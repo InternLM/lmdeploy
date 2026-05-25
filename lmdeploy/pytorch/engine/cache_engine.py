@@ -525,11 +525,45 @@ class StateCacheEngine:
         """Normalize host-side cache indices."""
         if isinstance(idx, torch.Tensor):
             raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
-        if isinstance(idx, int):
-            return [idx]
-        if not isinstance(idx, Sequence) or isinstance(idx, (str, bytes)):
+        if isinstance(idx, (str, bytes)):
             raise TypeError('State cache copy indices must be an int or a sequence of ints.')
+        try:
+            return [as_index(idx)]
+        except TypeError:
+            pass
+        if not isinstance(idx, Sequence):
+            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
+        if any(isinstance(item, torch.Tensor) for item in idx):
+            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
         return [as_index(item) for item in idx]
+
+    @staticmethod
+    def _validate_index_bounds(indices: Sequence[int], num_caches: int):
+        """Check normalized cache indices are valid state slots."""
+        for idx in indices:
+            if idx < 0 or idx >= num_caches:
+                raise ValueError(f'State cache index {idx} is out of range [0, {num_caches}).')
+
+    @staticmethod
+    def _copy_ranges(src_list: list[int], dst_list: list[int]):
+        """Yield contiguous copy ranges as (src_start, dst_start, length)."""
+        pairs = sorted(zip(src_list, dst_list))
+        if len(pairs) == 0:
+            return
+        start_src = prev_src = pairs[0][0]
+        start_dst = prev_dst = pairs[0][1]
+        length = 1
+        for src, dst in pairs[1:]:
+            if src == prev_src + 1 and dst == prev_dst + 1:
+                prev_src = src
+                prev_dst = dst
+                length += 1
+                continue
+            yield start_src, start_dst, length
+            start_src = prev_src = src
+            start_dst = prev_dst = dst
+            length = 1
+        yield start_src, start_dst, length
 
     def copy_caches(self, src_idx: int | Sequence[int], dst_idx: int | Sequence[int]):
         """Copy state cache slots.
@@ -547,11 +581,20 @@ class StateCacheEngine:
             raise ValueError('src_idx and dst_idx must have the same number of elements.')
         if len(src_list) == 0:
             return
-        if not set(src_list).isdisjoint(dst_list):
+        num_caches = self.mem_pool.size(0)
+        self._validate_index_bounds(src_list, num_caches)
+        self._validate_index_bounds(dst_list, num_caches)
+        dst_set = set(dst_list)
+        if len(dst_set) != len(dst_list):
+            raise ValueError('dst_idx must not contain duplicate entries.')
+        if not set(src_list).isdisjoint(dst_set):
             raise ValueError('src_idx and dst_idx must not overlap for stream-ordered state copies.')
 
-        for src, dst in zip(src_list, dst_list):
-            self.mem_pool[dst].copy_(self.mem_pool[src], non_blocking=True)
+        for src, dst, length in self._copy_ranges(src_list, dst_list):
+            if length == 1:
+                self.mem_pool[dst].copy_(self.mem_pool[src], non_blocking=True)
+            else:
+                self.mem_pool[dst:dst + length].copy_(self.mem_pool[src:src + length], non_blocking=True)
 
     def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
         """Initialize state caches.

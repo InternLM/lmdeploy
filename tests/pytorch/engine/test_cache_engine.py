@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 
+import numpy as np
 import pytest
 import torch
 
@@ -76,12 +77,32 @@ def test_state_cache_engine_copy_caches_supports_batched_indices():
     conv_state[1].fill_(3.0)
     recurrent_state[1].fill_(4.0)
 
-    cache_engine.copy_caches((0, 1), (2, 3))
+    cache_engine.copy_caches((1, 0), (3, 2))
 
     assert torch.equal(conv_state[2], conv_state[0])
     assert torch.equal(recurrent_state[2], recurrent_state[0])
     assert torch.equal(conv_state[3], conv_state[1])
     assert torch.equal(recurrent_state[3], recurrent_state[1])
+
+
+def test_state_cache_engine_copy_caches_accepts_host_integer_scalars():
+    cache_engine = _make_state_cache_engine()
+    conv_state, recurrent_state = cache_engine.state_caches
+
+    conv_state[1].fill_(7.0)
+    recurrent_state[1].fill_(9.0)
+
+    cache_engine.copy_caches(np.int64(1), np.int64(2))
+
+    assert torch.equal(conv_state[2], conv_state[1])
+    assert torch.equal(recurrent_state[2], recurrent_state[1])
+
+
+def test_state_cache_engine_copy_caches_coalesces_contiguous_ranges():
+    ranges = list(StateCacheEngine._copy_ranges([4, 1, 5, 0, 6, 9], [20, 11, 21, 10, 22, 30]))
+
+    assert ranges == [(0, 10, 2), (4, 20, 3), (9, 30, 1)]
+    assert list(StateCacheEngine._copy_ranges([], [])) == []
 
 
 def test_state_cache_engine_copy_caches_rejects_mismatched_indices():
@@ -98,8 +119,32 @@ def test_state_cache_engine_copy_caches_rejects_tensor_indices():
         cache_engine.copy_caches(torch.tensor([0, 1]), torch.tensor([2, 3]))
 
 
+def test_state_cache_engine_copy_caches_rejects_tensor_sequence_items():
+    cache_engine = _make_state_cache_engine()
+
+    with pytest.raises(TypeError, match='host integers'):
+        cache_engine.copy_caches([torch.tensor(0)], [2])
+
+
+def test_state_cache_engine_copy_caches_rejects_out_of_range_indices():
+    cache_engine = _make_state_cache_engine()
+
+    with pytest.raises(ValueError, match='out of range'):
+        cache_engine.copy_caches([-1], [2])
+
+    with pytest.raises(ValueError, match='out of range'):
+        cache_engine.copy_caches([0], [4])
+
+
 def test_state_cache_engine_copy_caches_rejects_overlapping_indices():
     cache_engine = _make_state_cache_engine()
 
     with pytest.raises(ValueError, match='must not overlap'):
         cache_engine.copy_caches([0, 1], [1, 2])
+
+
+def test_state_cache_engine_copy_caches_rejects_duplicate_destinations():
+    cache_engine = _make_state_cache_engine()
+
+    with pytest.raises(ValueError, match='duplicate'):
+        cache_engine.copy_caches([0, 1], [2, 2])
