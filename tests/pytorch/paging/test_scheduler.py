@@ -300,6 +300,49 @@ def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     assert node.state_ready
 
 
+def test_ssm_end_session_discards_pending_checkpoint_reservation():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
+    block_size = scheduler.seq_meta.block_size
+    session = scheduler.add_session(100)
+    seq = session.add_sequence([1] * block_size * 2)
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    scheduler.state_manager.allocate(seq)
+
+    state_idx = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq)
+    node = seq.prefix_cache.save_node
+    assert state_idx >= 0
+    assert node is not None
+    assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 1
+
+    scheduler.end_session(100)
+
+    assert 100 not in scheduler.sessions
+    assert node.state_idx == -1
+    assert not node.state_ready
+    assert scheduler.state_manager.get_num_runtime_states() == 0
+    assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
+
+
+def test_ssm_end_session_releases_acquired_restore_checkpoint():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
+    block_size = scheduler.seq_meta.block_size
+    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    seq = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [2])
+
+    scheduler.block_trie.match(seq)
+    assert seq.prefix_cache.restore_state == state_idx
+    assert scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+    assert node.state_ref_count == 1
+
+    scheduler.end_session(100)
+
+    assert 100 not in scheduler.sessions
+    assert node.state_idx == state_idx
+    assert node.state_ready
+    assert node.state_ref_count == 0
+
+
 def test_ssm_failed_restore_schedule_rolls_back_match():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     block_size = scheduler.seq_meta.block_size
