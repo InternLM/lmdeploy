@@ -324,8 +324,22 @@ class AsyncEngine:
                 message=backend_status['message'] or 'Backend reported unhealthy.',
             )
 
+        schedule_metrics = backend_status['schedule_metrics']
+        if schedule_metrics is None:
+            if self.session_mgr.request_handle_pool.num_dispatched == 0:
+                self._dispatched_start_time = None
+                self._idle_schedule_start_time = None
+                return self._make_health_result(
+                    status='healthy',
+                    message=backend_status['message'] or 'Engine is healthy.',
+                )
+            return self._make_health_result(
+                status='unhealthy',
+                message='Backend did not return schedule metrics for dispatched request handle(s).',
+            )
+
         valid_progress, invalid_message = self._validate_scheduler_progress(
-            backend_status['schedule_metrics'],
+            schedule_metrics,
             scheduler_stall_timeout=scheduler_stall_timeout,
         )
         if not valid_progress:
