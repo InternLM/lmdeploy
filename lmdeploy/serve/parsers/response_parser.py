@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from mmengine import Registry
 
@@ -25,12 +25,77 @@ logger = get_logger('lmdeploy')
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
 
 
+def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
+    """Return dict-like tool arguments for request message normalization.
+
+    Raises ValueError if arguments is a string but contains invalid JSON. Returns None if arguments is not a string or
+    JSON parses to non-dict.
+    """
+    if not isinstance(arguments, str):
+        return None
+
+    try:
+        parsed_arguments = json.loads(arguments)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f'Tool call arguments contain invalid JSON at position {e.pos} '
+            f'(line {e.lineno}, column {e.colno})'
+        ) from e
+    except TypeError as e:
+        raise ValueError('Tool call arguments contain invalid JSON') from e
+    if isinstance(parsed_arguments, dict):
+        return parsed_arguments
+    return None
+
+
+def _normalize_request_messages(messages: list[dict]) -> list[dict] | None:
+    """Return a render-safe copy of request messages when needed."""
+    normalized_messages = None
+
+    for msg_idx, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get('role') != 'assistant':
+            continue
+        tool_calls = message.get('tool_calls')
+        if not isinstance(tool_calls, list):
+            continue
+
+        normalized_tool_calls = None
+        for tool_idx, tool_call in enumerate(tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get('function')
+            if not isinstance(function, dict) or isinstance(function.get('arguments'), dict):
+                continue
+
+            parsed_arguments = _parse_tool_call_arguments_dict(function.get('arguments'))
+            if parsed_arguments is None:
+                continue
+
+            if normalized_messages is None:
+                normalized_messages = list(messages)
+            if normalized_tool_calls is None:
+                normalized_tool_calls = list(tool_calls)
+                normalized_message = dict(message)
+                normalized_message['tool_calls'] = normalized_tool_calls
+                normalized_messages[msg_idx] = normalized_message
+
+            normalized_function = dict(function)
+            normalized_function['arguments'] = parsed_arguments
+
+            normalized_tool_call = dict(tool_call)
+            normalized_tool_call['function'] = normalized_function
+            normalized_tool_calls[tool_idx] = normalized_tool_call
+
+    return normalized_messages
+
+
 def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequest:
     """Normalize a ChatCompletionRequest for downstream consumption.
 
     - ``response_format``: ``ResponseFormat → dict``, ``type='text' → None``
     - ``stop``: ``str → list[str]``
     - ``max_completion_tokens``: resolves from deprecated ``max_tokens``
+    - ``messages``: tool call ``arguments`` JSON strings → dicts for template rendering
     """
     if not hasattr(request, 'model_copy'):
         return request
@@ -50,6 +115,12 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
         max_tokens = getattr(request, 'max_tokens', None)
         if max_tokens is not None:
             updates['max_completion_tokens'] = max_tokens
+
+    messages = request.messages
+    if isinstance(messages, list):
+        normalized_messages = _normalize_request_messages(messages)
+        if normalized_messages is not None:
+            updates['messages'] = normalized_messages
 
     if updates:
         request = request.model_copy(update=updates)
@@ -287,8 +358,31 @@ class BaseResponseParser(ResponseParser):
     @staticmethod
     def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Dump tools to a list of dicts to fit jinja chat template."""
+        from lmdeploy.serve.openai.protocol import AllowedToolChoice
+
+        if isinstance(request.tool_choice, AllowedToolChoice):
+            allowed_names: set[str] = set()
+            allowed_functions: list[dict] = []
+            for t in request.tool_choice.allowed_tools.tools:
+                func = t.get('function', {})
+                if isinstance(func, dict) and 'name' in func:
+                    allowed_names.add(func['name'])
+                    allowed_functions.append(func)
+
+            if not request.tools:
+                return request.model_copy(update={'tools': allowed_functions or None})
+
+            request_tool_names = {item.function.name for item in request.tools}
+            missing = sorted(allowed_names - request_tool_names)
+            if missing:
+                raise ValueError(f'Allowed tool(s) not found in request.tools: {missing}')
+
+            tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
+            return request.model_copy(update={'tools': tools})
+
         if not request.tools:
             return request.model_copy(update={'tools': None})
+
         if not isinstance(request.tool_choice, str):
             tools = [
                 item.function.model_dump() for item in request.tools
@@ -561,6 +655,7 @@ class BaseResponseParser(ResponseParser):
                 tool_calls.append(parsed_call)
                 pos = close_idx + len(close_tag) if close_tag else n
             else:
+                # Tool call parsing failed — fall back to plain text.
                 content_parts.append(text[open_idx:])
                 break
 
