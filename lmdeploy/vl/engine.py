@@ -2,17 +2,13 @@
 
 import asyncio
 import inspect
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
-from lmdeploy.utils import REQUEST_LOG_LEVEL, get_logger
 from lmdeploy.vl.model.builder import load_vl_model
-
-logger = get_logger('lmdeploy')
 
 
 def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
@@ -86,26 +82,14 @@ class ImageEncoder:
     async def preprocess(self,
                          messages: list[dict],
                          input_prompt: str | list[int] | None = None,
-                         mm_processor_kwargs: dict[str, Any] | None = None,
-                         session_id: int | None = None) -> list[dict]:
+                         mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
-        def _preprocess():
-            log_preprocess_time = logger.isEnabledFor(REQUEST_LOG_LEVEL)
-            start = time.perf_counter() if log_preprocess_time else 0.0
-            try:
-                if self._uses_new_preprocess:
-                    return self.model.preprocess(messages, input_prompt, mm_processor_kwargs)
-                return self.model.preprocess(messages)
-            finally:
-                if log_preprocess_time:
-                    elapsed = time.perf_counter() - start
-                    request_info = '' if session_id is None else f'session={session_id}, '
-                    logger.log(REQUEST_LOG_LEVEL, f'{request_info}multimodal preprocess time={elapsed:.3f}s')
-
         if self._uses_new_preprocess:
-            future = asyncio.get_event_loop().run_in_executor(self.executor, _preprocess)
+            future = asyncio.get_event_loop().run_in_executor(
+                self.executor, self.model.preprocess, messages, input_prompt, mm_processor_kwargs)
         else:
-            future = asyncio.get_event_loop().run_in_executor(self.executor, _preprocess)
+            future = asyncio.get_event_loop().run_in_executor(
+                self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
