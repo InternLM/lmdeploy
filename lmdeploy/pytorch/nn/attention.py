@@ -110,6 +110,10 @@ class Attention(nn.Module):
         quant_policy = attn_metadata.quant_policy
         if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
             # Reuse the scale/zero arguments as scalar-scale channels for FP8.
+            if self.k_scale.device != query.device:
+                self.k_scale = self.k_scale.to(device=query.device, non_blocking=True)
+            if self.v_scale.device != query.device:
+                self.v_scale = self.v_scale.to(device=query.device, non_blocking=True)
             k_scales_zeros = self.k_scale
             v_scales_zeros = self.v_scale
 
