@@ -146,7 +146,7 @@ def _set_config_dtype(model, torch_dtype):
             config.dtype = dtype
 
 
-def check_vl_llm(backend: str, config: dict) -> bool:
+def check_vl_llm(config: dict) -> bool:
     """Check if the model is a vl model from model config."""
     if 'auto_map' in config:
         for _, v in config['auto_map'].items():
@@ -180,11 +180,11 @@ def check_vl_llm(backend: str, config: dict) -> bool:
     return False
 
 
-def get_task(backend: str, model_path: str):
+def get_task(model_path: str, trust_remote_code: bool = False) -> str:
     """Get pipeline type and pipeline class from model config."""
 
-    _, config = get_model_arch(model_path)
-    if check_vl_llm(backend, config.to_dict()):
+    _, config = get_model_arch(model_path, trust_remote_code)
+    if check_vl_llm(config.to_dict()):
         return 'vlm'
 
     # default task
@@ -262,11 +262,11 @@ def _prepare_for_calibrate(model: nn.Module,
 
 
 # TODO to be removed
-def make_compatible_internvl_config(model_path):
+def make_compatible_internvl_config(model_path, trust_remote_code: bool = False):
     """Patch model.config since after transformers v4.45.0, InternVL models
     can't use `save_pretrained`"""
     from lmdeploy.archs import get_model_arch
-    arch, _ = get_model_arch(model_path)
+    arch, _ = get_model_arch(model_path, trust_remote_code)
     if arch == 'InternVLChatModel':
         import transformers
         from packaging import version
@@ -316,8 +316,8 @@ def load_model_and_tokenizer(model: str,
                          work_dir: str = './work_dir',
                          trust_remote_code: bool = False):
     """Load model and tokenizer."""
-    model_type = get_task(backend='turbomind', model_path=model)
-    make_compatible_internvl_config(model)
+    model_type = get_task(model, trust_remote_code)
+    make_compatible_internvl_config(model, trust_remote_code)
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=trust_remote_code)
