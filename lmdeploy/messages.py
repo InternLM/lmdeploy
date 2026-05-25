@@ -313,6 +313,10 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
         assert self.quant_policy in (
             QuantPolicy.NONE,
             QuantPolicy.INT4,
@@ -464,6 +468,10 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
         assert self.quant_policy in (
             QuantPolicy.NONE,
             QuantPolicy.INT4,

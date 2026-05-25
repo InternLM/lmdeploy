@@ -336,16 +336,16 @@ def flatten_kv_cache(k_caches: Tensor,
                      out_dtype: torch.dtype = None,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
-                     k_scale: Tensor = None,
-                     v_scale: Tensor = None,
                      quant_policy: QuantPolicy = QuantPolicy.NONE,
                      kv_layout: str = 'bshd',
                      flatten_kv_layout: str = 'hsd'):
-    """Recovery paged kv cache to normal kv cache.
+    """Recover paged KV cache to contiguous KV cache.
 
     Args:
-        k_scale: Per-tensor key scale for normal FP8 KV cache.
-        v_scale: Per-tensor value scale for normal FP8 KV cache.
+        k_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor key scale for per-tensor FP8 KV cache.
+        v_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor value scale for per-tensor FP8 KV cache.
     """
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
@@ -438,17 +438,15 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DV=BLOCK_DV,
         )
     elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
-        if k_scale is None:
-            k_scale = torch.ones((), device=k_caches.device, dtype=torch.float32)
-        if v_scale is None:
-            v_scale = k_scale
+        assert k_scales_zeros is not None, 'FP8 KV cache requires k scale.'
+        assert v_scales_zeros is not None, 'FP8 KV cache requires v scale.'
         _flatten_kv_cache_fp8_scalar[grid](
             k_caches,
             v_caches,
             k_states,
             v_states,
-            k_scale,
-            v_scale,
+            k_scales_zeros,
+            v_scales_zeros,
             start_loc,
             seqlens,
             block_offsets,

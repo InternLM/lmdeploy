@@ -584,8 +584,8 @@ class TestPagedAttentionFP8Scalar(TestPagedAttentionBase):
         out = flash_attn_with_kvcache(conti_q,
                                       blocked_k,
                                       blocked_v,
-                                      k_scale=k_scale,
-                                      v_scale=v_scale,
+                                      k_scales_zeros=k_scale,
+                                      v_scales_zeros=v_scale,
                                       quant_policy=quant_policy,
                                       page_table=block_offsets,
                                       cache_seqlens=kv_seqlens)

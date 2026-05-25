@@ -239,12 +239,28 @@ class TestFlattenKVCacheFP8Scalar(TestFlattenKVCache):
                                               block_offsets,
                                               out_size=out_size,
                                               out_dtype=out_dtype,
-                                              k_scale=k_scale,
-                                              v_scale=v_scale,
+                                              k_scales_zeros=k_scale,
+                                              v_scales_zeros=v_scale,
                                               quant_policy=quant_policy)
 
         torch.testing.assert_close(k_states, gt[0], atol=1e-3, rtol=1e-5)
         torch.testing.assert_close(v_states, gt[1], atol=1e-3, rtol=1e-5)
+
+    def test_flatten_kv_cache_requires_scale(self, k_caches, v_caches, kv_seqlens, block_offsets, out_size, out_dtype,
+                                             fp8_dtype, quant_policy):
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
+
+        k_caches_fp8 = k_caches.to(fp8_dtype)
+        v_caches_fp8 = v_caches.to(fp8_dtype)
+
+        with pytest.raises(AssertionError, match='requires k scale'):
+            flatten_kv_cache(k_caches_fp8,
+                             v_caches_fp8,
+                             kv_seqlens,
+                             block_offsets,
+                             out_size=out_size,
+                             out_dtype=out_dtype,
+                             quant_policy=quant_policy)
 
 
 class TestFlattenKVCacheFP8E5M2Scalar(TestFlattenKVCacheFP8Scalar):

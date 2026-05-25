@@ -769,8 +769,6 @@ def flash_attn_with_kvcache(
     alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
-    k_scale: Tensor = None,
-    v_scale: Tensor = None,
     quant_policy: QuantPolicy = QuantPolicy.NONE,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
@@ -780,8 +778,10 @@ def flash_attn_with_kvcache(
     Note that this kernel is decoding-only
 
     Args:
-        k_scale: Per-tensor key scale for normal FP8 KV cache.
-        v_scale: Per-tensor value scale for normal FP8 KV cache.
+        k_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor key scale for per-tensor FP8 KV cache.
+        v_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor value scale for per-tensor FP8 KV cache.
     """
 
     global _nv_cap
@@ -906,12 +906,10 @@ def flash_attn_with_kvcache(
 
     if quant_policy != QuantPolicy.NONE:
         if is_fp8_scalar:
-            if k_scale is None:
-                k_scale = torch.ones((), device=q.device, dtype=torch.float32)
-            if v_scale is None:
-                v_scale = k_scale
-            k_scales_arg = k_scale
-            v_scales_arg = v_scale
+            assert k_scales_zeros is not None, 'FP8 KV cache requires k scale.'
+            assert v_scales_zeros is not None, 'FP8 KV cache requires v scale.'
+            k_scales_arg = k_scales_zeros
+            v_scales_arg = v_scales_zeros
             stride_kszp = stride_kszbs = stride_kszh = stride_kszd = 0
             stride_vszp = stride_vszbs = stride_vszh = stride_vszd = 0
             triton_quant_policy = QuantPolicy.FP8

@@ -10,11 +10,6 @@ from ..backends.attention import AttentionMetadata
 from .utils import get_distribute_size
 
 
-def _is_per_tensor_fp8_kv_quant_policy(quant_policy: QuantPolicy):
-    """Return whether quant_policy uses per-tensor FP8 KV cache."""
-    return quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
-
-
 def _update_num_heads(num_heads: int, num_kv_heads: int):
     """Update heads."""
     world_size, rank = get_tp_world_rank('attn')
@@ -111,11 +106,9 @@ class Attention(nn.Module):
         self._lazy_init(query.device)
 
         quant_policy = attn_metadata.quant_policy
-        if _is_per_tensor_fp8_kv_quant_policy(quant_policy):
-            k_scale, v_scale = self.k_scale, self.v_scale
-        else:
-            k_scale = None
-            v_scale = None
+        if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+            k_scales_zeros = self.k_scale
+            v_scales_zeros = self.v_scale
 
         kwargs = dict()
         if nsa_indices is not None:
@@ -131,8 +124,6 @@ class Attention(nn.Module):
             attn_metadata=attn_metadata,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            k_scale=k_scale,
-            v_scale=v_scale,
             inplace=inplace,
             **kwargs,
         )

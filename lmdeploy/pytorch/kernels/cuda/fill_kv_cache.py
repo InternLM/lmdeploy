@@ -171,7 +171,7 @@ def _fill_kv_cache_fp8_scalar_kernel(
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """Fill FP8 KV cache with per-tensor K/V scales."""
+    """Fill per-tensor FP8 KV cache."""
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)
     block_id = tl.program_id(1)
@@ -795,14 +795,14 @@ def fill_kv_cache(k_states: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
                   quant_policy: QuantPolicy = QuantPolicy.NONE,
-                  k_scale: Tensor = None,
-                  v_scale: Tensor = None,
                   kv_layout: str = 'bshd'):
     """Fill key/value state to cache for paged attention.
 
     Args:
-        k_scale: Per-tensor key scale for normal FP8 KV cache.
-        v_scale: Per-tensor value scale for normal FP8 KV cache.
+        k_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor key scale for per-tensor FP8 KV cache.
+        v_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor value scale for per-tensor FP8 KV cache.
     """
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
@@ -910,18 +910,16 @@ def fill_kv_cache(k_states: Tensor,
             num_stages=3,
         )
     elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
-        if k_scale is None:
-            k_scale = torch.ones((), device=k_states.device, dtype=torch.float32)
-        if v_scale is None:
-            v_scale = k_scale
+        assert k_scales_zeros is not None, 'FP8 KV cache requires k scale.'
+        assert v_scales_zeros is not None, 'FP8 KV cache requires v scale.'
         finfo = torch.finfo(k_caches.dtype)
         _fill_kv_cache_fp8_scalar_kernel[grid](
             k_states,
             v_states,
             k_caches,
             v_caches,
-            k_scale,
-            v_scale,
+            k_scales_zeros,
+            v_scales_zeros,
             q_start_loc,
             q_seq_length,
             kv_seq_length,
