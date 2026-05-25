@@ -51,33 +51,36 @@ def _get_kv_cache_dtype(model_config: ModelConfig):
     return kv_cache_dtype
 
 
+_FP8_CACHE_DTYPES = {
+    QuantPolicy.FP8: torch.float8_e4m3fn,
+    QuantPolicy.FP8_E5M2: torch.float8_e5m2,
+}
+
+_KV_CACHE_QUANT_POLICY_DESCS = {
+    QuantPolicy.FP8: 'fp8_e4m3 KV cache',
+    QuantPolicy.FP8_E5M2: 'fp8_e5m2 KV cache',
+    QuantPolicy.INT4: 'int4 KV cache',
+    QuantPolicy.INT8: 'int8 KV cache',
+    QuantPolicy.TURBO_QUANT: 'TurboQuant KV cache',
+}
+
+
 def _is_fp8_quant_policy(quant_policy: QuantPolicy):
     """Return whether quant policy stores KV payload as torch FP8."""
-    return quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
+    return quant_policy in _FP8_CACHE_DTYPES
 
 
 def _get_fp8_cache_dtype(quant_policy: QuantPolicy):
     """Get the cache tensor dtype for an FP8 KV-cache quant policy."""
-    if quant_policy == QuantPolicy.FP8:
-        return torch.float8_e4m3fn
-    if quant_policy == QuantPolicy.FP8_E5M2:
-        return torch.float8_e5m2
-    raise ValueError(f'Not an FP8 quant policy: {quant_policy}')
+    try:
+        return _FP8_CACHE_DTYPES[quant_policy]
+    except KeyError as e:
+        raise ValueError(f'Not an FP8 quant policy: {quant_policy}') from e
 
 
 def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy):
     """Describe the active KV-cache quantization policy for logs."""
-    if quant_policy == QuantPolicy.FP8:
-        return 'fp8_e4m3 per-tensor KV cache (torch.float8_e4m3fn)'
-    if quant_policy == QuantPolicy.FP8_E5M2:
-        return 'fp8_e5m2 per-tensor KV cache (torch.float8_e5m2)'
-    if quant_policy == QuantPolicy.INT4:
-        return 'int4 KV cache'
-    if quant_policy == QuantPolicy.INT8:
-        return 'int8 KV cache'
-    if quant_policy == QuantPolicy.TURBO_QUANT:
-        return 'TurboQuant KV cache'
-    return None
+    return _KV_CACHE_QUANT_POLICY_DESCS.get(quant_policy)
 
 
 # 512*1 + 4*4 + 64*2 = 656

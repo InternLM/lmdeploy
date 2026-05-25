@@ -20,6 +20,3 @@ select = [
 ignore = [
   "E231", "E741"
 ]
-
-[tool.ruff.lint.isort]
-known-third-party = ["transformers"]

@@ -63,12 +63,8 @@ def test_fp8_kv_cache_dtype_mapping():
 
 
 def test_fp8_kv_cache_log_description():
-    assert 'fp8_e4m3' in _describe_kv_cache_quant_policy(QuantPolicy.FP8)
-    assert 'per-tensor' in _describe_kv_cache_quant_policy(QuantPolicy.FP8)
-    assert 'torch.float8_e4m3fn' in _describe_kv_cache_quant_policy(QuantPolicy.FP8)
-    assert 'fp8_e5m2' in _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2)
-    assert 'per-tensor' in _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2)
-    assert 'torch.float8_e5m2' in _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2)
+    assert _describe_kv_cache_quant_policy(QuantPolicy.FP8) == 'fp8_e4m3 KV cache'
+    assert _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2) == 'fp8_e5m2 KV cache'
     assert _describe_kv_cache_quant_policy(QuantPolicy.NONE) is None
 
 
