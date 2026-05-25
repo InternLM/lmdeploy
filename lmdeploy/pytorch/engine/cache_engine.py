@@ -282,6 +282,8 @@ class CacheEngine:
         if cache_config.quant_policy == QuantPolicy.NONE:
             return []
         if _is_fp8_quant_policy(cache_config.quant_policy):
+            # Regular FP8 KV cache uses fixed scalar scales from Attention, not
+            # per-token scale/zero cache tensors.
             return []
 
         dtype = model_config.dtype

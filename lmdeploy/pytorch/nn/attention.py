@@ -70,6 +70,8 @@ class Attention(nn.Module):
         else:
             self.alibi_ready = True
         scale_device = kwargs.get('device', None)
+        # Regular PyTorch FP8 KV cache intentionally uses fixed scalar scales
+        # of 1.0 for now. Kernels accept scale tensors to stay general.
         self.register_buffer('k_scale', torch.ones((), dtype=torch.float32, device=scale_device))
         self.register_buffer('v_scale', torch.ones((), dtype=torch.float32, device=scale_device))
 
@@ -107,6 +109,7 @@ class Attention(nn.Module):
 
         quant_policy = attn_metadata.quant_policy
         if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+            # Reuse the scale/zero arguments as scalar-scale channels for FP8.
             k_scales_zeros = self.k_scale
             v_scales_zeros = self.v_scale
 
