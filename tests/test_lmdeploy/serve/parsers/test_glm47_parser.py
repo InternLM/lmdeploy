@@ -3,7 +3,7 @@ import json
 import pytest
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
-from lmdeploy.serve.parsers import ResponseParserManager
+from lmdeploy.serve.parsers import ResponseParserManager, first_stream_delta
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import Glm47ToolParser, ToolParserManager
 
@@ -72,7 +72,8 @@ class TestGlm47ResponseParserStreaming:
     def test_stream_chunk_matches_reference(self, response_parser):
         for (delta_text, exp_delta_msg, exp_content, exp_tool_emitted,
              exp_function_name, exp_function_arguments, exp_type) in REFERENCE_CHUNKS:
-            delta_msg, tool_emitted = response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])
+            delta_msg, tool_emitted = first_stream_delta(response_parser.stream_chunk(
+                delta_text=delta_text, delta_token_ids=[]))
             if not exp_delta_msg:
                 assert delta_msg is None
                 continue
@@ -102,7 +103,7 @@ class TestGlm47ResponseParserStreaming:
         emitted_name = None
         emitted_args = ''
         for chunk in chunks:
-            delta, tool_emitted = response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
             if not tool_emitted or delta is None or not delta.tool_calls:
                 continue
             for call in delta.tool_calls:
@@ -128,7 +129,8 @@ class TestGlm47ResponseParserStreaming:
         emitted_args = ''
 
         for chunk in chunks:
-            delta, tool_emitted = response_parser_with_reasoning.stream_chunk(delta_text=chunk, delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser_with_reasoning.stream_chunk(
+                delta_text=chunk, delta_token_ids=[]))
             if delta is not None:
                 if delta.reasoning_content:
                     reasoning_seen.append(delta.reasoning_content)
@@ -142,7 +144,8 @@ class TestGlm47ResponseParserStreaming:
                         emitted_args += call.function.arguments
 
         for _ in range(3):
-            delta, tool_emitted = response_parser_with_reasoning.stream_chunk(delta_text='', delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser_with_reasoning.stream_chunk(
+                delta_text='', delta_token_ids=[]))
             if delta is not None:
                 if delta.reasoning_content:
                     reasoning_seen.append(delta.reasoning_content)
@@ -171,7 +174,7 @@ class TestGlm47ResponseParserStreaming:
         emitted_name = None
         emitted_args = ''
         for chunk in chunks:
-            delta, tool_emitted = response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
             if not tool_emitted or delta is None or not delta.tool_calls:
                 continue
             for call in delta.tool_calls:

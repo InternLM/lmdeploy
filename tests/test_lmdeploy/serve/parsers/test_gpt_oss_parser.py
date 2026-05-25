@@ -6,6 +6,7 @@ pytest.importorskip('openai_harmony')
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
+from lmdeploy.serve.parsers import first_stream_delta
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
 
 
@@ -96,7 +97,8 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk(delta_text='ignored', delta_token_ids=[1, 2, 3, 4, 5, 6, 7, 8])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk(delta_text='ignored',
+                                                                     delta_token_ids=[1, 2, 3, 4, 5, 6, 7, 8]))
         assert delta is not None
         assert delta.content == 'Result: sunny'
         assert delta.reasoning_content == 'Need tool. '
@@ -205,7 +207,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
         assert delta is not None
         assert delta.role == 'assistant'
         assert delta.content == ''
@@ -220,7 +222,7 @@ class TestGptOssResponseParser:
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
         parser.stream_chunk('warmup', [])
-        delta, tool_emitted = parser.stream_chunk('', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
         assert delta is None
         assert tool_emitted is False
 
@@ -232,7 +234,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('plain text', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('plain text', []))
         assert delta is not None
         assert delta.content == 'plain text'
         assert delta.reasoning_content is None
@@ -250,7 +252,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [10])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', [10]))
         assert delta is None
         assert tool_emitted is False
 
@@ -266,7 +268,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [1, 2])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', [1, 2]))
         assert delta is not None
         assert delta.content is None
         assert delta.reasoning_content == 'think more'

@@ -4,7 +4,7 @@ import pytest
 from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
-from lmdeploy.serve.parsers import ResponseParserManager
+from lmdeploy.serve.parsers import ResponseParserManager, first_stream_delta
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
@@ -103,10 +103,10 @@ class TestQwen3_5ResponseParserStreaming:
              exp_function_name, exp_function_arguments,
              exp_type) in REFERENCE_CHUNKS:
             delta_ids = self._encode_ids(tokenizer, delta_text)
-            delta_msg, tool_emitted = response_parser.stream_chunk(
+            delta_msg, tool_emitted = first_stream_delta(response_parser.stream_chunk(
                 delta_text=delta_text,
                 delta_token_ids=delta_ids,
-            )
+            ))
             if exp_delta_msg is False:
                 assert delta_msg is None
                 continue

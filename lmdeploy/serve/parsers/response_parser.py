@@ -137,7 +137,10 @@ class ResponseParser:
         self.request = request
 
     @abstractmethod
-    def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs) -> tuple[DeltaMessage | None, bool]:
+    def stream_chunk(self,
+                     delta_text: str,
+                     delta_token_ids: list[int],
+                     **kwargs) -> list[tuple[DeltaMessage | None, bool]]:
         raise NotImplementedError
 
     @abstractmethod
@@ -174,6 +177,15 @@ class ProtocolProfile:
 class _QueuedDelta:
     delta: DeltaMessage
     tool_calls_emitted: bool = False
+
+
+def first_stream_delta(
+    deltas: list[tuple[DeltaMessage | None, bool]],
+) -> tuple[DeltaMessage | None, bool]:
+    """Return the first delta from :meth:`ResponseParser.stream_chunk`."""
+    if not deltas:
+        return None, False
+    return deltas[0]
 
 
 @ResponseParserManager.register_module('default')
@@ -284,7 +296,7 @@ class BaseResponseParser(ResponseParser):
         delta_text: str,
         delta_token_ids: list[int],
         **kwargs,
-    ) -> tuple[DeltaMessage | None, bool]:
+    ) -> list[tuple[DeltaMessage | None, bool]]:
         """Parse one streamed chunk into delta message channels.
 
         Args:
@@ -292,10 +304,9 @@ class BaseResponseParser(ResponseParser):
             delta_token_ids: Token ids corresponding to ``delta_text``.
 
         Returns:
-            ``(delta_message, tool_calls_emitted)`` where:
-            - ``delta_message`` is ``None`` when this step has no visible delta.
-            - ``tool_calls_emitted`` is ``True`` if at least one tool-call
-              delta is emitted in this step.
+            A list of ``(delta_message, tool_calls_emitted)`` pairs produced
+            from this stream step. Multiple entries may be returned when one
+            engine chunk contains reasoning, content, and tool-call segments.
         """
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty
@@ -305,10 +316,12 @@ class BaseResponseParser(ResponseParser):
             and not delta_token_ids
             and self._accumulated_text == ''
         ):
-            return DeltaMessage(role='assistant', content=''), False
+            return [(DeltaMessage(role='assistant', content=''), False)]
 
         if self.tool_parser is None and self.reasoning_parser is None:
-            return DeltaMessage(role='assistant', content=delta_text), False
+            if not delta_text:
+                return []
+            return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
         self._accumulated_text += delta_text
         self._pending += delta_text
@@ -348,12 +361,14 @@ class BaseResponseParser(ResponseParser):
             delta_text == ''
             and not produced_any
             and self._accumulated_text != ''
+            and not self._queued_deltas
         ):
             self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=''), False))
         if not self._queued_deltas:
-            return None, False
-        queued = self._queued_deltas.pop(0)
-        return queued.delta, queued.tool_calls_emitted
+            return []
+        queued = self._queued_deltas
+        self._queued_deltas = []
+        return [(item.delta, item.tool_calls_emitted) for item in queued]
 
     @staticmethod
     def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:

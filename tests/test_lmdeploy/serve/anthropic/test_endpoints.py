@@ -83,22 +83,27 @@ class _ToolAndReasoningParser:
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         if delta_text.startswith('Hello'):
-            return DeltaMessage(role='assistant', reasoning_content='internal reasoning', content='visible text'), False
+            return [(DeltaMessage(role='assistant',
+                                  reasoning_content='internal reasoning',
+                                  content='visible text'), False)]
         if delta_text.startswith('world'):
-            return DeltaMessage(
-                role='assistant',
-                tool_calls=[
-                    DeltaToolCall(
-                        index=0,
-                        id='toolu_123',
-                        function=DeltaFunctionCall(
-                            name='search',
-                            arguments='{"query":"lmdeploy"}',
-                        ),
-                    )
-                ],
-            ), True
-        return None, False
+            return [(
+                DeltaMessage(
+                    role='assistant',
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=0,
+                            id='toolu_123',
+                            function=DeltaFunctionCall(
+                                name='search',
+                                arguments='{"query":"lmdeploy"}',
+                            ),
+                        )
+                    ],
+                ),
+                True,
+            )]
+        return []
 
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return (
@@ -369,31 +374,37 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
             self.calls += 1
             if self.calls == 1:
-                return DeltaMessage(
+                return [(
+                    DeltaMessage(
+                        role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(
+                                index=0,
+                                id='toolu_123',
+                                function=DeltaFunctionCall(
+                                    name='search',
+                                    arguments='{"query":',
+                                ),
+                            )
+                        ],
+                    ),
+                    True,
+                )]
+            if self.calls == 2:
+                return [(DeltaMessage(role='assistant', content='interlude'), False)]
+            return [(
+                DeltaMessage(
                     role='assistant',
                     tool_calls=[
                         DeltaToolCall(
                             index=0,
                             id='toolu_123',
-                            function=DeltaFunctionCall(
-                                name='search',
-                                arguments='{"query":',
-                            ),
+                            function=DeltaFunctionCall(arguments='"lmdeploy"}'),
                         )
                     ],
-                ), True
-            if self.calls == 2:
-                return DeltaMessage(role='assistant', content='interlude'), False
-            return DeltaMessage(
-                role='assistant',
-                tool_calls=[
-                    DeltaToolCall(
-                        index=0,
-                        id='toolu_123',
-                        function=DeltaFunctionCall(arguments='"lmdeploy"}'),
-                    )
-                ],
-            ), True
+                ),
+                True,
+            )]
 
     async def _result_generator():
         for idx, finish_reason in enumerate([None, None, 'stop'], start=1):
