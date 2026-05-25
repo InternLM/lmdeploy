@@ -375,7 +375,7 @@ class MultimodalProcessor:
                                            chat_template_kwargs: dict | None = None,
                                            media_io_kwargs: dict[str, Any] | None = None,
                                            mm_processor_kwargs: dict[str, Any] | None = None,
-                                           request_id: int | None = None,
+                                           session_id: int | None = None,
                                            **kwargs):
         """Process multimodal prompt and return processed data for inference
         engines."""
@@ -385,7 +385,7 @@ class MultimodalProcessor:
         if self.backend == 'turbomind':
             results = await self.vl_encoder.preprocess(messages,
                                                        mm_processor_kwargs=mm_processor_kwargs,
-                                                       request_id=request_id)
+                                                       session_id=session_id)
             results = await self.vl_encoder.async_infer(results)
             results = await self.vl_encoder.wrap_for_turbomind(messages=results,
                                                                chat_template=chat_template,
@@ -402,11 +402,11 @@ class MultimodalProcessor:
                 results = await self.vl_encoder.preprocess(messages,
                                                            input_prompt=input_prompt,
                                                            mm_processor_kwargs=mm_processor_kwargs,
-                                                           request_id=request_id)
+                                                           session_id=session_id)
             else:
                 results = await self.vl_encoder.preprocess(messages,
                                                            mm_processor_kwargs=mm_processor_kwargs,
-                                                           request_id=request_id)
+                                                           session_id=session_id)
                 results = await self.vl_encoder.wrap_for_pytorch(messages=results,
                                                                  chat_template=chat_template,
                                                                  tokenizer=self.tokenizer,
