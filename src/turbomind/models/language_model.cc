@@ -9,6 +9,7 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/interval.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
@@ -177,6 +178,7 @@ LanguageModel::Impl::Impl(const EngineParam& engine, const Context& ctx, const M
 
 Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf)
 {
+    TM_FUNCTION_SCOPE();
     const auto st = core::Context::stream().handle();
 
     const int hidden_units = weights_.hidden_units;
@@ -194,7 +196,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 
     if (tp_size_ == 1) {
         invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
@@ -203,7 +205,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   temp.raw_data(),
@@ -215,7 +217,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
                                   {true, true},
                                   comm_.d_tp_group,
                                   st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         Copy(temp.buffer(), input_embeds.buffer());
     }
@@ -226,11 +228,11 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         comm_.d_comm->AllGather(
             local.raw_data(), temp.raw_data(), local.size(), weights_.data_type, comm_.d_tp_group, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
                                   (uint16_t*)temp.raw_data(),
@@ -239,7 +241,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
                                   local_hidden_units,
                                   false,
                                   st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     return input_embeds;
@@ -247,6 +249,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 
 Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_buf)
 {
+    TM_FUNCTION_SCOPE();
     NvtxScope scope("postDecodeEmbedding");
 
     const auto st = core::Context::stream().handle();
@@ -261,16 +264,14 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
 
     if (tp_size_ == 1) {
         Tensor logits{{bsz, vocab_size}, weights_.data_type, kDEVICE};
-        linear_.Forward(features, *weights_.output, logits);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, logits));
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
     else if (use_ag2d_) {
         Tensor logits{symm_buf.view(weights_.data_type), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_.Forward(features, *weights_.output, local.squeeze(1));
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, local.squeeze(1)));
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   logits.raw_data(),
                                   vocab_size,
@@ -281,20 +282,19 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
                                   {true, true},
                                   comm_.d_tp_group,
                                   st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         return logits.view({bsz, -1});
     }
     else {
         Tensor logits{symm_buf.view(weights_.data_type), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_.Forward(features, *weights_.output, local.squeeze(0));
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, local.squeeze(0)));
         comm_.d_comm->AllGather(local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         Tensor out{{bsz, vocab_size}, features.dtype(), features.device()};
         invokeTransposeAxis01(
             (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         return out;
     }
 }
@@ -390,6 +390,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
 void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
 
     auto& d = data_.at(phase);
     auto& b = *env.at("batch").data<BatchData*>()[0];

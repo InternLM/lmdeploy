@@ -5,6 +5,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/cuda_data_type.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/scope.h"
 
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
@@ -33,11 +34,11 @@ struct LlamaLinear::Impl {
 
         auto st = core::Context::stream().handle();
 
-        check_cuda_error(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
-        check_cuda_error(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
+        TM_CUDA_CHECK(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
 
         core::Context::stream().Sync();
     }
@@ -74,8 +75,7 @@ struct LlamaLinear::Impl {
 
         // Currently, FP8 only; INT8 may be added later
         if (input.dtype() != weight.input_dtype()) {
-            QuantizeSymm(A, U, input, st);
-            sync_check_cuda_error();
+            TM_SCOPE_CALL(QuantizeSymm(A, U, input, st));
         }
         else {
             A = input;
@@ -87,12 +87,10 @@ struct LlamaLinear::Impl {
             const auto [bsz, k] = A.shapes(0, 1);
             const int e         = indices.size() / bsz;
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            invokeMoeDispatch(A_e, A, indices.data(), e, st);
-            sync_check_cuda_error();
+            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), e, st));
             if (U) {
                 Tensor U_e;
-                invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
-                sync_check_cuda_error();
+                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
                 U = U_e;
             }
             A       = A_e;
@@ -121,6 +119,7 @@ struct LlamaLinear::Impl {
                  const Buffer_<int>& indices,
                  const Buffer_<int>& offsets)
     {
+        TM_FUNCTION_SCOPE();
         using namespace gemm;
 
         Operation op{};
@@ -185,29 +184,26 @@ struct LlamaLinear::Impl {
 
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
 
-Tensor LlamaLinear::Forward(const Tensor&         input,  //
-                            const LinearWeight&   weight,
-                            std::optional<Tensor> output)
+void LlamaLinear::Forward(const Tensor&       input,  //
+                          const LinearWeight& weight,
+                          Ref<Tensor>         output)
 {
-    return Forward(input, weight, {}, {}, output);
+    Forward(input, weight, {}, {}, output);
 }
 
-Tensor LlamaLinear::Forward(const Tensor&         input,  //
-                            const LinearWeight&   weight,
-                            const Buffer_<int>&   indices,
-                            const Buffer_<int>&   offsets,
-                            std::optional<Tensor> output)
+void LlamaLinear::Forward(const Tensor&       input,  //
+                          const LinearWeight& weight,
+                          const Buffer_<int>& indices,
+                          const Buffer_<int>& offsets,
+                          Ref<Tensor>         output)
 {
     Tensor in = input.view({-1, input.shape(-1)});
-    Tensor out;
 
-    if (output) {
-        out = output->view({-1, output->shape(-1)});
+    if (output.get()) {
+        output.get() = output.get().view({-1, output.get().shape(-1)});
     }
 
-    impl_->Forward(out, in, weight, indices, offsets);
-
-    return out;
+    impl_->Forward(output.get(), in, weight, indices, offsets);
 }
 
 void LlamaLinear::set_measure(bool measure)

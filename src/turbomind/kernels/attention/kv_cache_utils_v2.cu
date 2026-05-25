@@ -279,7 +279,7 @@ void invokeProcessKV_v2(char**                 blocks,
         else if (head_dim == 576) {
             return invoke(tkv, std::integral_constant<int, 576>{});
         }
-        FT_CHECK(0);
+        TM_UNREACHABLE;
     };
 
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
@@ -291,6 +291,8 @@ void invokeProcessKV_v2(char**                 blocks,
     else {
         dispatch(T{});
     }
+
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_invokeProcessKV_v2(type)                                                                           \
@@ -525,7 +527,7 @@ void invokeFlattenKV_v2(T*                     k,
         else if (head_dim == 576) {
             return invoke(tkv, std::integral_constant<int, 576>{});
         }
-        FT_CHECK(0);
+        TM_UNREACHABLE;
     };
 
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
@@ -537,6 +539,8 @@ void invokeFlattenKV_v2(T*                     k,
     else {
         dispatch(T{});
     }
+
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_invokeFlattenKV_v2(type)                                                                           \

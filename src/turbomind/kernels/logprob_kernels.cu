@@ -30,6 +30,7 @@
 #include "src/turbomind/kernels/logprob_kernels.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/macro.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -181,6 +182,7 @@ void invokeLogProbFromLogits(float*       cum_log_probs,
                                                          batch_first);
     accumulate_log_probs<<<batch_size, block_size, 0, stream>>>(
         cum_log_probs, log_probs, input_lengths, max_input_length, batch_size, batch_first);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeLogProbFromLogits(float*       cum_log_probs,

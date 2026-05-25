@@ -49,7 +49,8 @@ class GLM4VisionModel(VisionModel):
         for message in messages:
             if not isinstance(message['content'], list):
                 continue
-            images = [x['image'] for x in message['content'] if x['type'] == 'image']
+            mm_items = self.collect_multimodal_items([message])
+            images = [data for modality, data, _ in mm_items if modality == 'image']
             if len(images) > 1:
                 logger.warning(f'glm4v does not support the input of multiple images'
                                f' in a single chat round, but got {len(images)} images.')

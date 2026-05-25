@@ -18,12 +18,14 @@
 
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
 // #include "dbg.h"
@@ -233,12 +235,12 @@ void Engine::Impl::CreateSequenceManager()
     }
 
     if (has_linear_attention && param_.enable_prefix_caching) {
-        TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
+        TM_LOG_FATAL("Prefix caching is unsupported when linear attention is present");
     }
 
     const auto get_free_size = [&] {
         size_t free{}, total{};
-        check_cuda_error(cudaMemGetInfo(&free, &total));
+        TM_CUDA_CHECK(cudaMemGetInfo(&free, &total));
         return AllReduce(tp_group_, free, comm::RedOp::kMin);
     };
 
@@ -543,6 +545,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
 void Engine::Impl::Schedule()
 {
+    TM_FUNCTION_SCOPE();
     auto& s = states_.at(0);
 
     vector<const Sequence*>  sequences;
@@ -672,6 +675,7 @@ void Engine::Impl::Schedule()
 
 void Engine::Impl::Setup(BatchData& d)
 {
+    TM_FUNCTION_SCOPE();
     auto& st = states_.at(0);
 
     d.rc.resize(st.active);
@@ -718,6 +722,7 @@ void Engine::Impl::Setup(BatchData& d)
 
 void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 {
+    TM_FUNCTION_SCOPE();
     auto& s = states_.at(0);
 
     BatchCopy copy;
@@ -807,7 +812,8 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 
 void Engine::Impl::InternalThreadEntry()
 {
-    check_cuda_error(cudaSetDevice(device_id_));
+    TM_FUNCTION_SCOPE();
+    TM_CUDA_CHECK(cudaSetDevice(device_id_));
 
     auto stream = Stream::create();
 

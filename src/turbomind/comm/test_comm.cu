@@ -21,8 +21,6 @@
 
 using namespace turbomind::comm;
 using turbomind::data_type_v;
-using turbomind::check;
-using turbomind::myAssert;
 using std::vector;
 
 [[maybe_unused]] static constexpr bool is_ncu = 0;
@@ -39,15 +37,15 @@ struct Context {
     template<class F>
     float exec(F func)
     {
-        check_cuda_error(cudaStreamSynchronize(stream));
-        check_cuda_error(cudaEventRecord(ev_start, stream));
+        TM_CUDA_CHECK(cudaStreamSynchronize(stream));
+        TM_CUDA_CHECK(cudaEventRecord(ev_start, stream));
 
         func(stream);
 
-        check_cuda_error(cudaEventRecord(ev_end, stream));
-        check_cuda_error(cudaEventSynchronize(ev_end));
+        TM_CUDA_CHECK(cudaEventRecord(ev_end, stream));
+        TM_CUDA_CHECK(cudaEventSynchronize(ev_end));
         float ms{};
-        check_cuda_error(cudaEventElapsedTime(&ms, ev_start, ev_end));
+        TM_CUDA_CHECK(cudaEventElapsedTime(&ms, ev_start, ev_end));
         return ms;
     }
 
@@ -55,7 +53,7 @@ struct Context {
     T* malloc(size_t count)
     {
         T* data;
-        check_cuda_error(cudaMallocAsync(&data, sizeof(T) * count, stream));
+        TM_CUDA_CHECK(cudaMallocAsync(&data, sizeof(T) * count, stream));
         buffers.push_back(data);
         return data;
     }
@@ -63,20 +61,20 @@ struct Context {
     template<class T>
     void copy_n(const T* src, size_t count, T* dst)
     {
-        check_cuda_error(cudaMemcpyAsync(dst, src, sizeof(T) * count, cudaMemcpyDefault, stream));
+        TM_CUDA_CHECK(cudaMemcpyAsync(dst, src, sizeof(T) * count, cudaMemcpyDefault, stream));
     }
 
     void sync()
     {
-        check_cuda_error(cudaStreamSynchronize(stream));
+        TM_CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
     Context(int device_id)
     {
-        check_cuda_error(cudaSetDevice(device_id));
-        check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-        check_cuda_error(cudaEventCreate(&ev_start));
-        check_cuda_error(cudaEventCreate(&ev_end));
+        TM_CUDA_CHECK(cudaSetDevice(device_id));
+        TM_CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        TM_CUDA_CHECK(cudaEventCreate(&ev_start));
+        TM_CUDA_CHECK(cudaEventCreate(&ev_end));
     }
     ~Context()
     {
@@ -571,7 +569,7 @@ struct TestComm {
                 auto&        delta = deltas.emplace_back();
                 h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-                    check_cuda_error(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * n_ranks, ctx.stream));
+                    TM_CUDA_CHECK(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * n_ranks, ctx.stream));
                     ctx.copy_n(d_data, count, d_tmp + rank * count);
                     auto ms = ctx.exec([&](auto stream) {  //
                         if (d_comm->Query(kHasAllGather2D) && 0) {
@@ -686,7 +684,7 @@ struct TestComm {
                 auto&        delta = deltas.emplace_back();
                 h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-                    check_cuda_error(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count, ctx.stream));
+                    TM_CUDA_CHECK(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count, ctx.stream));
                     if (rank == root) {
                         ctx.copy_n(d_data, count, d_tmp);
                     }

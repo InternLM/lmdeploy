@@ -18,7 +18,7 @@ from ..adapter import (
     map_finish_reason,
     normalize_tool_choice,
     to_generation_config,
-    to_lmdeploy_messages,
+    to_openai_messages,
     to_openai_tools,
 )
 from ..errors import create_error_response
@@ -50,7 +50,7 @@ def register(router: APIRouter, server_context) -> None:
             )
 
         try:
-            messages = to_lmdeploy_messages(request)
+            parser_messages = to_openai_messages(request)
         except ValueError as err:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
@@ -67,7 +67,7 @@ def register(router: APIRouter, server_context) -> None:
             tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
             openai_request = ChatCompletionRequest(
                 model=request.model,
-                messages=messages,
+                messages=parser_messages,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 top_p=request.top_p,
@@ -76,13 +76,16 @@ def register(router: APIRouter, server_context) -> None:
                 tools=to_openai_tools(request.tools),
                 tool_choice=normalize_tool_choice(request.tool_choice),
             )
-            response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
+            try:
+                response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
+            except ValueError as err:
+                return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
             parsed_request = response_parser.request
 
         session = server_context.create_session(-1)
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
         result_generator = server_context.async_engine.generate(
-            messages,
+            parser_messages if parsed_request is None else parsed_request.messages,
             session,
             gen_config=to_generation_config(request),
             tools=None if parsed_request is None else parsed_request.tools,
