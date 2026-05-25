@@ -45,6 +45,9 @@ class ExecutorBase:
             # do not support sliding window prefix caching
             logger.warning('Sliding window prefix caching is not supported.')
             cache_config.enable_prefix_caching = False
+        if specdecode_config is not None and cache_config.enable_prefix_caching:
+            logger.warning('Speculative decoding prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config

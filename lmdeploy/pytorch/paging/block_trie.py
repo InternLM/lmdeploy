@@ -102,6 +102,24 @@ class BlockTrie:
         """Get hit rate."""
         return self.stats.hit_rate()
 
+    def snapshot_stats(self):
+        """Snapshot prefix-cache stats before a tentative match."""
+        if not self.enable:
+            return None
+        return self.stats.num_query_tokens, self.stats.num_hit_tokens
+
+    def restore_stats(self, snapshot):
+        """Restore prefix-cache stats for an unused tentative match."""
+        if snapshot is None:
+            return
+        self.stats.num_query_tokens, self.stats.num_hit_tokens = snapshot
+
+    def record_recompute_after_rollback(self, seq: SchedulerSequence, snapshot):
+        """Record a recompute after a tentative match was rolled back."""
+        if snapshot is None:
+            return
+        self.stats.num_query_tokens += seq.num_all_ids
+
     def get_root(self, adapter_name: str):
         """Get root by adapter name."""
         if adapter_name not in self._roots:

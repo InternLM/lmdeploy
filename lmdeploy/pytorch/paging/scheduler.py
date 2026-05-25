@@ -84,38 +84,17 @@ class Scheduler:
             return True
         return self.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
 
-    def _prefix_cache_stats_snapshot(self):
-        """Snapshot prefix-cache stats before a tentative scheduler match."""
-        if not self.block_trie.enable:
-            return None
-        stats = self.block_trie.stats
-        return stats.num_query_tokens, stats.num_hit_tokens
-
-    def _restore_prefix_cache_stats(self, snapshot):
-        """Restore prefix-cache stats for an unused tentative match."""
-        if snapshot is None:
-            return
-        stats = self.block_trie.stats
-        stats.num_query_tokens, stats.num_hit_tokens = snapshot
-
-    def _record_prefix_cache_miss(self, seq: SchedulerSequence, snapshot):
-        """Record a recompute after a tentative match was rolled back."""
-        if snapshot is None:
-            return
-        self.block_trie.stats.num_query_tokens += seq.num_all_ids
-
-    def _rollback_unscheduled_ssm_match(self, seq: SchedulerSequence, stats_snapshot=None):
-        """Drop an SSM prefix match that will not be scheduled now.
+    def _rollback_unscheduled_prefix_match(self, seq: SchedulerSequence, stats_snapshot=None):
+        """Drop a tentative prefix match that will not be used now.
 
         ``block_trie.match()`` mutates sequence state immediately: it advances
         the history step, appends shared blocks, and may pin a restore node.
         If later eviction or state allocation fails, undo those side effects so
         the waiting sequence can be scheduled cleanly in a later round.
         """
-        if not self.is_ssm:
-            return
-        self._restore_prefix_cache_stats(stats_snapshot)
-        self.block_trie.release_state_checkpoint_restore_for_seq(seq)
+        self.block_trie.restore_stats(stats_snapshot)
+        if self.is_ssm:
+            self.block_trie.release_state_checkpoint_restore_for_seq(seq)
         if seq.num_blocks > 0 or seq.logical_state >= 0:
             seq.state.free()
         elif seq.num_history_ids > 0:
@@ -124,6 +103,21 @@ class Scheduler:
         prefix_cache.restore_state = -1
         prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
+
+    def _prefix_hit_starts_middle_long_context_chunk(self, seq: SchedulerSequence):
+        """Check whether a prefix hit would start chunking from the middle."""
+        if seq.num_history_ids <= 0:
+            return False
+
+        max_prefill_num = self.cache_config.max_prefill_token_num
+        input_mm = seq.get_input_multimodals()
+        history_multimodals = getattr(seq, 'history_multimodals', None)
+        mm_for_chunk_limit = getattr(history_multimodals, 'multimodals', input_mm) or {}
+        for value in mm_for_chunk_limit.values():
+            max_mm_size = max([v.end - v.start for v in value], default=0)
+            max_prefill_num = max(max_prefill_num, max_mm_size)
+
+        return seq.num_token_ids > max_prefill_num
 
     @staticmethod
     def create_status_list_property(status: MessageStatus):
@@ -266,34 +260,36 @@ class Scheduler:
             if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
                 break
 
-            stats_snapshot = self._prefix_cache_stats_snapshot()
+            stats_snapshot = self.block_trie.snapshot_stats()
             rolled_back_match = False
 
-            def __rollback_ssm_match():
+            def __rollback_prefix_match():
                 nonlocal rolled_back_match
-                self._rollback_unscheduled_ssm_match(seq, stats_snapshot)
+                self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
                 rolled_back_match = True
 
             self.block_trie.match(seq)
+            if self._prefix_hit_starts_middle_long_context_chunk(seq):
+                __rollback_prefix_match()
 
             had_ssm_restore = self.is_ssm and seq.prefix_cache.restore_state >= 0
             if not self._acquire_ssm_restore_if_needed(seq):
-                __rollback_ssm_match()
+                __rollback_prefix_match()
 
             if not __evict_for_seq(seq, waiting):
                 if not had_ssm_restore:
-                    __rollback_ssm_match()
+                    __rollback_prefix_match()
                     break
                 # A matched SSM restore may be pinning the only checkpoint
                 # state that eviction would otherwise free.  Roll it back once
                 # and retry eviction before declaring the sequence unschedulable.
-                __rollback_ssm_match()
+                __rollback_prefix_match()
                 if not __evict_for_seq(seq, waiting):
                     break
 
             # allocate session memory
             if self.is_ssm and not self._ensure_runtime_state_available():
-                __rollback_ssm_match()
+                __rollback_prefix_match()
                 if not __evict_for_seq(seq, waiting):
                     break
                 if not self._ensure_runtime_state_available():
@@ -301,7 +297,7 @@ class Scheduler:
             if rolled_back_match:
                 # The tentative hit was not used, but the request still queried
                 # the cache and will recompute from token 0 after rollback.
-                self._record_prefix_cache_miss(seq, stats_snapshot)
+                self.block_trie.record_recompute_after_rollback(seq, stats_snapshot)
             self.block_manager.allocate(seq, prealloc_size)
             self.block_trie.allocate(seq)
             if self.is_ssm:

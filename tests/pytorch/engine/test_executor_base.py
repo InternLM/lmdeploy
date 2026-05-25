@@ -55,6 +55,25 @@ def test_sync_spec_cache_block_size_updates_kernel_block_size():
     assert spec_cache_config.kernel_block_size == 16
 
 
+def test_executor_disables_prefix_cache_with_spec_decode():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True)
+    model_config = SimpleNamespace(sliding_window=None)
+
+    ExecutorBase(model_path='',
+                 model_config=model_config,
+                 cache_config=cache_config,
+                 backend_config=SimpleNamespace(),
+                 dist_config=SimpleNamespace(dp=1, world_size=1),
+                 misc_config=SimpleNamespace(),
+                 specdecode_config=SimpleNamespace())
+
+    assert not cache_config.enable_prefix_caching
+
+
 def test_get_rank_cache_block_sizes_only_charges_spec_rank():
     executor = object.__new__(ExecutorBase)
     executor.dist_config = SimpleNamespace(attn_tp=2)

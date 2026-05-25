@@ -143,10 +143,10 @@ class LongContextChunker:
         max_prefill_num = self.max_prefill_token_num
         input_mm = seq.get_input_multimodals()
         history_multimodals = getattr(seq, 'history_multimodals', None)
-        all_mm = getattr(history_multimodals, 'multimodals', input_mm) or {}
+        mm_for_chunk_limit = getattr(history_multimodals, 'multimodals', input_mm) or {}
         self.multimodals = defaultdict(list)
 
-        for value in all_mm.values():
+        for value in mm_for_chunk_limit.values():
             max_mm_size = max([v.end - v.start for v in value], default=0)
             max_prefill_num = max(max_prefill_num, max_mm_size)
 
@@ -402,10 +402,7 @@ class InputsMakerAsync:
 
     @torch.inference_mode()
     @record_function('create_model_inputs')
-    def create_model_inputs(self,
-                            messages: 'SeqList',
-                            is_prefill: bool,
-                            allow_state_checkpoint_save: bool = True):
+    def create_model_inputs(self, messages: 'SeqList', is_prefill: bool):
         """Create model inputs from messages.
 
         Args:
@@ -480,7 +477,7 @@ class InputsMakerAsync:
                 restore_src_offsets, restore_dst_offsets = _compact_state_prefix_cache_restore_offsets(messages)
                 model_inputs.state_prefix_cache_offsets = restore_src_offsets
                 model_inputs.state_prefix_cache_dst_offsets = restore_dst_offsets
-            if allow_state_checkpoint_save and not is_decoding:
+            if not is_decoding:
                 # Prefill saves publish only after model_forward has copied the
                 # runtime state to these reserved checkpoint offsets.
                 save_state_offsets = [
@@ -503,8 +500,7 @@ class InputsMakerAsync:
     def create_model_inputs_long_context(self,
                                          seq: 'SchedulerSequence',
                                          chunk_size: int,
-                                         multimodals: 'MultiModalInputs|None' = None,
-                                         allow_state_checkpoint_save: bool = True):
+                                         multimodals: 'MultiModalInputs|None' = None):
         """Create model inputs for long context messages."""
         token_ids = seq.token_ids[:chunk_size]
         input_ids = torch.as_tensor(token_ids)[None]
@@ -562,13 +558,12 @@ class InputsMakerAsync:
                     raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
                 model_inputs.state_prefix_cache_offsets = (seq.prefix_cache.restore_state, )
                 model_inputs.state_prefix_cache_dst_offsets = (seq.logical_state, )
-            if allow_state_checkpoint_save:
-                # Save at the exact state step produced by this chunk forward.
-                checkpoint_step = seq.num_history_ids + chunk_size
-                save_state = self.scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)
-                if save_state >= 0:
-                    model_inputs.state_prefix_cache_save_src_offsets = (seq.logical_state, )
-                    model_inputs.state_prefix_cache_save_offsets = (save_state, )
+            # Save at the exact state step produced by this chunk forward.
+            checkpoint_step = seq.num_history_ids + chunk_size
+            save_state = self.scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)
+            if save_state >= 0:
+                model_inputs.state_prefix_cache_save_src_offsets = (seq.logical_state, )
+                model_inputs.state_prefix_cache_save_offsets = (save_state, )
 
         # mrope
         if self.config.use_mrope:
@@ -720,9 +715,9 @@ class InputsMakerAsync:
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
 
-        def __create_model_inputs(seqs, allow_state_checkpoint_save: bool = True):
+        def __create_model_inputs(seqs):
             """Createe model inputs."""
-            inputs = self.create_model_inputs(seqs, True, allow_state_checkpoint_save=allow_state_checkpoint_save)
+            inputs = self.create_model_inputs(seqs, True)
             delta, valid_seqs, _ = self.create_model_inputs_delta_valid_only()
             self.running_seqs = valid_seqs
             extra_inputs = self.model_agent_strategy.make_extra_inputs(seqs, inputs)
@@ -769,7 +764,9 @@ class InputsMakerAsync:
                     # A prefix-cache restore can skip past a large multimodal
                     # span, leaving a tail that fits the multimodal-expanded
                     # chunk limit.  Treat it as normal prefill so the model sees
-                    # the same single tail chunk as the no-cache path.
+                    # the same single tail chunk as the no-cache path.  Do not
+                    # set chunk flags here: spec decoding uses them as a
+                    # cross-chunk carry protocol.
                     self.long_context_chunker.clear()
                     inputs, delta, extra_inputs = __create_model_inputs(running)
                 else:

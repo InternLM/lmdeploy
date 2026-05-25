@@ -2,8 +2,13 @@
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from lmdeploy.pytorch.engine.inputs_maker import (LongContextChunker, _compact_state_prefix_cache_restore_offsets,
-                                                  _compact_state_prefix_cache_save_offsets)
+from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.engine.inputs_maker import (
+    InputsMakerAsync,
+    LongContextChunker,
+    _compact_state_prefix_cache_restore_offsets,
+    _compact_state_prefix_cache_save_offsets,
+)
 
 
 @dataclass
@@ -19,6 +24,8 @@ class _DummySeq:
         self.num_token_ids = token_ids
         self.history_multimodals = SimpleNamespace(multimodals=all_multimodals)
         self._input_multimodals = input_multimodals
+        self.return_logits = False
+        self.return_routed_experts = False
 
     def get_input_multimodals(self):
         return self._input_multimodals
@@ -27,6 +34,36 @@ class _DummySeq:
 def _state_seq(logical_state: int, restore_state: int = -1):
     return SimpleNamespace(logical_state=logical_state,
                            prefix_cache=SimpleNamespace(restore_state=restore_state))
+
+
+class _FakeScheduler:
+
+    def __init__(self, running):
+        self.running = running
+
+    def schedule(self, is_prefill: bool, prealloc_size: int):
+        return SimpleNamespace(running=self.running, swap_in_map={}, swap_out_map={})
+
+
+class _FakeEngineStrategy:
+
+    def get_prealloc_size(self, is_prefill: bool):
+        return 0
+
+
+class _FakeSamplingStrategy:
+
+    def make_sampling_inputs(self, running):
+        return None
+
+
+class _FakeModelAgentStrategy:
+
+    def make_extra_inputs(self, running, inputs):
+        return None
+
+    def make_stopping_criteria(self, running):
+        return None
 
 
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():
@@ -67,6 +104,42 @@ def test_long_context_chunker_only_tracks_remaining_multimodals():
     assert chunker.max_prefill_num == 5376
     assert chunk_size == 2000
     assert multimodals == {'image': [remaining_image]}
+
+
+def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_decoding():
+    image = _DummyMultiModal(start=0, end=1024)
+    seq = _DummySeq(
+        history_ids=0,
+        token_ids=1024,
+        all_multimodals={'image': [image]},
+        input_multimodals={'image': [image]},
+    )
+    model_inputs = SimpleNamespace(is_decoding=False,
+                                   is_chunk=False,
+                                   is_first_chunk=False,
+                                   is_last_chunk=False,
+                                   is_chunk_multimodal=False)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode)
+    maker.spec_decoding = True
+    maker.scheduler = _FakeScheduler([seq])
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+
+    forward_inputs = maker._make_forward_inputs(prefill=True)
+
+    assert forward_inputs['inputs'] is model_inputs
+    assert not model_inputs.is_chunk
+    assert not model_inputs.is_first_chunk
+    assert not model_inputs.is_last_chunk
+    assert not model_inputs.is_chunk_multimodal
 
 
 def test_state_prefix_cache_restore_offsets_are_compact():
