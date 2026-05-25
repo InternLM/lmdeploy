@@ -211,11 +211,6 @@ class BlockTrie:
             return True
         return False
 
-    def discard_state_checkpoints(self, seqs: list[SchedulerSequence]):
-        """Discard unpublished sequence state checkpoint reservations."""
-        for seq in seqs:
-            self.discard_state_checkpoint_for_seq(seq)
-
     def _get_state_checkpoint_node_for_seq(self, seq: SchedulerSequence, step: int):
         """Get the trie node that exactly represents a sequence checkpoint
         step."""
