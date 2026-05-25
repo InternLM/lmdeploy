@@ -32,15 +32,15 @@ RUN --mount=type=cache,target=/root/.cache \
     uv venv -p python${PYTHON_VERSION} --seed /opt/py3 && \
     pip install --upgrade pip build
 
-# Pip deps only (cache until requirements/runtime_cuda.txt changes). No full repo COPY yet.
+# Pip deps only (cache until requirements/common.txt or runtime_cuda.txt changes). No full repo COPY yet.
 FROM dev AS runtime-deps-pip
 ARG PYTHON_VERSION=3.12
 ENV PYTHON_VERSION=${PYTHON_VERSION}
 
-COPY requirements/runtime_cuda.txt /tmp/runtime_cuda.txt
+COPY requirements/common.txt requirements/runtime_cuda.txt /tmp/requirements/
 
 RUN --mount=type=cache,target=/root/.cache \
-    pip install -r /tmp/runtime_cuda.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+    pip install -r /tmp/requirements/runtime_cuda.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
 
 RUN mkdir -p /wheels
 
