@@ -938,19 +938,16 @@ void Engine::Start()
 
 void Engine::Impl::UpdateScheduleMetrics()
 {
-    scheduler_tick_.fetch_add(1, std::memory_order_relaxed);
-    if (!param_.enable_metrics && metrics_) {
-        return;
-    }
+    const auto scheduler_tick = scheduler_tick_.fetch_add(1, std::memory_order_relaxed) + 1;
 
-    const auto& [total, active, cached] = seq_mgr_->seq_stats();
+    const auto [total, active, cached] = seq_mgr_->seq_stats();
 
     auto m = std::make_shared<ScheduleMetrics>();
 
     m->total_seqs     = total;
     m->active_seqs    = active;
     m->waiting_seqs   = total - active;
-    m->scheduler_tick = scheduler_tick_.load(std::memory_order_relaxed);
+    m->scheduler_tick = scheduler_tick;
 
     m->total_blocks  = seq_mgr_->total_count();
     m->active_blocks = seq_mgr_->active_count();
@@ -962,12 +959,7 @@ void Engine::Impl::UpdateScheduleMetrics()
 
 shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 {
-    auto metrics = std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
-    if (!impl_->param_.enable_metrics && metrics) {
-        metrics                 = std::make_shared<ScheduleMetrics>(*metrics);
-        metrics->scheduler_tick = impl_->scheduler_tick_.load(std::memory_order_relaxed);
-    }
-    return metrics;
+    return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
 }
 
 }  // namespace turbomind

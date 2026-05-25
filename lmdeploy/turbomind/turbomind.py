@@ -6,9 +6,7 @@ import json
 import math
 import os
 import os.path as osp
-import queue
 import sys
-import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -408,25 +406,7 @@ class TurboMind:
 
     async def get_health_status(self) -> dict:
         """Get backend health status without blocking the event loop."""
-        result_queue = queue.Queue(maxsize=1)
-
-        def _worker():
-            try:
-                result_queue.put((True, self._get_health_status()))
-            except Exception as e:
-                result_queue.put((False, str(e)))
-
-        thread = threading.Thread(target=_worker, name='TurboMindHealthProbe', daemon=True)
-        thread.start()
-        while True:
-            try:
-                succeeded, result = result_queue.get_nowait()
-                break
-            except queue.Empty:
-                await asyncio.sleep(0.01)
-        if not succeeded:
-            raise RuntimeError(result)
-        return result
+        return await asyncio.to_thread(self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):
