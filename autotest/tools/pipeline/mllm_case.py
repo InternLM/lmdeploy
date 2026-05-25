@@ -57,9 +57,7 @@ def _skip_video_error_text(exc: BaseException) -> str:
     return f'SKIPPED_UNSUPPORTED_VIDEO:{exc!s}'
 
 
-def _is_input_length_error_text(text: str | None) -> bool:
-    if text is None:
-        return False
+def _is_input_length_error_text(text: str) -> bool:
     rl = text.lower()
     return 'input_length_error' in rl or 'internal error happened' in rl
 

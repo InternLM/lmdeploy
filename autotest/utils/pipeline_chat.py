@@ -180,11 +180,9 @@ def _is_skipped_case_response(response: str) -> bool:
     return 'skipped_' in response.lower()
 
 
-def _parse_pipeline_mm_demo_payload(raw: str | None) -> tuple[str | None, str | None]:
+def _parse_pipeline_mm_demo_payload(raw: str) -> tuple[str | None, str | None]:
     """Parse ``qwen3-demo-video`` log payload (plain text or JSON with
     finish_reason)."""
-    if raw is None:
-        return None, None
     s = raw.strip()
     if s.startswith('{'):
         try:
@@ -197,9 +195,7 @@ def _parse_pipeline_mm_demo_payload(raw: str | None) -> tuple[str | None, str | 
     return s, None
 
 
-def _is_engine_error_response(text: str | None) -> bool:
-    if text is None:
-        return False
+def _is_engine_error_response(text: str) -> bool:
     rl = text.lower()
     return 'input_length_error' in rl or 'internal error happened' in rl
 

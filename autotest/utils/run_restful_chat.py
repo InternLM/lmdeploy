@@ -253,12 +253,10 @@ VIDEO_SINGLE_FRAME_MAX_TOKENS = 512
 VIDEO_REDPANDA_STREAM_MAX_TOKENS = 2048
 
 
-def _vl_video_stream_finish_assert(finish: str | None, text: str | None) -> bool:
+def _vl_video_stream_finish_assert(finish: str | None, text: str) -> bool:
     """``stop`` / ``length`` red-panda video: species keywords, then ``length``
     needs enough text."""
     if finish not in ('stop', 'length'):
-        return False
-    if text is None:
         return False
     t = text.lower()
     raw = text
@@ -397,11 +395,9 @@ def _mm_demo_public_answer_text(text: str) -> str:
     return s[i + len(key) :].strip()
 
 
-def _mm_demo_tomb_answer_assert(text: str | None) -> bool:
+def _mm_demo_tomb_answer_assert(text: str) -> bool:
     """Tomb/MCQ: visible tail mentions scene, a digit, or an MCQ-style letter
     (A–D)."""
-    if text is None:
-        return False
     raw = _mm_demo_public_answer_text(text).strip()
     if not raw:
         return False
@@ -420,11 +416,9 @@ def _mm_demo_tomb_answer_assert(text: str | None) -> bool:
     return False
 
 
-def _mm_demo_thinking_wrapper_shape_assert(text: str | None) -> bool:
+def _mm_demo_thinking_wrapper_shape_assert(text: str) -> bool:
     """Bound user-visible tail after ``</think>``, or total size if the wrapper
     never closes."""
-    if text is None:
-        return False
     s = text.strip()
     if not s:
         return False
@@ -434,11 +428,9 @@ def _mm_demo_thinking_wrapper_shape_assert(text: str | None) -> bool:
     return len(s) <= 3200
 
 
-def _mm_demo_tomb_run_assert(finish: str | None, text: str | None) -> bool:
+def _mm_demo_tomb_run_assert(finish: str | None, text: str) -> bool:
     """Tomb + ``mm_processor``: ``stop`` + shape; ``length`` + closed thinking
     + shape, else long jar/scene tail."""
-    if text is None:
-        return False
     t = text.strip()
     if not t or not _mm_demo_tomb_answer_assert(t):
         return False
@@ -622,10 +614,9 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
                     skip_red_panda_tail = True
                 else:
                     raw_ch0 = (raw_json.get('choices') or [{}])[0]
-                    raw_text = raw_ch0.get('message', {}).get('content')
-                    if raw_text is not None:
-                        file.writelines(raw_text.lower() + '\n')
-                    raw_fr = raw_ch0.get('finish_reason')
+                    raw_text = raw_ch0['message']['content']
+                    file.writelines(raw_text.lower() + '\n')
+                    raw_fr = raw_ch0['finish_reason']
                     with assume:
                         assert _vl_video_stream_finish_assert(raw_fr, raw_text), (raw_fr, raw_text, raw_json)
 
@@ -692,7 +683,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
         else:
             file.writelines('[video mm_processor non-stream] ' + str(mm_resp).lower() + '\n')
             mm_text = mm_resp.choices[0].message.content
-            mm_fr = getattr(mm_resp.choices[0], 'finish_reason', None)
+            mm_fr = mm_resp.choices[0]['finish_reason']
             with assume:
                 assert _mm_demo_tomb_run_assert(mm_fr, mm_text), (mm_fr, mm_text[:2000])
 
@@ -747,10 +738,9 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
                     skip_mm_tail = True
                 else:
                     mm_raw_choice0 = (mm_raw_json.get('choices') or [{}])[0]
-                    mm_raw_text = mm_raw_choice0.get('message', {}).get('content')
-                    if mm_raw_text is not None:
-                        file.writelines(mm_raw_text.lower() + '\n')
-                    mm_raw_fr = mm_raw_choice0.get('finish_reason')
+                    mm_raw_text = mm_raw_choice0['message']['content']
+                    file.writelines(mm_raw_text.lower() + '\n')
+                    mm_raw_fr = mm_raw_choice0['finish_reason']
                     with assume:
                         assert _mm_demo_tomb_run_assert(mm_raw_fr, mm_raw_text), (
                             mm_raw_fr, mm_raw_text, mm_raw_json)
@@ -800,13 +790,10 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
             file.writelines('[mixed image+text+video] ' + str(mix_resp).lower() + '\n')
             mix_content = mix_resp.choices[0].message.content
             with assume:
-                assert mix_content is not None, mix_resp
-            with assume:
                 assert ('tiger' in mix_content.lower() or '虎' in mix_content or 'ski' in mix_content.lower()
                         or '滑雪' in mix_content), mix_resp
             with assume:
-                assert _vl_video_stream_finish_assert(
-                    getattr(mix_resp.choices[0], 'finish_reason', None), mix_content), mix_resp
+                assert _vl_video_stream_finish_assert(mix_resp.choices[0]['finish_reason'], mix_content), mix_resp
 
     file.close()
 
