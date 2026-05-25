@@ -203,12 +203,14 @@ class CUDAGraphRunner(GraphRunner):
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         # for draft model to distinguish inputs from target model and itself
-        query_len = input_ids.size(1) // batch_size
+        target_hidden_size = None
+        if context.target_hidden_states is not None:
+            target_hidden_size = context.target_hidden_states.size(-1)
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch, query_len)
+        return (batch_size, is_decoding, enable_microbatch, target_hidden_size)
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
@@ -242,7 +244,8 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
-        decode_query_len = graph_key[3]
+        batch_size = kwargs['attn_metadata'].q_seqlens.size(0)
+        decode_query_len = kwargs['input_ids'].size(1) // batch_size
         if graph_key not in self._runner_map:
             max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
             runner = CUDASingleGraphRunner(
