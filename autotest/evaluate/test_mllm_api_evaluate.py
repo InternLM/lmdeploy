@@ -3,16 +3,14 @@ import time
 
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid
+from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid, resolve_eval_config_name
 from utils.evaluate_utils import mllm_eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
 
 
 def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
-    if eval_config_name == 'default':
-        if 'qwen3.5' in run_config.get('model', '').lower():
-            eval_config_name = 'qwen3.5'
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
     extra_config = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
     eval_path = config.get('mllm_eval_path')
     if eval_subpath:
@@ -83,12 +81,7 @@ def _run_proxy_distributed_mllm_test(
         eval_config_name='default'):
     assert manager is not None, 'Manager instance must be provided'
 
-    if eval_config_name == 'default':
-        if 'qwen3.5' in run_config.get('model', '').lower():
-            eval_config_name = 'qwen3.5'
-
-    if str(config.get('env_tag')) == 'ascend':
-        eval_config_name = f'{eval_config_name}-2batch'
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
     preset_config = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
     model_name = run_config['model']

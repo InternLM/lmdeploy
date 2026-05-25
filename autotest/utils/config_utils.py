@@ -525,6 +525,48 @@ def is_model_in_list(config: dict[str, Any], parallel_config: dict[str, int], mo
     return parallel_config in model_config
 
 
+_MODEL_EVAL_CONFIG_RULES = (
+    ('gpt', 'gpt'),
+    ('sdar', 'sdar'),
+    ('intern-s1-pro', 'intern-s1-pro'),
+    ('qwen3.5', 'qwen3.5'),
+)
+
+def _resolve_base_eval_config_name(run_config: dict[str, Any], rules: tuple[tuple[str, str], ...]) -> str:
+    model = run_config['model'].lower()
+    for needle, resolved in rules:
+        if needle in model:
+            return resolved
+    return 'default'
+
+
+def _apply_eval_config_env_suffix(config: dict[str, Any], name: str) -> str:
+    env_tag = str(config['env_tag'])
+    if env_tag == 'a100':
+        return f'{name}-32k'
+    if env_tag == 'ascend':
+        return f'{name}-2batch'
+    return name
+
+
+def resolve_eval_config_name(config: dict[str, Any],
+                             run_config: dict[str, Any],
+                             eval_config_name: str = 'default',
+                             *,
+                             only_if_default: bool = True) -> str:
+    """Resolve eval preset key (EVAL_CONFIGS / MLLM_EVAL_CONFIGS) from model
+    and env_tag."""
+    if only_if_default and eval_config_name != 'default':
+        return eval_config_name
+
+    if eval_config_name == 'default':
+        name = _resolve_base_eval_config_name(run_config, _MODEL_EVAL_CONFIG_RULES)
+    else:
+        name = eval_config_name
+
+    return _apply_eval_config_env_suffix(config, name)
+
+
 def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -> str:
     """Generate case name string by run config dict."""
     model_name = run_config['model']
@@ -943,6 +985,26 @@ def test_run_config():
     os.unsetenv('TEST_ENV')
 
 
+def test_resolve_eval_config_name():
+    run_config = {'model': 'openai/gpt-oss-120b'}
+    assert resolve_eval_config_name({}, run_config) == 'gpt'
+    assert resolve_eval_config_name({'env_tag': 'a100'}, run_config) == 'gpt-32k'
+    assert resolve_eval_config_name({'env_tag': 'ascend'}, run_config) == 'gpt-2batch'
+    assert resolve_eval_config_name({}, run_config, 'longtext-512k') == 'longtext-512k'
+    assert resolve_eval_config_name({'env_tag': 'ascend'}, run_config, 'longtext-512k') == 'longtext-512k'
+
+    sdar_config = {'model': 'inclusionAI/SDAR-30B-A3B'}
+    assert resolve_eval_config_name({}, sdar_config) == 'sdar'
+    qwen_config = {'model': 'Qwen/Qwen3.5-397B-A17B'}
+    assert resolve_eval_config_name({}, qwen_config) == 'qwen3.5'
+    intern_config = {'model': 'internlm/Intern-S1-Pro-FP8'}
+    assert resolve_eval_config_name({}, intern_config) == 'intern-s1-pro'
+    assert resolve_eval_config_name({}, {'model': 'meta/llama'}) == 'default'
+    mllm_config = {'model': 'Qwen/Qwen3.5-VL-7B'}
+    assert resolve_eval_config_name({}, mllm_config) == 'qwen3.5'
+    assert resolve_eval_config_name({'env_tag': 'ascend'}, mllm_config) == 'qwen3.5-2batch'
+
+
 def test_get_parallel_config():
     test = get_parallel_config({}, 'empty')
     assert test == [{'tp': 1}]
@@ -970,6 +1032,7 @@ def test_get_parallel_config():
 
 
 if __name__ == '__main__':
+    test_resolve_eval_config_name()
     test_get_parallel_config()
     test_cli_common_param()
     test_run_config()
