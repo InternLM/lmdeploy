@@ -28,21 +28,16 @@ class VLAsyncEngine(AsyncEngine):
         if backend_config and backend_config.enable_prefix_caching:
             backend_config.enable_prefix_caching = False
             logger.warning('Prefix caching is disabled since LMDeploy hasn\'t support in on VL models yet')
+        self.vl_encoder = ImageEncoder(model_path,
+                                       backend,
+                                       vision_config,
+                                       backend_config=backend_config,
+                                       trust_remote_code=trust_remote_code)
         super().__init__(model_path,
                          backend=backend,
                          backend_config=backend_config,
                          trust_remote_code=trust_remote_code,
                          **kwargs)
-        mm_feature_dtype = None
-        if backend == 'pytorch':
-            model_config = getattr(self.engine, 'model_config', None)
-            mm_feature_dtype = getattr(model_config, 'dtype', None)
-        self.vl_encoder = ImageEncoder(model_path,
-                                       backend,
-                                       vision_config,
-                                       backend_config=backend_config,
-                                       trust_remote_code=trust_remote_code,
-                                       mm_feature_dtype=mm_feature_dtype)
         # Update prompt_processor to support multimodal processing
         self.prompt_processor = MultimodalProcessor(self.tokenizer,
                                                     self.chat_template,

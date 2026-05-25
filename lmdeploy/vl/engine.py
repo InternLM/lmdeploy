@@ -15,6 +15,29 @@ from lmdeploy.vl.model.builder import load_vl_model
 logger = get_logger('lmdeploy')
 
 
+def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
+    """Get multimodal feature dtype from the original Transformers config."""
+
+    def _to_torch_dtype(dtype):
+        if isinstance(dtype, torch.dtype):
+            return dtype
+        if isinstance(dtype, str):
+            return getattr(torch, dtype.removeprefix('torch.'), None)
+        return None
+
+    if hf_config is None:
+        return None
+
+    for config in (hf_config, getattr(hf_config, 'text_config', None), getattr(hf_config, 'llm_config', None)):
+        if config is None:
+            continue
+        for attr_name in ('dtype', 'torch_dtype'):
+            dtype = _to_torch_dtype(getattr(config, attr_name, None))
+            if isinstance(dtype, torch.dtype) and torch.empty((), dtype=dtype).is_floating_point():
+                return dtype
+    return None
+
+
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
     """Raise exception on finish."""
     try:
@@ -35,13 +58,12 @@ class ImageEncoder:
         vision_config: VisionConfig = None,
         backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
         trust_remote_code: bool = False,
-        mm_feature_dtype: torch.dtype | None = None,
     ):
         self.model = load_vl_model(model_path,
                                    backend,
                                    backend_config=backend_config,
                                    trust_remote_code=trust_remote_code)
-        self.mm_feature_dtype = mm_feature_dtype
+        self.mm_feature_dtype = _get_hf_config_mm_feature_dtype(getattr(self.model, 'hf_config', None))
         if self.model is not None and hasattr(self.model, 'set_mm_feature_dtype'):
             self.model.set_mm_feature_dtype(self.mm_feature_dtype)
         if vision_config is None:
@@ -65,7 +87,7 @@ class ImageEncoder:
                          messages: list[dict],
                          input_prompt: str | list[int] | None = None,
                          mm_processor_kwargs: dict[str, Any] | None = None,
-                         request_id: int | None = None) -> list[dict]:
+                         session_id: int | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
         def _preprocess():
             log_preprocess_time = logger.isEnabledFor(REQUEST_LOG_LEVEL)
@@ -77,7 +99,7 @@ class ImageEncoder:
             finally:
                 if log_preprocess_time:
                     elapsed = time.perf_counter() - start
-                    request_info = '' if request_id is None else f'session={request_id}, '
+                    request_info = '' if session_id is None else f'session={session_id}, '
                     logger.log(REQUEST_LOG_LEVEL, f'{request_info}multimodal preprocess time={elapsed:.3f}s')
 
         if self._uses_new_preprocess:

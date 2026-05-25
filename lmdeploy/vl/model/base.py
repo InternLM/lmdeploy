@@ -21,31 +21,6 @@ from lmdeploy.vl.model.preprocess_utils import (
 VISION_MODELS = Registry('vision_model')
 
 
-def _normalize_mm_feature_dtype(dtype: torch.dtype | None) -> torch.dtype | None:
-    """Return a floating torch dtype suitable for MM features."""
-    if not isinstance(dtype, torch.dtype):
-        return None
-    if not torch.empty((), dtype=dtype).is_floating_point():
-        return None
-    return dtype
-
-
-def _postprocess_mm_output(output, target_dtype: torch.dtype | None):
-    """Cast floating processor-output tensors to the resolved model dtype."""
-    target_dtype = _normalize_mm_feature_dtype(target_dtype)
-    if target_dtype is None:
-        return output
-    if isinstance(output, torch.Tensor):
-        if output.is_floating_point() and output.dtype != target_dtype:
-            return output.to(dtype=target_dtype)
-        return output
-    if isinstance(output, dict):
-        return {key: _postprocess_mm_output(value, target_dtype) for key, value in output.items()}
-    if isinstance(output, list):
-        return [_postprocess_mm_output(value, target_dtype) for value in output]
-    return output
-
-
 class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: str | list[str] = None
@@ -91,7 +66,24 @@ class VisionModel(ABC):
 
     def set_mm_feature_dtype(self, dtype: torch.dtype | None):
         """Set target dtype for floating MM feature tensors."""
-        self.mm_feature_dtype = _normalize_mm_feature_dtype(dtype)
+        self.mm_feature_dtype = dtype
+
+    @classmethod
+    def _postprocess_mm_output(cls, output, target_dtype: torch.dtype | None):
+        """Cast floating processor-output tensors to the target model dtype."""
+        if not isinstance(target_dtype, torch.dtype):
+            return output
+        if not torch.empty((), dtype=target_dtype).is_floating_point():
+            return output
+        if isinstance(output, torch.Tensor):
+            if output.is_floating_point() and output.dtype != target_dtype:
+                return output.to(dtype=target_dtype)
+            return output
+        if isinstance(output, dict):
+            return {key: cls._postprocess_mm_output(value, target_dtype) for key, value in output.items()}
+        if isinstance(output, list):
+            return [cls._postprocess_mm_output(value, target_dtype) for value in output]
+        return output
 
     def get_pad_token_id(self, model_path, hf_config, trust_remote_code: bool = False):
         """Get pad_token_id from hf_config or tokenizer."""
@@ -203,7 +195,7 @@ class VisionModel(ABC):
                     collected_mm_items[current_modality] = {}
 
                 if attr_name in self.FEATURE_NAMES:
-                    value = _postprocess_mm_output(value, self.mm_feature_dtype)
+                    value = self._postprocess_mm_output(value, self.mm_feature_dtype)
                     processor_outputs[attr_name] = value
                     attr_name = 'feature'
 
