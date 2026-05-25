@@ -167,6 +167,14 @@ pytorch_quantization:
         - test/test_vl_tp1
         - test/test_vl_dpep8
 
+longtext_model:
+    - test/test_tp1
+    - test/test_tp1_pytorch
+    - test/test_vl_tp2
+    - test/test_vl_tp8
+    - test/test_cp2tp8
+    - test/test_vl_dpep8
+
 longtext_benchmark_model:
     - test/test_tp1
     - test/test_tp1_pytorch

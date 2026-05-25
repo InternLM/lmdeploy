@@ -19,11 +19,11 @@ def _run_ray_distributed_test(
         eval_config_name='default'):
     """Universal distributed test executor (using shared Ray cluster)"""
     assert manager is not None, 'Manager instance must be provided'
-    if 'gpt' in run_config.get('model', '').lower():
+    if 'gpt' in run_config.get('model').lower():
         eval_config_name = 'gpt'
-    elif 'intern-s1-pro' in run_config.get('model', '').lower():
+    elif 'intern-s1-pro' in run_config.get('model').lower():
         eval_config_name = 'intern-s1-pro'
-    elif 'qwen3.5' in run_config.get('model', '').lower():
+    elif 'qwen3.5' in run_config.get('model').lower():
         eval_config_name = 'qwen3.5'
     if str(config.get('env_tag')) == 'ascend':
         eval_config_name = f'{eval_config_name}-2batch'
@@ -66,11 +66,11 @@ def _run_proxy_distributed_test(config,
                                 eval_config_name='default'):
     assert manager is not None, 'Manager instance must be provided'
 
-    if 'gpt' in run_config.get('model', '').lower():
+    if 'gpt' in run_config.get('model').lower():
         eval_config_name = 'gpt'
-    elif 'intern-s1-pro' in run_config.get('model', '').lower():
+    elif 'intern-s1-pro' in run_config.get('model').lower():
         eval_config_name = 'intern-s1-pro'
-    elif 'qwen3.5' in run_config.get('model', '').lower():
+    elif 'qwen3.5' in run_config.get('model').lower():
         eval_config_name = 'qwen3.5'
 
     if str(config.get('env_tag')) == 'ascend':
@@ -115,13 +115,13 @@ def _run_proxy_distributed_test(config,
 def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
     """Run test with specified evaluation configuration."""
     if eval_config_name == 'default':
-        if 'gpt' in run_config.get('model', '').lower():
+        if 'gpt' in run_config.get('model').lower():
             eval_config_name = 'gpt'
-        elif 'sdar' in run_config.get('model', '').lower():
+        elif 'sdar' in run_config.get('model').lower():
             eval_config_name = 'sdar'
-        elif 'intern-s1-pro' in run_config.get('model', '').lower():
+        elif 'intern-s1-pro' in run_config.get('model').lower():
             eval_config_name = 'intern-s1-pro'
-        elif 'qwen3.5' in run_config.get('model', '').lower():
+        elif 'qwen3.5' in run_config.get('model').lower():
             eval_config_name = 'qwen3.5'
         if str(config.get('env_tag')) == 'a100':
             eval_config_name = f'{eval_config_name}-32k'

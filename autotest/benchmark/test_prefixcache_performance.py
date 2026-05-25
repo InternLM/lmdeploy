@@ -4,7 +4,8 @@ from utils.config_utils import get_func_config_list
 
 
 def get_models(backend, parallel_config):
-    return get_func_config_list(backend, parallel_config, func_type='benchmark')
+    return get_func_config_list(backend, parallel_config, func_type='benchmark') + \
+        get_func_config_list(backend, parallel_config, func_type='benchmark', extra={'enable-prefix-caching': None})
 
 
 @pytest.mark.turbomind
@@ -109,6 +110,24 @@ def test_pytorch_prefix_tp16(config, run_config, worker_id):
         'tp': 2
     },
     'extra_params': {}
+}, {
+    'model': 'Qwen/Qwen3-30B-A3B',
+    'backend': 'turbomind',
+    'communicator': 'cuda-ipc',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {'enable-prefix-caching': None}
+}, {
+    'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {'enable-prefix-caching': None}
 }])
 def test_pytorch_prefix_pr_test_tp1(config, run_config, worker_id):
     result, msg = prefixcache_throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)

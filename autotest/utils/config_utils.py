@@ -36,6 +36,91 @@ def resolve_extra_params(extra_params: dict[str, Any], model_base_path: str) -> 
             spec_cfg['model'] = os.path.join(model_base_path, model)
 
 
+_MODEL_RUN_PARAMS_PATH = os.path.join(os.path.dirname(__file__), 'model_run_params.yml')
+_model_run_params_rules: list[dict[str, Any]] | None = None
+
+
+def _load_model_run_params_rules() -> list[dict[str, Any]]:
+    global _model_run_params_rules
+    if _model_run_params_rules is None:
+        with open(_MODEL_RUN_PARAMS_PATH, encoding='utf-8') as f:
+            data = yaml.safe_load(f) or {}
+        _model_run_params_rules = data.get('rules', [])
+    return _model_run_params_rules
+
+
+def _parallel_rule_matches(para_match: dict[str, Any], parallel_config: dict[str, Any]) -> bool:
+    for key in ('dp', 'ep', 'tp'):
+        if key in para_match and parallel_config.get(key, 0) != para_match[key]:
+            return False
+    return True
+
+
+def _model_subcondition_matches(cond: dict[str, Any], model: str) -> bool:
+    if 'model_contains' in cond:
+        return cond['model_contains'] in model
+    if 'model_contains_ignore_case' in cond:
+        return cond['model_contains_ignore_case'].lower() in model.lower()
+    if 'model_equals' in cond:
+        return model == cond['model_equals']
+    if 'model_not_contains' in cond:
+        return cond['model_not_contains'] not in model
+    return False
+
+
+def _rule_match_matches(match: dict[str, Any], *, config: dict[str, Any], extra: dict[str, Any],
+                        func_type: str, backend: str, run_config: dict[str, Any]) -> bool:
+    if not match:
+        return True
+    model = run_config['model']
+    if 'model_contains' in match and match['model_contains'] not in model:
+        return False
+    if 'model_contains_ignore_case' in match:
+        if match['model_contains_ignore_case'].lower() not in model.lower():
+            return False
+    if 'model_equals' in match and model != match['model_equals']:
+        return False
+    if 'model_not_contains' in match and match['model_not_contains'] in model:
+        return False
+    if 'model_any' in match:
+        if not any(_model_subcondition_matches(c, model) for c in match['model_any']):
+            return False
+    if 'func_type' in match and func_type != match['func_type']:
+        return False
+    if 'func_type_in' in match and func_type not in match['func_type_in']:
+        return False
+    if 'backend' in match and backend != match['backend']:
+        return False
+    if 'env_tag_in' in match:
+        env_tag = str(config.get('env_tag', ''))
+        if env_tag not in {str(tag) for tag in match['env_tag_in']}:
+            return False
+    if 'extra_missing_keys' in match:
+        for key in match['extra_missing_keys']:
+            if key in extra:
+                return False
+    return True
+
+
+def apply_model_run_params(run_config: dict[str, Any], config: dict[str, Any], extra: dict[str, Any],
+                           func_type: str, backend: str) -> None:
+    """Apply ordered rules from model_run_params.yml to run_config
+    extra_params."""
+    parallel_config = run_config.get('parallel_config', {})
+    for rule in _load_model_run_params_rules():
+        if not _rule_match_matches(rule.get('match', {}), config=config, extra=extra, func_type=func_type,
+                                   backend=backend, run_config=run_config):
+            continue
+        for model_rule in rule.get('model_rules', []):
+            if _model_subcondition_matches(model_rule.get('match', {}), run_config['model']):
+                run_config['extra_params'].update(model_rule.get('extra_params', {}))
+        if 'extra_params' in rule:
+            run_config['extra_params'].update(rule['extra_params'])
+        for para_rule in rule.get('parallel_rules', []):
+            if _parallel_rule_matches(para_rule.get('match', {}), parallel_config):
+                run_config['extra_params'].update(para_rule.get('extra_params', {}))
+
+
 def get_func_config_list(backend: str,
                          parallel_config: dict[str, int],
                          model_type: str = 'chat_model',
@@ -84,7 +169,7 @@ def get_func_config_list(backend: str,
                 if not _is_kvint_model(config, backend, model, quant_policy):
                     continue
                 # Prefix caching is unsupported when linear attention is present
-                if 'enable-prefix-caching' in extra and 'Qwen3.' in model:
+                if 'enable-prefix-caching' in extra and 'Qwen3.5' in model:
                     continue
                 run_config = {
                     'model': model,
@@ -101,58 +186,7 @@ def get_func_config_list(backend: str,
                 run_configs.append(run_config)
 
     for run_config in run_configs:
-        if 'Qwen3-235B-A22B-Thinking-2507' in run_config['model']:
-            run_config['extra_params']['cache-max-entry-count'] = 0.9
-            run_config['extra_params']['max-batch-size'] = 1024
-            para_conf = run_config.get('parallel_config', {})
-            if para_conf.get('dp', 0) == 8 and para_conf.get('ep', 0) == 8:
-                run_config['extra_params']['max-batch-size'] = 256
-
-        if 'GLM-5-FP8' in run_config['model']:
-            run_config['extra_params']['cache-max-entry-count'] = 0.9
-            run_config['extra_params']['max-batch-size'] = 128
-
-        if (func_type == 'evaluate' and 'session_len' not in extra
-                and 'session-len' not in extra and 'Qwen3.5' not in run_config['model']):
-            run_config['extra_params']['session_len'] = 65536
-
-        if config.get('env_tag', '') in ['3090', '5080']:
-            run_config['extra_params']['cache-max-entry-count'] = 0.5
-
-        if config.get('env_tag', '') in ['a100'] and ('Qwen3-235B-A22B' in run_config['model']
-                                                      or run_config['model'] == 'internlm/Intern-S1'):
-            run_config['extra_params']['cache-max-entry-count'] = 0.6
-
-        if 'sdar' in run_config['model'].lower():
-            run_config['extra_params']['dllm-block-length'] = 4
-            run_config['extra_params']['dllm-denoising-steps'] = 4
-            run_config['extra_params']['dllm-confidence-threshold'] = 0.9
-
-        if 'kimi' in run_config['model'].lower():
-            para_conf = run_config.get('parallel_config', {})
-            if para_conf.get('dp', 0) == 16 and para_conf.get('ep', 0) == 16:
-                run_config['extra_params']['max-batch-size'] = 256
-
-        if 'Intern-S1-Pro-FP8' in run_config['model'] or 'Intern-S1-Pro-BF16' in run_config['model']:
-            if 'Intern-S1-Pro-FP8' in run_config['model']:
-                run_config['extra_params']['model-format'] = 'fp8'
-            para_conf = run_config.get('parallel_config', {})
-            # For dpep16 configuration, add max-prefill-token-num
-            if para_conf.get('dp', 0) == 16 and para_conf.get('ep', 0) == 16:
-                run_config['extra_params']['max-prefill-token-num'] = 1024
-                run_config['extra_params']['max-batch-size'] = 128
-
-        if ('openai/gpt-oss' in run_config['model'] and backend == 'turbomind'
-                and func_type in ('benchmark', 'longtext_benchmark')):
-            run_config['extra_params']['model-format'] = 'mxfp4'
-
-        if func_type == 'mtp_evaluate' and 'Qwen3.5' in run_config['model']:
-            run_config['extra_params'].update({
-                'reasoning-parser': 'qwen-qwq',
-                'speculative-algorithm': 'qwen3_5_mtp',
-                'speculative-num-draft-tokens': 4,
-                'max-batch-size': 256,
-            })
+        apply_model_run_params(run_config, config, extra, func_type, backend)
 
     return run_configs
 
@@ -187,7 +221,8 @@ def get_cli_common_param(run_config: dict[str, Any]) -> str:
         cli_params.append(f'--tp {tp_num}')  # noqa
 
     # Extra params
-    cli_params.append(get_cli_str(extra_params))
+    if len(extra_params) > 0:
+        cli_params.append(get_cli_str(extra_params))
     cli_params.append('--trust-remote-code')
 
     return ' '.join(cli_params).strip()
@@ -208,7 +243,6 @@ def get_cli_str(config: dict[str, Any]) -> str:
             cli_str.append(f'--{key} {tmp_cli}')
         else:
             cli_str.append(f'--{key} {value}' if value else f'--{key}')
-
     return ' '.join(cli_str)
 
 
@@ -658,7 +692,7 @@ def test_cli_common_param():
     }
 
     cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend turbomind --communicator nccl --quant-policy 8 --model-format awq --dp 16 --ep 16 --dtype bfloat16 --device ascend --enable-prefix-caching --max-batch-size 2048 --session-len 8192 --cache-max-entry-count 0.75 --adapters a=lora/2024-01-25_self_dup b=lora/2024-01-25_self', cli_params  # noqa
+    assert cli_params == '--backend turbomind --communicator nccl --quant-policy 8 --model-format awq --dp 16 --ep 16 --dtype bfloat16 --device ascend --enable-prefix-caching --max-batch-size 2048 --session-len 8192 --cache-max-entry-count 0.75 --adapters a=lora/2024-01-25_self_dup b=lora/2024-01-25_self --trust-remote-code', cli_params  # noqa
     run_config = {
         'model': 'test/test_dpep16-inner-4bits',
         'backend': 'pytorch',
@@ -670,7 +704,7 @@ def test_cli_common_param():
     }
 
     cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend pytorch --communicator nccl --model-format awq --tp 8', cli_params
+    assert cli_params == '--backend pytorch --communicator nccl --model-format awq --tp 8 --trust-remote-code', cli_params # noqa
     os.unsetenv('TEST_ENV')
 
 
@@ -943,7 +977,109 @@ def test_get_parallel_config():
     assert test == [{'tp': 1}, {'dp': 1, 'ep': 8}, {'cp': 8, 'tp': 8}]
 
 
+def _apply_model_run_params_for_test(model: str,
+                                     env_tag: str = '',
+                                     func_type: str = 'func',
+                                     backend: str = 'pytorch',
+                                     extra: dict[str, Any] | None = None,
+                                     parallel_config: dict[str, int] | None = None) -> dict[str, Any]:
+    extra = extra or {}
+    run_config = {
+        'model': model,
+        'extra_params': copy.copy(extra),
+        'parallel_config': parallel_config or {'dp': 1, 'ep': 1, 'tp': 1},
+    }
+    apply_model_run_params(run_config, {'env_tag': env_tag}, extra, func_type, backend)
+    return run_config['extra_params']
+
+
+def test_apply_model_run_params():
+    rules = _load_model_run_params_rules()
+    assert len(rules) == 11
+    assert rules[0]['name'] == 'qwen3-235b-thinking-2507'
+
+    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', func_type='benchmark')
+    assert params['cache-max-entry-count'] == 0.9
+    assert params['max-batch-size'] == 1024
+
+    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507',
+                                              parallel_config={'dp': 8, 'ep': 8, 'tp': 1})
+    assert params['max-batch-size'] == 256
+
+    params = _apply_model_run_params_for_test('org/GLM-5-FP8')
+    assert params['cache-max-entry-count'] == 0.9
+    assert params['max-batch-size'] == 128
+
+    params = _apply_model_run_params_for_test('some/model', func_type='evaluate')
+    assert params['session_len'] == 65536
+
+    params = _apply_model_run_params_for_test('THUDM/cogvlm-chat-hf', func_type='evaluate')
+    assert params['session-len'] == 32568
+
+    params = _apply_model_run_params_for_test('THUDM/cogvlm-chat-hf', func_type='func')
+    assert params['session-len'] == 32568
+
+    params = _apply_model_run_params_for_test('some/model', func_type='evaluate', extra={'session_len': 4096})
+    assert params['session_len'] == 4096
+
+    params = _apply_model_run_params_for_test('Qwen3.5-7B', func_type='evaluate')
+    assert 'session_len' not in params
+    assert 'session-len' not in params
+
+    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', env_tag='3090')
+    assert params['cache-max-entry-count'] == 0.5
+
+    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', env_tag='5080')
+    assert params['cache-max-entry-count'] == 0.5
+
+    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B', env_tag='a100')
+    assert params['cache-max-entry-count'] == 0.6
+
+    params = _apply_model_run_params_for_test('internlm/Intern-S1', env_tag='a100')
+    assert params['cache-max-entry-count'] == 0.6
+
+    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', env_tag='a100')
+    assert params['cache-max-entry-count'] == 0.6
+
+    params = _apply_model_run_params_for_test('My-SDAR-Model')
+    assert params['dllm-block-length'] == 4
+    assert params['dllm-denoising-steps'] == 4
+    assert params['dllm-confidence-threshold'] == 0.9
+
+    params = _apply_model_run_params_for_test('kimi-k2', parallel_config={'dp': 16, 'ep': 16, 'tp': 1})
+    assert params['max-batch-size'] == 256
+
+    params = _apply_model_run_params_for_test('kimi-k2', parallel_config={'dp': 8, 'ep': 8, 'tp': 1})
+    assert 'max-batch-size' not in params
+
+    params = _apply_model_run_params_for_test('Intern-S1-Pro-FP8', parallel_config={'dp': 16, 'ep': 16, 'tp': 1})
+    assert params['model-format'] == 'fp8'
+    assert params['max-prefill-token-num'] == 1024
+    assert params['max-batch-size'] == 128
+
+    params = _apply_model_run_params_for_test('Intern-S1-Pro-BF16', parallel_config={'dp': 16, 'ep': 16, 'tp': 1})
+    assert 'model-format' not in params
+    assert params['max-prefill-token-num'] == 1024
+
+    params = _apply_model_run_params_for_test('openai/gpt-oss-20b',
+                                              func_type='benchmark',
+                                              backend='turbomind')
+    assert params['model-format'] == 'mxfp4'
+
+    params = _apply_model_run_params_for_test('openai/gpt-oss-20b',
+                                              func_type='benchmark',
+                                              backend='pytorch')
+    assert 'model-format' not in params
+
+    params = _apply_model_run_params_for_test('Qwen3.5-7B', func_type='mtp_evaluate')
+    assert params['reasoning-parser'] == 'qwen-qwq'
+    assert params['speculative-algorithm'] == 'qwen3_5_mtp'
+    assert params['speculative-num-draft-tokens'] == 4
+    assert params['max-batch-size'] == 256
+
+
 if __name__ == '__main__':
+    test_apply_model_run_params()
     test_get_parallel_config()
     test_cli_common_param()
     test_run_config()
