@@ -43,7 +43,8 @@ def _hash_multimodal_value(hasher: 'hashlib._Hash', value: Any):
         hasher.update(f'{type(value).__name__}:{repr(value)}'.encode())
 
 
-def make_multimodal_content_hash(data: Any, meta: dict[str, Any] | None, mrope_pos_ids: np.ndarray | None = None) -> str:
+def make_multimodal_content_hash(data: Any, meta: dict[str, Any] | None,
+                                 mrope_pos_ids: np.ndarray | None = None) -> str:
     """Create a stable content hash for prefix-cache multimodal matching."""
     hasher = hashlib.sha256()
     _hash_multimodal_value(hasher, data)

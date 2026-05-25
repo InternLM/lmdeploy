@@ -582,6 +582,7 @@ class ArgumentHelper:
                                    type=int,
                                    default=0,
                                    help='Extra SSM state-cache slots budgeted for prefix-cache checkpoints. '
+                                   '0 adds no extra slots, but checkpoints may borrow idle runtime state slots. '
                                    'Only used by the PyTorch engine.')
 
     @staticmethod

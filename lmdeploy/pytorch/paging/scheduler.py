@@ -68,9 +68,8 @@ class Scheduler:
     def _ensure_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state.
 
-        Runtime states and frozen checkpoints share the same state-cache pool.
-        Scheduling a request is more important than keeping an old checkpoint,
-        so unpinned checkpoints are evicted before we give up.
+        Runtime states and frozen checkpoints share the same state-cache pool. Scheduling a request is more important
+        than keeping an old checkpoint, so unpinned checkpoints are evicted before we give up.
         """
         if not self.is_ssm:
             return True

@@ -236,10 +236,6 @@ class ExecutorBase:
         mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
         mems *= num_state_caches
 
-        if cache_config.enable_prefix_caching and cache_config.prefix_cache_state_budget <= 0:
-            cache_config.enable_prefix_caching = False
-            logger.warning('State-space model prefix caching requires prefix_cache_state_budget > 0.')
-
         return mems
 
     def _sync_spec_cache_block_size(self) -> None:

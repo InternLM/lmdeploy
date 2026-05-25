@@ -123,9 +123,8 @@ class BlockTrie:
     def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int):
         """Make the sparse SSM checkpoint lookup key for a sequence prefix.
 
-        The last block key is only a filter into the sparse index.  Candidate
-        nodes are still verified by walking the full ancestor chain so hash
-        collisions or stale index entries cannot produce a false state hit.
+        The last block key is only a filter into the sparse index.  Candidate nodes are still verified by walking the
+        full ancestor chain so hash collisions or stale index entries cannot produce a false state hit.
         """
         start = step - self.block_size
         end = step
@@ -167,10 +166,9 @@ class BlockTrie:
     def reserve_state_checkpoint(self, node: Node):
         """Reserve a state-cache slot owned by a trie node.
 
-        Reusing a ready slot means replacing the checkpoint for the same node,
-        which is allowed only while no restore copy has it pinned.  If the
-        shared state pool is full, evict an old unpinned checkpoint without
-        removing the trie/KV node itself.
+        Reusing a ready slot means replacing the checkpoint for the same node, which is allowed only while no restore
+        copy has it pinned.  If the shared state pool is full, evict an old unpinned checkpoint without removing the
+        trie/KV node itself.
         """
         if not self.requires_state_checkpoint or node.parent is None:
             return -1
@@ -196,9 +194,8 @@ class BlockTrie:
     def discard_state_checkpoint_for_seq(self, seq: SchedulerSequence):
         """Discard an unpublished state checkpoint reservation for a sequence.
 
-        Reservations happen before forward.  If the executor fails to produce
-        output, or the sequence is rescheduled before the copy is committed, the
-        unready state slot must be released rather than becoming matchable.
+        Reservations happen before forward.  If the executor fails to produce output, or the sequence is rescheduled
+        before the copy is committed, the unready state slot must be released rather than becoming matchable.
         """
         prefix_cache = seq.prefix_cache
         state_idx = prefix_cache.save_state
@@ -240,9 +237,8 @@ class BlockTrie:
                                          is_decode: bool = False):
         """Reserve a state checkpoint slot for an exact trie step.
 
-        SSM prefix hits are valid only when KV blocks and recurrent state refer
-        to the same prefix.  Therefore saves are limited to block-aligned,
-        multimodal-safe steps that already have an attached trie node.
+        SSM prefix hits are valid only when KV blocks and recurrent state refer to the same prefix.  Therefore saves are
+        limited to block-aligned, multimodal-safe steps that already have an attached trie node.
         """
         self.discard_state_checkpoint_for_seq(seq)
 
@@ -331,11 +327,11 @@ class BlockTrie:
         self._index_state_checkpoint(node)
 
     def commit_state_checkpoint_for_seq(self, seq: SchedulerSequence):
-        """Publish a sequence state checkpoint after its state copy is enqueued.
+        """Publish a sequence state checkpoint after its state copy is
+        enqueued.
 
-        Commit validates the remembered node directly.  This matters for decode
-        saves because the sequence may have advanced by one sampled token before
-        the output boundary publishes the checkpoint.
+        Commit validates the remembered node directly.  This matters for decode saves because the sequence may have
+        advanced by one sampled token before the output boundary publishes the checkpoint.
         """
         prefix_cache = seq.prefix_cache
         state_idx = prefix_cache.save_state
@@ -483,8 +479,8 @@ class BlockTrie:
     def _match_state_checkpoint(self, seq: SchedulerSequence):
         """Match SSM prefixes through sparse ready-checkpoint lookup.
 
-        KV-only reuse is unsafe for SSM models, so this path reports a hit only
-        if a ready recurrent-state checkpoint exists at the exact matched step.
+        KV-only reuse is unsafe for SSM models, so this path reports a hit only if a ready recurrent-state checkpoint
+        exists at the exact matched step.
         """
         seq.prefix_cache.restore_state = -1
         seq.prefix_cache.restore_node = None
@@ -523,9 +519,8 @@ class BlockTrie:
     def match(self, seq: SchedulerSequence):
         """Match reusable prefix blocks for a sequence.
 
-        Text/VLM models walk the trie block by block.  SSM models delegate to
-        the sparse checkpoint matcher above because a KV block match without an
-        exact recurrent-state snapshot must be treated as a miss.
+        Text/VLM models walk the trie block by block.  SSM models delegate to the sparse checkpoint matcher above
+        because a KV block match without an exact recurrent-state snapshot must be treated as a miss.
         """
         if not self.enable:
             return

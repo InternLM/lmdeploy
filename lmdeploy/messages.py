@@ -355,7 +355,8 @@ class PytorchEngineConfig:
         thread_safe: thread safe engine instance.
         enable_prefix_caching: Enable token match and sharing caches.
         prefix_cache_state_budget: Extra SSM state-cache slots budgeted for
-            prefix-cache checkpoints.
+            prefix-cache checkpoints. 0 adds no extra slots, but SSM
+            checkpoints may still borrow idle runtime state slots.
         prefix_cache_decode_state_interval: Token interval for SSM decode
             state checkpoints. 0 disables decode-state checkpoint saves.
             Positive values must be multiples of the cache block size.

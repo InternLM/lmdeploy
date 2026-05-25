@@ -98,7 +98,7 @@ def test_get_state_cache_mem_uses_prefix_cache_state_budget():
     assert mem == expected_mem
 
 
-def test_get_state_cache_mem_disables_ssm_prefix_cache_without_budget():
+def test_get_state_cache_mem_keeps_ssm_prefix_cache_enabled_without_extra_budget():
     executor = object.__new__(ExecutorBase)
     state_shapes = [((2, ), torch.float32)]
     executor.cache_config = CacheConfig(max_batches=4,
@@ -112,7 +112,7 @@ def test_get_state_cache_mem_disables_ssm_prefix_cache_without_budget():
     executor._get_state_cache_mem()
 
     assert executor.cache_config.num_state_caches == 4 + 1
-    assert not executor.cache_config.enable_prefix_caching
+    assert executor.cache_config.enable_prefix_caching
 
 
 def test_get_state_cache_mem_keeps_budgeted_ssm_prefix_cache_enabled():

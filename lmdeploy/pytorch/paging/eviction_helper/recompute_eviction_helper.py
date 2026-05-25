@@ -58,9 +58,8 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
     def _evict_for_ssm(self, seq: SchedulerSequence, evictable_seqs: list[SchedulerSequence], prealloc_size: int):
         """Evict blocks and checkpoint states for an SSM sequence.
 
-        SSM scheduling needs both KV blocks and a runtime state slot.  Before
-        evicting live sequences, try dropping old unpinned checkpoints because
-        they are cheaper to recompute than an active request.
+        SSM scheduling needs both KV blocks and a runtime state slot.  Before evicting live sequences, try dropping old
+        unpinned checkpoints because they are cheaper to recompute than an active request.
         """
         block_manager = self.block_manager
         state_manager = self.state_manager

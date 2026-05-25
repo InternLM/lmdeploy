@@ -864,10 +864,9 @@ class SchedulerSequence:
     def get_prefix_cache_extra_hashes(self, start: int, end: int):
         """Get canonical multimodal identity entries for a token range.
 
-        The common caller asks for a full block, but partial ranges are used
-        when verifying sparse SSM checkpoint candidates.  Returning only
-        overlapping spans keeps text-only blocks unchanged while making blocks
-        that touch multimodal placeholders content-aware.
+        The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
+        candidates.  Returning only overlapping spans keeps text-only blocks unchanged while making blocks that touch
+        multimodal placeholders content-aware.
         """
         prefix_cache = self.prefix_cache
         if len(prefix_cache.metas) == 0:
@@ -894,9 +893,8 @@ class SchedulerSequence:
     def clamp_prefix_cache_match_step(self, step: int):
         """Clamp a prefix-cache match so forward never starts inside a span.
 
-        Multimodal processors expect an image/video span to be consumed as a
-        whole.  If a candidate cache hit would stop in the middle of such a
-        span, rewind to the span start and then to a block boundary.
+        Multimodal processors expect an image/video span to be consumed as a whole.  If a candidate cache hit would stop
+        in the middle of such a span, rewind to the span start and then to a block boundary.
         """
         if step <= 0:
             return step
@@ -958,9 +956,8 @@ class SchedulerSequence:
     def _index_prefix_cache_metas(self):
         """Build the lazy block -> multimodal identity index.
 
-        The trie asks for block keys many times during match/allocation, so we
-        pay the span-to-block indexing cost once per newly appended metadata
-        entry instead of scanning all multimodal spans for every block.
+        The trie asks for block keys many times during match/allocation, so we pay the span-to-block indexing cost once
+        per newly appended metadata entry instead of scanning all multimodal spans for every block.
         """
         prefix_cache = self.prefix_cache
         block_size = self.block_size
