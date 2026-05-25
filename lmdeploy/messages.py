@@ -317,12 +317,10 @@ class TurbomindEngineConfig:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:
             raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
-        assert self.quant_policy in (
-            QuantPolicy.NONE,
-            QuantPolicy.INT4,
-            QuantPolicy.INT8,
-            QuantPolicy.TURBO_QUANT,
-        ), 'invalid quant_policy'
+        assert self.quant_policy not in (
+            QuantPolicy.FP8,
+            QuantPolicy.FP8_E5M2,
+        ), 'invalid quant_policy for TurboMind, FP8 quantization is not supported'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
@@ -472,14 +470,6 @@ class PytorchEngineConfig:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:
             raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
-        assert self.quant_policy in (
-            QuantPolicy.NONE,
-            QuantPolicy.INT4,
-            QuantPolicy.INT8,
-            QuantPolicy.FP8,
-            QuantPolicy.FP8_E5M2,
-            QuantPolicy.TURBO_QUANT,
-        ), 'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.kernel_block_size >= 16 and \
                (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
