@@ -216,13 +216,6 @@ class VisionModel(ABC):
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
 
         result = dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
-
-        # Drop large temporary preprocessing references before handing the result to the engine.
-        processor_outputs = None
-        collected_mm_items = None
-        mm_items = None
-        raw_images = raw_videos = video_metadatas = None
-        raw_time_series = sampling_rates = None
         return result
 
     @staticmethod

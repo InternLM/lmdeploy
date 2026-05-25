@@ -137,7 +137,6 @@ class MPEngineInstance(EngineInstanceBase):
                                                                 state.is_exists,
                                                                 *args,
                                                                 **kwargs)
-        kwargs.pop('multimodal', None)
 
         async for result in generator:
             yield result

@@ -313,7 +313,6 @@ class AsyncEngine:
     @asynccontextmanager
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
-        kwargs.pop('multimodal', None)
         try:
             metrics_processor.increase_api_routed_requests()
             yield generator
