@@ -4,7 +4,7 @@ import torch
 
 from lmdeploy.pytorch import messages as messages_module
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
+from lmdeploy.pytorch.messages import SamplingParam, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging import Scheduler
 from lmdeploy.vl.constants import Modality
@@ -106,6 +106,10 @@ class TestBlockTire:
                            meta=dict(image_token_id=99)) for start, end, value in spans
         ])
 
+    def _routed_experts(self, num_tokens: int, offset: int = 0):
+        values = np.arange(offset, offset + num_tokens * 2, dtype=np.uint16)
+        return values.reshape(num_tokens, 2, 1)
+
     def _add_ready_ssm_checkpoint(self, scheduler, token_ids):
         seq = scheduler.add_session(len(scheduler.sessions)).add_sequence(token_ids)
         scheduler.block_manager.allocate(seq)
@@ -191,6 +195,126 @@ class TestBlockTire:
         assert len(logical_blocks) == 2
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [4, 3])
+
+    def test_match_after_sequence_blocks_are_freed(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3] * (block_size // 2)
+        seq = sess.add_sequence(token_ids)
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        seq.state.free()
+
+        assert seq.num_history_ids == 0
+        assert len(seq.logical_blocks) == 0
+
+        block_trie.match(seq)
+
+        assert seq.num_history_ids == block_size * 2
+        assert len(seq.logical_blocks) == 2
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert node is not None
+        assert node.num_matched == block_size * 2
+
+    def test_match_replays_cached_routed_experts(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        sampling_param = SamplingParam(return_routed_experts=True)
+        seq = sess.add_sequence(token_ids, sampling_param=sampling_param)
+        experts = self._routed_experts(block_size * 2)
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        seq.append_routed_experts(experts)
+        block_trie.cache_routed_experts_for_seq(seq)
+
+        matched = sess.add_sequence(token_ids, sampling_param=sampling_param)
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == block_size * 2
+        assert np.array_equal(matched.all_routed_experts.get_real(), experts)
+
+    def test_match_skips_routed_expert_replay_when_not_requested(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        seq = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        seq.append_routed_experts(self._routed_experts(block_size * 2))
+        block_trie.cache_routed_experts_for_seq(seq)
+
+        matched = sess.add_sequence(token_ids)
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == block_size * 2
+        assert len(matched.all_routed_experts) == 0
+
+    def test_existing_node_can_be_enriched_with_routed_experts(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3]
+
+        seq = sess.add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert node is not None
+        assert node.routed_experts is None
+
+        expert_seq = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
+        experts = self._routed_experts(block_size * 2)
+        expert_seq.append_routed_experts(experts)
+        block_mgr.allocate(expert_seq)
+        block_trie.allocate(expert_seq)
+
+        assert node.routed_experts is not None
+        matched = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
+        block_trie.match(matched)
+        assert np.array_equal(matched.all_routed_experts.get_real(), experts)
+
+    def test_match_does_not_partially_replay_routed_experts(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        seq = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        seq.append_routed_experts(self._routed_experts(block_size))
+        block_trie.cache_routed_experts_for_seq(seq)
+
+        matched = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == block_size * 2
+        assert len(matched.all_routed_experts) == 0
+
+    def test_missing_replay_does_not_enrich_from_misaligned_tail(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        seq = sess.add_sequence(token_ids)
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        last_node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert last_node is not None
+        assert last_node.routed_experts is None
+
+        matched = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == block_size * 2
+        assert len(matched.all_routed_experts) == 0
+
+        matched.append_routed_experts(self._routed_experts(1, offset=1000))
+        block_trie.cache_routed_experts_for_seq(matched)
+
+        assert last_node.routed_experts is None
 
     def test_match_multimodal_same_hash(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
@@ -467,6 +591,31 @@ class TestBlockTire:
         assert len(seq.logical_blocks) == 2
         assert seq.num_history_ids == block_size * 2
         assert seq.prefix_cache.restore_state == state_idx
+
+    def test_match_ssm_replays_cached_routed_experts(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size
+        sampling_param = SamplingParam(return_routed_experts=True)
+        seq = sess.add_sequence(token_ids, sampling_param=sampling_param)
+        experts = self._routed_experts(block_size * 2)
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        seq.append_routed_experts(experts)
+        block_trie.cache_routed_experts_for_seq(seq)
+        state_idx = block_trie.reserve_state_checkpoint_for_seq(seq)
+        assert state_idx >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(seq)
+
+        matched = sess.add_sequence(token_ids + [3], sampling_param=sampling_param)
+        block_trie.match(matched)
+
+        assert matched.prefix_cache.restore_state == state_idx
+        assert matched.num_history_ids == block_size * 2
+        assert np.array_equal(matched.all_routed_experts.get_real(), experts)
 
     def test_match_ssm_sparse_index_misses_without_block_walk(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager

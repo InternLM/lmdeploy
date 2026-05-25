@@ -21,6 +21,10 @@ class PrefixCacheStats:
         self.num_query_tokens = 0
         self.num_hit_tokens = 0
 
+    def copy(self):
+        """Copy stats for tentative-match rollback."""
+        return PrefixCacheStats(num_query_tokens=self.num_query_tokens, num_hit_tokens=self.num_hit_tokens)
+
     def hit_rate(self):
         return 0.0 if self.num_query_tokens <= 0 else float(self.num_hit_tokens) / self.num_query_tokens
 
@@ -43,6 +47,7 @@ class Node:
                  state_ready: bool = False,
                  state_ref_count: int = 0,
                  state_access_time: float = 0.0,
+                 routed_experts: np.ndarray = None,
                  adapter_name: str = None):
         self.hash_key = hash_key
         self.block = block
@@ -53,6 +58,7 @@ class Node:
         self.state_ready = state_ready
         self.state_ref_count = state_ref_count
         self.state_access_time = state_access_time
+        self.routed_experts = routed_experts
         self.adapter_name = adapter_name
         self.children: dict[int, Node] = dict()
         self._parent: Node = None
@@ -106,13 +112,14 @@ class BlockTrie:
         """Snapshot prefix-cache stats before a tentative match."""
         if not self.enable:
             return None
-        return self.stats.num_query_tokens, self.stats.num_hit_tokens
+        return self.stats.copy()
 
-    def restore_stats(self, snapshot):
+    def restore_stats(self, snapshot: PrefixCacheStats | None):
         """Restore prefix-cache stats for an unused tentative match."""
         if snapshot is None:
             return
-        self.stats.num_query_tokens, self.stats.num_hit_tokens = snapshot
+        self.stats.num_query_tokens = snapshot.num_query_tokens
+        self.stats.num_hit_tokens = snapshot.num_hit_tokens
 
     def record_recompute_after_rollback(self, seq: SchedulerSequence, snapshot):
         """Record a recompute after a tentative match was rolled back."""
@@ -126,17 +133,75 @@ class BlockTrie:
             self._roots[adapter_name] = Node(-1, -1, None, adapter_name=adapter_name)
         return self._roots[adapter_name]
 
-    def _get_block_extra_hashes(self, seq: SchedulerSequence, start: int, end: int):
+    @staticmethod
+    def _get_block_extra_hashes(seq: SchedulerSequence, start: int, end: int):
         """Get multimodal identity entries that belong in a block key."""
         return seq.get_prefix_cache_extra_hashes(start, end)
 
-    def _make_key(self, tokens: np.ndarray, extra_hashes: tuple):
+    @staticmethod
+    def _make_key(tokens: np.ndarray, extra_hashes: tuple):
         """Make the trie lookup key from tokens plus multimodal identity."""
         return hash(('random', tuple(tokens), extra_hashes))
 
-    def _match_node(self, node: Node, tokens: np.ndarray, extra_hashes: tuple):
+    @staticmethod
+    def _match_node(node: Node, tokens: np.ndarray, extra_hashes: tuple):
         """Check the exact key payload after the hash-table lookup."""
         return np.array_equal(tokens, node.tokens) and extra_hashes == node.extra_hashes
+
+    @staticmethod
+    def _get_routed_experts_for_range(seq: SchedulerSequence, start: int, end: int):
+        """Get a copy of routed experts for a full token range, if present."""
+        if not seq.return_routed_experts:
+            return None
+        all_routed_experts = seq.all_routed_experts
+        if all_routed_experts is None:
+            return None
+        if len(all_routed_experts) < seq.num_history_ids or len(all_routed_experts) < end:
+            return None
+        routed_experts = all_routed_experts.get_real()
+        if routed_experts is None or len(routed_experts) < end:
+            return None
+        return routed_experts[start:end].copy()
+
+    def _try_cache_node_routed_experts(self, node: Node, seq: SchedulerSequence, start: int, end: int):
+        """Attach routed experts to a trie node when a sequence has them."""
+        if node.routed_experts is not None:
+            return
+        routed_experts = self._get_routed_experts_for_range(seq, start, end)
+        if routed_experts is not None and len(routed_experts) == end - start:
+            node.routed_experts = routed_experts
+
+    def _append_matched_routed_experts(self, seq: SchedulerSequence, nodes: list[Node], start: int):
+        """Replay cached routed experts for a matched trie range."""
+        if not seq.return_routed_experts or len(nodes) == 0:
+            return
+        if len(seq.all_routed_experts) != start:
+            return
+
+        expert_slices = []
+        for node in nodes:
+            routed_experts = node.routed_experts
+            if routed_experts is None or len(routed_experts) != self.block_size:
+                return
+            expert_slices.append(routed_experts)
+
+        seq.append_routed_experts(np.concatenate(expert_slices, axis=0).copy())
+
+    def cache_routed_experts_for_seq(self, seq: SchedulerSequence):
+        """Enrich attached trie nodes with routed experts from a sequence."""
+        if not self.enable or not seq.return_routed_experts:
+            return
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        while node is not None and node.parent is not None:
+            end = node.num_matched
+            start = end - self.block_size
+            self._try_cache_node_routed_experts(node, seq, start, end)
+            node = node.parent
+
+    def cache_routed_experts(self, seqs: list[SchedulerSequence]):
+        """Enrich trie nodes with routed experts from multiple sequences."""
+        for seq in seqs:
+            self.cache_routed_experts_for_seq(seq)
 
     def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int):
         """Make the sparse SSM checkpoint lookup key for a sequence prefix.
@@ -150,7 +215,8 @@ class BlockTrie:
         extra_hashes = self._get_block_extra_hashes(seq, start, end)
         return (seq.adapter_name, step, self._make_key(tokens, extra_hashes))
 
-    def _make_state_checkpoint_node_key(self, node: Node):
+    @staticmethod
+    def _make_state_checkpoint_node_key(node: Node):
         """Make the sparse SSM checkpoint lookup key for a trie node."""
         return (node.adapter_name, node.num_matched, node.hash_key)
 
@@ -239,7 +305,8 @@ class BlockTrie:
             return None
         return node
 
-    def _is_attached_node(self, node: Node):
+    @staticmethod
+    def _is_attached_node(node: Node):
         """Check whether a node is still attached to the trie."""
         parent = node.parent
         return parent is not None and parent.children.get(node.hash_key) is node
@@ -487,7 +554,7 @@ class BlockTrie:
                 return None
             matched_blocks.append(block_node.block)
 
-        return matched_blocks
+        return matched_blocks, nodes
 
     def _match_state_checkpoint(self, seq: SchedulerSequence):
         """Match SSM prefixes through sparse ready-checkpoint lookup.
@@ -510,15 +577,18 @@ class BlockTrie:
                 continue
             key = self._make_state_checkpoint_lookup_key(seq, step)
             for node in self._state_checkpoint_index.get(key, ()):
-                matched_blocks = self._verify_state_checkpoint_node(seq, node)
-                if matched_blocks is None:
+                match_result = self._verify_state_checkpoint_node(seq, node)
+                if match_result is None:
                     continue
 
+                matched_blocks, matched_nodes = match_result
+                matched_nodes = matched_nodes[init_num_matched // self.block_size:]
                 matched_blocks = np.array(matched_blocks[init_num_matched // self.block_size:])
                 self.allocator.update_access_time(matched_blocks)
                 self.allocator.add_ref_count(matched_blocks, 1)
                 seq.logical_blocks.append(matched_blocks)
                 seq.set_step(step)
+                self._append_matched_routed_experts(seq, matched_nodes, init_num_matched)
                 seq.prefix_cache.restore_state = node.state_idx
                 seq.prefix_cache.restore_node = node
                 seq.logical_blocks.last_shared_node = node
@@ -605,6 +675,7 @@ class BlockTrie:
             self.allocator.add_ref_count(matched_blocks, 1)
             seq.logical_blocks.append(matched_blocks)
             seq.set_step(num_matched)
+            self._append_matched_routed_experts(seq, matched_nodes, init_num_matched)
             if self.requires_state_checkpoint:
                 seq.prefix_cache.restore_state = curr.state_idx
 
@@ -655,14 +726,17 @@ class BlockTrie:
                 # Another sequence inserted the same key before us.  Reuse the
                 # trie-owned block and release this sequence's duplicate block.
                 node = child
+                self._try_cache_node_routed_experts(node, seq, start, end)
                 free_blocks.append(block)
                 logical_blocks[block_id] = node.block
             else:
+                routed_experts = self._get_routed_experts_for_range(seq, start, end)
                 node = Node(hash_key=hash_key,
                             block=block,
                             tokens=curr_tokens,
                             num_matched=num_matched + block_size,
                             extra_hashes=extra_hashes,
+                            routed_experts=routed_experts,
                             adapter_name=seq.adapter_name)
                 node.parent = parent
             blocks.append(node.block)

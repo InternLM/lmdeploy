@@ -303,6 +303,7 @@ class EngineLoop:
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
+            self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -316,6 +317,7 @@ class EngineLoop:
                                          batched_outputs=batched_outputs,
                                          model_inputs=model_inputs,
                                          delta=delta)
+        self.scheduler.block_trie.cache_routed_experts(running)
 
         # generate output
         outputs: dict[int, InferOutput] = dict()
