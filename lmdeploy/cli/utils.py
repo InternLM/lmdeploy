@@ -611,7 +611,8 @@ class ArgumentHelper:
                                    nargs='+',
                                    default=None,
                                    help='Batch sizes to capture CUDA graphs for in the PyTorch engine. '
-                                   'If not specified, the engine infers them from max_batch_size')
+                                   'If not specified, the engine infers them from max_batch_size. '
+                                   'max_batch_size is always captured')
 
     @staticmethod
     def vision_max_batch_size(parser):

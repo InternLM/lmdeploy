@@ -48,6 +48,8 @@ class ConfigBuilder:
             assert len(capture_sizes) > 0, (
                 'cudagraph_capture_batch_sizes should contain at least one value '
                 f'<= max_batch_size ({engine_config.max_batch_size})')
+            if capture_sizes[-1] != engine_config.max_batch_size:
+                capture_sizes.append(engine_config.max_batch_size)
             engine_config.cudagraph_capture_batch_sizes = capture_sizes
 
         if engine_config.dp != 1:

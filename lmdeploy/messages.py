@@ -354,6 +354,7 @@ class PytorchEngineConfig:
         max_prefill_token_num: tokens per iteration.
         cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
             If not specified, the engine will infer them from max_batch_size.
+            max_batch_size is always captured.
         thread_safe: thread safe engine instance.
         enable_prefix_caching: Enable token match and sharing caches.
         device_type: The inference device type, options ['cuda']
