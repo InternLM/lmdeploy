@@ -14,6 +14,7 @@ with read_base():
     from opencompass.configs.datasets.gpqa.gpqa_cascade_eval_academic import gpqa_datasets
     from opencompass.configs.datasets.HLE.hle_llmverify_academic import hle_datasets
     from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import ifeval_datasets
+    from opencompass.configs.datasets.longbenchv2.longbenchv2_gen import LongBenchv2_datasets
     from opencompass.configs.datasets.livecodebench.livecodebench_v6_academic import LCBCodeGeneration_dataset
     from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_nocot_genericllmeval_gen_08c1de import mmlu_pro_datasets
     # Summary Groups
@@ -27,6 +28,10 @@ datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), []) 
 TASK_TAG = ''
 API_SERVER_ADDR = 'http://<API_SERVER>'
 SERVED_MODEL_PATH = ''
+OC_MAX_OUT_LEN = int(__import__('os').environ.get('OC_MAX_OUT_LEN', '64000'))
+OC_MAX_SEQ_LEN = int(__import__('os').environ.get('OC_MAX_SEQ_LEN', '65536'))
+OC_BATCH_SIZE = int(__import__('os').environ.get('OC_BATCH_SIZE', '32'))
+OC_MODE = __import__('os').environ.get('OC_MODE', 'none')
 
 models = [
     dict(abbr=TASK_TAG,
@@ -40,9 +45,10 @@ models = [
              dict(role='BOT', api_role='BOT', generate=True),
          ], ),
          query_per_second=10,
-         max_out_len=64000,
-         max_seq_len=65536,
-         batch_size=32,
+         max_out_len=OC_MAX_OUT_LEN,
+         max_seq_len=OC_MAX_SEQ_LEN,
+         batch_size=OC_BATCH_SIZE,
+         mode=OC_MODE,
          retry=10,
          pred_postprocessor=dict(type=extract_non_reasoning_content),
          verbose=False)
@@ -113,6 +119,9 @@ summarizer = dict(
         '',
         'Code',
         ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
+        '',
+        'LongBenchV2',
+        ['LongBenchv2', 'accuracy'],
     ],
     summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )

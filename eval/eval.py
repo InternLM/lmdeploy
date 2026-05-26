@@ -90,10 +90,14 @@ def update_datasets(config, datasets):
         # datasets part of the config file specifies all datasets, no need to update
         return config
 
+    datasets = list(datasets)
     selected_datasets = []
     if 'code' in datasets:
         selected_datasets.append('[LCBCodeGeneration_dataset]')
         datasets.remove('code')
+    if 'longbenchv2' in datasets:
+        selected_datasets.append('LongBenchv2_datasets')
+        datasets.remove('longbenchv2')
     for d in datasets:
         selected_datasets.append(f'{d}_datasets')
     selected_datasets = ' + '.join(selected_datasets)
@@ -141,7 +145,7 @@ def save_config(work_dir: str, config: str):
     print(f'Config written to {output_file}')
 
 
-def perform_evaluation(config, api_server, judger_server, mode, work_dir, reuse):
+def perform_evaluation(config, api_server, judger_server, mode, work_dir, reuse, need_judger=True):
     """Perform model evaluation by opencompass.
 
     Args:
@@ -152,11 +156,12 @@ def perform_evaluation(config, api_server, judger_server, mode, work_dir, reuse)
         work_dir (str): Output directory for evaluation results. If not specified,
             config will not be saved and execution will not be performed.
         reuse (str): Whether to reuse existing results
+        need_judger (bool): Whether selected datasets require a judge model
     """
     if mode in ['infer', 'all', 'config']:
         served_model_name = get_model_name_from_server(api_server, 'api')
         config = config.replace("SERVED_MODEL_PATH = ''", f"SERVED_MODEL_PATH = '{served_model_name}'")
-    if mode in ['eval', 'all', 'config']:
+    if need_judger and mode in ['eval', 'all', 'config']:
         judger_model_name = get_model_name_from_server(judger_server, 'judger')
         config = config.replace("JUDGER_MODEL_PATH = ''", f"JUDGER_MODEL_PATH = '{judger_model_name}'")
 
@@ -197,7 +202,7 @@ def main():
     parser.add_argument('task_name', type=str, help='The name of an evaluation task')
     parser.add_argument('-a', '--api-server', type=str, default='', help='API server address for inference')
     parser.add_argument('-j', '--judger-server', type=str, default='', help='Judger server address for evaluation')
-    dataset_choices = ['aime2025', 'gpqa', 'ifeval', 'code', 'mmlu_pro', 'hle', 'all']
+    dataset_choices = ['aime2025', 'gpqa', 'ifeval', 'code', 'mmlu_pro', 'hle', 'longbenchv2', 'all']
     parser.add_argument('-d',
                         '--datasets',
                         nargs='+',
@@ -250,6 +255,7 @@ def main():
 
     # update datasets part of config according to args.datasets
     config = update_datasets(config, datasets)
+    need_judger = datasets != ['longbenchv2']
 
     # update api_server part of config according to args.api_server
     if api_server:
@@ -259,7 +265,7 @@ def main():
         config = config.replace("JUDGER_ADDR = 'http://<JUDGER_SERVER>'", f"JUDGER_ADDR = '{judger_server}'")
 
     # perform evaluation
-    perform_evaluation(config, api_server, judger_server, mode, work_dir, args.reuse)
+    perform_evaluation(config, api_server, judger_server, mode, work_dir, args.reuse, need_judger)
 
 
 if __name__ == '__main__':
