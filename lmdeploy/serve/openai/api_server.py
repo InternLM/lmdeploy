@@ -554,7 +554,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if (res.finish_reason is None and usage is None and logprobs is None
                         and not delta_token_ids):
                     continue
-                stream_deltas = [(DeltaMessage(role='assistant'), False)]
+                stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
 
             for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
                 if tool_emitted:
