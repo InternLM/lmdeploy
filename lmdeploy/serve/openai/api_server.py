@@ -556,12 +556,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if tool_emitted:
                     streaming_tools = True
 
-                finish_reason = res.finish_reason if delta_index == len(stream_deltas) - 1 else None
+                is_last_delta = delta_index == len(stream_deltas) - 1
+
+                finish_reason = res.finish_reason if is_last_delta else None
                 if include_usage:
                     chunk_usage = None
                 else:
-                    chunk_usage = usage if delta_index == len(stream_deltas) - 1 else None
-                chunk_logprobs = logprobs if delta_index == len(stream_deltas) - 1 else None
+                    chunk_usage = usage if is_last_delta else None
+                chunk_logprobs = logprobs if is_last_delta else None
 
                 if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
                     if finish_reason == 'stop' and streaming_tools is True:
@@ -569,7 +571,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
                 # Only output routed_experts in the final chunk
                 routed_experts = res.routed_experts if finish_reason is not None else None
-                stream_output_ids = delta_token_ids if request.return_token_ids else None
+                # Emit token ids once per engine yield on the last parsed delta, when
+                # accumulated delta text and token ids for this step are aligned.
+                stream_output_ids = delta_token_ids if (request.return_token_ids and is_last_delta) else None
 
                 response_json = create_stream_response_json(index=0,
                                                             delta_message=delta_message,
@@ -578,7 +582,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                             usage=chunk_usage,
                                                             routed_experts=routed_experts,
                                                             output_ids=stream_output_ids)
-                if res.cache_block_ids is not None:
+                if res.cache_block_ids is not None and is_last_delta:
                     payload = json.loads(response_json)
                     payload['cache_block_ids'] = res.cache_block_ids
                     payload['remote_token_ids'] = res.token_ids
