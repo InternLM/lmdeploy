@@ -1,8 +1,10 @@
 import json
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
-from lmdeploy.serve.parsers import ResponseParserManager, first_stream_delta
+from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+
+from .helpers import first_stream_delta
 
 
 def _build_parser():

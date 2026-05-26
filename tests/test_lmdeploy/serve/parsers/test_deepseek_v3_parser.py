@@ -2,8 +2,10 @@ import pytest
 from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
-from lmdeploy.serve.parsers import ResponseParserManager, first_stream_delta
+from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
+
+from .helpers import first_stream_delta
 
 MODEL_ID = 'deepseek-ai/DeepSeek-V3.1'
 

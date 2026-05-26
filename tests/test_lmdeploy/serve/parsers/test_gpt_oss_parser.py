@@ -6,8 +6,9 @@ pytest.importorskip('openai_harmony')
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
-from lmdeploy.serve.parsers import first_stream_delta
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
+
+from .helpers import first_stream_delta
 
 
 @dataclass

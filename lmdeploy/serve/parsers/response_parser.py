@@ -173,21 +173,6 @@ class ProtocolProfile:
     starts_in_reasoning_mode: bool = True
 
 
-@dataclass
-class _QueuedDelta:
-    delta: DeltaMessage
-    tool_calls_emitted: bool = False
-
-
-def first_stream_delta(
-    deltas: list[tuple[DeltaMessage | None, bool]],
-) -> tuple[DeltaMessage | None, bool]:
-    """Return the first delta from :meth:`ResponseParser.stream_chunk`."""
-    if not deltas:
-        return None, False
-    return deltas[0]
-
-
 @ResponseParserManager.register_module('default')
 class BaseResponseParser(ResponseParser):
     """The default response parser for streaming and complete assistant
@@ -289,7 +274,6 @@ class BaseResponseParser(ResponseParser):
         else:
             self._mode = self.MODE_PLAIN
         self._pending = ''
-        self._queued_deltas: list[_QueuedDelta] = []
 
     def stream_chunk(
         self,
@@ -326,30 +310,29 @@ class BaseResponseParser(ResponseParser):
         self._accumulated_text += delta_text
         self._pending += delta_text
         produced_any = False
+        deltas: list[tuple[DeltaMessage, bool]] = []
 
         while True:
             progressed = False
             if self._mode == self.MODE_PLAIN:
                 emitted, progressed = self._consume_plain()
                 if emitted:
-                    self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=emitted), False))
+                    deltas.append((DeltaMessage(role='assistant', content=emitted), False))
                     produced_any = True
             elif self._mode == self.MODE_REASONING:
                 emitted, progressed = self._consume_reasoning()
                 if emitted:
                     if self.enable_thinking is False:
-                        self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=emitted), False))
+                        deltas.append((DeltaMessage(role='assistant', content=emitted), False))
                     else:
-                        self._queued_deltas.append(
-                            _QueuedDelta(DeltaMessage(role='assistant', reasoning_content=emitted), False))
+                        deltas.append((DeltaMessage(role='assistant', reasoning_content=emitted), False))
                     produced_any = True
             if self._mode == self.MODE_TOOL:
                 # self._consume_plain() might change the mode to MODE_TOOL
                 # so we need to check the mode again
                 new_calls, progressed = self._consume_tool()
                 if new_calls:
-                    self._queued_deltas.append(
-                        _QueuedDelta(DeltaMessage(role='assistant', tool_calls=new_calls), True))
+                    deltas.append((DeltaMessage(role='assistant', tool_calls=new_calls), True))
                     produced_any = True
             if not progressed:
                 break
@@ -361,14 +344,10 @@ class BaseResponseParser(ResponseParser):
             delta_text == ''
             and not produced_any
             and self._accumulated_text != ''
-            and not self._queued_deltas
+            and not deltas
         ):
-            self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=''), False))
-        if not self._queued_deltas:
-            return []
-        queued = self._queued_deltas
-        self._queued_deltas = []
-        return [(item.delta, item.tool_calls_emitted) for item in queued]
+            deltas.append((DeltaMessage(role='assistant', content=''), False))
+        return deltas
 
     @staticmethod
     def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:

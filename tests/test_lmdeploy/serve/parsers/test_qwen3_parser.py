@@ -2,9 +2,11 @@ import pytest
 from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
-from lmdeploy.serve.parsers import ResponseParserManager, first_stream_delta
+from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+
+from .helpers import first_stream_delta
 
 MODEL_ID = 'Qwen/Qwen3-8B'
 
