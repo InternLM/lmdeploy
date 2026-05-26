@@ -1,13 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# Some codes borrowed from https://github.com/google-research/timesfm
-# Noted in comments
-"""Time-series forecaster module for LMDeploy inference.
-
-The module consumes numeric history, LLM hidden states, and time-series encoder hidden states, then predicts point and
-quantile forecasts. It is intentionally standalone for the first integration pass; public serving response plumbing is
-left to the final model integration.
-"""
-
+# Adapted from https://github.com/google-research/timesfm for LMDeploy inference.
 import dataclasses
 import math
 from collections.abc import Callable, Sequence
@@ -23,10 +15,6 @@ from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 
 TS_GEN_TOKEN_ID = 123456
-
-# ---------------------------------------------------------------------------
-# 1b. normalization  (from models/forecaster/torch/normalization.py)
-# ---------------------------------------------------------------------------
 
 
 class RMSNorm(nn.Module):
@@ -50,11 +38,6 @@ class RMSNorm(nn.Module):
         normed_inputs = inputs * torch.rsqrt(var + self.epsilon)
         normed_inputs = normed_inputs * self.scale
         return normed_inputs
-
-
-# ---------------------------------------------------------------------------
-# 1c. dense  (from models/forecaster/torch/dense.py)
-# ---------------------------------------------------------------------------
 
 
 class ResidualBlock(nn.Module):
@@ -108,10 +91,6 @@ class ResidualBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.output_layer(self.activation(self.hidden_layer(x))) + self.residual_layer(x)
 
-
-# ---------------------------------------------------------------------------
-# 1d. util  (from models/forecaster/torch/util.py)
-# ---------------------------------------------------------------------------
 
 _TOLERANCE = 1e-6
 
@@ -184,11 +163,6 @@ def revin(
         return x * sigma + mu
     else:
         return (x - mu) / torch.where(sigma < _TOLERANCE, 1.0, sigma)
-
-
-# ---------------------------------------------------------------------------
-# 1e. transformer  (from models/forecaster/torch/transformer.py)
-# ---------------------------------------------------------------------------
 
 
 def make_attn_mask(
@@ -264,9 +238,7 @@ def _torch_dot_product_attention(query, key, value, mask=None):
     safe_mask = mask
     fully_masked_rows = None
     if mask is not None:
-        # F.scaled_dot_product_attention can emit NaNs/NaN-grads when a query row is
-        # fully masked. Keep the fused kernel by opening a single dummy key for
-        # those rows, then zero their outputs.
+        # Avoid NaNs for fully masked query rows while keeping fused SDPA.
         fully_masked_rows = ~mask.any(dim=-1, keepdim=True)
         if fully_masked_rows.any():
             dummy_key_mask = torch.zeros_like(mask)
@@ -279,18 +251,15 @@ def _torch_dot_product_attention(query, key, value, mask=None):
     if key.dtype != attention_dtype:
         key = key.to(attention_dtype)
 
-    # 1. Permute inputs from (B, L, H, D) to the expected (B, H, L, D)
     query = query.permute(0, 2, 1, 3)
     key = key.permute(0, 2, 1, 3)
     value = value.permute(0, 2, 1, 3)
 
-    # 2. Fused attention kernel with scale=1.0 (disable 1/sqrt(d_k) scaling).
     output = F.scaled_dot_product_attention(query, key, value, attn_mask=safe_mask, scale=1.0)
 
     if fully_masked_rows is not None and fully_masked_rows.any():
         output = output.masked_fill(fully_masked_rows, 0.0)
 
-    # 3. Permute back to (B, L, H, D)
     output = output.permute(0, 2, 1, 3)
     return output
 
@@ -424,8 +393,7 @@ class MultiHeadAttention(nn.Module):
             value = self.value(inputs_q).view(b, n_patches, self.num_heads, self.head_dim)
 
         if decode_cache is None:
-            # Count only LEADING masked patches (not total). make_attn_mask assumes
-            # all masked positions are a contiguous left-padding block.
+            # make_attn_mask expects a left-padding count.
             is_valid = ~patch_mask
             has_valid = is_valid.any(dim=-1)
             first_valid = torch.argmax(is_valid.to(torch.int32), dim=-1)
@@ -728,11 +696,6 @@ class Transformer(nn.Module):
         return output_embeddings, decode_cache
 
 
-# ---------------------------------------------------------------------------
-# 1f. Forecaster 2.5 definition + helpers  (from forecaster_2p5_base.py)
-# ---------------------------------------------------------------------------
-
-
 def strip_leading_nans(arr):
     """Removes contiguous NaN values from the beginning of a NumPy array."""
     isnan = np.isnan(arr)
@@ -764,20 +727,13 @@ def linear_interpolation(arr):
     return arr
 
 
-# ---------------------------------------------------------------------------
-# 1g. Forecaster 2.5 torch module  (from forecaster_2p5_torch.py)
-# ---------------------------------------------------------------------------
-
-
 class ForecasterBackbone(nn.Module):
     """Forecaster 2.5 with 200M parameters (cross-attention capable)."""
 
-    # Architecture constants (Forecaster 2.5 200M)
     context_limit = 16384
     _quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     _num_layers = 20
 
-    # Residual block configs
     _tokenizer_kwargs = dict(input_dims=64, hidden_dims=1280, output_dims=1280, use_bias=True, activation='swish')
     _output_point_kwargs = dict(input_dims=1280, hidden_dims=1280, output_dims=1280, use_bias=False, activation='swish')
     _output_quantile_kwargs = dict(
@@ -788,7 +744,6 @@ class ForecasterBackbone(nn.Module):
         activation='swish',
     )
 
-    # Transformer layer config
     _xf_kwargs = dict(
         model_dims=1280,
         hidden_dims=1280,
@@ -812,16 +767,15 @@ class ForecasterBackbone(nn.Module):
     ):
         super().__init__()
 
-        # Named constants.
         self.p = 32
         self.o = 128
         self.os = 1024
-        self.m = self.o // self.p  # 4
-        self.x = self._num_layers  # 20
-        self.h = self._xf_kwargs['num_heads']  # 16
-        self.md = self._xf_kwargs['model_dims']  # 1280
-        self.hd = self.md // self.h  # 80
-        self.q = len(self._quantiles) + 1  # 10
+        self.m = self.o // self.p
+        self.x = self._num_layers
+        self.h = self._xf_kwargs['num_heads']
+        self.md = self._xf_kwargs['model_dims']
+        self.hd = self.md // self.h
+        self.q = len(self._quantiles) + 1
         self.aridx = 5
 
         self.use_cross_attn = bool(use_cross_attn)
@@ -832,7 +786,6 @@ class ForecasterBackbone(nn.Module):
             xf_kwargs['cross_attn_kv_dim'] = int(cross_attn_kv_dim) or self.md
             xf_kwargs['use_cross_attn_gate'] = bool(use_cross_attn_gate)
 
-        # Layers.
         self.tokenizer = ResidualBlock(**self._tokenizer_kwargs, dtype=dtype, device=device)
         self.stacked_xf = nn.ModuleList([Transformer(**xf_kwargs, dtype=dtype, device=device) for _ in range(self.x)])
         self.output_projection_point = ResidualBlock(**self._output_point_kwargs, dtype=dtype, device=device)
@@ -914,11 +867,9 @@ class ForecasterBackbone(nn.Module):
             decode_cache_size = num_input_patches + num_decode_steps * self.m
             cache_dtype = next(self.parameters()).dtype
 
-            # Prefill
             patched_inputs = torch.reshape(inputs, (batch_size, -1, self.p))
             patched_masks = torch.reshape(masks, (batch_size, -1, self.p))
 
-            # running stats
             n = torch.zeros(batch_size, device=inputs.device)
             mu = torch.zeros(batch_size, device=inputs.device)
             sigma = torch.zeros(batch_size, device=inputs.device)
@@ -972,7 +923,6 @@ class ForecasterBackbone(nn.Module):
                 (batch_size, -1, self.os, self.q),
             )[:, -1, ...]
 
-            # Autoregressive decode
             ar_outputs = []
             last_renormed_output = renormed_outputs[:, -1, :, self.aridx]
 
@@ -1011,11 +961,6 @@ class ForecasterBackbone(nn.Module):
                 ar_renormed_outputs = None
 
         return renormed_outputs, renormed_quantile_spread, ar_renormed_outputs
-
-
-# ============================================================================
-# SECTION 2 - QFormer
-# ============================================================================
 
 
 class QFormerAttention(nn.Module):
@@ -1298,7 +1243,7 @@ class QFormer(nn.Module):
                 raise ValueError('src_key_padding_mask shape must equal src.shape[:2]:'
                                  f" {tuple(src_key_padding_mask.shape)} != {tuple(src.shape[:2])}")
             kpm = src_key_padding_mask.to(dtype=torch.bool, device=kv.device)
-            # If a row is fully padded, MHA would NaN. Flip one position to valid.
+            # Avoid fully padded attention rows.
             all_padded = kpm.all(dim=1)
             if all_padded.any():
                 kpm = kpm.clone()
@@ -1311,11 +1256,6 @@ class QFormer(nn.Module):
             queries = block(queries, kv, kv_key_padding_mask=kpm)
 
         return self.output_ln(queries)
-
-
-# ============================================================================
-# SECTION 3 - Aligner + TSForecaster
-# ============================================================================
 
 
 class Aligner(nn.Module):
@@ -1346,8 +1286,6 @@ class Aligner(nn.Module):
         self.llm_qformer = QFormer(in_dim=config.d_llm, **qformer_kwargs)
 
         if config.use_horizon_head:
-            # Prediction-length head: LayerNorm -> Linear -> SiLU -> Linear(.,1),
-            # regressing log1p(horizon) from the pooled LLM Q-former output.
             self.horizon_head = nn.Sequential(
                 LayerNorm(config.qformer_hidden_dim, eps=1e-5, dtype=dtype, device=device),
                 build_colwise_linear(
@@ -1392,7 +1330,6 @@ class Aligner(nn.Module):
             ctx: (B, Q_ts + Q_llm, qformer_hidden_dim) cross-attention KV stream.
             llm_chunk: (B, Q_llm, qformer_hidden_dim) compressed LLM tokens.
         """
-        # --- TS-encoder branch ---
         ts_param = next(self.ts_qformer.parameters())
         ts_hidden = ts_encoder_embedding_input.to(device=ts_param.device, dtype=ts_param.dtype)
         if ts_encoder_embedding_mask is None:
@@ -1401,7 +1338,6 @@ class Aligner(nn.Module):
             ts_pad = (~ts_encoder_embedding_mask.to(dtype=torch.bool)).to(device=ts_hidden.device)
         ts_chunk = self.ts_qformer(ts_hidden, src_key_padding_mask=ts_pad)
 
-        # --- LLM branch ---
         llm_param = next(self.llm_qformer.parameters())
         llm_hidden = llm_embedding_input.to(device=llm_param.device, dtype=llm_param.dtype)
         if llm_embedding_mask is None:
@@ -1410,7 +1346,6 @@ class Aligner(nn.Module):
             llm_pad = (~llm_embedding_mask.to(dtype=torch.bool)).to(device=llm_hidden.device)
         llm_chunk = self.llm_qformer(llm_hidden, src_key_padding_mask=llm_pad)
 
-        # --- Concatenate: ts tokens first, then llm tokens ---
         ctx = torch.cat([ts_chunk, llm_chunk], dim=1)
         return ctx, llm_chunk
 
@@ -1458,7 +1393,6 @@ class TSForecasterConfig:
 
     model_type = 'timeomni_v2_forecaster'
 
-    # Forecaster 2.5 200M is fixed at model_dims = 1280.
     TIMESFM_MODEL_DIMS = 1280
 
     def __init__(
@@ -1482,27 +1416,20 @@ class TSForecasterConfig:
         return_backcast: bool = False,
         default_pred_len: int = 720,
     ):
-        # Precomputed-embedding dims (must match the consumer's LLM / TS encoder).
         self.d_llm = int(d_llm)
         self.d_ts_encoder = int(d_ts_encoder)
 
-        # Q-former. qformer_hidden_dim == 0 -> default to the Forecaster model dim so
-        # the cross-attention KV stream needs no further projection.
         self.qformer_hidden_dim = int(qformer_hidden_dim) or self.TIMESFM_MODEL_DIMS
         self.qformer_num_query_tokens = int(qformer_num_query_tokens)
         self.qformer_num_heads = int(qformer_num_heads)
         self.qformer_num_layers = int(qformer_num_layers)
 
-        # Prediction-length head.
         self.use_horizon_head = bool(use_horizon_head)
         self.horizon_max_length = int(horizon_max_length)
 
-        # Forecaster cross-attention backbone build.
         self.use_cross_attn_gate = bool(use_cross_attn_gate)
-        # Cross-attn KV dim equals the compressed-token dim.
         self.cross_attn_kv_dim = self.qformer_hidden_dim
 
-        # Forecast knobs.
         self.max_context = int(max_context)
         self.max_horizon = int(max_horizon)
         self.normalize_inputs = bool(normalize_inputs)
@@ -1512,7 +1439,6 @@ class TSForecasterConfig:
         self.fix_quantile_crossing = bool(fix_quantile_crossing)
         self.return_backcast = bool(return_backcast)
 
-        # Fallback horizon when the horizon head is disabled and no override given.
         self.default_pred_len = int(default_pred_len)
 
 
@@ -1562,7 +1488,6 @@ class TSForecaster(nn.Module):
             device=device,
         )
 
-        # Normalize max_context / max_horizon to Forecaster patch multiples.
         if config.max_context % self.forecaster.p != 0:
             config.max_context = math.ceil(config.max_context / self.forecaster.p) * self.forecaster.p
         if config.max_horizon % self.forecaster.o != 0:
@@ -1574,11 +1499,6 @@ class TSForecaster(nn.Module):
             raise ValueError(f"Continuous quantile head is not supported for horizons > {self.forecaster.os}.")
 
         self._horizon_max_length = (int(config.horizon_max_length) or int(config.max_horizon))
-
-    # ------------------------------------------------------------------ #
-    # Forecaster forecast orchestration (ported from Forecaster_2p5.forecast /
-    # Forecaster_2p5_200M_torch.compile._compiled_decode, cross-attn path).
-    # ------------------------------------------------------------------ #
 
     def _forecaster_compiled_decode(
         self,
@@ -1810,7 +1730,6 @@ class TSForecaster(nn.Module):
                              f"{batch_size}, llm_embedding_input={llm_embedding_input.size(0)},"
                              f" ts_encoder_embedding_input={ts_encoder_embedding_input.size(0)}")
 
-        # 1. Align modalities -> cross-attention KV stream + horizon features.
         ctx, llm_chunk = self.aligner(
             llm_embedding_input,
             ts_encoder_embedding_input,
@@ -1818,7 +1737,6 @@ class TSForecaster(nn.Module):
             ts_encoder_embedding_mask=ts_encoder_embedding_mask,
         )
 
-        # 2. Resolve per-sample horizons.
         predicted_horizon = None
         if override_horizon is not None:
             if isinstance(override_horizon, int):
@@ -1839,17 +1757,12 @@ class TSForecaster(nn.Module):
         if len(per_sample_horizons) != batch_size:
             raise ValueError(f"per-sample horizon count ({len(per_sample_horizons)}) does not match"
                              f" batch size ({batch_size})")
-        # Forecaster decodes a single horizon for the whole flattened batch; use the
-        # max and slice each sample back to its own length below.
+        # Decode once at max horizon, then slice per sample.
         horizon = max(per_sample_horizons) if per_sample_horizons else 1
 
-        # 3. Flatten channelwise; replicate the cross-attn context per channel.
         channel_counts, flattened_inputs, flattened_prefix = (self._flatten_channelwise(history, ctx))
-        # Preprocess the KV stream in float32 (stable revin); the Forecaster module
-        # re-casts it to its own dtype internally.
         flattened_prefix = [p.to(dtype=torch.float32) for p in flattened_prefix]
 
-        # 4. Forecaster forecast (cross-attention injection).
         point_flat, quantile_flat = self._forecaster_forecast(
             horizon=horizon,
             inputs=flattened_inputs,
@@ -1857,7 +1770,6 @@ class TSForecaster(nn.Module):
             cross_kv=flattened_prefix,
         )
 
-        # 5. Reshape the flat (Bf, horizon[, Q]) outputs back to per-sample lists.
         point_outputs = []
         quantile_outputs = []
         cursor = 0
