@@ -76,7 +76,10 @@ def register(router: APIRouter, server_context) -> None:
                 tools=to_openai_tools(request.tools),
                 tool_choice=normalize_tool_choice(request.tool_choice),
             )
-            response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
+            try:
+                response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
+            except ValueError as err:
+                return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
             parsed_request = response_parser.request
 
         session = server_context.create_session(-1)
