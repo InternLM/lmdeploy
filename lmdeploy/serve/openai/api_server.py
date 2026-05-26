@@ -548,7 +548,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 delta_token_ids
             )
             if not stream_deltas:
-                if res.finish_reason is None and usage is None and logprobs is None:
+                # Parser may buffer partial protocol tags and emit no visible delta
+                # while the engine still produced new tokens (e.g. MTP batch). Do not
+                # drop those token ids; emit them once on a placeholder delta.
+                if (res.finish_reason is None and usage is None and logprobs is None
+                        and not delta_token_ids):
                     continue
                 stream_deltas = [(DeltaMessage(role='assistant'), False)]
 
