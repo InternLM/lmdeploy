@@ -1280,11 +1280,11 @@ class QFormer(nn.Module):
         """Compress `src` into `num_query_tokens` learned query vectors.
 
         Args:
-          src: (B, T, in_dim) source token embeddings.
-          src_key_padding_mask: (B, T) bool, True = padded position (ignored).
+            src: (B, T, in_dim) source token embeddings.
+            src_key_padding_mask: (B, T) bool, True = padded position (ignored).
 
         Returns:
-          (B, num_query_tokens, out_dim) query outputs.
+            (B, num_query_tokens, out_dim) query outputs.
         """
         if src.dim() != 3:
             raise ValueError(f"src must be (B, T, D), got shape {tuple(src.shape)}")
@@ -1382,15 +1382,15 @@ class Aligner(nn.Module):
         stream.
 
         Args:
-          llm_embedding_input: (B, T_llm, d_llm) precomputed LLM hidden states.
-          ts_encoder_embedding_input: (B, T_ts, d_ts_encoder) precomputed TS-encoder
-            hidden states.
-          llm_embedding_mask / ts_encoder_embedding_mask: optional (B, T) bool masks,
-            True = valid token. Default: all valid.
+            llm_embedding_input: (B, T_llm, d_llm) precomputed LLM hidden states.
+            ts_encoder_embedding_input: (B, T_ts, d_ts_encoder) precomputed TS-encoder
+                hidden states.
+            llm_embedding_mask / ts_encoder_embedding_mask: optional (B, T) bool masks,
+                True = valid token. Default: all valid.
 
         Returns:
-          ctx: (B, Q_ts + Q_llm, qformer_hidden_dim) cross-attention KV stream.
-          llm_chunk: (B, Q_llm, qformer_hidden_dim) compressed LLM tokens.
+            ctx: (B, Q_ts + Q_llm, qformer_hidden_dim) cross-attention KV stream.
+            llm_chunk: (B, Q_llm, qformer_hidden_dim) compressed LLM tokens.
         """
         # --- TS-encoder branch ---
         ts_param = next(self.ts_qformer.parameters())
@@ -1421,10 +1421,10 @@ class Aligner(nn.Module):
         """Predict per-sample forecast horizon in log1p-space from llm_chunk.
 
         Args:
-          llm_chunk: (B, Q, qformer_hidden_dim) LLM Q-former output.
+            llm_chunk: (B, Q, qformer_hidden_dim) LLM Q-former output.
 
         Returns:
-          (B,) float32 tensor of predicted log1p(horizon).
+            (B,) float32 tensor of predicted log1p(horizon).
         """
         if self.horizon_head is None:
             raise RuntimeError('horizon_head is not enabled but predict_horizon was called')
@@ -1521,11 +1521,11 @@ class TSForecasterOutput:
     """Output of :class:`TSForecaster`.
 
     Attributes:
-      point_forecast: list of (horizon_i, C_i) per-sample median forecasts.
-      quantile_forecast: list of (horizon_i, C_i, 10) per-sample quantile
-        forecasts (quantile order: [median, 0.1, 0.2, ..., 0.9]).
-      predicted_horizon: (B,) long tensor of horizons predicted by the horizon
-        head, or None when the head is disabled / a horizon override was given.
+        point_forecast: list of (horizon_i, C_i) per-sample median forecasts.
+        quantile_forecast: list of (horizon_i, C_i, 10) per-sample quantile
+            forecasts (quantile order: [median, 0.1, 0.2, ..., 0.9]).
+        predicted_horizon: (B,) long tensor of horizons predicted by the horizon
+            head, or None when the head is disabled / a horizon override was given.
     """
 
     point_forecast: list[torch.Tensor] | None = None
@@ -1788,19 +1788,19 @@ class TSForecaster(nn.Module):
         """Forecast multi-channel time series.
 
         Args:
-          history: list of B per-sample 2-D tensors (T_i, C_i), the numeric
-            forecast context fed to Forecaster. T and C may differ across samples.
-          llm_embedding_input: (B, T_llm, d_llm) precomputed LLM hidden states.
-          ts_encoder_embedding_input: (B, T_ts, d_ts_encoder) precomputed TS-encoder
-            hidden states.
-          llm_embedding_mask / ts_encoder_embedding_mask: optional (B, T) bool masks
-            (True = valid). Default: all valid.
-          override_horizon: optional forecast horizon. An int applies to every
-            sample; a sequence gives one horizon per sample. When omitted, the
-            horizon head predicts it (if enabled), else ``config.default_pred_len``.
+            history: list of B per-sample 2-D tensors (T_i, C_i), the numeric
+                forecast context fed to Forecaster. T and C may differ across samples.
+            llm_embedding_input: (B, T_llm, d_llm) precomputed LLM hidden states.
+            ts_encoder_embedding_input: (B, T_ts, d_ts_encoder) precomputed TS-encoder
+                hidden states.
+            llm_embedding_mask / ts_encoder_embedding_mask: optional (B, T) bool masks
+                (True = valid). Default: all valid.
+            override_horizon: optional forecast horizon. An int applies to every
+                sample; a sequence gives one horizon per sample. When omitted, the
+                horizon head predicts it (if enabled), else ``config.default_pred_len``.
         Returns:
-          :class:`TSForecasterOutput` with per-sample ``point_forecast`` /
-          ``quantile_forecast`` lists and the predicted horizon.
+            :class:`TSForecasterOutput` with per-sample ``point_forecast`` /
+            ``quantile_forecast`` lists and the predicted horizon.
         """
         if not isinstance(history, (list, tuple)):
             raise ValueError('history must be a list/tuple of (T, C) tensors, one per sample')
