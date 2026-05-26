@@ -94,6 +94,15 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                         offset=item['offset'][0],
                         image_token_id=token_id,
                     ))
+            elif modality == Modality.VIDEO:
+                expanded_mm_items.append(
+                    dict(
+                        modality=modality,
+                        pixel_values_videos=item['feature'],
+                        video_grid_thw=item['video_grid_thw'][0],
+                        offset=item['offset'][0],
+                        video_token_id=token_id,
+                    ))
             elif modality == Modality.TIME_SERIES:
                 expanded_mm_items.append(
                     dict(
@@ -134,6 +143,29 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
             video_grid_thw = item['video_grid_thw']
             num_videos = video_grid_thw.shape[0]
 
+            patches_per_video = []
+            for i in range(num_videos):
+                grid = video_grid_thw[i]
+                patches_per_video.append(
+                    int(torch.prod(grid).item()) if isinstance(grid, torch.Tensor) else int(
+                        torch.prod(torch.as_tensor(grid, dtype=torch.long)).item()))
+
+            if num_items == num_videos:
+                cumulative = torch.cumsum(torch.tensor(patches_per_video, dtype=torch.long), dim=0)
+                slice_indices = [0] + cumulative.tolist()
+
+                for video_idx in range(num_videos):
+                    start, end = slice_indices[video_idx], slice_indices[video_idx + 1]
+                    expanded_mm_items.append(
+                        dict(
+                            modality=modality,
+                            pixel_values_videos=item['feature'][start:end].clone(),
+                            video_grid_thw=video_grid_thw[video_idx],
+                            offset=item['offset'][video_idx],
+                            video_token_id=token_id,
+                        ))
+                continue
+
             frames_per_video = []
             total_frames = 0
             for i in range(num_videos):
@@ -146,13 +178,6 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
             if num_items != total_frames:
                 expanded_mm_items.append(item)
                 continue
-
-            patches_per_video = []
-            for i in range(num_videos):
-                grid = video_grid_thw[i]
-                patches_per_video.append(
-                    int(torch.prod(grid).item()) if isinstance(grid, torch.Tensor) else int(
-                        torch.prod(torch.as_tensor(grid, dtype=torch.long)).item()))
 
             cumulative = torch.cumsum(torch.tensor(patches_per_video, dtype=torch.long), dim=0)
             slice_indices = [0] + cumulative.tolist()

@@ -898,19 +898,29 @@ class SchedulerSequence:
         """Clamp a prefix-cache match so forward never starts inside a span.
 
         Multimodal processors expect an image/video span to be consumed as a whole.  If a candidate cache hit would stop
-        in the middle of such a span, rewind to the span start and then to a block boundary.
+        in the middle of such a span, rewind to the span start and then to a block boundary.  Rounding a later span
+        start down can itself land inside an earlier span when multimodal spans are close together, so keep rewinding
+        until the final block boundary is outside every span.
         """
         if step <= 0:
             return step
 
+        spans = [(meta.start, meta.end) for meta in self.prefix_cache.metas]
+        spans.extend((emb.start, emb.end) for emb in self.history_embeddings.embeddings)
+        if len(spans) == 0:
+            return (step // self.block_size) * self.block_size
+
         clamped = step
-        for meta in self.prefix_cache.metas:
-            if meta.start < step < meta.end:
-                clamped = min(clamped, meta.start)
-        for emb in self.history_embeddings.embeddings:
-            if emb.start < step < emb.end:
-                clamped = min(clamped, emb.start)
-        return (clamped // self.block_size) * self.block_size
+        while clamped > 0:
+            next_step = clamped
+            for start, end in spans:
+                if start < next_step < end:
+                    next_step = min(next_step, start)
+            next_step = (next_step // self.block_size) * self.block_size
+            if next_step == clamped:
+                break
+            clamped = next_step
+        return clamped
 
     def record_event(
         self,

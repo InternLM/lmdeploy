@@ -476,6 +476,26 @@ class TestBlockTire:
         assert len(seq.logical_blocks) == 3
         assert seq.num_history_ids == block_size * 3
 
+    def test_match_multimodal_clamp_rechecks_after_block_rounding(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [99] * (block_size * 7 + block_size // 2)
+        image1 = (block_size // 2, block_size * 5 + block_size // 2, 1.0)
+        image2 = (block_size * 5 + block_size // 2 + 2, block_size * 7 + block_size // 2, 2.0)
+
+        seq = sess.add_sequence(token_ids, multimodals=self._multi_image_multimodals([image1, image2]))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(token_ids, multimodals=self._multi_image_multimodals([image1, image2]))
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 0
+        assert seq.num_history_ids == 0
+        node = seq.prefix_cache.last_shared_node
+        assert node is not None
+        assert node.num_matched == 0
+
     def test_match_multimodal_extra_hash_order_is_canonical(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
