@@ -137,7 +137,10 @@ class ResponseParser:
         self.request = request
 
     @abstractmethod
-    def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs) -> tuple[DeltaMessage | None, bool]:
+    def stream_chunk(self,
+                     delta_text: str,
+                     delta_token_ids: list[int],
+                     **kwargs) -> list[tuple[DeltaMessage | None, bool]]:
         raise NotImplementedError
 
     @abstractmethod
@@ -168,12 +171,6 @@ class ProtocolProfile:
     tool_close_tag: str | None = None
     tool_payload_format: str = 'json'
     starts_in_reasoning_mode: bool = True
-
-
-@dataclass
-class _QueuedDelta:
-    delta: DeltaMessage
-    tool_calls_emitted: bool = False
 
 
 @ResponseParserManager.register_module('default')
@@ -277,14 +274,13 @@ class BaseResponseParser(ResponseParser):
         else:
             self._mode = self.MODE_PLAIN
         self._pending = ''
-        self._queued_deltas: list[_QueuedDelta] = []
 
     def stream_chunk(
         self,
         delta_text: str,
         delta_token_ids: list[int],
         **kwargs,
-    ) -> tuple[DeltaMessage | None, bool]:
+    ) -> list[tuple[DeltaMessage | None, bool]]:
         """Parse one streamed chunk into delta message channels.
 
         Args:
@@ -292,10 +288,9 @@ class BaseResponseParser(ResponseParser):
             delta_token_ids: Token ids corresponding to ``delta_text``.
 
         Returns:
-            ``(delta_message, tool_calls_emitted)`` where:
-            - ``delta_message`` is ``None`` when this step has no visible delta.
-            - ``tool_calls_emitted`` is ``True`` if at least one tool-call
-              delta is emitted in this step.
+            A list of ``(delta_message, tool_calls_emitted)`` pairs produced
+            from this stream step. Multiple entries may be returned when one
+            engine chunk contains reasoning, content, and tool-call segments.
         """
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty
@@ -305,38 +300,39 @@ class BaseResponseParser(ResponseParser):
             and not delta_token_ids
             and self._accumulated_text == ''
         ):
-            return DeltaMessage(role='assistant', content=''), False
+            return [(DeltaMessage(role='assistant', content=''), False)]
 
         if self.tool_parser is None and self.reasoning_parser is None:
-            return DeltaMessage(role='assistant', content=delta_text), False
+            if not delta_text:
+                return []
+            return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
         self._accumulated_text += delta_text
         self._pending += delta_text
         produced_any = False
+        deltas: list[tuple[DeltaMessage, bool]] = []
 
         while True:
             progressed = False
             if self._mode == self.MODE_PLAIN:
                 emitted, progressed = self._consume_plain()
                 if emitted:
-                    self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=emitted), False))
+                    deltas.append((DeltaMessage(role='assistant', content=emitted), False))
                     produced_any = True
             elif self._mode == self.MODE_REASONING:
                 emitted, progressed = self._consume_reasoning()
                 if emitted:
                     if self.enable_thinking is False:
-                        self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=emitted), False))
+                        deltas.append((DeltaMessage(role='assistant', content=emitted), False))
                     else:
-                        self._queued_deltas.append(
-                            _QueuedDelta(DeltaMessage(role='assistant', reasoning_content=emitted), False))
+                        deltas.append((DeltaMessage(role='assistant', reasoning_content=emitted), False))
                     produced_any = True
             if self._mode == self.MODE_TOOL:
                 # self._consume_plain() might change the mode to MODE_TOOL
                 # so we need to check the mode again
                 new_calls, progressed = self._consume_tool()
                 if new_calls:
-                    self._queued_deltas.append(
-                        _QueuedDelta(DeltaMessage(role='assistant', tool_calls=new_calls), True))
+                    deltas.append((DeltaMessage(role='assistant', tool_calls=new_calls), True))
                     produced_any = True
             if not progressed:
                 break
@@ -348,12 +344,10 @@ class BaseResponseParser(ResponseParser):
             delta_text == ''
             and not produced_any
             and self._accumulated_text != ''
+            and not deltas
         ):
-            self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=''), False))
-        if not self._queued_deltas:
-            return None, False
-        queued = self._queued_deltas.pop(0)
-        return queued.delta, queued.tool_calls_emitted
+            deltas.append((DeltaMessage(role='assistant', content=''), False))
+        return deltas
 
     @staticmethod
     def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:

@@ -4,6 +4,8 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
+from .helpers import first_stream_delta
+
 
 def _build_parser():
     cls = ResponseParserManager.get('default')
@@ -43,11 +45,11 @@ def test_llama3_streaming_without_close_tag():
     payload = ('{"name":"find_user_id_by_name_zip","parameters":{"first_name":"Chen",'
                '"last_name":"Johnson","zip":77004}}')
 
-    delta_msg, tool_emitted = parser.stream_chunk('<|python_tag|>', [])
+    delta_msg, tool_emitted = first_stream_delta(parser.stream_chunk('<|python_tag|>', []))
     assert delta_msg is None
     assert tool_emitted is False
 
-    delta_msg, tool_emitted = parser.stream_chunk(payload, [])
+    delta_msg, tool_emitted = first_stream_delta(parser.stream_chunk(payload, []))
     assert delta_msg is not None
     assert tool_emitted is True
     assert delta_msg.tool_calls is not None
@@ -87,11 +89,11 @@ def test_llama3_streaming_emits_plain_text_after_tool_call_finishes():
                '"last_name":"Johnson","zip":77004}}')
 
     parser.stream_chunk('<|python_tag|>', [])
-    delta_msg, tool_emitted = parser.stream_chunk(payload, [])
+    delta_msg, tool_emitted = first_stream_delta(parser.stream_chunk(payload, []))
     assert delta_msg is not None
     assert tool_emitted is True
 
-    delta_msg, tool_emitted = parser.stream_chunk(' Done.', [])
+    delta_msg, tool_emitted = first_stream_delta(parser.stream_chunk(' Done.', []))
     assert delta_msg is not None
     assert tool_emitted is False
     assert delta_msg.content == ' Done.'

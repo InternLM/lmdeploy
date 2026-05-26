@@ -553,40 +553,47 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     total_tokens=total_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
-            delta_message, tool_emitted = response_parser.stream_chunk(
+            stream_deltas = response_parser.stream_chunk(
                 res.response,
                 delta_token_ids
             )
-            if tool_emitted:
-                streaming_tools = True
-
-            if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
-                if res.finish_reason == 'stop' and streaming_tools is True:
-                    res.finish_reason = 'tool_calls'
-
-            # The parser may intentionally suppress no-op chunks by returning
-            # ``None``. Keep them suppressed unless this is a visible terminal
-            # frame (finish/usage/logprobs), where OpenAI-style streams still
-            # expect a delta object.
-            if delta_message is None:
-                if res.finish_reason is None and logprobs is None:
+            if not stream_deltas:
+                # Parser may buffer partial protocol tags and emit no visible delta
+                # while the engine still produced new tokens (e.g. MTP batch). Do not
+                # drop those token ids; emit them once on a placeholder delta.
+                if res.finish_reason is None and logprobs is None and not delta_token_ids:
                     continue
-                delta_message = DeltaMessage(role='assistant')
+                stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
 
-            # Only output routed_experts in the final chunk
-            routed_experts = res.routed_experts if res.finish_reason is not None else None
-            stream_output_ids = delta_token_ids if request.return_token_ids else None
+            for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
+                if tool_emitted:
+                    streaming_tools = True
 
-            response_json = create_stream_response_json(index=0,
-                                                        delta_message=delta_message,
-                                                        finish_reason=res.finish_reason,
-                                                        logprobs=logprobs,
-                                                        routed_experts=routed_experts,
-                                                        output_ids=stream_output_ids)
-            if res.cache_block_ids is not None:
-                response_json['cache_block_ids'] = res.cache_block_ids
-                response_json['remote_token_ids'] = res.token_ids
-            yield f'data: {json.dumps(response_json)}\n\n'
+                is_last_delta = delta_index == len(stream_deltas) - 1
+
+                finish_reason = res.finish_reason if is_last_delta else None
+                chunk_logprobs = logprobs if is_last_delta else None
+
+                if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
+                    if finish_reason == 'stop' and streaming_tools is True:
+                        finish_reason = 'tool_calls'
+
+                # Only output routed_experts in the final chunk
+                routed_experts = res.routed_experts if finish_reason is not None else None
+                # Emit token ids once per engine yield on the last parsed delta, when
+                # accumulated delta text and token ids for this step are aligned.
+                stream_output_ids = delta_token_ids if (request.return_token_ids and is_last_delta) else None
+
+                response_json = create_stream_response_json(index=0,
+                                                            delta_message=delta_message,
+                                                            finish_reason=finish_reason,
+                                                            logprobs=chunk_logprobs,
+                                                            routed_experts=routed_experts,
+                                                            output_ids=stream_output_ids)
+                if res.cache_block_ids is not None and is_last_delta:
+                    response_json['cache_block_ids'] = res.cache_block_ids
+                    response_json['remote_token_ids'] = res.token_ids
+                yield f'data: {json.dumps(response_json)}\n\n'
         if final_usage is not None:
             yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
         yield 'data: [DONE]\n\n'

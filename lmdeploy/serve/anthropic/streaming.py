@@ -7,6 +7,8 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from lmdeploy.serve.openai.protocol import DeltaMessage
+
 from .adapter import map_finish_reason
 
 
@@ -150,56 +152,55 @@ async def stream_messages_response(result_generator,
         text = res.response or ''
         delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
 
-        delta_message = None
-        tool_emitted = False
+        delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+
+        stream_deltas = []
         if response_parser is not None:
-            delta_message, tool_emitted = response_parser.stream_chunk(text, delta_token_ids)
+            stream_deltas = response_parser.stream_chunk(text, delta_token_ids)
         elif text:
-            for event in _start_text_or_thinking('text'):
-                yield event
-            if current_block is not None:
-                yield _emit_text_delta(text, thinking=False)
+            stream_deltas = [(DeltaMessage(role='assistant', content=text), False)]
 
-        if tool_emitted:
-            streaming_tools = True
-        if (response_parser is not None and res.finish_reason == 'stop' and streaming_tools):
-            res.finish_reason = 'tool_calls'
-
-        if delta_message is None:
+        if not stream_deltas:
             continue
 
-        if delta_message.reasoning_content:
-            for event in _start_text_or_thinking('thinking'):
-                yield event
-            if current_block is not None:
-                yield _emit_text_delta(delta_message.reasoning_content, thinking=True)
+        for delta_message, tool_emitted in stream_deltas:
+            if tool_emitted:
+                streaming_tools = True
+            if response_parser is not None and res.finish_reason == 'stop' and streaming_tools:
+                res.finish_reason = 'tool_calls'
 
-        if delta_message.content:
-            for event in _start_text_or_thinking('text'):
-                yield event
-            if current_block is not None:
-                yield _emit_text_delta(delta_message.content, thinking=False)
-
-        if delta_message.tool_calls:
-            for tool_delta in delta_message.tool_calls:
-                for event in _start_tool_block(tool_delta):
+            if delta_message.reasoning_content:
+                for event in _start_text_or_thinking('thinking'):
                     yield event
-                function_delta = getattr(tool_delta, 'function', None)
-                if function_delta is None:
-                    continue
-                partial_json = function_delta.arguments or ''
-                if partial_json:
-                    yield _format_sse(
-                        'content_block_delta',
-                        {
-                            'type': 'content_block_delta',
-                            'index': current_block['block_index'],
-                            'delta': {
-                                'type': 'input_json_delta',
-                                'partial_json': partial_json,
+                if current_block is not None:
+                    yield _emit_text_delta(delta_message.reasoning_content, thinking=True)
+
+            if delta_message.content:
+                for event in _start_text_or_thinking('text'):
+                    yield event
+                if current_block is not None:
+                    yield _emit_text_delta(delta_message.content, thinking=False)
+
+            if delta_message.tool_calls:
+                for tool_delta in delta_message.tool_calls:
+                    for event in _start_tool_block(tool_delta):
+                        yield event
+                    function_delta = getattr(tool_delta, 'function', None)
+                    if function_delta is None:
+                        continue
+                    partial_json = function_delta.arguments or ''
+                    if partial_json:
+                        yield _format_sse(
+                            'content_block_delta',
+                            {
+                                'type': 'content_block_delta',
+                                'index': current_block['block_index'],
+                                'delta': {
+                                    'type': 'input_json_delta',
+                                    'partial_json': partial_json,
+                                },
                             },
-                        },
-                    )
+                        )
 
     closing = _close_current_block()
     if closing:
