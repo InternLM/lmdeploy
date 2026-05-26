@@ -73,29 +73,22 @@ def concat_chunks_simple(chunks: torch.Tensor, chunk_lengths: torch.Tensor | Non
 
 class ChunkModel(nn.Module):
 
-    def __init__(self, encoder_embed: nn.Module, encoder: nn.Module, chunk_size: int | None = None,
-                 step: int | None = None):
+    def __init__(self, encoder_embed: nn.Module, encoder: nn.Module, chunk_size: int = 6400, step: int = 6400):
         super().__init__()
 
-        if chunk_size is None:
-            self.chunk_size = 6400
-            self.step = 6400
-        else:
-            self.chunk_size = chunk_size
-            self.step = max(chunk_size, 1) if step is None else step
-
+        self.chunk_size = chunk_size
+        self.step = step
         assert self.step <= self.chunk_size or self.chunk_size < 0
 
         self.encoder_embed = encoder_embed
         self.encoder = encoder
 
-    def chunk_tensor(self, tensor: torch.Tensor, return_indices: bool = False):
+    def chunk_tensor(self, tensor: torch.Tensor):
         seq_len = tensor.shape[0]
         chunk_size = self.chunk_size
         step = self.step
 
         chunks = []
-        indices = [] if return_indices else None
         masks = []
 
         if chunk_size > 0:
@@ -107,8 +100,6 @@ class ChunkModel(nn.Module):
                 mask = torch.zeros(chunk.shape)
                 mask[:end - start, :] = 1
                 masks.append(mask)
-                if return_indices:
-                    indices.append((start, end))
 
                 if end >= seq_len:
                     break
@@ -121,8 +112,6 @@ class ChunkModel(nn.Module):
             output = tensor.unsqueeze(0)
             output_mask = torch.ones(output.shape).to(tensor.device)
 
-        if return_indices:
-            return output, indices, output_mask
         return output, output_mask
 
     def forward_encoder(self,
@@ -196,17 +185,14 @@ class SingleResChunkQformerSubsampling(nn.Module):
 
     def __init__(self,
                  hidden_dim: int = 128,
-                 nhead: int = 8,
                  alpha: float = 0.5,
                  patch: int = 800,
                  num_query: int = 32,
                  num_conv_layers: int = 0,
-                 selfatt: bool = False,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None):
         super().__init__()
 
-        self.selfatt = selfatt
         self.patch_list = [patch]
         self.num_query_list = [num_query]
 
@@ -242,20 +228,14 @@ class SingleResChunkQformerSubsampling(nn.Module):
             self.conv = nn.Sequential(*conv_layers)
             self.mask_pool = nn.Sequential(*pool_layers)
 
-        if self.selfatt:
-            encoder_layers = TransformerEncoderLayer(d_model=hidden_dim, nhead=nhead, dtype=dtype, device=device)
-            self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers=1)
-            self.mrqformer = None
-        else:
-            self.mrqformer = MRQFormer(
-                num_query_list=self.num_query_list,
-                hidden_size=hidden_dim,
-                num_layers=6,
-                cross_attention_freq=2,
-                output_size=hidden_dim,
-                dtype=dtype,
-                device=device)
-            self.transformer_encoder = None
+        self.mrqformer = MRQFormer(
+            num_query_list=self.num_query_list,
+            hidden_size=hidden_dim,
+            num_layers=6,
+            cross_attention_freq=2,
+            output_size=hidden_dim,
+            dtype=dtype,
+            device=device)
 
         self.pos_encoder = FixPositionalEncoding(d_model=hidden_dim, dtype=dtype, device=device)
 
@@ -363,10 +343,7 @@ class SingleResChunkQformerSubsampling(nn.Module):
             patched_mask = patched_mask.reshape(batch_size * num_patch, patch_len, channels)
 
             raw_output = self.forward_encoder(patched, patched_mask, res_idx)
-            if self.selfatt:
-                output = raw_output.mean(dim=1)
-            else:
-                output = raw_output.reshape(-1, hidden_dim)
+            output = raw_output.reshape(-1, hidden_dim)
             output_list.append(output)
 
         outputs = torch.cat(output_list, dim=1)
@@ -375,10 +352,7 @@ class SingleResChunkQformerSubsampling(nn.Module):
 
         outputs = outputs.reshape(batch_size, -1, out_hidden_dim)
 
-        if self.selfatt:
-            output_lens = torch.ceil(padded_mask[:, :, 0].sum(dim=-1) / max_patch)
-        else:
-            output_lens = torch.ceil(padded_mask[:, :, 0].sum(dim=-1) / max_patch) * max_num_query
+        output_lens = torch.ceil(padded_mask[:, :, 0].sum(dim=-1) / max_patch) * max_num_query
 
         learnable_lens = None
         raw_outputs = None
@@ -395,7 +369,6 @@ class SingleResChunkQformerSubsampling(nn.Module):
 
         mask = mask.permute(0, 2, 1)
         mask = mask.reshape(num_patch * channels, patch_len)
-        bool_mask = mask == 0
 
         chunk_size = 4096 * 8
         all_outputs = []
@@ -403,13 +376,9 @@ class SingleResChunkQformerSubsampling(nn.Module):
         for i in range(0, x.size(1), chunk_size):
             x_chunk = x[:, i:i + chunk_size, :].contiguous()
             chunk_mask = mask[i:i + chunk_size]
-            chunk_bool_mask = bool_mask[i:i + chunk_size]
-            if self.selfatt:
-                x_chunk = self.transformer_encoder(x_chunk, src_key_padding_mask=chunk_bool_mask)
-            else:
-                x_chunk = x_chunk.permute(1, 0, 2)
-                x_chunk = self.mrqformer(x_chunk, attention_mask=chunk_mask, res_idx=res_idx)
-                x_chunk = x_chunk.permute(1, 0, 2)
+            x_chunk = x_chunk.permute(1, 0, 2)
+            x_chunk = self.mrqformer(x_chunk, attention_mask=chunk_mask, res_idx=res_idx)
+            x_chunk = x_chunk.permute(1, 0, 2)
             all_outputs.append(x_chunk)
 
         x = torch.cat(all_outputs, dim=1)
@@ -437,8 +406,6 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
 
     def __init__(self, config: WhisperConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
         super().__init__(config)
-        self._init_dtype = dtype
-        self._init_device = device
 
         self.embed_dim = config.d_model
         self.num_mel_bins = config.num_mel_bins
@@ -452,9 +419,8 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
         self.embed_positions = nn.Embedding(self.max_source_positions, self.embed_dim, dtype=dtype, device=device)
 
         self.layers = nn.ModuleList(
-            [WhisperEncoderLayer(config, dtype=self._init_dtype, device=self._init_device)
-             for _ in range(config.encoder_layers)])
-        self.layer_norm = LayerNorm(config.d_model, eps=1e-5, dtype=self._init_dtype, device=self._init_device)
+            [WhisperEncoderLayer(config, dtype=dtype, device=device) for _ in range(config.encoder_layers)])
+        self.layer_norm = LayerNorm(config.d_model, eps=1e-5, dtype=dtype, device=device)
 
         self.post_init()
 
@@ -468,8 +434,8 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
             80,
             bias=True,
             quant_config=quantization_config,
-            dtype=self._init_dtype,
-            device=self._init_device,
+            dtype=self.dtype,
+            device=self.device,
         )
 
     def add_adpt_out(self, output_dim: int):
@@ -479,8 +445,8 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
             output_dim,
             bias=True,
             quant_config=quantization_config,
-            dtype=self._init_dtype,
-            device=self._init_device,
+            dtype=self.dtype,
+            device=self.device,
         )
 
     def get_input_embeddings(self) -> nn.Module:
