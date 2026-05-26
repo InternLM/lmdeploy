@@ -16,134 +16,286 @@ from .bert import BertConfig, BertModel
 from .whisper import WhisperEncoderLayer
 
 
-class ChunkModel(nn.Module):
+class FixPositionalEncoding(nn.Module):
 
-    def __init__(self, encoder_embed: nn.Module, encoder: nn.Module, chunk_size: int = 6400, step: int = 6400):
+    def __init__(self,
+                 d_model: int,
+                 max_len: int = 200000,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None):
+        super().__init__()
+        pe = torch.zeros(max_len, 1, d_model, dtype=torch.float)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        pe = pe.to(dtype=dtype, device=device)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.pe[:x.size(0), :, :]
+        return x
+
+
+class CustomWhisperEncoder(WhisperPreTrainedModel):
+    """Whisper encoder with time-series input/output adapters."""
+
+    def __init__(self, config: WhisperConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
+        super().__init__(config)
+
+        self.embed_dim = config.d_model
+        self.num_mel_bins = config.num_mel_bins
+        self.max_source_positions = config.max_source_positions
+        self.embed_scale = math.sqrt(self.embed_dim) if config.scale_embedding else 1.0
+
+        self.conv1 = nn.Conv1d(
+            self.num_mel_bins, self.embed_dim, kernel_size=3, padding=1, dtype=dtype, device=device)
+        self.conv2 = nn.Conv1d(
+            self.embed_dim, self.embed_dim, kernel_size=3, stride=2, padding=1, dtype=dtype, device=device)
+        self.embed_positions = nn.Embedding(self.max_source_positions, self.embed_dim, dtype=dtype, device=device)
+
+        self.layers = nn.ModuleList(
+            [WhisperEncoderLayer(config, dtype=dtype, device=device) for _ in range(config.encoder_layers)])
+        self.layer_norm = LayerNorm(config.d_model, eps=1e-5, dtype=dtype, device=device)
+
+        self.adapt_in = build_colwise_linear(
+            config.ts_adapt_in_dim,
+            80,
+            bias=True,
+            dtype=dtype,
+            device=device,
+        )
+        self.adapt_out = build_rowwise_linear(
+            self.embed_dim,
+            config.ts_adapt_out_dim,
+            bias=True,
+            dtype=dtype,
+            device=device,
+        )
+
+        self.mask_type = None
+        self.chunk_length = None
+
+    def get_input_embeddings(self) -> nn.Module:
+        return self.conv1
+
+    def set_input_embeddings(self, value: nn.Module):
+        self.conv1 = value
+
+    def define_masktype(self, masktype: str, chunk_length: int | None = None):
+        self.mask_type = masktype
+        self.chunk_length = chunk_length
+
+    def _make_causal_mask(self,
+                          input_ids_shape: torch.Size,
+                          dtype: torch.dtype,
+                          device: torch.device,
+                          past_key_values_length: int = 0) -> torch.Tensor:
+        """Create a causal attention mask in HF Whisper's expected shape."""
+        bsz, tgt_len = input_ids_shape
+        mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)
+        mask_cond = torch.arange(mask.size(-1), device=device)
+        mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+        mask = mask.to(dtype)
+
+        if past_key_values_length > 0:
+            mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
+        return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+
+    def _prepare_decoder_attention_mask(self, input_shape, inputs_embeds, past_key_values_length):
+        # create causal mask
+        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        combined_attention_mask = None
+
+        if input_shape[-1] > 1:
+            combined_attention_mask = self._make_causal_mask(
+                input_shape,
+                inputs_embeds.dtype,
+                device=inputs_embeds.device,
+                past_key_values_length=past_key_values_length,
+            )
+
+        return combined_attention_mask
+
+    def prepare_chunk_attention_mask(self, input_shape, inputs_embeds):
+        block_size = round(self.chunk_length / 4 * 2)
+        matrix_size = input_shape[1]
+
+        matrix = torch.ones(matrix_size, matrix_size)
+
+        num_full_blocks = round(matrix_size // block_size)
+        remainder = matrix_size % block_size
+        for i in range(num_full_blocks):
+            row_start = i * block_size
+            col_start = i * block_size
+            matrix[row_start:row_start + block_size, col_start:col_start + block_size] = torch.zeros(
+                block_size, block_size)
+
+        if remainder > 0:
+            last_row_start = num_full_blocks * block_size
+            last_col_start = num_full_blocks * block_size
+            matrix[last_row_start:last_row_start + remainder,
+                   last_col_start:last_col_start + remainder] = torch.zeros(remainder, remainder)
+
+        matrix = matrix * -65504
+        matrix = matrix.unsqueeze(0).unsqueeze(0).repeat(input_shape[0], 1, 1, 1)
+        attention_mask = matrix.to(inputs_embeds.device)
+        return attention_mask
+
+    def prepare_padding_mask(self, input_shape, inputs_embeds, input_lens):
+        matrix_size = input_shape[1]
+        matrix_list = []
+
+        for i in range(input_shape[0]):
+            padding_matrix = torch.ones(matrix_size, matrix_size) * -65504
+            padding_matrix[:input_lens[i], :input_lens[i]] = 0
+            matrix_list.append(padding_matrix)
+
+        attention_mask = torch.stack(matrix_list).unsqueeze(1).to(inputs_embeds.dtype).to(inputs_embeds.device)
+
+        return attention_mask
+
+    def forward(
+        self,
+        input_features,
+        input_length=None,
+        causal=True,
+    ):
+        input_features = self.adapt_in(input_features)
+        input_features = input_features.permute(1, 2, 0)
+
+        inputs_embeds = F.gelu(self.conv1(input_features))
+        inputs_embeds = F.gelu(self.conv2(inputs_embeds))
+
+        inputs_embeds = inputs_embeds.permute(0, 2, 1)
+        embed_pos = self.embed_positions.weight
+
+        if inputs_embeds.shape[1] > embed_pos.shape[0]:
+            target_len = inputs_embeds.shape[1]
+            padding = [0, 0, 0, target_len - embed_pos.shape[0]]
+
+            embed_pos = F.pad(embed_pos, pad=padding, mode='constant', value=0)
+            hidden_states = inputs_embeds[:, :embed_pos.shape[0], :] + embed_pos
+        else:
+            hidden_states = inputs_embeds + embed_pos[:inputs_embeds.shape[1], :]
+
+        input_shape = inputs_embeds.size()[:-1]
+        past_key_values_length = 0
+        if causal:
+            if self.mask_type == 'chunk':
+                attention_mask = self.prepare_chunk_attention_mask(input_shape, inputs_embeds)
+            else:
+                attention_mask = self._prepare_decoder_attention_mask(input_shape, inputs_embeds,
+                                                                      past_key_values_length)
+        else:
+            attention_mask = self.prepare_padding_mask(input_shape, inputs_embeds, (input_length + 1) // 2)
+
+        for encoder_layer in self.layers:
+            layer_outputs = encoder_layer(hidden_states, attention_mask)
+            if isinstance(layer_outputs, tuple):
+                hidden_states = layer_outputs[0]
+            else:
+                hidden_states = layer_outputs
+
+        hidden_states = hidden_states.permute(1, 0, 2)
+        hidden_states = self.layer_norm(hidden_states)
+        hidden_states = self.adapt_out(hidden_states)
+
+        lengths = (input_length + 1) // 2
+
+        return hidden_states, lengths
+
+
+class MRQFormer(nn.Module):
+
+    def __init__(self,
+                 num_query_list: list[int],
+                 hidden_size: int = 1024,
+                 num_layers: int = 6,
+                 cross_attention_freq: int = 2,
+                 encoder_hidden_size: int | None = None,
+                 output_size: int | None = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None):
         super().__init__()
 
-        self.chunk_size = chunk_size
-        self.step = step
-        assert self.step <= self.chunk_size or self.chunk_size < 0
+        self.num_query_list = num_query_list
+        self.hidden_size = hidden_size
 
-        self.encoder_embed = encoder_embed
-        self.encoder = encoder
+        self.query_token_list = nn.ParameterList()
+        for num_queries in self.num_query_list:
+            self.query_token_list.append(
+                nn.Parameter(torch.randn(1, num_queries, hidden_size, dtype=dtype, device=device)))
 
-    def chunk_tensor(self, tensor: torch.Tensor):
-        seq_len = tensor.shape[0]
-        chunk_size = self.chunk_size
-        step = self.step
+        bert_config = BertConfig(
+            vocab_size=1,
+            hidden_size=hidden_size,
+            num_hidden_layers=num_layers,
+            num_attention_heads=hidden_size // 16,
+            intermediate_size=hidden_size * 4,
+            max_position_embeddings=max(self.num_query_list),
+            add_cross_attention=True,
+            is_decoder=True,
+            cross_attention_freq=cross_attention_freq,
+        )
+        self.transformer = BertModel(bert_config, dtype=dtype, device=device)
 
-        chunks = []
-        masks = []
-
-        if chunk_size > 0:
-            start = 0
-            while start < seq_len:
-                end = min(start + chunk_size, seq_len)
-                chunk = tensor[start:end, :]
-                chunks.append(chunk)
-                mask = torch.zeros(chunk.shape)
-                mask[:end - start, :] = 1
-                masks.append(mask)
-
-                if end >= seq_len:
-                    break
-
-                start += step
-
-            output = pad_sequence(chunks, batch_first=True)
-            output_mask = pad_sequence(masks, batch_first=True).to(output.device)
+        if encoder_hidden_size is not None and encoder_hidden_size != hidden_size:
+            self.encoder_proj = build_colwise_linear(
+                encoder_hidden_size,
+                hidden_size,
+                bias=True,
+                check_dist=False,
+                dtype=dtype,
+                device=device,
+            )
         else:
-            output = tensor.unsqueeze(0)
-            output_mask = torch.ones(output.shape).to(tensor.device)
+            self.encoder_proj = nn.Identity()
 
-        return output, output_mask
+        if output_size is None:
+            output_size = hidden_size
 
-    def concat_chunks_simple(self,
-                             chunks: torch.Tensor,
-                             chunk_lengths: torch.Tensor | None = None) -> tuple[torch.Tensor, int]:
-        """Concatenate chunks without overlap."""
-        num_chunks, chunk_len, channels = chunks.shape
+        self.proj_out = nn.Sequential(
+            build_colwise_linear(
+                in_features=hidden_size,
+                out_features=4 * hidden_size,
+                bias=True,
+                check_dist=False,
+                dtype=dtype,
+                device=device,
+            ),
+            nn.ReLU(),
+            build_rowwise_linear(
+                in_features=4 * hidden_size,
+                out_features=output_size,
+                bias=True,
+                check_dist=False,
+                dtype=dtype,
+                device=device,
+            ),
+        )
 
-        if chunk_lengths is None:
-            signal = chunks.reshape(-1, channels)
-            signal_len = num_chunks * chunk_len
-        else:
-            signal_list = []
-            signal_len = 0
-            for i in range(num_chunks):
-                valid_len = int(chunk_lengths[i].item())
-                signal_list.append(chunks[i, :valid_len, :])
-                signal_len += valid_len
-            signal = torch.cat(signal_list, dim=0)
+    def forward(self, encoder_features: torch.Tensor, attention_mask=None, res_idx: int = 0):
+        batch_size = encoder_features.shape[0]
 
-        return signal, signal_len
+        encoder_features = self.encoder_proj(encoder_features)
 
-    def forward_encoder(self,
-                        x: torch.Tensor,
-                        x_lens: torch.Tensor,
-                        x_channels: torch.Tensor,
-                        sr=None,
-                        force_strides=None) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute encoder outputs."""
-        assert x.shape[0] == len(x_lens) and x.shape[0] == len(x_channels)
-        batch_size = x.shape[0]
+        query_tokens = self.query_token_list[res_idx]
+        query_tokens = query_tokens.expand(batch_size, -1, -1)
 
-        outputs = []
-        output_lens = []
-        output_chunks = []
-        for b in range(batch_size):
-            seq = x[b, :x_lens[b], :x_channels[b]]
-            chunks, mask = self.chunk_tensor(seq)
+        encoder_attention_mask = None
+        if attention_mask is not None:
+            encoder_attention_mask = attention_mask
 
-            chunk_output, chunk_lens, learnable_lens, _, _ = self.encoder_embed(
-                chunks, x_lens[b], sr, force_strides, mask=mask)
+        outputs, _ = self.transformer(
+            inputs_embeds=query_tokens,
+            encoder_hidden_states=encoder_features,
+            encoder_attention_mask=encoder_attention_mask
+        )
 
-            outputs.append(chunk_output)
-            output_lens.append(chunk_lens)
-            output_chunks.append(chunk_output.shape[0])
+        outputs = self.proj_out(outputs)
 
-        x_lens = torch.cat(output_lens, dim=0)
-        max_len = x_lens.max().item()
-
-        # Preserve reference behavior: padded chunk embeddings are constructed
-        # here but the original input tensor is fed into the final encoder.
-        padded_list = []
-        for tensor in outputs:
-            pad_len = int(max_len - tensor.shape[1])
-            padded_list.append(F.pad(tensor, (0, 0, 0, pad_len, 0, 0), mode='constant', value=0))
-
-        if x_lens.ndim == 0:
-            x_lens = x_lens.unsqueeze(-1)
-
-        x = x.permute(1, 0, 2)
-        encoder_out, encoder_out_lens = self.encoder(x, x_lens)
-        encoder_out = encoder_out.permute(1, 0, 2)
-
-        if learnable_lens is not None:
-            learnable_lens = learnable_lens / 2
-
-        total_chunks = encoder_out.shape[0]
-        assert sum(output_chunks) == total_chunks, f'chunk count mismatch: {sum(output_chunks)} vs {total_chunks}'
-
-        features = []
-        feature_lens = []
-        start = 0
-
-        for count in output_chunks:
-            end = start + count
-            signal_chunks = encoder_out[start:end]
-
-            feature, feature_len = self.concat_chunks_simple(signal_chunks, encoder_out_lens[start:end])
-
-            features.append(feature)
-            start = end
-            feature_lens.append(feature_len)
-
-        encoder_out = pad_sequence(features, batch_first=True)
-        encoder_out_lens = torch.tensor(feature_lens).to(encoder_out.device)
-
-        return encoder_out, encoder_out_lens
+        return outputs
 
 
 class SingleResChunkQformerSubsampling(nn.Module):
@@ -366,283 +518,131 @@ class SingleResChunkQformerSubsampling(nn.Module):
         return x
 
 
-class CustomWhisperEncoder(WhisperPreTrainedModel):
-    """Whisper encoder with time-series input/output adapters."""
+class ChunkModel(nn.Module):
 
-    def __init__(self, config: WhisperConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
-        super().__init__(config)
-
-        self.embed_dim = config.d_model
-        self.num_mel_bins = config.num_mel_bins
-        self.max_source_positions = config.max_source_positions
-        self.embed_scale = math.sqrt(self.embed_dim) if config.scale_embedding else 1.0
-
-        self.conv1 = nn.Conv1d(
-            self.num_mel_bins, self.embed_dim, kernel_size=3, padding=1, dtype=dtype, device=device)
-        self.conv2 = nn.Conv1d(
-            self.embed_dim, self.embed_dim, kernel_size=3, stride=2, padding=1, dtype=dtype, device=device)
-        self.embed_positions = nn.Embedding(self.max_source_positions, self.embed_dim, dtype=dtype, device=device)
-
-        self.layers = nn.ModuleList(
-            [WhisperEncoderLayer(config, dtype=dtype, device=device) for _ in range(config.encoder_layers)])
-        self.layer_norm = LayerNorm(config.d_model, eps=1e-5, dtype=dtype, device=device)
-
-        self.adapt_in = build_colwise_linear(
-            config.ts_adapt_in_dim,
-            80,
-            bias=True,
-            dtype=dtype,
-            device=device,
-        )
-        self.adapt_out = build_rowwise_linear(
-            self.embed_dim,
-            config.ts_adapt_out_dim,
-            bias=True,
-            dtype=dtype,
-            device=device,
-        )
-
-        self.mask_type = None
-        self.chunk_length = None
-
-    def get_input_embeddings(self) -> nn.Module:
-        return self.conv1
-
-    def set_input_embeddings(self, value: nn.Module):
-        self.conv1 = value
-
-    def define_masktype(self, masktype: str, chunk_length: int | None = None):
-        self.mask_type = masktype
-        self.chunk_length = chunk_length
-
-    def _make_causal_mask(self, input_ids_shape: torch.Size,
-                        dtype: torch.dtype,
-                        device: torch.device,
-                        past_key_values_length: int = 0) -> torch.Tensor:
-        """Create a causal attention mask in HF Whisper's expected shape."""
-        bsz, tgt_len = input_ids_shape
-        mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)
-        mask_cond = torch.arange(mask.size(-1), device=device)
-        mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-        mask = mask.to(dtype)
-
-        if past_key_values_length > 0:
-            mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
-        return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
-
-
-    def _prepare_decoder_attention_mask(self, input_shape, inputs_embeds, past_key_values_length):
-        # create causal mask
-        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-        combined_attention_mask = None
-
-        if input_shape[-1] > 1:
-            combined_attention_mask = self._make_causal_mask(
-                input_shape,
-                inputs_embeds.dtype,
-                device=inputs_embeds.device,
-                past_key_values_length=past_key_values_length,
-            )
-
-        return combined_attention_mask
-
-    def prepare_chunk_attention_mask(self, input_shape, inputs_embeds):
-        block_size = round(self.chunk_length / 4 * 2)
-        matrix_size = input_shape[1]
-
-        matrix = torch.ones(matrix_size, matrix_size)
-
-        num_full_blocks = round(matrix_size // block_size)
-        remainder = matrix_size % block_size
-        for i in range(num_full_blocks):
-            row_start = i * block_size
-            col_start = i * block_size
-            matrix[row_start:row_start + block_size, col_start:col_start + block_size] = torch.zeros(
-                block_size, block_size)
-
-        if remainder > 0:
-            last_row_start = num_full_blocks * block_size
-            last_col_start = num_full_blocks * block_size
-            matrix[last_row_start:last_row_start + remainder,
-                   last_col_start:last_col_start + remainder] = torch.zeros(remainder, remainder)
-
-        matrix = matrix * -65504
-        matrix = matrix.unsqueeze(0).unsqueeze(0).repeat(input_shape[0], 1, 1, 1)
-        attention_mask = matrix.to(inputs_embeds.device)
-        return attention_mask
-
-    def prepare_padding_mask(self, input_shape, inputs_embeds, input_lens):
-        matrix_size = input_shape[1]
-        matrix_list = []
-
-        for i in range(input_shape[0]):
-            padding_matrix = torch.ones(matrix_size, matrix_size) * -65504
-            padding_matrix[:input_lens[i], :input_lens[i]] = 0
-            matrix_list.append(padding_matrix)
-
-        attention_mask = torch.stack(matrix_list).unsqueeze(1).to(inputs_embeds.dtype).to(inputs_embeds.device)
-
-        return attention_mask
-
-    def forward(
-        self,
-        input_features,
-        input_length=None,
-        causal=True,
-    ):
-        input_features = self.adapt_in(input_features)
-        input_features = input_features.permute(1, 2, 0)
-
-        inputs_embeds = F.gelu(self.conv1(input_features))
-        inputs_embeds = F.gelu(self.conv2(inputs_embeds))
-
-        inputs_embeds = inputs_embeds.permute(0, 2, 1)
-        embed_pos = self.embed_positions.weight
-
-        if inputs_embeds.shape[1] > embed_pos.shape[0]:
-            target_len = inputs_embeds.shape[1]
-            padding = [0, 0, 0, target_len - embed_pos.shape[0]]
-
-            embed_pos = F.pad(embed_pos, pad=padding, mode='constant', value=0)
-            hidden_states = inputs_embeds[:, :embed_pos.shape[0], :] + embed_pos
-        else:
-            hidden_states = inputs_embeds + embed_pos[:inputs_embeds.shape[1], :]
-
-        input_shape = inputs_embeds.size()[:-1]
-        past_key_values_length = 0
-        if causal:
-            if self.mask_type == 'chunk':
-                attention_mask = self.prepare_chunk_attention_mask(input_shape, inputs_embeds)
-            else:
-                attention_mask = self._prepare_decoder_attention_mask(input_shape, inputs_embeds,
-                                                                      past_key_values_length)
-        else:
-            attention_mask = self.prepare_padding_mask(input_shape, inputs_embeds, (input_length + 1) // 2)
-
-        for encoder_layer in self.layers:
-            layer_outputs = encoder_layer(hidden_states, attention_mask)
-            if isinstance(layer_outputs, tuple):
-                hidden_states = layer_outputs[0]
-            else:
-                hidden_states = layer_outputs
-
-        hidden_states = hidden_states.permute(1, 0, 2)
-        hidden_states = self.layer_norm(hidden_states)
-        hidden_states = self.adapt_out(hidden_states)
-
-        lengths = (input_length + 1) // 2
-
-        return hidden_states, lengths
-
-
-class MRQFormer(nn.Module):
-
-    def __init__(self,
-                 num_query_list: list[int],
-                 hidden_size: int = 1024,
-                 num_layers: int = 6,
-                 cross_attention_freq: int = 2,
-                 encoder_hidden_size: int | None = None,
-                 output_size: int | None = None,
-                 dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+    def __init__(self, encoder_embed: nn.Module, encoder: nn.Module, chunk_size: int = 6400, step: int = 6400):
         super().__init__()
 
-        self.num_query_list = num_query_list
-        self.hidden_size = hidden_size
+        self.chunk_size = chunk_size
+        self.step = step
+        assert self.step <= self.chunk_size or self.chunk_size < 0
 
-        self.query_token_list = nn.ParameterList()
-        for num_queries in self.num_query_list:
-            self.query_token_list.append(
-                nn.Parameter(torch.randn(1, num_queries, hidden_size, dtype=dtype, device=device)))
+        self.encoder_embed = encoder_embed
+        self.encoder = encoder
 
-        bert_config = BertConfig(
-            vocab_size=1,
-            hidden_size=hidden_size,
-            num_hidden_layers=num_layers,
-            num_attention_heads=hidden_size // 16,
-            intermediate_size=hidden_size * 4,
-            max_position_embeddings=max(self.num_query_list),
-            add_cross_attention=True,
-            is_decoder=True,
-            cross_attention_freq=cross_attention_freq,
-        )
-        self.transformer = BertModel(bert_config, dtype=dtype, device=device)
+    def chunk_tensor(self, tensor: torch.Tensor):
+        seq_len = tensor.shape[0]
+        chunk_size = self.chunk_size
+        step = self.step
 
-        if encoder_hidden_size is not None and encoder_hidden_size != hidden_size:
-            self.encoder_proj = build_colwise_linear(
-                encoder_hidden_size,
-                hidden_size,
-                bias=True,
-                check_dist=False,
-                dtype=dtype,
-                device=device,
-            )
+        chunks = []
+        masks = []
+
+        if chunk_size > 0:
+            start = 0
+            while start < seq_len:
+                end = min(start + chunk_size, seq_len)
+                chunk = tensor[start:end, :]
+                chunks.append(chunk)
+                mask = torch.zeros(chunk.shape)
+                mask[:end - start, :] = 1
+                masks.append(mask)
+
+                if end >= seq_len:
+                    break
+
+                start += step
+
+            output = pad_sequence(chunks, batch_first=True)
+            output_mask = pad_sequence(masks, batch_first=True).to(output.device)
         else:
-            self.encoder_proj = nn.Identity()
+            output = tensor.unsqueeze(0)
+            output_mask = torch.ones(output.shape).to(tensor.device)
 
-        if output_size is None:
-            output_size = hidden_size
+        return output, output_mask
 
-        self.proj_out = nn.Sequential(
-            build_colwise_linear(
-                in_features=hidden_size,
-                out_features=4 * hidden_size,
-                bias=True,
-                check_dist=False,
-                dtype=dtype,
-                device=device,
-            ),
-            nn.ReLU(),
-            build_rowwise_linear(
-                in_features=4 * hidden_size,
-                out_features=output_size,
-                bias=True,
-                check_dist=False,
-                dtype=dtype,
-                device=device,
-            ),
-        )
+    def concat_chunks_simple(self,
+                             chunks: torch.Tensor,
+                             chunk_lengths: torch.Tensor | None = None) -> tuple[torch.Tensor, int]:
+        """Concatenate chunks without overlap."""
+        num_chunks, chunk_len, channels = chunks.shape
 
-    def forward(self, encoder_features: torch.Tensor, attention_mask=None, res_idx: int = 0):
-        batch_size = encoder_features.shape[0]
+        if chunk_lengths is None:
+            signal = chunks.reshape(-1, channels)
+            signal_len = num_chunks * chunk_len
+        else:
+            signal_list = []
+            signal_len = 0
+            for i in range(num_chunks):
+                valid_len = int(chunk_lengths[i].item())
+                signal_list.append(chunks[i, :valid_len, :])
+                signal_len += valid_len
+            signal = torch.cat(signal_list, dim=0)
 
-        encoder_features = self.encoder_proj(encoder_features)
+        return signal, signal_len
 
-        query_tokens = self.query_token_list[res_idx]
-        query_tokens = query_tokens.expand(batch_size, -1, -1)
+    def forward_encoder(self,
+                        x: torch.Tensor,
+                        x_lens: torch.Tensor,
+                        x_channels: torch.Tensor,
+                        sr=None,
+                        force_strides=None) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute encoder outputs."""
+        assert x.shape[0] == len(x_lens) and x.shape[0] == len(x_channels)
+        batch_size = x.shape[0]
 
-        encoder_attention_mask = None
-        if attention_mask is not None:
-            encoder_attention_mask = attention_mask
+        outputs = []
+        output_lens = []
+        output_chunks = []
+        for b in range(batch_size):
+            seq = x[b, :x_lens[b], :x_channels[b]]
+            chunks, mask = self.chunk_tensor(seq)
 
-        outputs, _ = self.transformer(
-            inputs_embeds=query_tokens,
-            encoder_hidden_states=encoder_features,
-            encoder_attention_mask=encoder_attention_mask
-        )
+            chunk_output, chunk_lens, learnable_lens, _, _ = self.encoder_embed(
+                chunks, x_lens[b], sr, force_strides, mask=mask)
 
-        outputs = self.proj_out(outputs)
+            outputs.append(chunk_output)
+            output_lens.append(chunk_lens)
+            output_chunks.append(chunk_output.shape[0])
 
-        return outputs
+        x_lens = torch.cat(output_lens, dim=0)
+        max_len = x_lens.max().item()
 
+        # Preserve reference behavior: padded chunk embeddings are constructed
+        # here but the original input tensor is fed into the final encoder.
+        padded_list = []
+        for tensor in outputs:
+            pad_len = int(max_len - tensor.shape[1])
+            padded_list.append(F.pad(tensor, (0, 0, 0, pad_len, 0, 0), mode='constant', value=0))
 
-class FixPositionalEncoding(nn.Module):
+        if x_lens.ndim == 0:
+            x_lens = x_lens.unsqueeze(-1)
 
-    def __init__(self,
-                 d_model: int,
-                 max_len: int = 200000,
-                 dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
-        super().__init__()
-        pe = torch.zeros(max_len, 1, d_model, dtype=torch.float)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        pe = pe.to(dtype=dtype, device=device)
-        self.register_buffer('pe', pe)
+        x = x.permute(1, 0, 2)
+        encoder_out, encoder_out_lens = self.encoder(x, x_lens)
+        encoder_out = encoder_out.permute(1, 0, 2)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.pe[:x.size(0), :, :]
-        return x
+        if learnable_lens is not None:
+            learnable_lens = learnable_lens / 2
+
+        total_chunks = encoder_out.shape[0]
+        assert sum(output_chunks) == total_chunks, f'chunk count mismatch: {sum(output_chunks)} vs {total_chunks}'
+
+        features = []
+        feature_lens = []
+        start = 0
+
+        for count in output_chunks:
+            end = start + count
+            signal_chunks = encoder_out[start:end]
+
+            feature, feature_len = self.concat_chunks_simple(signal_chunks, encoder_out_lens[start:end])
+
+            features.append(feature)
+            start = end
+            feature_lens.append(feature_len)
+
+        encoder_out = pad_sequence(features, batch_first=True)
+        encoder_out_lens = torch.tensor(feature_lens).to(encoder_out.device)
+
+        return encoder_out, encoder_out_lens
