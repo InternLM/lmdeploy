@@ -191,6 +191,11 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation='GPU KV-cache usage. 1 means 100 percent usage.',
             labelnames=labelnames).labels(*labelvalues)
 
+        self.gauge_prefix_cache_hit_rate = prometheus_client.Gauge(
+            name='lmdeploy:prefix_cache_hit_rate',
+            documentation='Prefix-cache hit rate. 1 means 100 percent of queried prefix tokens hit.',
+            labelnames=labelnames).labels(*labelvalues)
+
         #
         # Counters
         #
@@ -317,6 +322,7 @@ class PrometheusStatLogger(StatLoggerBase):
         self.gauge_scheduler_running.set(stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
+        self.gauge_prefix_cache_hit_rate.set(stats.prefix_cache_hit_rate)
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""
