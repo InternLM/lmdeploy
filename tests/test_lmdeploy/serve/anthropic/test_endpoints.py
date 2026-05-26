@@ -446,6 +446,58 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
         for item in payloads[:resumed_tool_delta_index])
 
 
+def test_stream_messages_response_maps_stop_to_tool_use_on_empty_terminal_chunk():
+    class _ToolParser:
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            if delta_text == 'chunk-1':
+                return [(
+                    DeltaMessage(
+                        role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(
+                                index=0,
+                                id='toolu_123',
+                                function=DeltaFunctionCall(
+                                    name='search',
+                                    arguments='{"query":"lmdeploy"}',
+                                ),
+                            )
+                        ],
+                    ),
+                    True,
+                )]
+            return []
+
+    async def _result_generator():
+        for idx, finish_reason in enumerate([None, 'stop'], start=1):
+            yield SimpleNamespace(
+                response=f'chunk-{idx}',
+                token_ids=[idx],
+                input_token_len=8,
+                generate_token_len=idx,
+                finish_reason=finish_reason,
+            )
+
+    async def _collect_events():
+        return [
+            event async for event in stream_messages_response(
+                _result_generator(),
+                request_id='msg_test',
+                model='fake-model',
+                response_parser=_ToolParser(),
+            )
+        ]
+
+    events = asyncio.run(_collect_events())
+    payloads = [
+        json.loads(line.removeprefix('data: ')) for event in events for line in event.splitlines()
+        if line.startswith('data: ')
+    ]
+
+    message_delta = next(item for item in payloads if item['type'] == 'message_delta')
+    assert message_delta['delta']['stop_reason'] == 'tool_use'
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(
