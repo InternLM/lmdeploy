@@ -8,7 +8,19 @@ from torch import nn
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn.utils.rnn import pad_sequence
 from transformers import BertConfig, BertModel, WhisperConfig, WhisperPreTrainedModel
-from transformers.models.whisper.modeling_whisper import WhisperEncoderLayer
+
+from lmdeploy.pytorch.nn import LayerNorm
+from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
+
+from .whisper import WhisperEncoderLayer
+
+
+def _resolve_factory_kwargs(dtype: torch.dtype | None, device: torch.device | None):
+    """Use PyTorch-like defaults when this standalone module is built directly."""
+    return {
+        'dtype': torch.float32 if dtype is None else dtype,
+        'device': torch.device('cpu') if device is None else device,
+    }
 
 
 def _make_causal_mask(input_ids_shape: torch.Size,
@@ -131,40 +143,37 @@ class ChunkModel(nn.Module):
         assert x.shape[0] == len(x_lens) and x.shape[0] == len(x_channels)
         batch_size = x.shape[0]
 
-        with torch.set_grad_enabled((not freeze_encoder) and self.training):
-            outputs = []
-            output_lens = []
-            output_chunks = []
-            for b in range(batch_size):
-                seq = x[b, :x_lens[b], :x_channels[b]]
-                chunks, mask = self.chunk_tensor(seq)
+        outputs = []
+        output_lens = []
+        output_chunks = []
+        for b in range(batch_size):
+            seq = x[b, :x_lens[b], :x_channels[b]]
+            chunks, mask = self.chunk_tensor(seq)
 
-                chunk_output, chunk_lens, learnable_lens, _, _ = self.encoder_embed(
-                    chunks, x_lens[b], sr, force_strides, freeze_encoder, mask)
+            chunk_output, chunk_lens, learnable_lens, _, _ = self.encoder_embed(
+                chunks, x_lens[b], sr, force_strides, freeze_encoder, mask)
 
-                outputs.append(chunk_output)
-                output_lens.append(chunk_lens)
-                output_chunks.append(chunk_output.shape[0])
+            outputs.append(chunk_output)
+            output_lens.append(chunk_lens)
+            output_chunks.append(chunk_output.shape[0])
 
-            x_lens = torch.cat(output_lens, dim=0)
-            max_len = x_lens.max().item()
+        x_lens = torch.cat(output_lens, dim=0)
+        max_len = x_lens.max().item()
 
-            # Preserve reference behavior: padded chunk embeddings are constructed
-            # here but the original input tensor is fed into the final encoder.
-            padded_list = []
-            for tensor in outputs:
-                pad_len = int(max_len - tensor.shape[1])
-                padded_list.append(F.pad(tensor, (0, 0, 0, pad_len, 0, 0), mode='constant', value=0))
+        # Preserve reference behavior: padded chunk embeddings are constructed
+        # here but the original input tensor is fed into the final encoder.
+        padded_list = []
+        for tensor in outputs:
+            pad_len = int(max_len - tensor.shape[1])
+            padded_list.append(F.pad(tensor, (0, 0, 0, pad_len, 0, 0), mode='constant', value=0))
 
         if x_lens.ndim == 0:
             x_lens = x_lens.unsqueeze(-1)
 
-        with torch.set_grad_enabled((not freeze_encoder) and self.training):
-            src_key_padding_mask = make_pad_mask(x_lens)
-            x = x.permute(1, 0, 2)
-            encoder_out, encoder_out_lens, _ = self.encoder(
-                x, x_lens, src_key_padding_mask, output_hidden_states=True)
-            encoder_out = encoder_out.permute(1, 0, 2)
+        src_key_padding_mask = make_pad_mask(x_lens)
+        x = x.permute(1, 0, 2)
+        encoder_out, encoder_out_lens, _ = self.encoder(x, x_lens, src_key_padding_mask, output_hidden_states=True)
+        encoder_out = encoder_out.permute(1, 0, 2)
 
         if learnable_lens is not None:
             learnable_lens = learnable_lens / 2
@@ -206,7 +215,7 @@ class SingleResChunkQformerSubsampling(nn.Module):
                  device: torch.device | None = None):
         super().__init__()
 
-        factory_kwargs = {'dtype': dtype, 'device': device}
+        factory_kwargs = _resolve_factory_kwargs(dtype, device)
         self.selfatt = selfatt
         self.patch_list = [patch]
         self.num_query_list = [num_query]
@@ -251,7 +260,13 @@ class SingleResChunkQformerSubsampling(nn.Module):
         self.alpha = alpha
         channel_encoder_layers = TransformerEncoderLayer(d_model=hidden_dim, nhead=32, **factory_kwargs)
         self.channel_encoder = TransformerEncoder(channel_encoder_layers, num_layers=1)
-        self.fuze_proj = nn.Linear(in_features=hidden_dim, out_features=256, **factory_kwargs)
+        self.fuze_proj = build_rowwise_linear(
+            in_features=hidden_dim,
+            out_features=256,
+            bias=True,
+            check_dist=False,
+            **factory_kwargs,
+        )
 
     def forward(self,
                 inputs: torch.Tensor,
@@ -278,85 +293,84 @@ class SingleResChunkQformerSubsampling(nn.Module):
 
         output_list = []
 
-        with torch.set_grad_enabled(self.training):
-            seq = inputs
+        seq = inputs
 
-            mean = seq.mean(dim=1, keepdim=True)
-            std = seq.std(dim=1, keepdim=True)
+        mean = seq.mean(dim=1, keepdim=True)
+        std = seq.std(dim=1, keepdim=True)
 
-            abs_mean_plus_1 = torch.abs(mean) + 1.0
-            log_abs_plus_1 = torch.log(abs_mean_plus_1)
-            sign_mean = torch.sign(mean)
-            mean_feat = sign_mean * log_abs_plus_1
+        abs_mean_plus_1 = torch.abs(mean) + 1.0
+        log_abs_plus_1 = torch.log(abs_mean_plus_1)
+        sign_mean = torch.sign(mean)
+        mean_feat = sign_mean * log_abs_plus_1
 
-            std_feat = torch.log(std + 1e-7)
+        std_feat = torch.log(std + 1e-7)
 
-            seq = (seq - mean) / (std + 1e-7)
+        seq = (seq - mean) / (std + 1e-7)
 
-            max_patch = torch.tensor([max(self.patch_list)]).to(seq.device)
-            max_num_query = torch.tensor([max(self.num_query_list)]).to(seq.device)
-            patch_size = max_patch
-            step = max_patch
-            seq_len = torch.tensor(inputs.shape[1]).to(seq.device)
+        max_patch = torch.tensor([max(self.patch_list)]).to(seq.device)
+        max_num_query = torch.tensor([max(self.num_query_list)]).to(seq.device)
+        patch_size = max_patch
+        step = max_patch
+        seq_len = torch.tensor(inputs.shape[1]).to(seq.device)
 
-            output_len = torch.ceil((seq_len - patch_size) / step + 1)
-            pad_len = (torch.ceil((output_len - 1) * step + patch_size - seq_len)).long().item()
+        output_len = torch.ceil((seq_len - patch_size) / step + 1)
+        pad_len = (torch.ceil((output_len - 1) * step + patch_size - seq_len)).long().item()
 
-            if seq.ndim == 2:
-                seq = seq.unsqueeze(-1)
-            seq = F.pad(seq, (0, 0, 0, pad_len, 0, 0), 'constant', 0)
+        if seq.ndim == 2:
+            seq = seq.unsqueeze(-1)
+        seq = F.pad(seq, (0, 0, 0, pad_len, 0, 0), 'constant', 0)
 
-            padded_mask = F.pad(mask, (0, 0, 0, pad_len, 0, 0), 'constant', 0)
+        padded_mask = F.pad(mask, (0, 0, 0, pad_len, 0, 0), 'constant', 0)
 
-            batch_size, seq_len, channels = seq.shape
-            seq = seq.permute(0, 2, 1)
-            seq = seq.reshape(batch_size * channels, 1, seq_len)
-            if self.num_conv_layers == 0:
-                seq = F.relu(self.conv(seq))
+        batch_size, seq_len, channels = seq.shape
+        seq = seq.permute(0, 2, 1)
+        seq = seq.reshape(batch_size * channels, 1, seq_len)
+        if self.num_conv_layers == 0:
+            seq = F.relu(self.conv(seq))
+        else:
+            seq = self.conv(seq)
+        seq_len = seq.shape[-1]
+        seq = seq.reshape(batch_size, channels, -1, seq_len)
+        seq = seq.permute(0, 3, 1, 2)
+
+        mean_feat = mean_feat.expand([batch_size, seq_len, channels]).unsqueeze(-1)
+        std_feat = std_feat.expand([batch_size, seq_len, channels]).unsqueeze(-1)
+
+        seq = torch.cat([seq, mean_feat, std_feat], dim=-1)
+        hidden_dim = seq.shape[-1]
+
+        if self.mask_pool is not None:
+            padded_mask = padded_mask.permute(0, 2, 1)
+            padded_mask = self.mask_pool(padded_mask)
+            padded_mask = padded_mask.permute(0, 2, 1)
+
+        for res_idx, patch in enumerate(self.patch_list):
+            patch_output_len = output_len * max_patch / (patch * (2**self.num_conv_layers))
+
+            indices = (torch.floor(torch.arange(0, patch_output_len.item()).to(seq.device) * patch).unsqueeze(1)
+                       + torch.arange(patch).to(seq.device)).long()
+            patched = seq[:, indices, :, :]
+            _, num_patch, patch_len, _, _ = patched.shape
+            patched = patched.permute(1, 2, 0, 3, 4)
+            patched = patched.reshape(num_patch, patch_len, -1)
+            patched = patched.reshape(num_patch, patch_len, batch_size, channels, hidden_dim)
+
+            patched = patched.permute(2, 0, 1, 3, 4)
+            patched = patched.reshape(batch_size * num_patch, patch_len, channels, hidden_dim)
+
+            patched_mask = padded_mask[:, indices, :]
+            patched_mask = patched_mask.reshape(batch_size * num_patch, patch_len, channels)
+
+            raw_output = self.forward_encoder(patched, patched_mask, res_idx)
+            if self.selfatt:
+                output = raw_output.mean(dim=1)
             else:
-                seq = self.conv(seq)
-            seq_len = seq.shape[-1]
-            seq = seq.reshape(batch_size, channels, -1, seq_len)
-            seq = seq.permute(0, 3, 1, 2)
+                output = raw_output.reshape(-1, hidden_dim)
+            output_list.append(output)
 
-            mean_feat = mean_feat.expand([batch_size, seq_len, channels]).unsqueeze(-1)
-            std_feat = std_feat.expand([batch_size, seq_len, channels]).unsqueeze(-1)
-
-            seq = torch.cat([seq, mean_feat, std_feat], dim=-1)
-            hidden_dim = seq.shape[-1]
-
-            if self.mask_pool is not None:
-                padded_mask = padded_mask.permute(0, 2, 1)
-                padded_mask = self.mask_pool(padded_mask)
-                padded_mask = padded_mask.permute(0, 2, 1)
-
-            for res_idx, patch in enumerate(self.patch_list):
-                patch_output_len = output_len * max_patch / (patch * (2**self.num_conv_layers))
-
-                indices = (torch.floor(torch.arange(0, patch_output_len.item()).to(seq.device) * patch).unsqueeze(1)
-                           + torch.arange(patch).to(seq.device)).long()
-                patched = seq[:, indices, :, :]
-                _, num_patch, patch_len, _, _ = patched.shape
-                patched = patched.permute(1, 2, 0, 3, 4)
-                patched = patched.reshape(num_patch, patch_len, -1)
-                patched = patched.reshape(num_patch, patch_len, batch_size, channels, hidden_dim)
-
-                patched = patched.permute(2, 0, 1, 3, 4)
-                patched = patched.reshape(batch_size * num_patch, patch_len, channels, hidden_dim)
-
-                patched_mask = padded_mask[:, indices, :]
-                patched_mask = patched_mask.reshape(batch_size * num_patch, patch_len, channels)
-
-                raw_output = self.forward_encoder(patched, patched_mask, res_idx)
-                if self.selfatt:
-                    output = raw_output.mean(dim=1)
-                else:
-                    output = raw_output.reshape(-1, hidden_dim)
-                output_list.append(output)
-
-            outputs = torch.cat(output_list, dim=1)
-            outputs = self.fuze_proj(outputs)
-            out_hidden_dim = outputs.shape[1]
+        outputs = torch.cat(output_list, dim=1)
+        outputs = self.fuze_proj(outputs)
+        out_hidden_dim = outputs.shape[1]
 
         outputs = outputs.reshape(batch_size, -1, out_hidden_dim)
 
@@ -422,11 +436,9 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
 
     def __init__(self, config: WhisperConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
         super().__init__(config)
-        factory_kwargs = {'dtype': dtype, 'device': device}
-        self._init_dtype = dtype
-        self._init_device = device
-        self.dropout = config.dropout
-        self.layerdrop = config.encoder_layerdrop
+        factory_kwargs = _resolve_factory_kwargs(dtype, device)
+        self._init_dtype = factory_kwargs['dtype']
+        self._init_device = factory_kwargs['device']
 
         self.embed_dim = config.d_model
         self.num_mel_bins = config.num_mel_bins
@@ -438,22 +450,37 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
             self.embed_dim, self.embed_dim, kernel_size=3, stride=2, padding=1, **factory_kwargs)
         self.embed_positions = nn.Embedding(self.max_source_positions, self.embed_dim, **factory_kwargs)
 
-        self.layers = nn.ModuleList([WhisperEncoderLayer(config) for _ in range(config.encoder_layers)])
-        if dtype is not None or device is not None:
-            self.layers.to(dtype=dtype, device=device)
-        self.layer_norm = nn.LayerNorm(config.d_model, **factory_kwargs)
+        self.layers = nn.ModuleList(
+            [WhisperEncoderLayer(config, dtype=self._init_dtype, device=self._init_device)
+             for _ in range(config.encoder_layers)])
+        self.layer_norm = LayerNorm(config.d_model, eps=1e-5, dtype=self._init_dtype, device=self._init_device)
 
-        self.gradient_checkpointing = False
         self.post_init()
 
         self.mask_type = None
         self.chunk_length = None
 
     def add_adpt_in(self, input_dim: int):
-        self.adapt_in = nn.Linear(input_dim, 80, dtype=self._init_dtype, device=self._init_device)
+        quantization_config = getattr(self.config, 'quantization_config', None)
+        self.adapt_in = build_colwise_linear(
+            input_dim,
+            80,
+            bias=True,
+            quant_config=quantization_config,
+            dtype=self._init_dtype,
+            device=self._init_device,
+        )
 
     def add_adpt_out(self, output_dim: int):
-        self.adapt_out = nn.Linear(self.embed_dim, output_dim, dtype=self._init_dtype, device=self._init_device)
+        quantization_config = getattr(self.config, 'quantization_config', None)
+        self.adapt_out = build_rowwise_linear(
+            self.embed_dim,
+            output_dim,
+            bias=True,
+            quant_config=quantization_config,
+            dtype=self._init_dtype,
+            device=self._init_device,
+        )
 
     def _freeze_parameters(self):
         for param in self.parameters():
@@ -557,7 +584,6 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
             hidden_states = inputs_embeds[:, :embed_pos.shape[0], :] + embed_pos
         else:
             hidden_states = inputs_embeds + embed_pos[:inputs_embeds.shape[1], :]
-        hidden_states = F.dropout(hidden_states, p=self.dropout, training=self.training)
 
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
@@ -580,45 +606,14 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
                 f'The head_mask should be specified for {len(self.layers)} layers, but it is for '
                 f'{head_mask.size()[0]}.')
 
-        for idx, encoder_layer in enumerate(self.layers):
+        for encoder_layer in self.layers:
             if output_hidden_states:
                 encoder_states = encoder_states + (self.layer_norm(hidden_states),)
-            to_drop = False
-            if self.training:
-                dropout_probability = torch.rand([])
-                if dropout_probability < self.layerdrop:
-                    to_drop = True
-
-            if to_drop:
-                layer_outputs = (None, None)
+            layer_outputs = encoder_layer(hidden_states, attention_mask)
+            if isinstance(layer_outputs, tuple):
+                hidden_states = layer_outputs[0]
             else:
-                if self.gradient_checkpointing and self.training:
-
-                    def create_custom_forward(module):
-
-                        def custom_forward(*inputs):
-                            return module(*inputs, output_attentions)
-
-                        return custom_forward
-
-                    layer_outputs = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(encoder_layer),
-                        hidden_states,
-                        attention_mask,
-                        head_mask[idx] if head_mask is not None else None,
-                    )
-                else:
-                    layer_outputs = encoder_layer(
-                        hidden_states,
-                        attention_mask,
-                        layer_head_mask=head_mask[idx] if head_mask is not None else None,
-                        output_attentions=output_attentions,
-                    )
-
-                if isinstance(layer_outputs, tuple):
-                    hidden_states = layer_outputs[0]
-                else:
-                    hidden_states = layer_outputs
+                hidden_states = layer_outputs
 
             if output_attentions:
                 layer_attention = (
@@ -651,7 +646,7 @@ class MRQFormer(nn.Module):
                  device: torch.device | None = None):
         super().__init__()
 
-        factory_kwargs = {'dtype': dtype, 'device': device}
+        factory_kwargs = _resolve_factory_kwargs(dtype, device)
         self.num_query_list = num_query_list
         self.hidden_size = hidden_size
 
@@ -671,11 +666,16 @@ class MRQFormer(nn.Module):
             cross_attention_freq=cross_attention_freq,
         )
         self.transformer = BertModel(bert_config)
-        if dtype is not None or device is not None:
-            self.transformer.to(dtype=dtype, device=device)
+        self.transformer.to(**factory_kwargs)
 
         if encoder_hidden_size is not None and encoder_hidden_size != hidden_size:
-            self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, **factory_kwargs)
+            self.encoder_proj = build_colwise_linear(
+                encoder_hidden_size,
+                hidden_size,
+                bias=True,
+                check_dist=False,
+                **factory_kwargs,
+            )
         else:
             self.encoder_proj = nn.Identity()
 
@@ -683,9 +683,21 @@ class MRQFormer(nn.Module):
             output_size = hidden_size
 
         self.proj_out = nn.Sequential(
-            nn.Linear(in_features=hidden_size, out_features=4 * hidden_size, **factory_kwargs),
+            build_colwise_linear(
+                in_features=hidden_size,
+                out_features=4 * hidden_size,
+                bias=True,
+                check_dist=False,
+                **factory_kwargs,
+            ),
             nn.ReLU(),
-            nn.Linear(in_features=4 * hidden_size, out_features=output_size, **factory_kwargs),
+            build_rowwise_linear(
+                in_features=4 * hidden_size,
+                out_features=output_size,
+                bias=True,
+                check_dist=False,
+                **factory_kwargs,
+            ),
         )
 
     def forward(self, encoder_features: torch.Tensor, attention_mask=None, res_idx: int = 0):
