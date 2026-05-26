@@ -16,7 +16,6 @@ from utils.sleep_utils import (
     LEVEL2_GREEDY_MESSAGES,
     LEVEL2_MAX_TOKENS,
     apply_serialized_hf_segments_for_level2_weights,
-    apply_serialized_hf_segments_for_turbomind_level2_weights,
     assert_assistant_not_degenerate,
     assert_chat_decode_unchanged,
     assistant_content_from_openai_completion_dict,
@@ -70,7 +69,7 @@ def _post_wakeup(*, tags: list[str] | None = None) -> requests.Response:
     )
 
 
-def _post_update_weights_from_hf_dir(model_dir: Path, *, engine: str) -> None:
+def _post_update_weights_from_hf_dir(model_dir: Path) -> None:
     def _emit(serialized_data: object, finished: bool) -> None:
         data = level2_update_weights_request_dict(serialized_data, finished)
         r = requests.post(
@@ -81,12 +80,7 @@ def _post_update_weights_from_hf_dir(model_dir: Path, *, engine: str) -> None:
         )
         _assert_status_200(r)
 
-    if engine == 'pytorch':
-        apply_serialized_hf_segments_for_level2_weights(model_dir, _emit)
-    elif engine == 'turbomind':
-        apply_serialized_hf_segments_for_turbomind_level2_weights(model_dir, _emit)
-    else:
-        pytest.skip(f'unsupported engine for update_weights: {engine!r}')
+    apply_serialized_hf_segments_for_level2_weights(model_dir, _emit)
 
 
 def _level2_reload_hf_weights(backend: str, config: dict, model_case: str) -> None:
@@ -96,7 +90,7 @@ def _level2_reload_hf_weights(backend: str, config: dict, model_case: str) -> No
     if not model_dir.is_dir():
         pytest.skip(f'HF checkpoint not found for update_weights: {model_dir}')
     try:
-        _post_update_weights_from_hf_dir(model_dir, engine=backend)
+        _post_update_weights_from_hf_dir(model_dir)
     except FileNotFoundError as e:
         pytest.skip(str(e))
     except RuntimeError as e:
@@ -151,13 +145,6 @@ def _assert_level2_greedy_baseline_stable(api_client: APIClient, model_name: str
         f'{label}: greedy REST baseline not stable (fix prompt/model for this case):\n'
         + '\n'.join(f'  run{j + 1}={c!r}' for j, c in enumerate(contents)))
     return refs[0]
-
-
-def _should_enforce_level2_greedy_checks(backend: str) -> bool:
-    # Known issue: TurboMind may produce non-stable outputs even in
-    # temperature=0 greedy-style requests. Keep the staged wakeup / reload
-    # flow coverage, but skip strict determinism assertions for this backend.
-    return backend != 'turbomind'
 
 
 @pytest.mark.order(8)
@@ -353,10 +340,8 @@ class TestRestfulSleepWakeup:
             api_client = APIClient(BASE_URL)
             model_name = api_client.available_models[0]
 
-            baseline = None
-            if _should_enforce_level2_greedy_checks(backend):
-                baseline = _assert_level2_greedy_baseline_stable(
-                    api_client, model_name, label='level2 REST')
+            baseline = _assert_level2_greedy_baseline_stable(
+                api_client, model_name, label='level2 REST')
 
             _assert_status_200(_post_sleep_level2())
             assert _fetch_is_sleeping() is True
@@ -381,8 +366,7 @@ class TestRestfulSleepWakeup:
             assert_assistant_not_degenerate(
                 assistant_content_from_openai_completion_dict(after),
                 label='level2 REST after staged wakeup (1st chat)')
-            if baseline is not None:
-                assert_chat_decode_unchanged(baseline, after, label='level2 REST 1st infer after staged wakeup')
+            assert_chat_decode_unchanged(baseline, after, label='level2 REST 1st infer after staged wakeup')
 
             after2 = _chat_completion_collect(
                 api_client,
@@ -394,8 +378,7 @@ class TestRestfulSleepWakeup:
                 top_k=1,
             )
             assert_chat_completions_batch_return(after2, model_name)
-            if baseline is not None:
-                assert_chat_decode_unchanged(baseline, after2, label='level2 REST 2nd infer after staged wakeup')
+            assert_chat_decode_unchanged(baseline, after2, label='level2 REST 2nd infer after staged wakeup')
 
             _assert_status_200(_post_sleep_level2())
             assert _fetch_is_sleeping() is True
@@ -416,8 +399,7 @@ class TestRestfulSleepWakeup:
             )
             assert_chat_completions_batch_return(after_full, model_name)
             label2 = 'level2 REST infer after 2nd sleep cycle (staged wakeup)'
-            if baseline is not None:
-                assert_chat_decode_unchanged(baseline, after_full, label=label2)
+            assert_chat_decode_unchanged(baseline, after_full, label=label2)
 
             output = None
             for output in api_client.chat_completions_v1(

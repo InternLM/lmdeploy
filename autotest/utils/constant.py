@@ -207,7 +207,7 @@ SLEEP_WAKEUP_MODEL_LIST = [
     'Qwen/Qwen3.5-122B-A10B',
 ]
 
-SLEEP_WAKEUP_BACKENDS = ['pytorch', 'turbomind']
+SLEEP_WAKEUP_BACKENDS = ['pytorch']
 
 BACKEND_LIST = ['turbomind', 'pytorch']
 
