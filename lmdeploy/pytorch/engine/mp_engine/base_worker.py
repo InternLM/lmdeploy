@@ -151,7 +151,9 @@ class EngineOutputGather:
     def pop(self, stream_id, result):
         if not isinstance(result, EngineOutput):
             return result
-        output = self._output.pop(stream_id)
+        output = self._output.pop(stream_id, None)
+        if output is None:
+            return result
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
         return result

@@ -252,6 +252,7 @@ class BaseModelAgent:
         device_ctx: DeviceContext,
         adapters: dict[str, str] = None,
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False
     ):
 
         self.model_config = model_config
@@ -259,7 +260,7 @@ class BaseModelAgent:
         # use raw tokenizer
         if dist_ctx.dist_config.world_size > 1:
             monkey_patch_hf_modules_cache()
-        self.tokenizer = Tokenizer(model_path).model.model
+        self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code).model.model
 
         # asyncio
         self._pre_in_que = None
@@ -577,7 +578,7 @@ class BaseModelAgent:
             # for second round chat
             self.step_inputs.reindex(delta)
 
-        if inputs.is_first_chunk:
+        if inputs.is_first_chunk or not inputs.is_chunk:
             self._prev_chunk_output = None
 
         # check long context
@@ -937,6 +938,17 @@ class BaseModelAgent:
         assert self._pre_in_que is not None, ('Please start backendground task before forward.')
         self._pre_in_que.put_nowait(inputs)
 
+    def _drain_queues(self):
+        """Drain all internal queues to discard stale forward data."""
+        for q in (self._pre_in_que, self._in_que, self._out_que):
+            if q is None:
+                continue
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
     async def get_output_async(self):
         """Async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
@@ -1164,6 +1176,7 @@ class BaseModelAgent:
             self.spec_agent.cache_engine = None
             spec_model.to(device=device, non_blocking=True)
 
+        self._drain_queues()
         torch.cuda.synchronize()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None

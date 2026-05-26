@@ -131,12 +131,14 @@ def sample_random_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, engine_config, csv: str, speculative_config: SpeculativeConfig | None = None):
+    def __init__(self, model_path: str, engine_config, csv: str, speculative_config: SpeculativeConfig | None = None,
+                 trust_remote_code: bool = False):
         self.pipe = pipeline(model_path,
                              backend_config=engine_config,
                              log_level='ERROR',
-                             speculative_config=speculative_config)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+                             speculative_config=speculative_config,
+                             trust_remote_code=trust_remote_code)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
         self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
         self.csv = csv
 
@@ -254,6 +256,7 @@ def parse_args():
     ArgumentHelper.top_k(parser)
     ArgumentHelper.log_level(parser)
     ArgumentHelper.backend(parser)
+    ArgumentHelper.trust_remote_code(parser)
 
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -319,7 +322,8 @@ def main():
         )
 
     speculative_config = get_speculative_config(args)
-    engine = Engine(args.model_path, engine_config, csv=args.csv, speculative_config=speculative_config)
+    engine = Engine(args.model_path, engine_config, csv=args.csv, speculative_config=speculative_config,
+                    trust_remote_code=args.trust_remote_code)
 
     profiler = Profiler(args.stream_output, [50, 75, 95, 99])
 

@@ -1,14 +1,12 @@
 # Reasoning Outputs
 
-对于支持推理能力的模型，比如 [DeepSeek R1](https://huggingface.co/deepseek-ai/DeepSeek-R1)，LMDeploy 支持在服务中将推理的结果解析出来，并单独用
-reasoning_content 记录推理内容。
+对于支持推理能力的模型，比如 [DeepSeek R1](https://huggingface.co/deepseek-ai/DeepSeek-R1)，LMDeploy 支持在服务端解析推理结果，并通过 `reasoning_content` 单独返回推理内容。
 
 ## 使用示例
 
 ### DeepSeek R1
 
-我们可以像启动其他模型的 api_server 服务一样启动 DeepSeek R1 的模型，只是不同的是，我们需要指定 `--reasoning-parser`。
-在 `--reasoning-parser` 传参里，我们需要指定具体的 parser。
+我们可以像启动其他模型一样启动 DeepSeek R1 的 `api_server`，但需要额外指定 `--reasoning-parser` 参数。
 
 ```
 lmdeploy serve api_server deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --reasoning-parser deepseek-r1
@@ -46,62 +44,49 @@ print("content:", content)
 
 ## 自定义 parser
 
-只需要在 `lmdeploy/serve/openai/reasoning_parser/reasoning_parser.py` 中添加一个类似的 parser 类即可。
+内置的 reasoning parser 名称包括：
+
+- `qwen-qwq`
+- `qwen3`
+- `intern-s1`
+- `deepseek-r1`
+- `deepseek-v3`
+- `gpt-oss`
+
+### 说明
+
+- `deepseek-v3`：仅当 `enable_thinking=True` 时，才会从推理模式开始解析。
+  当 `enable_thinking` 为 `None`（默认）时，通常不会出现推理段，输出为普通内容。
+- `gpt-oss`：基于 OpenAI Harmony channel 解析：
+  - `final` -> `content`
+  - `analysis` -> `reasoning_content`
+  - `commentary` 且 `recipient` 为 `functions.*` -> `tool_calls`
+
+### 添加自定义 parser
+
+在 `lmdeploy/serve/openai/reasoning_parser/` 目录下新增 parser 类，并通过 `ReasoningParserManager` 注册。
 
 ```python
-# import the required packages
-from typing import Sequence, Union, Tuple, Optional
-
 from lmdeploy.serve.openai.reasoning_parser import (
-    ReasoningParser, ReasoningParserManager)
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest,
-                                              DeltaMessage)
+    ReasoningParser, ReasoningParserManager
+)
 
-# define a reasoning parser and register it to lmdeploy
-# the name list in register_module can be used
-# in --reasoning-parser.
 @ReasoningParserManager.register_module(["example"])
 class ExampleParser(ReasoningParser):
-    def __init__(self, tokenizer: object):
-        super().__init__(tokenizer)
+    def __init__(self, tokenizer: object, **kwargs):
+        super().__init__(tokenizer, **kwargs)
 
-    def extract_reasoning_content_streaming(
-        self,
-        previous_text: str,
-        current_text: str,
-        delta_text: str,
-        previous_token_ids: Sequence[int],
-        current_token_ids: Sequence[int],
-        delta_token_ids: Sequence[int],
-    ) -> Union[DeltaMessage, None]:
-        """
-        Instance method that should be implemented for extracting reasoning
-        from an incomplete response; for use when handling reasoning calls and
-        streaming. Has to be an instance method because  it requires state -
-        the current tokens/diffs, but also the information about what has
-        previously been parsed and extracted (see constructor)
-        """
+    def get_reasoning_open_tag(self) -> str | None:
+        return "<think>"
 
-    def extract_reasoning_content(
-            self, model_output: str, request: ChatCompletionRequest
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Extract reasoning content from a complete model-generated string.
+    def get_reasoning_close_tag(self) -> str | None:
+        return "</think>"
 
-        Used for non-streaming responses where we have the entire model response
-        available before sending to the client.
-
-        Args:
-            model_output (str): The model-generated string to extract reasoning content from.
-            request (ChatCompletionRequest): he request object that was used to generate the model_output.
-
-        Returns:
-            reasoning_content (str | None): The reasoning content.
-            final_output (str | None): The content.
-        """
+    def starts_in_reasoning_mode(self) -> bool:
+        return True
 ```
 
-类似的，启动服务的命令就变成了：
+然后通过以下命令启动服务：
 
 ```
 lmdeploy serve api_server $model_path --reasoning-parser example

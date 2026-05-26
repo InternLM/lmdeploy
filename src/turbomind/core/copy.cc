@@ -57,6 +57,14 @@ const auto& GetCopyAPI()
         void*                           fpn{};
         TM_CHECK_EQ(cudaGetDriverEntryPoint(symbol, &fpn, cudaEnableDefault, &status), 0);
         if (fpn && status == cudaDriverEntryPointSuccess) {
+            // cuMemcpyBatchAsync crashes on sm_100 (Blackwell); force monostate -> serialized path.
+            int device = 0;
+            (void)cudaGetDevice(&device);
+            int major = 0;
+            (void)cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
+            if (major >= 10) {
+                return {};
+            }
             return (PFN_cuMemcpyBatchAsync_v12080)fpn;
         }
         else {
@@ -102,7 +110,11 @@ void BatchCopy::Run()
                                    core::Context::stream().handle());
 
                 if (auto i = fail_idx; i != SIZE_MAX) {
-                    TM_CHECK(0) << (void*)src_[i] << " " << size_[i] << " " << (void*)dst_[i] << " code " << status;
+                    TM_LOG_FATAL("copy failed: src={} size={} dst={} code={}",
+                                 (void*)src_[i],
+                                 size_[i],
+                                 (void*)dst_[i],
+                                 (int)status);
                 }
             }
             else {

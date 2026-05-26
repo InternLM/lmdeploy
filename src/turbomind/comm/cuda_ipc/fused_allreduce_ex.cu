@@ -303,7 +303,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                      const int*   local_token_nums,
                                                      cudaStream_t stream)
 {
-    FT_CHECK(group0 * group1 == 0);
+    TM_CHECK(group0 * group1 == 0);
 
     const auto& g0 = groups_.at(group0);
     const auto& g1 = groups_.at(group1);
@@ -313,7 +313,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
 
     const int inner_tp = std::min(tp0, tp1);
 
-    FT_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+    TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
 
     Array<int, kMaxRanks> offsets{};
     Array<int, kMaxRanks> firsts{};
@@ -401,8 +401,6 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
         }
         return true;
     };
-
-    sync_check_cuda_error();
 
     auto dispatch_D = [&](auto t) {
         using T                = decltype(t);

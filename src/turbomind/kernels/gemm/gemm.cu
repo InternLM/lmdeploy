@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/dispatch_cache.h"
@@ -267,8 +268,7 @@ int Gemm::Run(const Operation&    operation,
     const auto desc = context.Init(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc);
 
     if (!desc) {
-        fprintf(stderr, "invalid argument.\n");
-        TM_CHECK(0);
+        TM_LOG_FATAL("invalid argument");
         return -1;
     }
 
@@ -324,7 +324,7 @@ int Gemm::Run(const Operation&    operation,
         return launch(spec, stream);
     }
 
-    TM_CHECK(0) << "No feasible kernel found for the problem: " << to_string(context.desc());
+    TM_LOG_FATAL("No feasible kernel found for the problem: {}", to_string(context.desc()));
 
     return -1;
 }

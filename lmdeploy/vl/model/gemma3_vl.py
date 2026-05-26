@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoProcessor
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
 from lmdeploy.utils import get_logger
@@ -39,22 +39,14 @@ class Gemma3VisionModel(VisionModel):
 
     _arch = 'Gemma3ForConditionalGeneration'
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: dict[int, int] = None,
-                 hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
-
-    def build_preprocessor(self):
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = self.processor.tokenizer
         self.image_token_id = tokenizer.encode(tokenizer.image_token)[-1]
         self.image_tokens = self.processor.image_seq_length
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine

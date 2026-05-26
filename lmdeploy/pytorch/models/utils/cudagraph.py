@@ -189,10 +189,11 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
+            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
             input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
                                                                              graph_meta.decode_query_len,
                                                                              block_size=graph_meta.block_size,
-                                                                             max_seqlen_k=decode_query_len,
+                                                                             max_seqlen_k=max_seqlen_k,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
 
         # mrope
@@ -225,11 +226,17 @@ class CudaGraphMixin:
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids
         input_buffers['position_ids'][:, :num_tokens] = position_ids
+        # 0 is reserved for padding requests
+        # fill zero to prevent writing to the unexpected blocks
+        input_buffers['block_offsets'].zero_()
         input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
         input_buffers['qkv_lens'].zero_()
-        input_buffers['q_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
+        # initialize q_seqlens and kv_seqlens to max_tokens // max_batchs
+        # to avoid out of bound in flash attention kernels
+        # padding kv should be the same as padding q so q-kv=0
+        input_buffers['qkv_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
         input_buffers['qkv_lens'][:, :batch_size] = qkv
         input_buffers['cu_seqlens'][:, 1:] = input_buffers['qkv_seqlens'].cumsum(1)
         if inputs_embeds is not None:
@@ -268,11 +275,16 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
+            # FA3's mha_fwd internally computes seqlen_k = page_table.size(1) * page_size
+            # where page_table is the (padded) block_offsets buffer. We must use
+            # graph_meta.num_blocks * graph_meta.block_size to match the buffer shape
+            # allocated in make_buffers_cudagraph, not the runtime attn_metadata value.
+            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
             scheduler_metadata = self.update_meta_flashattn(
                 new_batch_size,
                 decode_query_len,
                 block_size=graph_meta.block_size,
-                max_seqlen_k=attn_metadata.max_kv_seqlen,
+                max_seqlen_k=max_seqlen_k,
                 cache_seqlens=input_buffers['kv_seqlens'],
             )
             num_meta = scheduler_metadata.size(0)

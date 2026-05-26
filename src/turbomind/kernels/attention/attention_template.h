@@ -5,6 +5,7 @@
 #include "attention_params.h"
 #include "attention_universal.h"
 #include "reduce.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "utils.h"
 
 namespace turbomind {
@@ -60,10 +61,7 @@ void invokeAttention(const typename Kernel::ParamType& params, int sm_count, int
                                                            q_group_size  // cta_per_q_group
     );
 
-    if (auto err = cudaGetLastError(); err != cudaSuccess) {
-        std::cout << cudaGetErrorString(err) << "\n";
-        std::abort();
-    }
+    TM_CUDA_CHECK(cudaGetLastError());
 
     if (params.cp_fn) {
         params.cp_fn(params.cp_fn_ctx);

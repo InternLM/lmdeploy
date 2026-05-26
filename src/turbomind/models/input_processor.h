@@ -9,7 +9,7 @@ class InputProcessor {
 public:
     ~InputProcessor();
 
-    InputProcessor(const EngineParam& engine, const ModelParam& model, int phases);
+    InputProcessor(const EngineParam& engine, int hidden_units, DataType data_type, int phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 

@@ -216,6 +216,7 @@ void invokeGenericActivation_v2(
 
     activation_kernel<kVecSize, Activation, T>
         <<<grid, block, 0, stream>>>(inter_buf, gate_buf, stride, token_num, dims);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<template<typename T> class Activation>
@@ -243,6 +244,7 @@ void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStre
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(inter.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeGenericActivation_v3<SiluActivation>(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);

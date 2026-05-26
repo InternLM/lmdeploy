@@ -11,6 +11,7 @@
 #include "src/turbomind/kernels/attention/arch.h"
 #include "src/turbomind/kernels/attention/registrar.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::attention {
 
@@ -90,7 +91,7 @@ Registry& Registry::instance()
 
     static std::vector<std::unique_ptr<DeviceState>> states = [] {
         int count{};
-        TM_CHECK_EQ(cudaGetDeviceCount(&count), cudaSuccess);
+        TM_CUDA_CHECK(cudaGetDeviceCount(&count));
         std::vector<std::unique_ptr<DeviceState>> vec(count);
         for (auto& s : vec) {
             s = std::make_unique<DeviceState>();
@@ -99,13 +100,13 @@ Registry& Registry::instance()
     }();
 
     int device_id{};
-    TM_CHECK_EQ(cudaGetDevice(&device_id), cudaSuccess);
+    TM_CUDA_CHECK(cudaGetDevice(&device_id));
 
     auto& state = *states.at(device_id);
 
     std::call_once(state.flag, [&]() {
         auto prop = std::make_shared<cudaDeviceProp>();
-        TM_CHECK_EQ(cudaGetDeviceProperties(prop.get(), device_id), cudaSuccess);
+        TM_CUDA_CHECK(cudaGetDeviceProperties(prop.get(), device_id));
         state.registry = std::make_unique<Registry>(std::move(prop));
     });
 

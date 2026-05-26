@@ -63,6 +63,14 @@ def get_func_config_list(backend: str,
     run_configs = []
     dtype = 'float16' if not is_bf16_supported(device) else None
 
+    quantization_config = config.get(f'{backend}_quantization', {})
+    fp8_model_list = quantization_config.get('fp8', [])
+
+    def get_model_extra_params(model: str) -> dict:
+        if model in fp8_model_list:
+            return {'model-format': 'fp8'}
+        return {}
+
     for communicator in _get_communicator_list(config, backend, parallel_config):
         for model in base_case_list:
             for quant_policy in [0, 4, 8]:
@@ -95,6 +103,13 @@ def get_func_config_list(backend: str,
                     run_config['extra_params']['dtype'] = dtype
                 if device != 'cuda':
                     run_config['extra_params']['device'] = device
+
+                model_extra_params = get_model_extra_params(model)
+                if model_extra_params and quant_policy == 0:
+                    run_config_with_format = copy.deepcopy(run_config)
+                    run_config_with_format['extra_params'].update(model_extra_params)
+                    run_configs.append(run_config_with_format)
+
                 run_configs.append(run_config)
 
     for run_config in run_configs:
@@ -108,6 +123,10 @@ def get_func_config_list(backend: str,
         if 'GLM-5-FP8' in run_config['model']:
             run_config['extra_params']['cache-max-entry-count'] = 0.9
             run_config['extra_params']['max-batch-size'] = 128
+
+        if 'Qwen3.5-397B-A17B' in run_config['model']:
+            run_config['extra_params']['max-batch-size'] = 256
+            run_config['extra_params']['cache-max-entry-count'] = 0.9
 
         if (func_type == 'evaluate' and 'session_len' not in extra
                 and 'session-len' not in extra and 'Qwen3.5' not in run_config['model']):
@@ -143,7 +162,7 @@ def get_func_config_list(backend: str,
                 and func_type in ('benchmark', 'longtext_benchmark')):
             run_config['extra_params']['model-format'] = 'mxfp4'
 
-        if func_type == 'mtp_evaluate' and 'Qwen3.5' in run_config['model']:
+        if func_type == 'mtp_evaluate':
             run_config['extra_params'].update({
                 'reasoning-parser': 'qwen-qwq',
                 'speculative-algorithm': 'qwen3_5_mtp',
@@ -185,6 +204,7 @@ def get_cli_common_param(run_config: dict[str, Any]) -> str:
 
     # Extra params
     cli_params.append(get_cli_str(extra_params))
+    cli_params.append('--trust-remote-code')
 
     return ' '.join(cli_params).strip()
 
@@ -505,6 +525,48 @@ def is_model_in_list(config: dict[str, Any], parallel_config: dict[str, int], mo
     return parallel_config in model_config
 
 
+_MODEL_EVAL_CONFIG_RULES = (
+    ('gpt', 'gpt'),
+    ('sdar', 'sdar'),
+    ('intern-s1-pro', 'intern-s1-pro'),
+    ('qwen3.5', 'qwen3.5'),
+)
+
+def _resolve_base_eval_config_name(run_config: dict[str, Any], rules: tuple[tuple[str, str], ...]) -> str:
+    model = run_config['model'].lower()
+    for needle, resolved in rules:
+        if needle in model:
+            return resolved
+    return 'default'
+
+
+def _apply_eval_config_env_suffix(config: dict[str, Any], name: str) -> str:
+    env_tag = str(config['env_tag'])
+    if env_tag == 'a100':
+        return f'{name}-32k'
+    if env_tag == 'ascend':
+        return f'{name}-2batch'
+    return name
+
+
+def resolve_eval_config_name(config: dict[str, Any],
+                             run_config: dict[str, Any],
+                             eval_config_name: str = 'default',
+                             *,
+                             only_if_default: bool = True) -> str:
+    """Resolve eval preset key (EVAL_CONFIGS / MLLM_EVAL_CONFIGS) from model
+    and env_tag."""
+    if only_if_default and eval_config_name != 'default':
+        return eval_config_name
+
+    if eval_config_name == 'default':
+        name = _resolve_base_eval_config_name(run_config, _MODEL_EVAL_CONFIG_RULES)
+    else:
+        name = eval_config_name
+
+    return _apply_eval_config_env_suffix(config, name)
+
+
 def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -> str:
     """Generate case name string by run config dict."""
     model_name = run_config['model']
@@ -520,6 +582,9 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
     # Get last section of model name, compatible with model name contains '/'
     pure_model_name = model_name.split('/')[-1].replace('_', '-')
     extra_params_case = ''
+    model_format = extra_params.get('model-format')
+    if model_format:
+        extra_params_case += f'_{model_format}'
     if not is_simple:
         for k, v in extra_params.items():
             if len(v) > 10:
@@ -534,12 +599,23 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
     """Parse run config dict from case name string (fix split & type convert
     bug)"""
     case_parts = case_str.split('_')
-    # Parse fixed field & reassemble dynamic parallel config
+    if len(case_parts) < 4:
+        raise ValueError(f'Invalid case string: {case_str}')
+
     backend = case_parts[0]
     model = case_parts[1]
     communicator = case_parts[2]
-    quant_policy = int(case_parts[-1])
-    parallel_parts = case_parts[3:-1]
+
+    quant_idx = None
+    for i in range(len(case_parts) - 1, 2, -1):
+        if case_parts[i].isdigit():
+            quant_idx = i
+            break
+    if quant_idx is None:
+        raise ValueError(f'No numeric quant policy found in case string: {case_str}')
+
+    quant_policy = int(case_parts[quant_idx])
+    parallel_parts = case_parts[3:quant_idx]
 
     # Convert parallel str to dict, e.g: ['tp1','pp2'] -> {'tp':1, 'pp':2}
     parallel_config = {}
@@ -909,6 +985,26 @@ def test_run_config():
     os.unsetenv('TEST_ENV')
 
 
+def test_resolve_eval_config_name():
+    run_config = {'model': 'openai/gpt-oss-120b'}
+    assert resolve_eval_config_name({}, run_config) == 'gpt'
+    assert resolve_eval_config_name({'env_tag': 'a100'}, run_config) == 'gpt-32k'
+    assert resolve_eval_config_name({'env_tag': 'ascend'}, run_config) == 'gpt-2batch'
+    assert resolve_eval_config_name({}, run_config, 'longtext-512k') == 'longtext-512k'
+    assert resolve_eval_config_name({'env_tag': 'ascend'}, run_config, 'longtext-512k') == 'longtext-512k'
+
+    sdar_config = {'model': 'inclusionAI/SDAR-30B-A3B'}
+    assert resolve_eval_config_name({}, sdar_config) == 'sdar'
+    qwen_config = {'model': 'Qwen/Qwen3.5-397B-A17B'}
+    assert resolve_eval_config_name({}, qwen_config) == 'qwen3.5'
+    intern_config = {'model': 'internlm/Intern-S1-Pro-FP8'}
+    assert resolve_eval_config_name({}, intern_config) == 'intern-s1-pro'
+    assert resolve_eval_config_name({}, {'model': 'meta/llama'}) == 'default'
+    mllm_config = {'model': 'Qwen/Qwen3.5-VL-7B'}
+    assert resolve_eval_config_name({}, mllm_config) == 'qwen3.5'
+    assert resolve_eval_config_name({'env_tag': 'ascend'}, mllm_config) == 'qwen3.5-2batch'
+
+
 def test_get_parallel_config():
     test = get_parallel_config({}, 'empty')
     assert test == [{'tp': 1}]
@@ -936,6 +1032,7 @@ def test_get_parallel_config():
 
 
 if __name__ == '__main__':
+    test_resolve_eval_config_name()
     test_get_parallel_config()
     test_cli_common_param()
     test_run_config()
