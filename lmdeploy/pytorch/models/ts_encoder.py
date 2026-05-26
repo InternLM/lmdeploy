@@ -16,61 +16,6 @@ from .bert import BertConfig, BertModel
 from .whisper import WhisperEncoderLayer
 
 
-def _make_causal_mask(input_ids_shape: torch.Size,
-                      dtype: torch.dtype,
-                      device: torch.device,
-                      past_key_values_length: int = 0) -> torch.Tensor:
-    """Create a causal attention mask in HF Whisper's expected shape."""
-    bsz, tgt_len = input_ids_shape
-    mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)
-    mask_cond = torch.arange(mask.size(-1), device=device)
-    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-    mask = mask.to(dtype)
-
-    if past_key_values_length > 0:
-        mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
-    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
-
-
-def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int | None = None) -> torch.Tensor:
-    """Expand a 2D padding mask to the 4D additive attention-mask format."""
-    bsz, src_len = mask.size()
-    tgt_len = tgt_len if tgt_len is not None else src_len
-
-    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
-    inverted_mask = 1.0 - expanded_mask
-    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
-
-
-def make_pad_mask(lengths: torch.Tensor, max_len: int = 0) -> torch.Tensor:
-    """Return a bool padding mask where padded positions are True."""
-    assert lengths.ndim == 1, lengths.ndim
-    max_len = max(max_len, lengths.max().long().item())
-    n = lengths.size(0)
-    seq_range = torch.arange(0, max_len, device=lengths.device)
-    expanded_lengths = seq_range.unsqueeze(0).expand(n, max_len)
-    return expanded_lengths >= lengths.unsqueeze(-1)
-
-
-def concat_chunks_simple(chunks: torch.Tensor, chunk_lengths: torch.Tensor | None = None) -> tuple[torch.Tensor, int]:
-    """Concatenate chunks without overlap."""
-    num_chunks, chunk_len, channels = chunks.shape
-
-    if chunk_lengths is None:
-        signal = chunks.reshape(-1, channels)
-        signal_len = num_chunks * chunk_len
-    else:
-        signal_list = []
-        signal_len = 0
-        for i in range(num_chunks):
-            valid_len = int(chunk_lengths[i].item())
-            signal_list.append(chunks[i, :valid_len, :])
-            signal_len += valid_len
-        signal = torch.cat(signal_list, dim=0)
-
-    return signal, signal_len
-
-
 class ChunkModel(nn.Module):
 
     def __init__(self, encoder_embed: nn.Module, encoder: nn.Module, chunk_size: int = 6400, step: int = 6400):
@@ -113,6 +58,26 @@ class ChunkModel(nn.Module):
             output_mask = torch.ones(output.shape).to(tensor.device)
 
         return output, output_mask
+
+    def concat_chunks_simple(self,
+                             chunks: torch.Tensor,
+                             chunk_lengths: torch.Tensor | None = None) -> tuple[torch.Tensor, int]:
+        """Concatenate chunks without overlap."""
+        num_chunks, chunk_len, channels = chunks.shape
+
+        if chunk_lengths is None:
+            signal = chunks.reshape(-1, channels)
+            signal_len = num_chunks * chunk_len
+        else:
+            signal_list = []
+            signal_len = 0
+            for i in range(num_chunks):
+                valid_len = int(chunk_lengths[i].item())
+                signal_list.append(chunks[i, :valid_len, :])
+                signal_len += valid_len
+            signal = torch.cat(signal_list, dim=0)
+
+        return signal, signal_len
 
     def forward_encoder(self,
                         x: torch.Tensor,
@@ -169,7 +134,7 @@ class ChunkModel(nn.Module):
             end = start + count
             signal_chunks = encoder_out[start:end]
 
-            feature, feature_len = concat_chunks_simple(signal_chunks, encoder_out_lens[start:end])
+            feature, feature_len = self.concat_chunks_simple(signal_chunks, encoder_out_lens[start:end])
 
             features.append(feature)
             start = end
@@ -422,32 +387,23 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
             [WhisperEncoderLayer(config, dtype=dtype, device=device) for _ in range(config.encoder_layers)])
         self.layer_norm = LayerNorm(config.d_model, eps=1e-5, dtype=dtype, device=device)
 
-        self.post_init()
+        self.adapt_in = build_colwise_linear(
+            config.ts_adapt_in_dim,
+            80,
+            bias=True,
+            dtype=dtype,
+            device=device,
+        )
+        self.adapt_out = build_rowwise_linear(
+            self.embed_dim,
+            config.ts_adapt_out_dim,
+            bias=True,
+            dtype=dtype,
+            device=device,
+        )
 
         self.mask_type = None
         self.chunk_length = None
-
-    def add_adpt_in(self, input_dim: int):
-        quantization_config = getattr(self.config, 'quantization_config', None)
-        self.adapt_in = build_colwise_linear(
-            input_dim,
-            80,
-            bias=True,
-            quant_config=quantization_config,
-            dtype=self.dtype,
-            device=self.device,
-        )
-
-    def add_adpt_out(self, output_dim: int):
-        quantization_config = getattr(self.config, 'quantization_config', None)
-        self.adapt_out = build_rowwise_linear(
-            self.embed_dim,
-            output_dim,
-            bias=True,
-            quant_config=quantization_config,
-            dtype=self.dtype,
-            device=self.device,
-        )
 
     def get_input_embeddings(self) -> nn.Module:
         return self.conv1
@@ -459,16 +415,36 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
         self.mask_type = masktype
         self.chunk_length = chunk_length
 
+    def _make_causal_mask(self, input_ids_shape: torch.Size,
+                        dtype: torch.dtype,
+                        device: torch.device,
+                        past_key_values_length: int = 0) -> torch.Tensor:
+        """Create a causal attention mask in HF Whisper's expected shape."""
+        bsz, tgt_len = input_ids_shape
+        mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)
+        mask_cond = torch.arange(mask.size(-1), device=device)
+        mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+        mask = mask.to(dtype)
+
+        if past_key_values_length > 0:
+            mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
+        return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+
+
     def _prepare_decoder_attention_mask(self, input_shape, inputs_embeds, past_key_values_length):
+        # create causal mask
+        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        combined_attention_mask = None
+
         if input_shape[-1] > 1:
-            return _make_causal_mask(
+            combined_attention_mask = self._make_causal_mask(
                 input_shape,
                 inputs_embeds.dtype,
                 device=inputs_embeds.device,
                 past_key_values_length=past_key_values_length,
             )
 
-        return None
+        return combined_attention_mask
 
     def prepare_chunk_attention_mask(self, input_shape, inputs_embeds):
         block_size = round(self.chunk_length / 4 * 2)
