@@ -42,9 +42,8 @@ class ConfigBuilder:
         capture_sizes = engine_config.cudagraph_capture_batch_sizes
         if capture_sizes is not None:
             assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
-            assert all(isinstance(size, int) for size in capture_sizes), (
-                'cudagraph_capture_batch_sizes should be integers')
-            assert all(size > 0 for size in capture_sizes), 'cudagraph_capture_batch_sizes should be positive'
+            assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
+                'cudagraph_capture_batch_sizes should be positive integers')
             capture_sizes = sorted({size for size in capture_sizes if size <= engine_config.max_batch_size})
             assert len(capture_sizes) > 0, (
                 'cudagraph_capture_batch_sizes should contain at least one value '
