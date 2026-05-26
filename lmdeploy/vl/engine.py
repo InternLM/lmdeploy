@@ -29,7 +29,7 @@ def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
             continue
         for attr_name in ('dtype', 'torch_dtype'):
             dtype = _to_torch_dtype(getattr(config, attr_name, None))
-            if isinstance(dtype, torch.dtype) and torch.empty((), dtype=dtype).is_floating_point():
+            if isinstance(dtype, torch.dtype) and dtype.is_floating_point:
                 return dtype
     return None
 

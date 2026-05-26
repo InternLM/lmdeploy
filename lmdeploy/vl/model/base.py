@@ -73,7 +73,7 @@ class VisionModel(ABC):
         """Cast floating processor-output tensors to the target model dtype."""
         if not isinstance(target_dtype, torch.dtype):
             return output
-        if not torch.empty((), dtype=target_dtype).is_floating_point():
+        if not target_dtype.is_floating_point:
             return output
         if isinstance(output, torch.Tensor):
             if output.is_floating_point() and output.dtype != target_dtype:
