@@ -125,3 +125,82 @@ def test_parse_complete_falls_back_to_plain_text_on_invalid_tool_arguments():
     finally:
         cls.reasoning_parser_cls = old_reasoning_cls
         cls.tool_parser_cls = old_tool_cls
+
+
+def test_parse_complete_reports_invalid_tool_arguments_finish_reason():
+    """parse_complete reports malformed tool output separately from plain text
+    fallback."""
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    from lmdeploy.serve.parsers import ResponseParserManager
+    from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+
+    cls = ResponseParserManager.get('default')
+    old_reasoning_cls = cls.reasoning_parser_cls
+    old_tool_cls = cls.tool_parser_cls
+    try:
+        cls.reasoning_parser_cls = None
+        cls.tool_parser_cls = ToolParserManager.get('qwen3')
+        request = ChatCompletionRequest(
+            model='test',
+            messages=[],
+            tool_choice='auto',
+        )
+        parser = cls(request=request, tokenizer=object())
+        open_tag = parser.profile.tool_open_tag
+        close_tag = parser.profile.tool_close_tag
+        text = open_tag + '{"name": "get_weather", "arguments": {"city":' + close_tag
+
+        content, tool_calls, reasoning = parser.parse_complete(text, finish_reason='stop')
+
+        assert content is not None
+        assert tool_calls is None
+        assert reasoning is None
+        assert parser.finish_reason == 'tool_call_error'
+    finally:
+        cls.reasoning_parser_cls = old_reasoning_cls
+        cls.tool_parser_cls = old_tool_cls
+
+
+def test_stream_chunk_reports_invalid_tool_arguments_finish_reason():
+    """stream_chunk validates streamed text from parser state."""
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    from lmdeploy.serve.parsers import ResponseParserManager
+    from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+
+    cls = ResponseParserManager.get('default')
+    old_reasoning_cls = cls.reasoning_parser_cls
+    old_tool_cls = cls.tool_parser_cls
+    try:
+        cls.reasoning_parser_cls = None
+        cls.tool_parser_cls = ToolParserManager.get('qwen3')
+        request = ChatCompletionRequest(
+            model='test',
+            messages=[],
+            tool_choice='auto',
+        )
+        parser = cls(request=request, tokenizer=object())
+        open_tag = parser.profile.tool_open_tag
+        close_tag = parser.profile.tool_close_tag
+
+        parser.stream_chunk(open_tag + '{"name": "get_weather", "arguments": {"city":', [])
+        parser.stream_chunk(close_tag, [], finish_reason='stop')
+
+        assert parser.finish_reason == 'tool_call_error'
+    finally:
+        cls.reasoning_parser_cls = old_reasoning_cls
+        cls.tool_parser_cls = old_tool_cls
+
+
+def test_complete_validation_is_private():
+    """Complete validation should not be part of the public parser contract."""
+    from inspect import signature
+
+    from lmdeploy.serve.parsers import ResponseParserManager
+    from lmdeploy.serve.parsers.response_parser import ResponseParser
+
+    cls = ResponseParserManager.get('default')
+
+    assert not hasattr(ResponseParser, 'validate_complete')
+    assert not hasattr(cls, 'validate_complete')
+    assert 'token_ids' not in signature(ResponseParser._validate_complete).parameters
+    assert 'token_ids' not in signature(cls._validate_complete).parameters

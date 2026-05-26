@@ -203,6 +203,10 @@ def check_request(request) -> JSONResponse | None:
     return None
 
 
+def _set_stream_delta_role(delta_message: DeltaMessage, is_first_chunk: bool):
+    delta_message.role = 'assistant' if is_first_chunk else None
+
+
 def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
                                      token_ids: list[int] | None = None,
                                      logprobs: list[dict[int, float]] | None = None):
@@ -548,6 +552,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
+        streamed_chunks = 0
         final_usage = None
         async for res in result_generator:
             logprobs = None
@@ -572,6 +577,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if res.finish_reason is None and logprobs is None and not delta_token_ids:
                     continue
                 stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+            should_validate_complete = (
+                res.finish_reason in ('stop', 'length')
+                and (request.return_token_ids or request.return_routed_experts)
+            )
+            if should_validate_complete and not response_parser.validate_complete():
+                res.finish_reason = 'parse_error'
 
             for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
                 if tool_emitted:
@@ -581,6 +592,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
                 finish_reason = res.finish_reason if is_last_delta else None
                 chunk_logprobs = logprobs if is_last_delta else None
+                _set_stream_delta_role(delta_message, streamed_chunks == 0)
 
                 if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
                     if finish_reason == 'stop' and streaming_tools is True:
@@ -602,6 +614,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
+                streamed_chunks += 1
         if final_usage is not None:
             yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
         yield 'data: [DONE]\n\n'
@@ -635,8 +648,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     reasoning_content = None
 
     try:
-        text, tool_calls, reasoning_content = response_parser.parse_complete(
-            text, final_token_ids)
+        raw_text = text
+        text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
+        should_validate_complete = (
+            final_res.finish_reason in ('stop', 'length')
+            and (request.return_token_ids or request.return_routed_experts)
+        )
+        if should_validate_complete and not response_parser.validate_complete(raw_text):
+            final_res.finish_reason = 'parse_error'
         if isinstance(tool_calls, list) and len(tool_calls):
             if final_res.finish_reason == 'stop':
                 final_res.finish_reason = 'tool_calls'
