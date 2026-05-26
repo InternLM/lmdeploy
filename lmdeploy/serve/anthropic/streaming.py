@@ -152,22 +152,15 @@ async def stream_messages_response(result_generator,
         text = res.response or ''
         delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
 
-        delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
-
         stream_deltas = []
         if response_parser is not None:
             stream_deltas = response_parser.stream_chunk(text, delta_token_ids)
         elif text:
             stream_deltas = [(DeltaMessage(role='assistant', content=text), False)]
 
-        if not stream_deltas:
-            continue
-
         for delta_message, tool_emitted in stream_deltas:
             if tool_emitted:
                 streaming_tools = True
-            if response_parser is not None and res.finish_reason == 'stop' and streaming_tools:
-                res.finish_reason = 'tool_calls'
 
             if delta_message.reasoning_content:
                 for event in _start_text_or_thinking('thinking'):
@@ -201,6 +194,9 @@ async def stream_messages_response(result_generator,
                                 },
                             },
                         )
+
+        if response_parser is not None and res.finish_reason == 'stop' and streaming_tools:
+            res.finish_reason = 'tool_calls'
 
     closing = _close_current_block()
     if closing:
