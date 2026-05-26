@@ -7,7 +7,12 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.selector import get_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    ModelConfig,
+    normalize_cudagraph_capture_batch_sizes,
+)
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
@@ -309,5 +314,7 @@ class CUDAGraphRunner(GraphRunner):
     def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
         if self.cache_config.cudagraph_capture_batch_sizes is not None:
+            self.cache_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                self.cache_config.cudagraph_capture_batch_sizes, self.cache_config.max_batches)
             return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)

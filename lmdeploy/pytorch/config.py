@@ -14,6 +14,24 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 logger = get_logger('lmdeploy')
 
 
+def normalize_cudagraph_capture_batch_sizes(capture_sizes: list[int] | None, max_batches: int) -> list[int] | None:
+    """Normalize configured cudagraph capture batch sizes."""
+    if capture_sizes is None:
+        return None
+
+    assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
+    assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
+        'cudagraph_capture_batch_sizes should be positive integers')
+
+    capture_sizes = sorted({size for size in capture_sizes if size <= max_batches})
+    assert len(capture_sizes) > 0, (
+        'cudagraph_capture_batch_sizes should contain at least one value '
+        f'<= max_batch_size ({max_batches})')
+    if capture_sizes[-1] != max_batches:
+        capture_sizes.append(max_batches)
+    return capture_sizes
+
+
 def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'auto'):
     """Update the torch dtype from the model config.
 
@@ -119,6 +137,8 @@ class CacheConfig:
             self.enable_prefix_caching = False
         if self.kernel_block_size == -1:
             self.kernel_block_size = self.block_size
+        self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+            self.cudagraph_capture_batch_sizes, self.max_batches)
 
 
 class TPMode(enum.Enum):

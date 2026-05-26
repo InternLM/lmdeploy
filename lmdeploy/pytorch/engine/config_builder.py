@@ -10,6 +10,7 @@ from lmdeploy.pytorch.config import (
     MiscConfig,
     SchedulerConfig,
     SpecDecodeConfig,
+    normalize_cudagraph_capture_batch_sizes,
 )
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
@@ -41,16 +42,8 @@ class ConfigBuilder:
 
         capture_sizes = engine_config.cudagraph_capture_batch_sizes
         if capture_sizes is not None:
-            assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
-            assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
-                'cudagraph_capture_batch_sizes should be positive integers')
-            capture_sizes = sorted({size for size in capture_sizes if size <= engine_config.max_batch_size})
-            assert len(capture_sizes) > 0, (
-                'cudagraph_capture_batch_sizes should contain at least one value '
-                f'<= max_batch_size ({engine_config.max_batch_size})')
-            if capture_sizes[-1] != engine_config.max_batch_size:
-                capture_sizes.append(engine_config.max_batch_size)
-            engine_config.cudagraph_capture_batch_sizes = capture_sizes
+            engine_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                capture_sizes, engine_config.max_batch_size)
 
         if engine_config.dp != 1:
             if engine_config.tp == 1 and engine_config.ep == 1:

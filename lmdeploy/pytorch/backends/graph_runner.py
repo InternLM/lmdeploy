@@ -4,7 +4,12 @@ from dataclasses import dataclass
 
 import torch
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    ModelConfig,
+    normalize_cudagraph_capture_batch_sizes,
+)
 from lmdeploy.pytorch.model_inputs import StepContext
 
 
@@ -102,5 +107,7 @@ class GraphRunner:
     def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
         if self.cache_config.cudagraph_capture_batch_sizes is not None:
+            self.cache_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                self.cache_config.cudagraph_capture_batch_sizes, self.cache_config.max_batches)
             return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
