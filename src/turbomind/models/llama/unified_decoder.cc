@@ -76,7 +76,7 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
                                                           phases,
                                                           (bool)moe_ffn_layer_);
 
-    bool has_linear_attn = false;
+    bool                  has_linear_attn       = false;
     const DeltaNetWeight* linear_attn_prototype = nullptr;
     for (auto t : model_weight.layer_types) {
         if (t == 1) {

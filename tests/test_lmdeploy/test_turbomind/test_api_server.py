@@ -62,6 +62,7 @@ def _make_api_server_args(**overrides):
                 max_concurrent_requests=None,
                 reasoning_parser='qwen-qwq',
                 tool_call_parser='qwen3coder',
+                trust_remote_code=False,
                 hf_overrides=None)
     args.update(overrides)
     return SimpleNamespace(**args)
@@ -78,7 +79,7 @@ def test_api_server_turbomind_forwards_hybrid_prefix_cache_options(monkeypatch):
     fake_api_server.serve = fake_serve
 
     monkeypatch.setitem(sys.modules, 'lmdeploy.serve.openai.api_server', fake_api_server)
-    monkeypatch.setattr('lmdeploy.archs.autoget_backend', lambda _: 'turbomind')
+    monkeypatch.setattr('lmdeploy.archs.autoget_backend', lambda *args, **kwargs: 'turbomind')
     monkeypatch.setattr(serve_module, 'get_max_batch_size', lambda device: 13)
     monkeypatch.setattr(serve_module, 'get_chat_template', lambda *_: None)
     monkeypatch.setattr(serve_module, 'get_speculative_config', lambda _: None)
@@ -103,7 +104,7 @@ def test_api_server_turbomind_uses_default_cuda_batch_size(monkeypatch):
     fake_api_server.serve = fake_serve
 
     monkeypatch.setitem(sys.modules, 'lmdeploy.serve.openai.api_server', fake_api_server)
-    monkeypatch.setattr('lmdeploy.archs.autoget_backend', lambda _: 'turbomind')
+    monkeypatch.setattr('lmdeploy.archs.autoget_backend', lambda *args, **kwargs: 'turbomind')
     monkeypatch.setattr(serve_module, 'get_max_batch_size', lambda device: 7)
     monkeypatch.setattr(serve_module, 'get_chat_template', lambda *_: None)
     monkeypatch.setattr(serve_module, 'get_speculative_config', lambda _: None)

@@ -93,8 +93,8 @@ private:
     cudaStream_t aux_stream_{};
     cudaEvent_t  ev_before_{};
     cudaEvent_t  ev_after_{};
-    bool warned_prefix_capture_oom_{false};
-    bool warned_prefix_capture_budget_{false};
+    bool         warned_prefix_capture_oom_{false};
+    bool         warned_prefix_capture_budget_{false};
 };
 
 }  // namespace turbomind

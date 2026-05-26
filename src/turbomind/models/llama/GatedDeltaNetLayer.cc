@@ -344,9 +344,9 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         Tensor attn_out{{token_num, value_dim}, dtype, device};
         Tensor conv_out{{token_num, conv_dim}, dtype, device};
 
-        const int state_layer_idx              = linear_layer_index(p.layer_id, layer_types_);
-        const int conv_state_layer_offset      = state_layer_idx * (conv_dim * d_conv);
-        const int recurrent_state_layer_offset = state_layer_idx * (num_v_heads * key_head_dim * value_head_dim);
+        const int  state_layer_idx              = linear_layer_index(p.layer_id, layer_types_);
+        const int  conv_state_layer_offset      = state_layer_idx * (conv_dim * d_conv);
+        const int  recurrent_state_layer_offset = state_layer_idx * (num_v_heads * key_head_dim * value_head_dim);
         const int  conv_capture_stride          = num_linear_layers_ * d_conv_ * conv_dim_;
         const int  recurrent_capture_stride     = num_linear_layers_ * num_v_heads_ * key_head_dim_ * value_head_dim_;
         const bool has_prefix_captures          = enable_linear_prefix_caching_ && pd.total_capture_count > 0;
