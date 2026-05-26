@@ -43,13 +43,6 @@ class BertConfig:
         self.initializer_range = initializer_range
 
 
-class BertModelOutput:
-
-    def __init__(self, last_hidden_state: torch.Tensor, pooler_output: torch.Tensor | None = None):
-        self.last_hidden_state = last_hidden_state
-        self.pooler_output = pooler_output
-
-
 def _make_causal_mask(input_shape: torch.Size, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
     batch_size, tgt_len = input_shape
     mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)
@@ -305,14 +298,11 @@ class BertModel(nn.Module):
 
     def forward(self,
                 input_ids: torch.Tensor | None = None,
-                attention_mask: torch.Tensor | None = None,
                 token_type_ids: torch.Tensor | None = None,
                 position_ids: torch.Tensor | None = None,
                 inputs_embeds: torch.Tensor | None = None,
                 encoder_hidden_states: torch.Tensor | None = None,
-                encoder_attention_mask: torch.Tensor | None = None,
-                return_dict: bool = True,
-                **kwargs):
+                encoder_attention_mask: torch.Tensor | None = None):
         if (input_ids is None) == (inputs_embeds is None):
             raise ValueError('You must specify exactly one of input_ids or inputs_embeds.')
 
@@ -336,6 +326,4 @@ class BertModel(nn.Module):
         )
         pooled_output = self.pooler(sequence_output)
 
-        if return_dict:
-            return BertModelOutput(last_hidden_state=sequence_output, pooler_output=pooled_output)
         return sequence_output, pooled_output

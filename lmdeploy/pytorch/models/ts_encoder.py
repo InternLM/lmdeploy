@@ -129,7 +129,6 @@ class ChunkModel(nn.Module):
                         x: torch.Tensor,
                         x_lens: torch.Tensor,
                         x_channels: torch.Tensor,
-                        freeze_encoder: bool = False,
                         sr=None,
                         force_strides=None) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute encoder outputs."""
@@ -144,7 +143,7 @@ class ChunkModel(nn.Module):
             chunks, mask = self.chunk_tensor(seq)
 
             chunk_output, chunk_lens, learnable_lens, _, _ = self.encoder_embed(
-                chunks, x_lens[b], sr, force_strides, freeze_encoder, mask)
+                chunks, x_lens[b], sr, force_strides, mask=mask)
 
             outputs.append(chunk_output)
             output_lens.append(chunk_lens)
@@ -163,9 +162,8 @@ class ChunkModel(nn.Module):
         if x_lens.ndim == 0:
             x_lens = x_lens.unsqueeze(-1)
 
-        src_key_padding_mask = make_pad_mask(x_lens)
         x = x.permute(1, 0, 2)
-        encoder_out, encoder_out_lens, _ = self.encoder(x, x_lens, src_key_padding_mask, output_hidden_states=True)
+        encoder_out, encoder_out_lens = self.encoder(x, x_lens)
         encoder_out = encoder_out.permute(1, 0, 2)
 
         if learnable_lens is not None:
@@ -278,12 +276,11 @@ class SingleResChunkQformerSubsampling(nn.Module):
                 input_lens: torch.Tensor,
                 sr,
                 force_strides,
-                freeze_encoder: bool = False,
                 mask: torch.Tensor | None = None):
         if mask is None:
             mask = torch.ones(inputs.shape).to(inputs.device)
         features, feature_lens, learnable_lens, strides, raw_outputs = self.forward_patch(
-            inputs, input_lens, sr, force_strides, freeze_encoder, mask)
+            inputs, input_lens, sr, force_strides, mask)
 
         return features, feature_lens, learnable_lens, strides, raw_outputs
 
@@ -292,7 +289,6 @@ class SingleResChunkQformerSubsampling(nn.Module):
                       input_lens: torch.Tensor,
                       sr,
                       force_strides,
-                      freeze_encoder: bool = False,
                       mask: torch.Tensor | None = None):
         pred_strides = None
 
@@ -487,11 +483,6 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
             device=self._init_device,
         )
 
-    def _freeze_parameters(self):
-        for param in self.parameters():
-            param.requires_grad = False
-        self._requires_grad = False
-
     def get_input_embeddings(self) -> nn.Module:
         return self.conv1
 
@@ -502,25 +493,18 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
         self.mask_type = masktype
         self.chunk_length = chunk_length
 
-    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
-        combined_attention_mask = None
-
+    def _prepare_decoder_attention_mask(self, input_shape, inputs_embeds, past_key_values_length):
         if input_shape[-1] > 1:
-            combined_attention_mask = _make_causal_mask(
+            return _make_causal_mask(
                 input_shape,
                 inputs_embeds.dtype,
                 device=inputs_embeds.device,
                 past_key_values_length=past_key_values_length,
             )
 
-        if attention_mask is not None:
-            expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
-            combined_attention_mask = (
-                expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask)
+        return None
 
-        return combined_attention_mask
-
-    def prepare_chunk_attention_mask(self, attention_mask, input_shape, inputs_embeds):
+    def prepare_chunk_attention_mask(self, input_shape, inputs_embeds):
         block_size = round(self.chunk_length / 4 * 2)
         matrix_size = input_shape[1]
 
@@ -545,7 +529,7 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
         attention_mask = matrix.to(inputs_embeds.device)
         return attention_mask
 
-    def prepare_padding_mask(self, attention_mask, input_shape, inputs_embeds, input_lens):
+    def prepare_padding_mask(self, input_shape, inputs_embeds, input_lens):
         matrix_size = input_shape[1]
         matrix_list = []
 
@@ -562,19 +546,11 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
         self,
         input_features,
         input_length=None,
-        attention_mask=None,
-        head_mask=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
         causal=True,
     ):
         input_features = self.adapt_in(input_features)
         input_features = input_features.permute(1, 2, 0)
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states)
         inputs_embeds = F.gelu(self.conv1(input_features))
         inputs_embeds = F.gelu(self.conv2(inputs_embeds))
 
@@ -590,51 +566,30 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
         else:
             hidden_states = inputs_embeds + embed_pos[:inputs_embeds.shape[1], :]
 
-        encoder_states = () if output_hidden_states else None
-        all_attentions = () if output_attentions else None
-
         input_shape = inputs_embeds.size()[:-1]
         past_key_values_length = 0
-        attention_mask = None
         if causal:
             if self.mask_type == 'chunk':
-                attention_mask = self.prepare_chunk_attention_mask(attention_mask, input_shape, inputs_embeds)
+                attention_mask = self.prepare_chunk_attention_mask(input_shape, inputs_embeds)
             else:
-                attention_mask = self._prepare_decoder_attention_mask(
-                    attention_mask, input_shape, inputs_embeds, past_key_values_length)
+                attention_mask = self._prepare_decoder_attention_mask(input_shape, inputs_embeds,
+                                                                      past_key_values_length)
         else:
-            attention_mask = self.prepare_padding_mask(
-                attention_mask, input_shape, inputs_embeds, (input_length + 1) // 2)
-
-        if head_mask is not None:
-            assert head_mask.size()[0] == len(self.layers), (
-                f'The head_mask should be specified for {len(self.layers)} layers, but it is for '
-                f'{head_mask.size()[0]}.')
+            attention_mask = self.prepare_padding_mask(input_shape, inputs_embeds, (input_length + 1) // 2)
 
         for encoder_layer in self.layers:
-            if output_hidden_states:
-                encoder_states = encoder_states + (self.layer_norm(hidden_states),)
             layer_outputs = encoder_layer(hidden_states, attention_mask)
             if isinstance(layer_outputs, tuple):
                 hidden_states = layer_outputs[0]
             else:
                 hidden_states = layer_outputs
 
-            if output_attentions:
-                layer_attention = (
-                    layer_outputs[1] if isinstance(layer_outputs, tuple) and len(layer_outputs) > 1 else None)
-                all_attentions = all_attentions + (layer_attention,)
-
         hidden_states = hidden_states.permute(1, 0, 2)
         hidden_states = self.layer_norm(hidden_states)
         hidden_states = self.adapt_out(hidden_states)
-        if output_hidden_states:
-            encoder_states = encoder_states + (hidden_states,)
 
         lengths = (input_length + 1) // 2
 
-        if output_hidden_states:
-            return hidden_states, lengths, encoder_states
         return hidden_states, lengths
 
 
@@ -719,14 +674,12 @@ class MRQFormer(nn.Module):
         if attention_mask is not None:
             encoder_attention_mask = attention_mask
 
-        outputs = self.transformer(
+        outputs, _ = self.transformer(
             inputs_embeds=query_tokens,
             encoder_hidden_states=encoder_features,
-            encoder_attention_mask=encoder_attention_mask,
-            return_dict=True,
+            encoder_attention_mask=encoder_attention_mask
         )
 
-        outputs = outputs.last_hidden_state
         outputs = self.proj_out(outputs)
 
         return outputs
