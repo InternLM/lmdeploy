@@ -502,14 +502,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         input_ids=resolved_input_ids,
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
+    include_usage = bool(request.stream_options and request.stream_options.include_usage)
 
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,
                                     finish_reason: str | None = None,
                                     logprobs: LogProbs | None = None,
-                                    usage: UsageInfo | None = None,
                                     routed_experts=None,
-                                    output_ids=None) -> str:
+                                    output_ids=None) -> dict:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
@@ -521,22 +521,33 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=None,
+        )
+        response_dict = response.model_dump(mode='json', exclude_none=True)
+        if include_usage:
+            response_dict['usage'] = None
+        return response_dict
+
+    def create_stream_usage_response_json(usage: UsageInfo) -> str:
+        response = ChatCompletionStreamResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=[],
             usage=usage,
         )
-        response_json = response.model_dump_json(exclude_none=True)
-
-        return response_json
+        return response.model_dump_json(exclude_none=True)
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
+        final_usage = None
         async for res in result_generator:
-            logprobs, usage = None, None
+            logprobs = None
             if gen_logprobs and res.logprobs:
                 logprobs = _create_chat_completion_logprobs(tokenizer, res.token_ids, res.logprobs)
-            # Only stream chunk `usage` in the final chunk according to OpenAI API spec
-            if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
+            if res.finish_reason and include_usage:
                 total_tokens = sum([res.input_token_len, res.generate_token_len])
-                usage = UsageInfo(
+                final_usage = UsageInfo(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
@@ -558,7 +569,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             # frame (finish/usage/logprobs), where OpenAI-style streams still
             # expect a delta object.
             if delta_message is None:
-                if res.finish_reason is None and usage is None and logprobs is None:
+                if res.finish_reason is None and logprobs is None:
                     continue
                 delta_message = DeltaMessage(role='assistant')
 
@@ -570,13 +581,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
-                                                        usage=usage,
                                                         routed_experts=routed_experts,
                                                         output_ids=stream_output_ids)
             if res.cache_block_ids is not None:
                 response_json['cache_block_ids'] = res.cache_block_ids
                 response_json['remote_token_ids'] = res.token_ids
-            yield f'data: {response_json}\n\n'
+            yield f'data: {json.dumps(response_json)}\n\n'
+        if final_usage is not None:
+            yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -781,11 +793,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             adapter_name=adapter_name)
         generators.append(result_generator)
 
+    include_usage = bool(request.stream_options and request.stream_options.include_usage)
+
     def create_stream_response_json(index: int,
                                     text: str,
                                     finish_reason: str | None = None,
-                                    logprobs: LogProbs | None = None,
-                                    usage: UsageInfo | None = None) -> str:
+                                    logprobs: LogProbs | None = None) -> dict:
         choice_data = CompletionResponseStreamChoice(index=index,
                                                      text=text,
                                                      finish_reason=finish_reason,
@@ -795,37 +808,47 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=None,
+        )
+        response_json = response.model_dump(mode='json', exclude_none=True)
+        if include_usage:
+            response_json['usage'] = None
+        return response_json
+
+    def create_stream_usage_response_json(usage: UsageInfo) -> dict:
+        response = CompletionStreamResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=[],
             usage=usage,
         )
-        response_json = response.model_dump()
-        return response_json
+        return response.model_dump(mode='json', exclude_none=True)
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
+        final_usage = UsageInfo() if include_usage else None
         for generator in generators:
             async for res in generator:
                 logprobs = None
-                usage = None
                 if request.logprobs and res.logprobs:
                     raise ValueError('logprobs is removed')
-                # Only stream chunk `usage` in the final chunk according to OpenAI API spec
-                if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
+                if res.finish_reason and final_usage is not None:
                     final_res = res
                     total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-                    usage = UsageInfo(
-                        prompt_tokens=final_res.input_token_len,
-                        completion_tokens=final_res.generate_token_len,
-                        total_tokens=total_tokens,
-                    )
+                    final_usage.prompt_tokens += final_res.input_token_len
+                    final_usage.completion_tokens += final_res.generate_token_len
+                    final_usage.total_tokens += total_tokens
                 response_json = create_stream_response_json(index=0,
                                                             text=res.response,
                                                             finish_reason=res.finish_reason,
-                                                            logprobs=logprobs,
-                                                            usage=usage)
+                                                            logprobs=logprobs)
                 if res.cache_block_ids is not None:
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
+        if final_usage is not None:
+            yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response

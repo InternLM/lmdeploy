@@ -52,8 +52,8 @@ def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_ins
         if should_print:
             basename = os.path.basename(model_name)
             print(f'📊 Check {check_count}: Model registration progress: '
-                  f'{ready_instances}/{expected_instances} instances ready '
-                  f'(Total reported: {total_instances})')
+                  f'{ready_instances}/{expected_instances} nodes with model, '
+                  f'{total_instances}/{expected_instances} nodes seen by proxy')
             for node_url, node_info in nodes_data.items():
                 models = node_info.get('models', [])
                 if model_name in models:
@@ -61,14 +61,21 @@ def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_ins
                 else:
                     print(f'   ⏳ Instance {node_url} has not registered target model')
 
-        if ready_instances >= expected_instances:
+        if total_instances != expected_instances:
             if should_print:
-                print(f'🎯 All {expected_instances} API server instances have registered the target model')
-            return True, ready_instances
-        else:
-            if should_print:
-                print(f'⏳ Waiting for more instances to register... ({ready_instances}/{expected_instances})')
+                print(f'⏳ Waiting for proxy to see exactly {expected_instances} nodes '
+                      f'(dp-sized cluster); currently {total_instances}')
             return False, ready_instances
+
+        if ready_instances == expected_instances:
+            if should_print:
+                print(f'🎯 All {expected_instances} nodes registered the target model '
+                      f'(matches /nodes/status count)')
+            return True, ready_instances
+
+        if should_print:
+            print(f'⏳ Waiting for all nodes to register model... ({ready_instances}/{expected_instances})')
+        return False, ready_instances
 
     except Exception as e:
         if current_time - last_progress_print >= progress_print_interval:
@@ -229,7 +236,9 @@ class ApiServerPerTest:
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proc_per_node = int(os.getenv('PROC_PER_NODE', '1'))
 
-        self.expected_instances = self.node_count * self.proc_per_node
+        _pc = run_config.get('parallel_config') or {}
+        _dp = int(_pc.get('dp', 0) or 0)
+        self.expected_instances = _dp if _dp > 1 else 1
         self.is_master = (self.node_rank == 0)
         self.api_process = None
 

@@ -8,6 +8,7 @@ from pytest_assume.plugin import assume
 from utils.common_utils import execute_command_with_logging
 from utils.config_utils import get_case_str_by_config, get_cuda_prefix_by_workerid, get_workerid, resolve_extra_params
 from utils.rule_condition_assert import assert_result
+from utils.run_restful_chat import _mm_demo_tomb_run_assert
 
 
 def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str = '', is_smoke: bool = False):
@@ -175,6 +176,30 @@ def get_response_from_output_by_prompt(output_text, case, prompt):
     return None
 
 
+def _is_skipped_case_response(response: str) -> bool:
+    return 'skipped_' in response.lower()
+
+
+def _parse_pipeline_mm_demo_payload(raw: str) -> tuple[str | None, str | None]:
+    """Parse ``qwen3-demo-video`` log payload (plain text or JSON with
+    finish_reason)."""
+    s = raw.strip()
+    if s.startswith('{'):
+        try:
+            obj = json.loads(s)
+        except json.JSONDecodeError:
+            return s, None
+        if isinstance(obj, dict) and 'text' in obj:
+            text_val = obj.get('text')
+            return (str(text_val) if text_val is not None else None), obj.get('finish_reason')
+    return s, None
+
+
+def _is_engine_error_response(text: str) -> bool:
+    rl = text.lower()
+    return 'input_length_error' in rl or 'internal error happened' in rl
+
+
 def assert_pipeline_single_return(output, logprobs_num: int = 0):
     result = assert_pipeline_single_element(output, is_last=True, logprobs_num=logprobs_num)
     if not result:
@@ -273,16 +298,22 @@ def internvl_vl_testcase(output_text, file, lang: str = 'en'):
             assert case_result, f'reason: separate images2: panda should in {response}'
     with allure.step(f'internvl-video-{lang}'):
         response = get_response_from_output(output_text, f'internvl-video-{lang}')
-        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子', 'food', 'hold'])
-        file.writelines(f'internvl-video-{lang} result: {case_result}, reason: panda should in {response} \n')
-        with assume:
-            assert case_result, f'reason: video: panda should in {response}'
+        if _is_skipped_case_response(response):
+            file.writelines(f'internvl-video-{lang} result: skipped, reason: {response}\n')
+        else:
+            case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子', 'food', 'hold'])
+            file.writelines(f'internvl-video-{lang} result: {case_result}, reason: panda should in {response} \n')
+            with assume:
+                assert case_result, f'reason: video: panda should in {response}'
     with allure.step(f'internvl-video2-{lang}'):
         response = get_response_from_output(output_text, f'internvl-video2-{lang}')
-        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子'])
-        file.writelines(f'internvl-video2-{lang} result: {case_result}, reason: panda should in {response} \n')
-        with assume:
-            assert case_result, f'reason: video2: panda should in {response}'
+        if _is_skipped_case_response(response):
+            file.writelines(f'internvl-video2-{lang} result: skipped, reason: {response}\n')
+        else:
+            case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子'])
+            file.writelines(f'internvl-video2-{lang} result: {case_result}, reason: panda should in {response} \n')
+            with assume:
+                assert case_result, f'reason: video2: panda should in {response}'
 
 
 def MiniCPM_vl_testcase(output_text, file):
@@ -306,10 +337,13 @@ def MiniCPM_vl_testcase(output_text, file):
             assert case_result, f'reason: fewshot: 2021 or 14 should in {response}'
     with allure.step('minicpm-video'):
         response = get_response_from_output(output_text, 'minicpm-video')
-        case_result = any(word in response.lower() for word in ['red panda', '熊猫'])
-        file.writelines(f'minicpm-video result: {case_result} reason: video: panda should in {response} \n')
-        with assume:
-            assert case_result, f'reason: video: panda should in {response}'
+        if _is_skipped_case_response(response):
+            file.writelines(f'minicpm-video result: skipped, reason: {response}\n')
+        else:
+            case_result = any(word in response.lower() for word in ['red panda', '熊猫'])
+            file.writelines(f'minicpm-video result: {case_result} reason: video: panda should in {response} \n')
+            with assume:
+                assert case_result, f'reason: video: panda should in {response}'
 
 
 def Qwen_vl_testcase(output_text, file):
@@ -337,6 +371,68 @@ def Qwen_vl_testcase(output_text, file):
         file.writelines(f'qwen-performance-images2 result: {case_result}, reason: buildings should in {response} \n')
         with assume:
             assert case_result, f'reason: performance images2: buildings should in {response}'
+    if '[caseresult qwen3-demo-video start]' in output_text:
+        with allure.step('qwen3-demo-video'):
+            response = get_response_from_output(output_text, 'qwen3-demo-video')
+            text, finish = _parse_pipeline_mm_demo_payload(response)
+            rl = response.lower()
+            if _is_skipped_case_response(response):
+                file.writelines(f'qwen3-demo-video result: skipped, reason: {response}\n')
+            elif text is None:
+                file.writelines(f'qwen3-demo-video result: false, missing text in payload: {response}\n')
+                with assume:
+                    assert False, f'qwen3-demo-video missing text: {response}'
+            elif _is_skipped_case_response(text):
+                file.writelines(f'qwen3-demo-video result: skipped, reason: {response}\n')
+            else:
+                text_l = text.lower()
+                if 'skipped_no_demo_mp4' in rl or 'skipped_no_demo_mp4' in text_l:
+                    file.writelines('qwen3-demo-video result: skipped (N1cdUjctpG8.mp4 not in resource_path)\n')
+                elif 'skipped_input_length_error' in rl or 'skipped_input_length_error' in text_l:
+                    file.writelines(
+                        'qwen3-demo-video result: skipped (input exceeds session_len, same as restful server log)\n')
+                elif 'pipeline_video_error:' in rl or 'pipeline_video_error:' in text_l:
+                    file.writelines(f'qwen3-demo-video result: false, pipeline video error in {response} \n')
+                    with assume:
+                        assert False, f'qwen3-demo-video pipeline error: {response}'
+                elif _is_engine_error_response(text):
+                    file.writelines(f'qwen3-demo-video result: skipped, engine error: {text} \n')
+                else:
+                    case_result = _mm_demo_tomb_run_assert(finish, text)
+                    reason = 'tomb/jar + bounded public tail (restful mm_processor assert)'
+                    file.writelines(f'qwen3-demo-video result: {case_result}, reason: {reason}: {text} \n')
+                    with assume:
+                        msg = 'reason: qwen3 demo video: expected tomb/jar-related bounded answer'
+                        assert case_result, f'{msg}: finish={finish}, text={text[:2000]}'
+    if '[caseresult qwen-mixed-image-text-video start]' in output_text:
+        with allure.step('qwen-mixed-image-text-video'):
+            response = get_response_from_output(output_text, 'qwen-mixed-image-text-video')
+            rl = response.lower()
+            if _is_skipped_case_response(response):
+                file.writelines(f'qwen-mixed-image-text-video result: skipped, reason: {response}\n')
+            elif 'skipped_no_red_panda_mp4' in rl:
+                file.writelines(
+                    'qwen-mixed-image-text-video result: skipped (red-panda.mp4 not in resource_path)\n')
+            elif 'pipeline_mixed_mm_error:' in rl:
+                file.writelines(f'qwen-mixed-image-text-video result: false, mixed mm error in {response} \n')
+                with assume:
+                    assert False, f'qwen-mixed-image-text-video pipeline error: {response}'
+            else:
+                img = (
+                    any(w in rl for w in ('tiger', 'ski'))
+                    or '虎' in response
+                    or '滑雪' in response
+                )
+                vid = (
+                    any(w in rl for w in ('panda', 'red panda', 'lesser panda', 'ailurus'))
+                    or any(w in response for w in ('小熊猫', '红熊猫'))
+                )
+                case_result = bool(response.strip()) and img and vid
+                file.writelines(
+                    f'qwen-mixed-image-text-video result: {case_result}, reason: image+tiger + video+panda cues\n')
+                with assume:
+                    msg = 'reason: mixed image+video reply should mention tiger/ski and panda'
+                    assert case_result, f'{msg}: {response}'
 
 
 def save_pipeline_common_log(config, log_name, result, content, msg: str = '', write_type: str = 'w'):

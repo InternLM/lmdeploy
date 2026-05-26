@@ -22,6 +22,13 @@ rules:
       cache-max-entry-count: 0.9
       max-batch-size: 128
 
+  - name: qwen35-397b-a17b
+    match:
+      model_contains: Qwen3.5-397B-A17B
+    extra_params:
+      max-batch-size: 256
+      cache-max-entry-count: 0.9
+
   - name: evaluate-default-session-len
     match:
       func_type: evaluate
@@ -95,10 +102,9 @@ rules:
     extra_params:
       model-format: mxfp4
 
-  - name: qwen35-mtp-evaluate
+  - name: mtp-evaluate
     match:
       func_type: mtp_evaluate
-      model_contains: Qwen3.5
     extra_params:
       reasoning-parser: qwen-qwq
       speculative-algorithm: qwen3_5_mtp
