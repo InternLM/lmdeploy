@@ -78,11 +78,15 @@ class CudaGraphMeta:
     use_mla_fp8_cache: bool = False
     use_flash_mla: bool = False
     mla_index_topk: int | None = None
-    decode_query_len: int = 1
     use_fa3_decoding: bool = False
     is_ssm: bool = False
     use_mrope: bool = False
     block_size: int = 64
+
+
+def get_decode_query_len(input_ids: Tensor, q_seqlens: Tensor) -> int:
+    """Get decode query length from graph inputs."""
+    return input_ids.size(-1) // q_seqlens.size(0)
 
 
 class CudaGraphMixin:
@@ -142,14 +146,15 @@ class CudaGraphMixin:
         )
         return scheduler_metadata
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: list[list[torch.Tensor]],
-                               **kwargs) -> BuffType:
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
+                               past_key_values: list[list[torch.Tensor]], attn_metadata: Any,
+                               inputs_embeds: Tensor = None, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
         device = graph_meta.device
-        decode_query_len = graph_meta.decode_query_len
+        decode_query_len = get_decode_query_len(input_ids, attn_metadata.q_seqlens)
 
         input_buffers: BuffType = dict()
         input_buffers['input_ids'] = torch.randint(0,
@@ -190,7 +195,7 @@ class CudaGraphMixin:
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
             input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
-                                                                             graph_meta.decode_query_len,
+                                                                             decode_query_len,
                                                                              block_size=graph_meta.block_size,
                                                                              max_seqlen_k=decode_query_len,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
@@ -220,7 +225,7 @@ class CudaGraphMixin:
 
         batch_size, num_blocks = block_offsets.size()
         num_tokens = input_ids.size(-1)
-        decode_query_len = graph_meta.decode_query_len
+        decode_query_len = get_decode_query_len(input_ids, q_seqlens)
         # fill buffer
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids

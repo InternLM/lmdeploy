@@ -70,7 +70,6 @@ class CUDASingleGraphRunner:
         pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
-        decode_query_len: int = 1,
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
@@ -88,7 +87,6 @@ class CUDASingleGraphRunner:
             use_mla_fp8_cache=getattr(self.model_config, 'use_mla_fp8_cache', False),
             use_flash_mla=getattr(self.model_config, 'use_flash_mla', False),
             mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
-            decode_query_len=decode_query_len,
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
             is_ssm=len(model_config.states_shapes) > 0,
             use_mrope=model_config.use_mrope,
@@ -244,8 +242,6 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
-        batch_size = kwargs['attn_metadata'].q_seqlens.size(0)
-        decode_query_len = kwargs['input_ids'].size(1) // batch_size
         if graph_key not in self._runner_map:
             max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
             runner = CUDASingleGraphRunner(
@@ -257,7 +253,6 @@ class CUDAGraphRunner(GraphRunner):
                 pool=self.graph_pool_handle,
                 model_config=self.model_config,
                 device=self.device,
-                decode_query_len=decode_query_len,
             )
             output = runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
