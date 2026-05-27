@@ -2,7 +2,7 @@
 # Adapted from https://github.com/google-research/timesfm for LMDeploy inference.
 import dataclasses
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -50,7 +50,6 @@ class ResidualBlock(nn.Module):
         hidden_dims,
         output_dims,
         use_bias,
-        activation='swish',
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -79,14 +78,7 @@ class ResidualBlock(nn.Module):
             device=device,
             check_dist=False,
         )
-        if activation == 'relu':
-            self.activation = nn.ReLU()
-        elif activation == 'swish':
-            self.activation = nn.SiLU()
-        elif activation == 'none':
-            self.activation = nn.Identity()
-        else:
-            raise ValueError(f"Activation: {activation} not supported.")
+        self.activation = nn.SiLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.output_layer(self.activation(self.hidden_layer(x))) + self.residual_layer(x)
@@ -290,12 +282,6 @@ class MultiHeadAttention(nn.Module):
         num_heads: int,
         in_features: int,
         *,
-        use_per_dim_scale: bool = True,
-        use_rotary_position_embeddings: bool = True,
-        use_bias: bool = False,
-        attention_fn: Callable[..., torch.Tensor] = _torch_dot_product_attention,
-        qk_norm: str = 'rms',
-        fuse_qkv: bool = False,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -303,72 +289,32 @@ class MultiHeadAttention(nn.Module):
         self.num_heads = num_heads
         self.in_features = in_features
         self.head_dim = in_features // num_heads
-        self.use_bias = use_bias
-        self.attention_fn = attention_fn
-        self.qk_norm = qk_norm
-        self.fuse_qkv = fuse_qkv
 
         if self.in_features % self.num_heads != 0:
             raise ValueError(f"Memory dimension ({self.in_features}) must be divisible by "
                              f"'num_heads' heads ({self.num_heads}).")
 
-        if self.fuse_qkv:
-            self.qkv_proj = build_colwise_linear(
-                self.in_features,
-                3 * self.in_features,
-                bias=use_bias,
-                dtype=dtype,
-                device=device,
-                check_dist=False,
-            )
-        else:
-            self.query = build_colwise_linear(
-                self.in_features,
-                self.in_features,
-                bias=use_bias,
-                dtype=dtype,
-                device=device,
-                check_dist=False,
-            )
-            self.key = build_colwise_linear(
-                self.in_features,
-                self.in_features,
-                bias=use_bias,
-                dtype=dtype,
-                device=device,
-                check_dist=False,
-            )
-            self.value = build_colwise_linear(
-                self.in_features,
-                self.in_features,
-                bias=use_bias,
-                dtype=dtype,
-                device=device,
-                check_dist=False,
-            )
+        self.qkv_proj = build_colwise_linear(
+            self.in_features,
+            3 * self.in_features,
+            bias=False,
+            dtype=dtype,
+            device=device,
+            check_dist=False,
+        )
         self.out = build_rowwise_linear(
             self.in_features,
             self.in_features,
-            bias=use_bias,
+            bias=False,
             dtype=dtype,
             device=device,
             check_dist=False,
         )
 
-        if self.qk_norm == 'rms':
-            self.query_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
-            self.key_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
-        else:
-            self.query_ln = nn.Identity()
-            self.key_ln = nn.Identity()
-
-        self.use_rotary_position_embeddings = use_rotary_position_embeddings
-        if self.use_rotary_position_embeddings:
-            self.rotary_position_embedding = RotaryPositionalEmbedding(embedding_dims=self.head_dim, )
-
-        self.use_per_dim_scale = use_per_dim_scale
-        if use_per_dim_scale:
-            self.per_dim_scale = PerDimScale(num_dims=self.head_dim, dtype=dtype, device=device)
+        self.query_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
+        self.key_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
+        self.rotary_position_embedding = RotaryPositionalEmbedding(embedding_dims=self.head_dim)
+        self.per_dim_scale = PerDimScale(num_dims=self.head_dim, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -381,16 +327,11 @@ class MultiHeadAttention(nn.Module):
         if patch_mask is None:
             patch_mask = torch.zeros(b, n_patches, dtype=torch.bool, device=inputs_q.device)
 
-        if self.fuse_qkv:
-            qkv = self.qkv_proj(inputs_q)
-            query, key, value = torch.chunk(qkv, 3, dim=-1)
-            query = query.view(b, n_patches, self.num_heads, self.head_dim)
-            key = key.view(b, n_patches, self.num_heads, self.head_dim)
-            value = value.view(b, n_patches, self.num_heads, self.head_dim)
-        else:
-            query = self.query(inputs_q).view(b, n_patches, self.num_heads, self.head_dim)
-            key = self.key(inputs_q).view(b, n_patches, self.num_heads, self.head_dim)
-            value = self.value(inputs_q).view(b, n_patches, self.num_heads, self.head_dim)
+        qkv = self.qkv_proj(inputs_q)
+        query, key, value = torch.chunk(qkv, 3, dim=-1)
+        query = query.view(b, n_patches, self.num_heads, self.head_dim)
+        key = key.view(b, n_patches, self.num_heads, self.head_dim)
+        value = value.view(b, n_patches, self.num_heads, self.head_dim)
 
         if decode_cache is None:
             # make_attn_mask expects a left-padding count.
@@ -409,17 +350,14 @@ class MultiHeadAttention(nn.Module):
             num_masked = leading_masked + decode_cache.num_masked
             next_index = decode_cache.next_index.clone()
 
-        if self.use_rotary_position_embeddings:
-            position = (torch.arange(n_patches, device=inputs_q.device)[None, :] + next_index[:, None] -
-                        num_masked[:, None])
-            query = self.rotary_position_embedding(query, position)
-            key = self.rotary_position_embedding(key, position)
+        position = (torch.arange(n_patches, device=inputs_q.device)[None, :] + next_index[:, None] -
+                    num_masked[:, None])
+        query = self.rotary_position_embedding(query, position)
+        key = self.rotary_position_embedding(key, position)
 
         query = self.query_ln(query)
         key = self.key_ln(key)
-
-        if self.use_per_dim_scale:
-            query = self.per_dim_scale(query)
+        query = self.per_dim_scale(query)
 
         if decode_cache is not None:
             _, decode_cache_size, _, _ = decode_cache.value.shape
@@ -456,7 +394,7 @@ class MultiHeadAttention(nn.Module):
             kv_valid = ~patch_mask  # (B, n_patches), True=valid
             attn_mask = attn_mask & kv_valid[:, None, None, :]
 
-        x = self.attention_fn(query, key, value, mask=attn_mask)
+        x = _torch_dot_product_attention(query, key, value, mask=attn_mask)
 
         x = x.reshape(b, n_patches, self.in_features)
         out = self.out(x)
@@ -476,9 +414,6 @@ class MultiHeadCrossAttention(nn.Module):
         in_features: int,
         *,
         kv_features: int | None = None,
-        use_bias: bool = False,
-        attention_fn: Callable[..., torch.Tensor] = _torch_dot_product_attention,
-        qk_norm: str = 'rms',
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -487,7 +422,6 @@ class MultiHeadCrossAttention(nn.Module):
         self.in_features = in_features
         self.kv_features = kv_features if kv_features is not None else in_features
         self.head_dim = in_features // num_heads
-        self.attention_fn = attention_fn
 
         if self.in_features % self.num_heads != 0:
             raise ValueError(f"Memory dimension ({self.in_features}) must be divisible by"
@@ -496,7 +430,7 @@ class MultiHeadCrossAttention(nn.Module):
         self.q_proj = build_colwise_linear(
             self.in_features,
             self.in_features,
-            bias=use_bias,
+            bias=False,
             dtype=dtype,
             device=device,
             check_dist=False,
@@ -504,7 +438,7 @@ class MultiHeadCrossAttention(nn.Module):
         self.k_proj = build_colwise_linear(
             self.kv_features,
             self.in_features,
-            bias=use_bias,
+            bias=False,
             dtype=dtype,
             device=device,
             check_dist=False,
@@ -512,7 +446,7 @@ class MultiHeadCrossAttention(nn.Module):
         self.v_proj = build_colwise_linear(
             self.kv_features,
             self.in_features,
-            bias=use_bias,
+            bias=False,
             dtype=dtype,
             device=device,
             check_dist=False,
@@ -520,18 +454,14 @@ class MultiHeadCrossAttention(nn.Module):
         self.out = build_rowwise_linear(
             self.in_features,
             self.in_features,
-            bias=use_bias,
+            bias=False,
             dtype=dtype,
             device=device,
             check_dist=False,
         )
 
-        if qk_norm == 'rms':
-            self.query_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
-            self.key_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
-        else:
-            self.query_ln = nn.Identity()
-            self.key_ln = nn.Identity()
+        self.query_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
+        self.key_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
 
         self.per_dim_scale = PerDimScale(num_dims=self.head_dim, dtype=dtype, device=device)
 
@@ -569,7 +499,7 @@ class MultiHeadCrossAttention(nn.Module):
             kv_valid = ~kv_mask  # True = valid
             attn_mask = kv_valid[:, None, None, :].expand(b, 1, n_q, n_kv)
 
-        x = self.attention_fn(query, key, value, mask=attn_mask)
+        x = _torch_dot_product_attention(query, key, value, mask=attn_mask)
         x = x.reshape(b, n_q, self.in_features)
         return self.out(x)
 
@@ -583,13 +513,6 @@ class Transformer(nn.Module):
         hidden_dims: int,
         num_heads: int,
         *,
-        attention_norm: str,
-        feedforward_norm: str,
-        qk_norm: str,
-        use_bias: bool,
-        use_rotary_position_embeddings: bool,
-        ff_activation: str,
-        fuse_qkv: bool,
         use_cross_attn: bool = False,
         cross_attn_kv_dim: int = 0,
         use_cross_attn_gate: bool = True,
@@ -598,32 +521,23 @@ class Transformer(nn.Module):
     ):
         super().__init__()
 
-        if attention_norm == 'rms':
-            self.pre_attn_ln = RMSNorm(num_features=model_dims, dtype=dtype, device=device)
-            self.post_attn_ln = RMSNorm(num_features=model_dims, dtype=dtype, device=device)
-        else:
-            raise ValueError(f"Layer norm: {attention_norm} not supported.")
+        self.pre_attn_ln = RMSNorm(model_dims, dtype=dtype, device=device)
+        self.post_attn_ln = RMSNorm(model_dims, dtype=dtype, device=device)
 
         self.attn = MultiHeadAttention(
             num_heads=num_heads,
             in_features=model_dims,
-            use_per_dim_scale=True,
-            use_rotary_position_embeddings=use_rotary_position_embeddings,
-            qk_norm=qk_norm,
-            fuse_qkv=fuse_qkv,
             dtype=dtype,
             device=device,
         )
 
         if use_cross_attn:
             _cross_kv_dim = cross_attn_kv_dim or model_dims
-            self.cross_attn_ln = RMSNorm(num_features=model_dims, dtype=dtype, device=device)
+            self.cross_attn_ln = RMSNorm(model_dims, dtype=dtype, device=device)
             self.cross_attn = MultiHeadCrossAttention(
                 num_heads=num_heads,
                 in_features=model_dims,
                 kv_features=_cross_kv_dim,
-                use_bias=use_bias,
-                qk_norm=qk_norm,
                 dtype=dtype,
                 device=device,
             )
@@ -637,16 +551,13 @@ class Transformer(nn.Module):
             self.cross_attn = None
             self.cross_attn_gate = None
 
-        if feedforward_norm == 'rms':
-            self.pre_ff_ln = RMSNorm(num_features=model_dims, dtype=dtype, device=device)
-            self.post_ff_ln = RMSNorm(num_features=model_dims, dtype=dtype, device=device)
-        else:
-            raise ValueError(f"Layer norm: {feedforward_norm} not supported.")
+        self.pre_ff_ln = RMSNorm(model_dims, dtype=dtype, device=device)
+        self.post_ff_ln = RMSNorm(model_dims, dtype=dtype, device=device)
 
         self.ff0 = build_colwise_linear(
             in_features=model_dims,
             out_features=hidden_dims,
-            bias=use_bias,
+            bias=False,
             dtype=dtype,
             device=device,
             check_dist=False,
@@ -654,19 +565,12 @@ class Transformer(nn.Module):
         self.ff1 = build_rowwise_linear(
             in_features=hidden_dims,
             out_features=model_dims,
-            bias=use_bias,
+            bias=False,
             dtype=dtype,
             device=device,
             check_dist=False,
         )
-        if ff_activation == 'relu':
-            self.activation = nn.ReLU()
-        elif ff_activation == 'swish':
-            self.activation = nn.SiLU()
-        elif ff_activation == 'none':
-            self.activation = nn.Identity()
-        else:
-            raise ValueError(f"Activation: {ff_activation} not supported.")
+        self.activation = nn.SiLU()
 
     def forward(
         self,
@@ -734,27 +638,19 @@ class ForecasterBackbone(nn.Module):
     _quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     _num_layers = 20
 
-    _tokenizer_kwargs = dict(input_dims=64, hidden_dims=1280, output_dims=1280, use_bias=True, activation='swish')
-    _output_point_kwargs = dict(input_dims=1280, hidden_dims=1280, output_dims=1280, use_bias=False, activation='swish')
+    _tokenizer_kwargs = dict(input_dims=64, hidden_dims=1280, output_dims=1280, use_bias=True)
+    _output_point_kwargs = dict(input_dims=1280, hidden_dims=1280, output_dims=1280, use_bias=False)
     _output_quantile_kwargs = dict(
         input_dims=1280,
         hidden_dims=1280,
         output_dims=10240,
         use_bias=False,
-        activation='swish',
     )
 
     _xf_kwargs = dict(
         model_dims=1280,
         hidden_dims=1280,
         num_heads=16,
-        attention_norm='rms',
-        feedforward_norm='rms',
-        qk_norm='rms',
-        use_bias=False,
-        use_rotary_position_embeddings=True,
-        ff_activation='swish',
-        fuse_qkv=True,
     )
 
     def __init__(
@@ -856,11 +752,10 @@ class ForecasterBackbone(nn.Module):
         horizon: int,
         inputs,
         masks,
-        enable_grad: bool = False,
         cross_kv: torch.Tensor | None = None,
     ):
         """Decodes the time series."""
-        with torch.set_grad_enabled(enable_grad):
+        with torch.no_grad():
             batch_size, context = inputs.shape[0], inputs.shape[1]
             num_decode_steps = (horizon - 1) // self.o
             num_input_patches = context // self.p
@@ -1056,9 +951,7 @@ class QFormerAttention(nn.Module):
         key: Tensor,
         value: Tensor,
         key_padding_mask: Tensor | None = None,
-        need_weights: bool = False,
-    ) -> tuple[Tensor, None]:
-        del need_weights
+    ) -> Tensor:
         q = self._shape(self.q_proj(query))
         k = self._shape(self.k_proj(key))
         v = self._shape(self.v_proj(value))
@@ -1076,7 +969,7 @@ class QFormerAttention(nn.Module):
         )
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(query.shape[0], query.shape[1], self.embed_dim)
-        return self.out_proj(attn_output), None
+        return self.out_proj(attn_output)
 
 
 class _QFormerBlock(nn.Module):
@@ -1139,17 +1032,16 @@ class _QFormerBlock(nn.Module):
         kv_key_padding_mask: Tensor | None = None,
     ) -> Tensor:
         q_norm = self.self_attn_ln(queries)
-        sa_out, _ = self.self_attn(q_norm, q_norm, q_norm, need_weights=False)
+        sa_out = self.self_attn(q_norm, q_norm, q_norm)
         queries = queries + sa_out
 
         q_norm = self.cross_attn_ln_q(queries)
         kv_norm = self.cross_attn_ln_kv(kv)
-        ca_out, _ = self.cross_attn(
+        ca_out = self.cross_attn(
             q_norm,
             kv_norm,
             kv_norm,
             key_padding_mask=kv_key_padding_mask,
-            need_weights=False,
         )
         queries = queries + ca_out
 
@@ -1409,11 +1301,9 @@ class TSForecasterConfig:
         max_context: int = 2048,
         max_horizon: int = 1024,
         normalize_inputs: bool = True,
-        use_continuous_quantile_head: bool = True,
         force_flip_invariance: bool = True,
         infer_is_positive: bool = True,
         fix_quantile_crossing: bool = True,
-        return_backcast: bool = False,
         default_pred_len: int = 720,
     ):
         self.d_llm = int(d_llm)
@@ -1433,11 +1323,9 @@ class TSForecasterConfig:
         self.max_context = int(max_context)
         self.max_horizon = int(max_horizon)
         self.normalize_inputs = bool(normalize_inputs)
-        self.use_continuous_quantile_head = bool(use_continuous_quantile_head)
         self.force_flip_invariance = bool(force_flip_invariance)
         self.infer_is_positive = bool(infer_is_positive)
         self.fix_quantile_crossing = bool(fix_quantile_crossing)
-        self.return_backcast = bool(return_backcast)
 
         self.default_pred_len = int(default_pred_len)
 
@@ -1495,7 +1383,7 @@ class TSForecaster(nn.Module):
         if config.max_context + config.max_horizon > self.forecaster.context_limit:
             raise ValueError('Context + horizon must be less than the context limit.'
                              f" {config.max_context} + {config.max_horizon} > {self.forecaster.context_limit}.")
-        if config.use_continuous_quantile_head and (config.max_horizon > self.forecaster.os):
+        if config.max_horizon > self.forecaster.os:
             raise ValueError(f"Continuous quantile head is not supported for horizons > {self.forecaster.os}.")
 
         self._horizon_max_length = (int(config.horizon_max_length) or int(config.max_horizon))
@@ -1505,7 +1393,6 @@ class TSForecaster(nn.Module):
         horizon,
         inputs,
         masks,
-        enable_grad: bool = False,
         cross_kv=None,
     ):
         """Single-series decode with revin / flip-invariance / quantile post-
@@ -1515,7 +1402,7 @@ class TSForecaster(nn.Module):
         if horizon > fc.max_horizon:
             raise ValueError(f"Horizon must be less than the max horizon. {horizon} > {fc.max_horizon}.")
 
-        with torch.set_grad_enabled(enable_grad):
+        with torch.no_grad():
             target_device = next(module.parameters()).device
             inputs = torch.as_tensor(inputs, dtype=torch.float32, device=target_device)
             masks = torch.as_tensor(masks, dtype=torch.bool, device=target_device)
@@ -1544,7 +1431,6 @@ class TSForecaster(nn.Module):
                 horizon,
                 inputs,
                 masks,
-                enable_grad=enable_grad,
                 cross_kv=cross_kv_t,
             )
             to_cat = [pf_outputs[:, -1, ...]]
@@ -1560,7 +1446,6 @@ class TSForecaster(nn.Module):
                     horizon,
                     -inputs,
                     masks,
-                    enable_grad=enable_grad,
                     cross_kv=cross_kv_t,
                 )
                 flipped_quantile_spreads = flip_quantile_fn(flipped_quantile_spreads)
@@ -1573,16 +1458,11 @@ class TSForecaster(nn.Module):
                 pf_outputs = (pf_outputs - flipped_pf_outputs) / 2
                 full_forecast = (full_forecast - flipped_full_forecast) / 2
 
-            if fc.use_continuous_quantile_head:
-                for quantile_index in [1, 2, 3, 4, 6, 7, 8, 9]:
-                    full_forecast[:, :horizon,
-                                  quantile_index] = (quantile_spreads[:, :horizon, quantile_index] -
-                                                     quantile_spreads[:, :horizon, 5] + full_forecast[:, :horizon, 5])
+            for quantile_index in [1, 2, 3, 4, 6, 7, 8, 9]:
+                full_forecast[:, :horizon,
+                              quantile_index] = (quantile_spreads[:, :horizon, quantile_index] -
+                                                 quantile_spreads[:, :horizon, 5] + full_forecast[:, :horizon, 5])
             full_forecast = full_forecast[:, :horizon, :]
-
-            if fc.return_backcast:
-                full_backcast = pf_outputs[:, :-1, :module.p, :].reshape(batch_size, -1, module.q)
-                full_forecast = torch.cat([full_backcast, full_forecast], dim=1)
 
             if fc.fix_quantile_crossing:
                 for i in [4, 3, 2, 1]:
@@ -1614,7 +1494,6 @@ class TSForecaster(nn.Module):
         self,
         horizon: int,
         inputs: list,
-        enable_grad: bool = False,
         cross_kv: list | None = None,
     ):
         """Batched forecast over a list of 1-D series (ported from
@@ -1668,7 +1547,6 @@ class TSForecaster(nn.Module):
                 horizon,
                 values_t,
                 masks_t,
-                enable_grad=enable_grad,
                 cross_kv=cross_kv_t,
             )
             output_points.append(point_forecast)
@@ -1766,7 +1644,6 @@ class TSForecaster(nn.Module):
         point_flat, quantile_flat = self._forecaster_forecast(
             horizon=horizon,
             inputs=flattened_inputs,
-            enable_grad=False,
             cross_kv=flattened_prefix,
         )
 
