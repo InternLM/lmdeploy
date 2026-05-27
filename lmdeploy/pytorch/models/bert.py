@@ -140,7 +140,7 @@ class BertSelfAttention(nn.Module):
         self.all_head_size = self.num_attention_heads * self.attention_head_size
         self.scaling = self.attention_head_size**-0.5
 
-        linear_kwargs = dict(dtype=dtype, device=device, check_dist=False)
+        linear_kwargs = dict(dtype=dtype, device=device)
         self.query = build_colwise_linear(config.hidden_size, self.all_head_size, bias=True, **linear_kwargs)
         self.key = build_colwise_linear(config.hidden_size, self.all_head_size, bias=True, **linear_kwargs)
         self.value = build_colwise_linear(config.hidden_size, self.all_head_size, bias=True, **linear_kwargs)
@@ -177,7 +177,7 @@ class BertSelfOutput(nn.Module):
     def __init__(self, config: BertConfig, dtype: torch.dtype, device: torch.device):
         super().__init__()
         self.dense = build_rowwise_linear(
-            config.hidden_size, config.hidden_size, bias=True, dtype=dtype, device=device, check_dist=False)
+            config.hidden_size, config.hidden_size, bias=True, dtype=dtype, device=device)
         self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_eps, dtype=dtype, device=device)
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
@@ -206,7 +206,7 @@ class BertIntermediate(nn.Module):
     def __init__(self, config: BertConfig, dtype: torch.dtype, device: torch.device):
         super().__init__()
         self.dense = build_colwise_linear(
-            config.hidden_size, config.intermediate_size, bias=True, dtype=dtype, device=device, check_dist=False)
+            config.hidden_size, config.intermediate_size, bias=True, dtype=dtype, device=device)
         self.intermediate_act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -218,7 +218,7 @@ class BertOutput(nn.Module):
     def __init__(self, config: BertConfig, dtype: torch.dtype, device: torch.device):
         super().__init__()
         self.dense = build_rowwise_linear(
-            config.intermediate_size, config.hidden_size, bias=True, dtype=dtype, device=device, check_dist=False)
+            config.intermediate_size, config.hidden_size, bias=True, dtype=dtype, device=device)
         self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_eps, dtype=dtype, device=device)
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
@@ -279,7 +279,7 @@ class BertPooler(nn.Module):
     def __init__(self, config: BertConfig, dtype: torch.dtype, device: torch.device):
         super().__init__()
         self.dense = build_colwise_linear(
-            config.hidden_size, config.hidden_size, bias=True, dtype=dtype, device=device, check_dist=False)
+            config.hidden_size, config.hidden_size, bias=True, dtype=dtype, device=device)
         self.activation = nn.Tanh()
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:

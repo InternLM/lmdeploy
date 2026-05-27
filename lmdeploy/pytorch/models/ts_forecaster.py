@@ -60,7 +60,6 @@ class ResidualBlock(nn.Module):
             bias=use_bias,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.output_layer = build_rowwise_linear(
             in_features=hidden_dims,
@@ -68,7 +67,6 @@ class ResidualBlock(nn.Module):
             bias=use_bias,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.residual_layer = build_rowwise_linear(
             in_features=input_dims,
@@ -76,7 +74,6 @@ class ResidualBlock(nn.Module):
             bias=use_bias,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.activation = nn.SiLU()
 
@@ -300,7 +297,6 @@ class MultiHeadAttention(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.out = build_rowwise_linear(
             self.in_features,
@@ -308,7 +304,6 @@ class MultiHeadAttention(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
 
         self.query_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
@@ -433,7 +428,6 @@ class MultiHeadCrossAttention(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.k_proj = build_colwise_linear(
             self.kv_features,
@@ -441,7 +435,6 @@ class MultiHeadCrossAttention(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.v_proj = build_colwise_linear(
             self.kv_features,
@@ -449,7 +442,6 @@ class MultiHeadCrossAttention(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.out = build_rowwise_linear(
             self.in_features,
@@ -457,7 +449,6 @@ class MultiHeadCrossAttention(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
 
         self.query_ln = RMSNorm(self.head_dim, dtype=dtype, device=device)
@@ -560,7 +551,6 @@ class Transformer(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.ff1 = build_rowwise_linear(
             in_features=hidden_dims,
@@ -568,7 +558,6 @@ class Transformer(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.activation = nn.SiLU()
 
@@ -887,7 +876,6 @@ class QFormerAttention(nn.Module):
             bias=True,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.k_proj = build_colwise_linear(
             embed_dim,
@@ -895,7 +883,6 @@ class QFormerAttention(nn.Module):
             bias=True,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.v_proj = build_colwise_linear(
             embed_dim,
@@ -903,7 +890,6 @@ class QFormerAttention(nn.Module):
             bias=True,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.out_proj = build_rowwise_linear(
             embed_dim,
@@ -911,7 +897,6 @@ class QFormerAttention(nn.Module):
             bias=True,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.register_load_state_dict_pre_hook(self._load_mha_state_dict_hook)
 
@@ -1010,7 +995,6 @@ class _QFormerBlock(nn.Module):
                 bias=True,
                 dtype=dtype,
                 device=device,
-                check_dist=False,
             ),
             nn.GELU(),
             nn.Identity(),
@@ -1020,7 +1004,6 @@ class _QFormerBlock(nn.Module):
                 bias=True,
                 dtype=dtype,
                 device=device,
-                check_dist=False,
             ),
             nn.Identity(),
         )
@@ -1090,7 +1073,6 @@ class QFormer(nn.Module):
             bias=True,
             dtype=dtype,
             device=device,
-            check_dist=False,
         )
         self.input_ln = LayerNorm(out_dim, eps=1e-5, dtype=dtype, device=device)
 
@@ -1186,7 +1168,6 @@ class Aligner(nn.Module):
                     bias=True,
                     dtype=dtype,
                     device=device,
-                    check_dist=False,
                 ),
                 nn.SiLU(),
                 build_rowwise_linear(
@@ -1195,7 +1176,6 @@ class Aligner(nn.Module):
                     bias=True,
                     dtype=dtype,
                     device=device,
-                    check_dist=False,
                 ),
             )
         else:

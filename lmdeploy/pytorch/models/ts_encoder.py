@@ -245,7 +245,6 @@ class MRQFormer(nn.Module):
                 encoder_hidden_size,
                 hidden_size,
                 bias=True,
-                check_dist=False,
                 dtype=dtype,
                 device=device,
             )
@@ -260,7 +259,6 @@ class MRQFormer(nn.Module):
                 in_features=hidden_size,
                 out_features=4 * hidden_size,
                 bias=True,
-                check_dist=False,
                 dtype=dtype,
                 device=device,
             ),
@@ -269,7 +267,6 @@ class MRQFormer(nn.Module):
                 in_features=4 * hidden_size,
                 out_features=output_size,
                 bias=True,
-                check_dist=False,
                 dtype=dtype,
                 device=device,
             ),
@@ -363,7 +360,6 @@ class SingleResChunkQformerSubsampling(nn.Module):
             in_features=hidden_dim,
             out_features=256,
             bias=True,
-            check_dist=False,
             dtype=dtype,
             device=device,
         )
