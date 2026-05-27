@@ -865,8 +865,6 @@ def resolve_eval_config_name(config: dict[str, Any],
                              only_if_default: bool = True) -> str:
     """Resolve eval preset key (EVAL_CONFIGS / MLLM_EVAL_CONFIGS) from model
     and env_tag."""
-    if run_config.get('gen_config'):
-        return '__from_run_config__'
     if only_if_default and eval_config_name != 'default':
         return eval_config_name
 
@@ -878,6 +876,46 @@ def resolve_eval_config_name(config: dict[str, Any],
     return _apply_eval_config_env_suffix(config, name)
 
 
+_EVAL_OC_SCALAR_KEYS = frozenset({
+    'query_per_second',
+    'max_out_len',
+    'max_seq_len',
+    'batch_size',
+    'temperature',
+})
+
+
+def _snake_key(key: str) -> str:
+    return key.replace('-', '_')
+
+
+def _gen_config_to_opencompass_kwargs(gen: dict[str, Any]) -> dict[str, Any]:
+    """Map per-model yaml ``gen_config`` (kebab-case) to OpenCompass
+    ``OpenAISDK`` keys."""
+    result: dict[str, Any] = {}
+    oai: dict[str, Any] = {}
+    body: dict[str, Any] = {}
+    for key, value in gen.items():
+        snake = _snake_key(key)
+        if snake == 'temperature':
+            result['temperature'] = value
+        elif snake in ('reasoning_effort', 'top_p'):
+            oai[snake] = value
+        elif snake in ('top_k', 'min_p', 'repetition_penalty', 'chat_template_kwargs'):
+            body[snake] = value
+        else:
+            body[snake] = value
+    if oai:
+        result['openai_extra_kwargs'] = oai
+    if body:
+        result['extra_body'] = body
+    return result
+
+
+def _eval_table_scalar_params(preset: dict[str, Any]) -> dict[str, Any]:
+    return {key: preset[key] for key in _EVAL_OC_SCALAR_KEYS if key in preset}
+
+
 def get_eval_preset_config(
     config: dict[str, Any],
     run_config: dict[str, Any],
@@ -885,20 +923,32 @@ def get_eval_preset_config(
     *,
     mllm: bool = False,
 ) -> dict[str, Any]:
-    """Request/eval sampling params: prefer ``run_config['gen_config']`` from
-    per-model yaml."""
-    if run_config.get('gen_config'):
-        return copy.deepcopy(run_config['gen_config'])
+    """Build kwargs for OpenCompass / VLMEvalKit from table preset + per-model
+    yaml.
 
+    Per-model ``gen_config`` overrides sampling fields; OpenCompass throughput /
+    length limits (``query_per_second``, ``max_out_len``, …) still come from
+    ``EVAL_CONFIGS`` keyed by :func:`resolve_eval_config_name`.
+    """
     name = resolve_eval_config_name(config, run_config, eval_config_name)
-    if name == '__from_run_config__':
-        return {}
     table = constant.MLLM_EVAL_CONFIGS if mllm else constant.EVAL_CONFIGS
     if mllm and name == 'default' and 'internvl' in run_config.get('model', '').lower():
-        preset = table.get('internvl', {})
-        if preset:
-            return copy.deepcopy(preset)
-    return copy.deepcopy(table.get(name, {}))
+        preset = table.get('internvl', {}) or table.get('default', {})
+    else:
+        preset = table.get(name, {})
+
+    if mllm:
+        merged = copy.deepcopy(preset)
+        if run_config.get('gen_config'):
+            merged.update(copy.deepcopy(run_config['gen_config']))
+        return merged
+
+    if run_config.get('gen_config'):
+        result = _eval_table_scalar_params(preset)
+        result.update(_gen_config_to_opencompass_kwargs(run_config['gen_config']))
+        return result
+
+    return copy.deepcopy(preset)
 
 
 def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -> str:
