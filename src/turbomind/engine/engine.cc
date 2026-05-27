@@ -234,10 +234,6 @@ void Engine::Impl::CreateSequenceManager()
         }
     }
 
-    if (has_linear_attention && param_.enable_prefix_caching) {
-        TM_LOG_FATAL("Prefix caching is unsupported when linear attention is present");
-    }
-
     const auto get_free_size = [&] {
         size_t free{}, total{};
         TM_CUDA_CHECK(cudaMemGetInfo(&free, &total));

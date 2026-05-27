@@ -241,7 +241,7 @@ bool GatedDeltaNetLayer::CanAllocatePrefixCapture(int capture_count)
 
     size_t free_bytes{};
     size_t total_bytes{};
-    check_cuda_error(cudaMemGetInfo(&free_bytes, &total_bytes));
+    TM_CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
     (void)total_bytes;
 
     const size_t budget_bytes    = free_bytes > kPrefixCaptureSafetyBytes ?
@@ -385,7 +385,10 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                                   work_counter_.data(),
                                   stream);
         }
-        sync_check_cuda_error();
+#ifndef NDEBUG
+        TM_CUDA_CHECK(cudaGetLastError());
+        TM_CUDA_CHECK(cudaDeviceSynchronize());
+#endif
 
         // ----- 3b. Gated Delta Rule -----
         // Requests are sorted by input_len: decode (seq_len==1) first, prefill last.
