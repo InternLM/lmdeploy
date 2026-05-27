@@ -264,3 +264,18 @@ EVAL_RUN_CONFIG = {
         'cache-max-entry-count': 0.7
     }
 }
+
+MM_DEMO_TOMB_MCQ_JSON_BLOCK = """{
+  "question": "How many porcelain jars were discovered in the niches located in the primary chamber of the tomb?",
+  "options": [
+    "A. 4.",
+    "B. 9.",
+    "C. 5.",
+    "D. 13."
+  ]
+}"""
+MM_DEMO_TOMB_USER_PROMPT = (
+    'You are given a multiple-choice problem as JSON (question and options only; there is no answer field). '
+    'Watch the entire video, pick the best option from what you see, then reply briefly with the letter '
+    '(A, B, C, or D) first and at most one short sentence. Do not output long step-by-step reasoning; '
+    'keep the final reply concise.\n\n' + MM_DEMO_TOMB_MCQ_JSON_BLOCK)

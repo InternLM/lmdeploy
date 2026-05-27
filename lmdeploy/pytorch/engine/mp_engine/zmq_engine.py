@@ -97,6 +97,13 @@ class ZMQMPEngine(MPEngine):
 
         from .zmq_rpc import AsyncRPCServer
 
+        # try rename the process
+        try:
+            import ctypes
+            ctypes.CDLL(None).prctl(15, b'ZMQMPEngine', 0, 0, 0)
+        except Exception as e:
+            logger.debug(f'Failed to rename MPEngine process: {e}')
+
         logger.setLevel(log_level)
 
         # create an async rpc server
