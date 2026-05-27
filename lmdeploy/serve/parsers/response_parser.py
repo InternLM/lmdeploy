@@ -140,7 +140,14 @@ class ResponseParser:
     def stream_chunk(self,
                      delta_text: str,
                      delta_token_ids: list[int],
-                     **kwargs) -> list[tuple[DeltaMessage | None, bool]]:
+                     **kwargs) -> list[tuple[DeltaMessage, bool]]:
+        """Parse one streamed chunk into delta message channels.
+
+        Returns:
+            A list of ``(delta_message, tool_calls_emitted)`` pairs. Return
+            ``[]`` when this engine step produces no visible delta (for example
+            while buffering a partial protocol tag).
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -280,7 +287,7 @@ class BaseResponseParser(ResponseParser):
         delta_text: str,
         delta_token_ids: list[int],
         **kwargs,
-    ) -> list[tuple[DeltaMessage | None, bool]]:
+    ) -> list[tuple[DeltaMessage, bool]]:
         """Parse one streamed chunk into delta message channels.
 
         Args:
@@ -291,6 +298,8 @@ class BaseResponseParser(ResponseParser):
             A list of ``(delta_message, tool_calls_emitted)`` pairs produced
             from this stream step. Multiple entries may be returned when one
             engine chunk contains reasoning, content, and tool-call segments.
+            Return ``[]`` when this engine step produces no visible delta (for
+            example while buffering a partial protocol tag).
         """
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty

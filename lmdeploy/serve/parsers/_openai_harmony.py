@@ -149,7 +149,7 @@ class GptOssResponseParser(ResponseParser):
         delta_text: str,
         delta_token_ids: list[int],
         **kwargs,
-    ) -> list[tuple[DeltaMessage | None, bool]]:
+    ) -> list[tuple[DeltaMessage, bool]]:
         if (
             not delta_text
             and not delta_token_ids
