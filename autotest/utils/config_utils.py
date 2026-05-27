@@ -1,15 +1,37 @@
 import copy
 import os
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
+import utils.constant as constant
 import yaml
 
 from lmdeploy.utils import is_bf16_supported
 
+DepsProfileSelector = str | dict[str, str]
+
 SUFFIX_INNER_AWQ = '-inner-4bits'
 SUFFIX_INNER_GPTQ = '-inner-gptq'
 SUFFIX_INNER_W8A8 = '-inner-w8a8'
+
+_AUTOTEST_ROOT = os.path.join(os.path.dirname(__file__), '..')
+CONFIGS_DIR = os.path.join(_AUTOTEST_ROOT, 'configs')
+ENV_PATHS_YML = os.path.join(_AUTOTEST_ROOT, 'env_paths.yml')
+PATHS_YML = ENV_PATHS_YML  # alias for error messages / imports
+PARALLEL_LAYOUT_KEYS = ('tp', 'dp', 'ep', 'cp')
+TEST_COVERAGE_KEY = 'test_coverage'
+PROFILE_TO_MODEL_TYPE_KEY = {
+    'chat': 'chat_model',
+    'vl': 'vl_model',
+    'base': 'base_model',
+}
+# Filter model yaml rows by entry ``deps`` in per-model yaml only.
+# Unset or empty ``DEPS_PROFILE``: only rows with no entry-level deps pins.
+# Selector: pip-style ``pkg==ver`` (multi-key: space or ``;`` between tokens).
+# ``all``: disable filtering (tests / debug).
+DEPS_PROFILE_ENV = 'DEPS_PROFILE'
+EMPTY_DEPS_SELECTOR = '__empty__'
 
 
 def resolve_extra_params(extra_params: dict[str, Any], model_base_path: str) -> None:
@@ -36,89 +58,449 @@ def resolve_extra_params(extra_params: dict[str, Any], model_base_path: str) -> 
             spec_cfg['model'] = os.path.join(model_base_path, model)
 
 
-_MODEL_RUN_PARAMS_PATH = os.path.join(os.path.dirname(__file__), 'model_run_params.yml')
-_model_run_params_rules: list[dict[str, Any]] | None = None
+_paths_doc_cache: dict[str, Any] | None = None
 
 
-def _load_model_run_params_rules() -> list[dict[str, Any]]:
-    global _model_run_params_rules
-    if _model_run_params_rules is None:
-        with open(_MODEL_RUN_PARAMS_PATH, encoding='utf-8') as f:
-            data = yaml.safe_load(f) or {}
-        _model_run_params_rules = data.get('rules', [])
-    return _model_run_params_rules
+def _matrix_env_key(env_key: str) -> str:
+    """Top-level key in per-model yaml (``*_legacy`` flat sources are merged
+    under the base env)."""
+    if not env_key:
+        return 'a100'
+    if env_key == 'legacy':
+        return 'a100'
+    if env_key.endswith('_legacy'):
+        return env_key[: -len('_legacy')]
+    return env_key
 
 
-def _parallel_rule_matches(para_match: dict[str, Any], parallel_config: dict[str, Any]) -> bool:
-    for key in ('dp', 'ep', 'tp'):
-        if key in para_match and parallel_config.get(key, 0) != para_match[key]:
+def _normalize_dep_spec_value(value: str) -> str | None:
+    if value.lower() in ('null', 'none', ''):
+        return None
+    return value.strip()
+
+
+def _dep_spec_values_equal(expected: str, actual: Any) -> bool:
+    exp = _normalize_dep_spec_value(expected)
+    if exp is None:
+        return actual is None
+    return str(actual).strip() == exp
+
+
+def _parse_deps_kv_chunk(chunk: str) -> tuple[str, str]:
+    chunk = chunk.strip()
+    if '==' in chunk:
+        key, value = chunk.split('==', 1)
+    else:
+        raise ValueError(f'invalid deps profile chunk: {chunk!r}')
+    return key.strip(), value.strip()
+
+
+def _split_deps_profile_chunks(text: str) -> list[str]:
+    text = text.strip()
+    if ';' in text:
+        return [c.strip() for c in text.split(';') if c.strip()]
+    if '==' in text and ' ' in text:
+        return [c for c in text.split() if c.strip()]
+    return [text]
+
+
+def format_deps_profile_env(selector: dict[str, str]) -> str:
+    """Canonical ``DEPS_PROFILE`` / ``pip install`` line (``pkg==ver``
+    tokens)."""
+    return ' '.join(f'{key}=={value}' for key, value in selector.items())
+
+
+def parse_deps_profile_selector(raw: str) -> DepsProfileSelector:
+    """Parse non-empty ``DEPS_PROFILE`` (``pkg==ver`` tokens or ``all``)."""
+    text = raw.strip()
+    if not text:
+        return EMPTY_DEPS_SELECTOR
+    if text == 'all':
+        return 'all'
+    if text.startswith('profile='):
+        return text.split('=', 1)[1].strip()
+    if text.startswith('profile:'):
+        return text.split(':', 1)[1].strip()
+    if '==' in text:
+        selector: dict[str, str] = {}
+        for chunk in _split_deps_profile_chunks(text):
+            key, value = _parse_deps_kv_chunk(chunk)
+            selector[key] = value
+        return selector
+    return text
+
+
+def deps_profile_to_pip_specs(raw: str) -> str:
+    """Space-separated pip requirements for ``pip install`` (empty when unset /
+    non-dict selector)."""
+    text = (raw or '').strip()
+    if not text:
+        return ''
+    parsed = parse_deps_profile_selector(text)
+    if isinstance(parsed, dict):
+        return format_deps_profile_env(parsed)
+    return ''
+
+
+def get_deps_profile_selector() -> DepsProfileSelector:
+    """Active deps selector (env: ``DEPS_PROFILE``).
+
+    Empty/unset → :data:`EMPTY_DEPS_SELECTOR`.
+    """
+    explicit = (os.environ.get(DEPS_PROFILE_ENV) or '').strip()
+    if not explicit:
+        return EMPTY_DEPS_SELECTOR
+    return parse_deps_profile_selector(explicit)
+
+
+def get_deps_profile() -> DepsProfileSelector:
+    """Alias of :func:`get_deps_profile_selector`."""
+    return get_deps_profile_selector()
+
+
+def _entry_has_empty_deps(entry: dict[str, Any]) -> bool:
+    """Entry-level ``deps`` absent or only null placeholders (no ``profile`` /
+    pins)."""
+    deps = entry.get('deps')
+    if deps is None:
+        return True
+    if not isinstance(deps, dict) or not deps:
+        return True
+    for key, value in deps.items():
+        if key == 'profile' and value:
+            return False
+        if value is not None:
             return False
     return True
 
 
-def _model_subcondition_matches(cond: dict[str, Any], model: str) -> bool:
-    if 'model_contains' in cond:
-        return cond['model_contains'] in model
-    if 'model_contains_ignore_case' in cond:
-        return cond['model_contains_ignore_case'].lower() in model.lower()
-    if 'model_equals' in cond:
-        return model == cond['model_equals']
-    if 'model_not_contains' in cond:
-        return cond['model_not_contains'] not in model
+def _model_matrix_env_key(config: dict[str, Any]) -> str:
+    """Env key for ``configs/<org>/<model>.yml`` list items (``TEST_ENV`` wins
+    over ``env_tag``)."""
+    test_env = os.environ.get('TEST_ENV')
+    if test_env:
+        return _matrix_env_key(test_env)
+    return _matrix_env_key(str(config.get('env_tag', 'a100')))
+
+
+def _per_model_configs_available() -> bool:
+    return os.path.isdir(CONFIGS_DIR) and os.path.isfile(PATHS_YML)
+
+
+def _load_paths_doc() -> dict[str, Any]:
+    global _paths_doc_cache
+    if _paths_doc_cache is None:
+        _paths_doc_cache = _load_yaml(PATHS_YML) if os.path.isfile(PATHS_YML) else {}
+    return _paths_doc_cache
+
+
+def _resolve_paths_env_key(test_env: str | None) -> str:
+    """Map ``TEST_ENV`` to a block in ``autotest/env_paths.yml``."""
+    if not test_env:
+        return 'a100'
+    if test_env == 'legacy':
+        return 'a100_legacy'
+    doc = _load_paths_doc()
+    if test_env in doc and isinstance(doc[test_env], dict):
+        return test_env
+    base = _matrix_env_key(test_env)
+    if base in doc and isinstance(doc[base], dict):
+        return base
+    return test_env
+
+
+def _load_yaml(path: str) -> dict[str, Any]:
+    with open(path, encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
+
+
+def _load_paths_for_env(env_key: str) -> dict[str, Any]:
+    paths_doc = _load_yaml(PATHS_YML)
+    block = paths_doc.get(env_key) or paths_doc.get(str(env_key)) or {}
+    config: dict[str, Any] = {
+        'env_tag': block.get('env_tag', env_key),
+        'device': block.get('device', 'cuda'),
+    }
+    config.update(block.get('paths') or {})
+    return config
+
+
+def _apply_run_id_paths(config: dict[str, Any]) -> None:
+    if os.environ.get('CONFIG_COMPARE_SKIP_MKDIRS'):
+        return
+    run_id = os.environ.get('RUN_ID', 'local_run')
+    run_suffix = str(run_id).replace('/', '_')
+    for key in ('log_path', 'eval_path', 'mllm_eval_path', 'benchmark_path', 'server_log_path'):
+        if key in config:
+            config[key] = os.path.join(config[key], run_suffix)
+            os.makedirs(config[key], exist_ok=True)
+
+
+def _model_id_from_config_path(path: str) -> str:
+    rel = os.path.relpath(path, CONFIGS_DIR)
+    return rel.replace(os.sep, '/').removesuffix('.yml')
+
+
+def _iter_model_config_paths() -> list[str]:
+    paths = []
+    for path in sorted(Path(CONFIGS_DIR).rglob('*.yml')):
+        if 'environments' in path.parts:
+            continue
+        paths.append(str(path))
+    return paths
+
+
+def _normalize_profiles(model_type_field) -> list[str]:
+    if isinstance(model_type_field, list):
+        return list(model_type_field)
+    return [model_type_field]
+
+
+def _parallel_layout(parallel: dict[str, Any]) -> dict[str, int]:
+    layout: dict[str, int] = {}
+    for key in PARALLEL_LAYOUT_KEYS:
+        if key in parallel:
+            layout[key] = int(parallel[key])
+    return layout or {'tp': 1}
+
+
+def _parallel_launch_extra(parallel: dict[str, Any]) -> dict[str, Any]:
+    extra = parallel.get('extra')
+    return copy.deepcopy(extra) if isinstance(extra, dict) else {}
+
+
+def _parallel_dicts_equal(a: dict[str, int], b: dict[str, int]) -> bool:
+    return a == b
+
+
+def _normalize_entry_backends(
+    entry: dict[str, Any],
+    config: dict[str, Any],
+    parallel_config: dict[str, int] | None = None,
+) -> dict[str, list[str]]:
+    """Normalize ``entry['backends']`` to ``{backend: [communicators...]}``.
+
+    Supported yaml forms:
+    - legacy: ``backends: [turbomind, pytorch]``
+    - redundant: ``backends: [{name: turbomind, communicators: [nccl, cuda-ipc]}]``
+    """
+    normalized: dict[str, list[str]] = {}
+    backends = entry.get('backends') or []
+    for item in backends:
+        backend_name = None
+        communicators: list[str] | None = None
+        if isinstance(item, str):
+            backend_name = item
+        elif isinstance(item, dict):
+            backend_name = item.get('name') or item.get('backend') or item.get('type')
+            comm_value = item.get('communicators', item.get('communicator'))
+            if isinstance(comm_value, str):
+                communicators = [comm_value]
+            elif isinstance(comm_value, list):
+                communicators = [str(c) for c in comm_value if c]
+        if not backend_name:
+            continue
+        if not communicators:
+            communicators = _get_communicator_list(config, backend_name, parallel_config)
+        deduped = list(OrderedDict.fromkeys(communicators))
+        normalized[backend_name] = deduped or _get_communicator_list(config, backend_name, parallel_config)
+    return normalized
+
+
+def _entry_deps_dict(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Pinned deps from the model yaml entry only (no global ``deps.yml``)."""
+    deps = entry.get('deps')
+    if not isinstance(deps, dict) or not deps:
+        return None
+    merged = {key: value for key, value in deps.items() if key != 'profile' and value is not None}
+    return merged or None
+
+
+def _entry_matches_deps_profile(entry: dict[str, Any], env_key: str, selector: DepsProfileSelector) -> bool:
+    del env_key  # kept for call-site stability
+    if selector == EMPTY_DEPS_SELECTOR:
+        return _entry_has_empty_deps(entry)
+    if selector == 'all':
+        return True
+    if isinstance(selector, dict):
+        pinned = _entry_deps_dict(entry) or {}
+        return all(_dep_spec_values_equal(exp, pinned.get(key)) for key, exp in selector.items())
     return False
 
 
-def _rule_match_matches(match: dict[str, Any], *, config: dict[str, Any], extra: dict[str, Any],
-                        func_type: str, backend: str, run_config: dict[str, Any]) -> bool:
-    if not match:
-        return True
-    model = run_config['model']
-    if 'model_contains' in match and match['model_contains'] not in model:
+def _entry_matches_func(entry: dict[str, Any], func_type: str, extra: dict[str, Any] | None) -> bool:
+    funcs = set(entry.get(TEST_COVERAGE_KEY) or [])
+    extra = extra or {}
+    if extra.get('enable-prefix-caching') is not None or extra.get('enable_prefix_caching') is not None:
+        return 'prefix_cache' in funcs
+    if func_type == 'benchmark' and funcs == {'prefix_cache'}:
         return False
-    if 'model_contains_ignore_case' in match:
-        if match['model_contains_ignore_case'].lower() not in model.lower():
-            return False
-    if 'model_equals' in match and model != match['model_equals']:
-        return False
-    if 'model_not_contains' in match and match['model_not_contains'] in model:
-        return False
-    if 'model_any' in match:
-        if not any(_model_subcondition_matches(c, model) for c in match['model_any']):
-            return False
-    if 'func_type' in match and func_type != match['func_type']:
-        return False
-    if 'func_type_in' in match and func_type not in match['func_type_in']:
-        return False
-    if 'backend' in match and backend != match['backend']:
-        return False
-    if 'env_tag_in' in match:
-        env_tag = str(config.get('env_tag', ''))
-        if env_tag not in {str(tag) for tag in match['env_tag_in']}:
-            return False
-    if 'extra_missing_keys' in match:
-        for key in match['extra_missing_keys']:
-            if key in extra:
-                return False
-    return True
+    if func_type == 'func':
+        return 'func' in funcs
+    return func_type in funcs
 
 
-def apply_model_run_params(run_config: dict[str, Any], config: dict[str, Any], extra: dict[str, Any],
-                           func_type: str, backend: str) -> None:
-    """Apply ordered rules from model_run_params.yml to run_config
-    extra_params."""
-    parallel_config = run_config.get('parallel_config', {})
-    for rule in _load_model_run_params_rules():
-        if not _rule_match_matches(rule.get('match', {}), config=config, extra=extra, func_type=func_type,
-                                   backend=backend, run_config=run_config):
+def _entry_matches_profile(entry: dict[str, Any], model_type: str) -> bool:
+    profile_name = model_type.replace('_model', '')
+    return profile_name in _normalize_profiles(entry.get('model_type', 'chat'))
+
+
+def _iter_per_model_entries(env_key: str, deps_profile: DepsProfileSelector | None = None):
+    active_profile = deps_profile if deps_profile is not None else get_deps_profile_selector()
+    for path in _iter_model_config_paths():
+        model_id = _model_id_from_config_path(path)
+        doc = _load_yaml(path)
+        entries = doc.get(env_key) or doc.get(str(env_key))
+        if not isinstance(entries, list):
             continue
-        for model_rule in rule.get('model_rules', []):
-            if _model_subcondition_matches(model_rule.get('match', {}), run_config['model']):
-                run_config['extra_params'].update(model_rule.get('extra_params', {}))
-        if 'extra_params' in rule:
-            run_config['extra_params'].update(rule['extra_params'])
-        for para_rule in rule.get('parallel_rules', []):
-            if _parallel_rule_matches(para_rule.get('match', {}), parallel_config):
-                run_config['extra_params'].update(para_rule.get('extra_params', {}))
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if not _entry_matches_deps_profile(entry, env_key, active_profile):
+                continue
+            yield model_id, entry
+
+
+def _quant_cfg_for_entry(entry: dict[str, Any]) -> dict[str, list[str]]:
+    return entry.get('quantization') or {}
+
+
+def _is_kvint_enabled_in_entry(
+    backend: str,
+    base_model: str,
+    quant_policy: int,
+    quant_cfg: dict[str, list[str]],
+) -> bool:
+    if quant_policy == 0:
+        return True
+    enabled = set(quant_cfg.get(backend) or [])
+    if quant_policy in (4, 8):
+        return f'kvint{quant_policy}' in enabled
+    if quant_policy == 42:
+        return 'kvint42' in enabled
+    return False
+
+
+def _extend_quant_models_from_entry(
+    backend: str,
+    base_models: list[str],
+    quant_cfg: dict[str, list[str]],
+    target: list[str],
+) -> None:
+    enabled = set(quant_cfg.get(backend) or [])
+    for model_name in base_models:
+        if model_name not in target:
+            continue
+        if 'awq' in enabled and not is_quantization_model(model_name):
+            target.append(model_name + SUFFIX_INNER_AWQ)
+        if backend == 'turbomind' and 'gptq' in enabled:
+            target.append(model_name + SUFFIX_INNER_GPTQ)
+        if backend == 'pytorch' and 'w8a8' in enabled:
+            target.append(model_name + SUFFIX_INNER_W8A8)
+
+
+def _build_run_config_entry(
+    model_id: str,
+    entry: dict[str, Any],
+    backend: str,
+    communicator: str,
+    parallel_config: dict[str, int],
+    quant_policy: int,
+    config: dict[str, Any],
+    func_type: str,
+    extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    launch_extra = _parallel_launch_extra(entry.get('parallel') or {})
+    merged_extra = copy.deepcopy(launch_extra)
+    if extra:
+        merged_extra.update(extra)
+    if extra and extra.get('enable-prefix-caching') is not None:
+        if 'prefix_cache' in (entry.get(TEST_COVERAGE_KEY) or []):
+            merged_extra['enable-prefix-caching'] = None
+
+    device = config.get('device', 'cuda')
+    dtype = 'float16' if not is_bf16_supported(device) else None
+
+    run_config: dict[str, Any] = {
+        'model': model_id,
+        'backend': backend,
+        'communicator': communicator,
+        'quant_policy': quant_policy,
+        'parallel_config': copy.deepcopy(parallel_config),
+        'extra_params': merged_extra,
+    }
+    if dtype and backend == 'pytorch':
+        run_config['extra_params']['dtype'] = dtype
+    if device != 'cuda':
+        run_config['extra_params']['device'] = device
+    if entry.get('gen_config'):
+        run_config['gen_config'] = copy.deepcopy(entry['gen_config'])
+    deps = _entry_deps_dict(entry)
+    if deps:
+        run_config['deps'] = deps
+    return run_config
+
+
+def _get_func_config_list_per_model(
+    config: dict[str, Any],
+    backend: str,
+    parallel_config: dict[str, int],
+    model_type: str,
+    func_type: str,
+    extra: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Expand run configs from autotest/configs/<org>/<model>.yml entries."""
+    extra = extra or {}
+    env_key = _model_matrix_env_key(config)
+    deps_profile = get_deps_profile_selector()
+    run_configs: list[dict[str, Any]] = []
+    base_case_list = get_model_list(
+        config, backend, parallel_config, model_type, func_type, extra=extra,
+    )
+
+    for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
+        layout = _parallel_layout(entry.get('parallel') or {})
+        if not _parallel_dicts_equal(layout, parallel_config):
+            continue
+        backend_map = _normalize_entry_backends(entry, config, layout)
+        if backend not in backend_map:
+            continue
+        if not _entry_matches_profile(entry, model_type):
+            continue
+        if not _entry_matches_func(entry, func_type, extra):
+            continue
+
+        quant_cfg = _quant_cfg_for_entry(entry)
+        base_model = model_id
+        models_for_quant = [base_model]
+        if 'quantization' in (entry.get(TEST_COVERAGE_KEY) or []):
+            _extend_quant_models_from_entry(backend, [base_model], quant_cfg, models_for_quant)
+        models_for_quant = [m for m in models_for_quant if m in base_case_list]
+
+        seen: set[tuple] = set()
+        for model in models_for_quant:
+            qcfg = quant_cfg
+            for quant_policy in [0, 4, 8, 42]:
+                if not _is_kvint_enabled_in_entry(backend, _base_model_name(model), quant_policy, qcfg):
+                    continue
+                for communicator in backend_map[backend]:
+                    sig = (model, communicator, quant_policy)
+                    if sig in seen:
+                        continue
+                    seen.add(sig)
+                    run_configs.append(
+                        _build_run_config_entry(
+                            model,
+                            entry,
+                            backend,
+                            communicator,
+                            parallel_config,
+                            quant_policy,
+                            config,
+                            func_type,
+                            extra,
+                        ))
+    return run_configs
 
 
 def get_func_config_list(backend: str,
@@ -129,81 +511,11 @@ def get_func_config_list(backend: str,
     """Generate all valid running config combinations (communicator + quant
     policy + model).
 
-    Args:
-        backend: Backend type (turbomind/pytorch)
-        parallel_config: Parallel config for tensor parallel
-        model_type: Model type, default: chat_model
-        func_type: Test func type filter, default: func
-        extra: extra config merged into each run config's extra_params.
-    Returns:
-        list[dict]: All valid run config dicts
+    Per-model YAML (``autotest/configs/``): ``parallel.extra`` = launch params;
+    ``gen_config`` = request/eval sampling params on each run_config.
     """
     config = get_config()
-    device = config.get('device', 'cuda')
-    base_case_list = get_model_list(config, backend, parallel_config, model_type, func_type)
-
-    if extra is None:
-        extra = {}
-
-    run_configs = []
-    dtype = 'float16' if not is_bf16_supported(device) else None
-
-    quantization_config = config.get(f'{backend}_quantization', {})
-    fp8_model_list = quantization_config.get('fp8', [])
-
-    def get_model_extra_params(model: str) -> dict:
-        if model in fp8_model_list:
-            return {'model-format': 'fp8'}
-        return {}
-
-    for communicator in _get_communicator_list(config, backend, parallel_config):
-        for model in base_case_list:
-            for quant_policy in [0, 4, 8, 42]:
-                # temp remove testcase because of issue 3434
-                if 'turbomind' == backend and communicator == 'cuda-ipc' and parallel_config.get(
-                        'tp', 1) > 1 and ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model
-                                          or 'InternVL2-Llama3' in model):  # noqa
-                    continue
-                if 'turbomind' == backend and parallel_config.get(
-                        'tp', 1
-                ) > 1 and model_type == 'vl_model' and func_type == 'mllm_evaluate':  # mllm eval with bug when tp > 2
-                    continue
-                # [TM][FATAL] models/llama/LlamaBatch.cc(362): Check failed: r->session.start_flag Mrope doesn't support interactive chat # noqa
-                if ('Qwen2.5-VL' in model or 'Qwen2-VL' in model) and 'turbomind' == backend:
-                    continue
-                # AssertionError: prompts should be a list
-                if 'phi' in model.lower() and model_type == 'vl_model':
-                    continue
-                if not _is_kvint_model(config, backend, model, quant_policy):
-                    continue
-                # Prefix caching is unsupported when linear attention is present
-                if 'enable-prefix-caching' in extra and 'Qwen3.5' in model:
-                    continue
-                run_config = {
-                    'model': model,
-                    'backend': backend,
-                    'communicator': communicator,
-                    'quant_policy': quant_policy,
-                    'parallel_config': parallel_config,
-                    'extra_params': copy.copy(extra)
-                }
-                if dtype and backend == 'pytorch':
-                    run_config['extra_params']['dtype'] = dtype
-                if device != 'cuda':
-                    run_config['extra_params']['device'] = device
-
-                model_extra_params = get_model_extra_params(model)
-                if model_extra_params and quant_policy == 0:
-                    run_config_with_format = copy.deepcopy(run_config)
-                    run_config_with_format['extra_params'].update(model_extra_params)
-                    run_configs.append(run_config_with_format)
-
-                run_configs.append(run_config)
-
-    for run_config in run_configs:
-        apply_model_run_params(run_config, config, extra, func_type, backend)
-
-    return run_configs
+    return _get_func_config_list_per_model(config, backend, parallel_config, model_type, func_type, extra)
 
 
 def get_cli_common_param(run_config: dict[str, Any]) -> str:
@@ -264,127 +576,96 @@ def get_cli_str(config: dict[str, Any]) -> str:
 def get_parallel_config(config: dict[str, Any], model_name: str) -> list[dict[str, int]]:
     """Get matched parallel config dict by model name, default tp:1 if no
     match."""
-    result = []
+    env_key = _model_matrix_env_key(config)
+    deps_profile = get_deps_profile_selector()
     base_model = _base_model_name(model_name)
-    parallel_configs = config.get('config', {})
-
-    for conf_key, model_map in parallel_configs.items():
-        if model_map is None:
+    layouts: list[dict[str, int]] = []
+    seen: set[tuple] = set()
+    for mid, entry in _iter_per_model_entries(env_key, deps_profile):
+        if _base_model_name(mid) != base_model:
             continue
-        if base_model in model_map:
-            conf_value = model_map[base_model]
-            if isinstance(conf_value, dict):
-                result.append(conf_value.copy())
-            elif isinstance(conf_value, int):
-                result.append({conf_key: conf_value})
+        funcs = entry.get(TEST_COVERAGE_KEY) or []
+        if funcs == ['prefix_cache']:
+            continue
+        layout = _parallel_layout(entry.get('parallel') or {})
+        key = tuple(sorted(layout.items()))
+        if key not in seen:
+            seen.add(key)
+            layouts.append(layout)
+    return layouts if layouts else [{'tp': 1}]
 
-    return result if result else [{'tp': 1}]
 
-
-def _extract_models_from_config(config_value: Any) -> list[str]:
-    """Extract flat model name list from config value (dict/list supported)"""
-    models = []
-    if isinstance(config_value, dict):
-        for model_list in config_value.values():
-            if isinstance(model_list, list):
-                models.extend([m for m in model_list if isinstance(m, str)])
-    elif isinstance(config_value, list):
-        models.extend([m for m in config_value if isinstance(m, str)])
-    return models
+def _model_ids_for_entries(
+    config: dict[str, Any],
+    backend: str,
+    parallel_config: dict[str, int],
+    model_type: str,
+    func_type: str,
+    extra: dict[str, Any] | None,
+) -> list[str]:
+    """Model ids from yaml entries matching backend / profile / parallel /
+    function."""
+    env_key = _model_matrix_env_key(config)
+    deps_profile = get_deps_profile_selector()
+    models: list[str] = []
+    extended: list[str] = []
+    for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
+        if not _entry_matches_profile(entry, model_type):
+            continue
+        if not _entry_matches_func(entry, func_type, extra):
+            continue
+        layout = _parallel_layout(entry.get('parallel') or {})
+        if not _parallel_dicts_equal(layout, parallel_config):
+            continue
+        if backend not in _normalize_entry_backends(entry, config, layout):
+            continue
+        if model_id not in models:
+            models.append(model_id)
+            extended.append(model_id)
+        if 'quantization' in (entry.get(TEST_COVERAGE_KEY) or []):
+            _extend_quant_models_from_entry(
+                backend, [model_id], _quant_cfg_for_entry(entry), extended,
+            )
+    return list(OrderedDict.fromkeys(extended))
 
 
 def get_model_list(config: dict[str, Any],
                    backend: str,
                    parallel_config: dict[str, int] | None = None,
                    model_type: str = 'chat_model',
-                   func_type: str = 'func') -> list[str]:
-    """Get filtered model list with quantization extended models by
-    backend/parallel config/model type/func type.
+                   func_type: str = 'func',
+                   extra: dict[str, Any] | None = None) -> list[str]:
+    """Get filtered model list (same rules as legacy flat yaml).
 
-    Args:
-        config: Global system config dict
-        backend: Backend type (turbomind/pytorch)
-        parallel_config: Parallel filter config
-        model_type: Model type, default: chat_model
-        func_type: Test func type filter, default: func
-    Returns:
-        list[str]: Base models + quantization extended models
+    Non-``func`` types use ``pytorch/turbomind_{profile}`` ∩ ``{func_type}_model`` semantics:
+    the model must appear under ``func`` for the same slice **and** under the target function.
     """
-    model_config_key = f'{backend}_{model_type}'
-    all_models = []
-
-    if model_config_key in config:
-        all_models = _extract_models_from_config(config[model_config_key])
-
-    all_models = _filter_by_test_func_type(config, all_models, func_type)
-    all_models = list(OrderedDict.fromkeys(all_models))  # Deduplicate, keep order
-    all_models = [model for model in all_models if is_model_in_list(config, parallel_config, model)]
-
-    extended_models = list(all_models)
-    quantization_config = config.get(f'{backend}_quantization', {})
-
-    # Append quantization models by backend
-    if backend == 'turbomind':
-        _extend_turbomind_quant_models(quantization_config, all_models, extended_models)
-    elif backend == 'pytorch':
-        _extend_pytorch_quant_models(quantization_config, all_models, extended_models)
-
-    return extended_models
-
-
-def _filter_by_test_func_type(config: dict[str, Any], model_list: list[str], func_type: str) -> list[str]:
-    """Filter model list by test function type, return intersection of two
-    model sets."""
+    parallel_config = parallel_config or {'tp': 1}
+    if extra and (extra.get('enable-prefix-caching') is not None or extra.get('enable_prefix_caching') is not None):
+        return _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
     if func_type == 'func':
-        return model_list
+        return _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', extra)
 
-    filtered_models = []
-    model_config_key = f'{func_type}_model'
-    if model_config_key in config:
-        filtered_models = _extract_models_from_config(config[model_config_key])
-
-    return list(set(filtered_models) & set(model_list))
-
-
-def _extend_turbomind_quant_models(quant_config: dict[str, Any], base_models: list[str],
-                                   target_list: list[str]) -> None:
-    """Append turbomind quantization models to target list (AWQ 4bits +
-    GPTQ)"""
-    no_awq_models = quant_config.get('no_awq', [])
-    # Append AWQ 4bits quantization models
-    for model_name in base_models:
-        if model_name in target_list and model_name not in no_awq_models and not is_quantization_model(model_name):
-            target_list.append(model_name + SUFFIX_INNER_AWQ)
-    # Append GPTQ quantization models
-    for model_name in quant_config.get('gptq', []):
-        if model_name in target_list:
-            target_list.append(model_name + SUFFIX_INNER_GPTQ)
-
-
-def _extend_pytorch_quant_models(quant_config: dict[str, Any], base_models: list[str], target_list: list[str]) -> None:
-    """Append pytorch quantization models to target list (AWQ 4bits + W8A8)"""
-    # Append AWQ quantization models
-    for model_name in quant_config.get('awq', []):
-        if model_name in target_list:
-            target_list.append(model_name + SUFFIX_INNER_AWQ)
-    # Append W8A8 quantization models
-    for model_name in quant_config.get('w8a8', []):
-        if model_name in target_list:
-            target_list.append(model_name + SUFFIX_INNER_W8A8)
+    chat_models = _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', None)
+    typed_models = _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
+    chat_bases = {_base_model_name(m) for m in chat_models}
+    return [m for m in typed_models if _base_model_name(m) in chat_bases]
 
 
 def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_policy: int) -> bool:
-    """Check if model supports the kv quantization policy, quant_policy=0
-    always return True."""
+    """Check KV quant policy support via per-model ``quantization`` blocks."""
     if quant_policy == 0:
         return True
-    if quant_policy in [4, 8]:
-        no_kvint_black_list = config.get(f'{backend}_quantization', {}).get(f'no_kvint{quant_policy}', [])
-        return _base_model_name(model) not in no_kvint_black_list
-
-    if quant_policy == 42:
-        kv42_list = config.get(f'{backend}_quantization', {}).get('kvint42', [])
-        return _base_model_name(model) in kv42_list
+    env_key = _model_matrix_env_key(config)
+    deps_profile = get_deps_profile_selector()
+    base = _base_model_name(model)
+    for mid, entry in _iter_per_model_entries(env_key, deps_profile):
+        if _base_model_name(mid) != base:
+            continue
+        layout = _parallel_layout(entry.get('parallel') or {})
+        if backend not in _normalize_entry_backends(entry, config, layout):
+            continue
+        return _is_kvint_enabled_in_entry(backend, base, quant_policy, _quant_cfg_for_entry(entry))
     return False
 
 def _base_model_name(model: str) -> str:
@@ -396,71 +677,38 @@ def _base_model_name(model: str) -> str:
 def get_quantization_model_list(type: str) -> list[str]:
     """Get quantization model list by specified quant type(awq/gptq/w8a8)"""
     config = get_config()
-    quant_model_list = []
-
-    # Get all chat/base models & deduplicate
-    turbomind_chat = _extract_models_from_config(
-        config['turbomind_chat_model']) if 'turbomind_chat_model' in config else []
-    turbomind_base = _extract_models_from_config(
-        config['turbomind_base_model']) if 'turbomind_base_model' in config else []
-    all_turbomind_models = list(OrderedDict.fromkeys(turbomind_chat + turbomind_base))
-
-    pytorch_chat = _extract_models_from_config(config['pytorch_chat_model']) if 'pytorch_chat_model' in config else []
-    pytorch_base = _extract_models_from_config(config['pytorch_base_model']) if 'pytorch_base_model' in config else []
-    all_pytorch_models = list(OrderedDict.fromkeys(pytorch_chat + pytorch_base))
-
-    if type == 'awq':
-        # Filter turbomind valid awq models
-        no_awq = config.get('turbomind_quantization', {}).get('no_awq', [])
-        quant_model_list = [m for m in all_turbomind_models if m not in no_awq and not is_quantization_model(m)]
-
-        # Append pytorch awq models
-        torch_awq = config.get('pytorch_quantization', {}).get('awq', [])
-        for model in torch_awq:
-            if model not in quant_model_list:
-                quant_model_list.append(model)
-
-    elif type == 'gptq':
-        gptq_model_list = config.get('turbomind_quantization', {}).get(type, [])
-        for model in gptq_model_list:
-            if model in all_turbomind_models:
-                quant_model_list.append(model)
-    elif type == 'w8a8':
-        w8a8_model_list = config.get('pytorch_quantization', {}).get(type, [])
-        for model in w8a8_model_list:
-            if model in all_pytorch_models:
-                quant_model_list.append(model)
-
-    return quant_model_list
+    env_key = _model_matrix_env_key(config)
+    deps_profile = get_deps_profile_selector()
+    quant_model_list: list[str] = []
+    for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
+        if 'quantization' not in (entry.get(TEST_COVERAGE_KEY) or []):
+            continue
+        layout = _parallel_layout(entry.get('parallel') or {})
+        backend_map = _normalize_entry_backends(entry, config, layout)
+        quant_cfg = _quant_cfg_for_entry(entry)
+        for backend in ('turbomind', 'pytorch'):
+            if backend not in backend_map:
+                continue
+            enabled = set(quant_cfg.get(backend) or [])
+            if type == 'awq' and 'awq' in enabled and not is_quantization_model(model_id):
+                quant_model_list.append(model_id)
+            elif type == 'gptq' and 'gptq' in enabled and backend == 'turbomind':
+                quant_model_list.append(model_id)
+            elif type == 'w8a8' and 'w8a8' in enabled and backend == 'pytorch':
+                quant_model_list.append(model_id)
+    return list(OrderedDict.fromkeys(quant_model_list))
 
 
 def get_config() -> dict[str, Any]:
-    """Load & get yaml config file, auto adapt device env & update log path."""
-    # Get device env & match config file path
-    env_tag = os.environ.get('TEST_ENV')
-    config_path = f'autotest/config_{env_tag}.yml' if env_tag else 'autotest/config.yml'
-
-    # Fallback to default config if device-specific config not exist
-    if env_tag and not os.path.exists(config_path):
-        config_path = 'autotest/config.yml'
-    # Load yaml config file safely
-    with open(config_path, encoding='utf-8') as f:
-        config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-
-    # Deep copy config to avoid modify raw data, update log path with github run id
-    config_copy = copy.deepcopy(config)
-    run_id = os.environ.get('RUN_ID', 'local_run')
-    config_copy['log_path'] = os.path.join(config_copy['log_path'], str(run_id).replace('/', '_'))
-    config_copy['eval_path'] = os.path.join(config_copy['eval_path'], str(run_id).replace('/', '_'))
-    config_copy['mllm_eval_path'] = os.path.join(config_copy['mllm_eval_path'], str(run_id).replace('/', '_'))
-    config_copy['benchmark_path'] = os.path.join(config_copy['benchmark_path'], str(run_id).replace('/', '_'))
-    config_copy['server_log_path'] = os.path.join(config_copy['server_log_path'], str(run_id).replace('/', '_'))
-    os.makedirs(config_copy['log_path'], exist_ok=True)
-    os.makedirs(config_copy['eval_path'], exist_ok=True)
-    os.makedirs(config_copy['mllm_eval_path'], exist_ok=True)
-    os.makedirs(config_copy['benchmark_path'], exist_ok=True)
-    os.makedirs(config_copy['server_log_path'], exist_ok=True)
-
+    """Load global paths from ``autotest/env_paths.yml``; model matrices from
+    ``configs/**``."""
+    if not _per_model_configs_available():
+        raise FileNotFoundError(
+            f'Per-model autotest configs required: missing {PATHS_YML} or {CONFIGS_DIR}',
+        )
+    paths_key = _resolve_paths_env_key(os.environ.get('TEST_ENV'))
+    config_copy = _load_paths_for_env(paths_key)
+    _apply_run_id_paths(config_copy)
     return config_copy
 
 
@@ -511,6 +759,7 @@ def _get_communicator_list(config: dict[str, Any],
                            backend: str,
                            parallel_config: dict[str, int] | None = None) -> list[str]:
     """Get available communicator list by device and parallel config."""
+    parallel_config = parallel_config or {}
     device = config.get('device', None)
 
     if device == 'ascend':
@@ -578,7 +827,7 @@ def _resolve_base_eval_config_name(run_config: dict[str, Any], rules: tuple[tupl
 
 
 def _apply_eval_config_env_suffix(config: dict[str, Any], name: str) -> str:
-    env_tag = str(config['env_tag'])
+    env_tag = str(config.get('env_tag') or _matrix_env_key(os.environ.get('TEST_ENV') or 'a100'))
     if env_tag == 'a100':
         return f'{name}-32k'
     if env_tag == 'ascend':
@@ -593,6 +842,8 @@ def resolve_eval_config_name(config: dict[str, Any],
                              only_if_default: bool = True) -> str:
     """Resolve eval preset key (EVAL_CONFIGS / MLLM_EVAL_CONFIGS) from model
     and env_tag."""
+    if run_config.get('gen_config'):
+        return '__from_run_config__'
     if only_if_default and eval_config_name != 'default':
         return eval_config_name
 
@@ -602,6 +853,29 @@ def resolve_eval_config_name(config: dict[str, Any],
         name = eval_config_name
 
     return _apply_eval_config_env_suffix(config, name)
+
+
+def get_eval_preset_config(
+    config: dict[str, Any],
+    run_config: dict[str, Any],
+    eval_config_name: str = 'default',
+    *,
+    mllm: bool = False,
+) -> dict[str, Any]:
+    """Request/eval sampling params: prefer ``run_config['gen_config']`` from
+    per-model yaml."""
+    if run_config.get('gen_config'):
+        return copy.deepcopy(run_config['gen_config'])
+
+    name = resolve_eval_config_name(config, run_config, eval_config_name)
+    if name == '__from_run_config__':
+        return {}
+    table = constant.MLLM_EVAL_CONFIGS if mllm else constant.EVAL_CONFIGS
+    if mllm and name == 'default' and 'internvl' in run_config.get('model', '').lower():
+        preset = table.get('internvl', {})
+        if preset:
+            return copy.deepcopy(preset)
+    return copy.deepcopy(table.get(name, {}))
 
 
 def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -> str:
@@ -654,7 +928,7 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
     quant_policy = int(case_parts[quant_idx])
     parallel_parts = case_parts[3:quant_idx]
 
-    # Convert parallel str to dict, e.g: ['tp1','pp2'] -> {'tp':1, 'pp':2}
+    # Convert parallel str to dict, e.g: ['tp1','dp2'] -> {'tp':1, 'dp':2}
     parallel_config = {}
     for part in parallel_parts:
         for idx, char in enumerate(part):
@@ -669,513 +943,5 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
         'model': model,
         'communicator': communicator,
         'parallel_config': parallel_config,
-        'quant_policy': quant_policy
+        'quant_policy': quant_policy,
     }
-
-
-def test_config():
-    os.environ['DEVICE'] = 'test'
-    config = get_config()
-    assert 'model_path' in config.keys()
-    assert 'resource_path' in config.keys()
-    assert 'log_path' in config.keys()
-    assert 'server_log_path' in config.keys()
-    assert 'eval_path' in config.keys()
-    assert 'mllm_eval_path' in config.keys()
-    assert 'benchmark_path' in config.keys()
-    assert 'dataset_path' in config.keys()
-    assert 'prefix_dataset_path' in config.keys()
-    assert 'env_tag' in config.keys()
-    assert 'config' in config.keys()
-    assert 'tp' in config.get('config')
-
-    assert is_model_in_list(config, parallel_config={'tp': 1}, model='test/test_tp1')
-    assert is_model_in_list(config, parallel_config={'tp': 2}, model='test/test_tp1') is False
-    assert is_model_in_list(config, parallel_config={'ep': 1},
-                            model='test/test_tp1') is False, is_model_in_list(config,
-                                                                              parallel_config={'ep': 1},
-                                                                              model='test/test_tp1')
-    assert is_model_in_list(config, parallel_config={'tp': 2}, model='test/test_tp2-inner-4bits')
-    assert is_model_in_list(config, parallel_config={'tp': 2}, model='test/test_tp2-inner-w8a8')
-    assert is_model_in_list(config, parallel_config={'tp': 8}, model='test/test_tp8-inner-gptq')
-    assert is_model_in_list(config, parallel_config={'tp': 8}, model='test/test_cp2tp8') is False
-    assert is_model_in_list(config, parallel_config={'tp': 8, 'cp': 2}, model='test/test_cp2tp8')
-    assert is_model_in_list(config, parallel_config={'cp': 2, 'tp': 8}, model='test/test_cp2tp8')
-    assert is_model_in_list(config, parallel_config={'cp': 4, 'tp': 8}, model='test/test_cp2tp8') is False
-    assert is_model_in_list(config, parallel_config={'dp': 8, 'ep': 8}, model='test/test_dpep8')
-    assert is_model_in_list(config, parallel_config={'dp': 4, 'ep': 8}, model='test/test_dpep8') is False
-    assert is_model_in_list(config, parallel_config={'ep': 4, 'dp': 8}, model='test/test_dpep8') is False
-
-    assert _is_kvint_model(config, 'turbomind', 'test/test_tp1-inner-4bits', 8) is False
-    assert _is_kvint_model(config, 'turbomind', 'test/test_tp1-inner-4bits', 4)
-    assert _is_kvint_model(config, 'turbomind', 'any', 0)
-    assert _is_kvint_model(config, 'pytorch', 'test/test_tp1-inner-gptq', 8) is False
-    assert _is_kvint_model(config, 'pytorch', 'test/test_tp1-inner-gptq', 4)
-    assert _is_kvint_model(config, 'pytorch', 'test/test_vl_tp1-inner-gptq', 8) is False
-    assert _is_kvint_model(config, 'pytorch', 'test/test_cp2tp8-inner-w8a8', 4) is False
-    os.unsetenv('DEVICE')
-
-
-def test_get_case_str_by_config():
-    run_config = {
-        'model': 'test/test_dpep16',
-        'backend': 'turbomind',
-        'communicator': 'nccl',
-        'quant_policy': 8,
-        'parallel_config': {
-            'dp': 16,
-            'ep': 16
-        }
-    }
-    case_str = get_case_str_by_config(run_config)
-    assert case_str == 'turbomind_test-dpep16_nccl_dp16_ep16_8', case_str
-    run_config_parsed = parse_config_by_case(case_str)
-    assert run_config_parsed['model'] == 'test-dpep16'
-    assert run_config_parsed['backend'] == 'turbomind'
-    assert run_config_parsed['communicator'] == 'nccl'
-    assert run_config_parsed['quant_policy'] == 8
-    assert run_config_parsed['parallel_config']['dp'] == 16
-    assert run_config_parsed['parallel_config']['ep'] == 16
-
-
-def test_cli_common_param():
-    run_config = {
-        'model': 'test/test_dpep16-inner-4bits',
-        'backend': 'turbomind',
-        'communicator': 'nccl',
-        'quant_policy': 8,
-        'parallel_config': {
-            'dp': 16,
-            'ep': 16
-        },
-        'extra_params': {
-            'dtype': 'bfloat16',
-            'device': 'ascend',
-            'enable_prefix_caching': None,
-            'max_batch_size': 2048,
-            'session_len': 8192,
-            'cache_max_entry_count': 0.75,
-            'adapters': {
-                'a': 'lora/2024-01-25_self_dup',
-                'b': 'lora/2024-01-25_self'
-            }
-        }
-    }
-
-    cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend turbomind --communicator nccl --quant-policy 8 --model-format awq --dp 16 --ep 16 --dtype bfloat16 --device ascend --enable-prefix-caching --max-batch-size 2048 --session-len 8192 --cache-max-entry-count 0.75 --adapters a=lora/2024-01-25_self_dup b=lora/2024-01-25_self --trust-remote-code', cli_params  # noqa
-    run_config = {
-        'model': 'test/test_dpep16-inner-4bits',
-        'backend': 'pytorch',
-        'communicator': 'nccl',
-        'quant_policy': 0,
-        'parallel_config': {
-            'tp': 8
-        }
-    }
-
-    cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend pytorch --communicator nccl --model-format awq --tp 8 --trust-remote-code', cli_params # noqa
-    os.unsetenv('TEST_ENV')
-
-
-def test_return_info_turbomind():
-    os.environ['TEST_ENV'] = 'test'
-    backend = 'turbomind'
-    func_chat_tp1 = get_func_config_list(backend, parallel_config={'tp': 1}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp1) == 12, len(func_chat_tp1)
-    func_chat_tp2 = get_func_config_list(backend, parallel_config={'tp': 2}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp2) == 32, len(func_chat_tp2)
-    func_chat_tp8 = get_func_config_list(backend, parallel_config={'tp': 8}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp8) == 36, len(func_chat_tp8)
-    func_chat_cptp = get_func_config_list(backend,
-                                          parallel_config={
-                                              'cp': 2,
-                                              'tp': 8
-                                          },
-                                          model_type='chat_model',
-                                          func_type='func')
-    assert len(func_chat_cptp) == 14, len(func_chat_cptp)
-    func_chat_dpep8 = get_func_config_list(backend,
-                                           parallel_config={
-                                               'dp': 8,
-                                               'ep': 8
-                                           },
-                                           model_type='chat_model',
-                                           func_type='func')
-    assert len(func_chat_dpep8) == 6, len(func_chat_dpep8)
-    func_chat_dpep16 = get_func_config_list(backend,
-                                            parallel_config={
-                                                'dp': 16,
-                                                'ep': 16
-                                            },
-                                            model_type='chat_model',
-                                            func_type='func')
-    assert len(func_chat_dpep16) == 0, len(func_chat_dpep16)
-    func_base_tp1 = get_func_config_list(backend, parallel_config={'tp': 1}, model_type='base_model', func_type='func')
-    assert len(func_base_tp1) == 6, len(func_base_tp1)
-    func_base_tp2 = get_func_config_list(backend, parallel_config={'tp': 2}, model_type='base_model', func_type='func')
-    assert len(func_base_tp2) == 4, len(func_base_tp2)
-
-    evaluate_tp1 = get_func_config_list(backend,
-                                        parallel_config={'tp': 1},
-                                        model_type='chat_model',
-                                        func_type='evaluate')
-    assert len(evaluate_tp1) == 6, len(evaluate_tp1)
-    benchmark_tp2 = get_func_config_list(backend,
-                                         parallel_config={'tp': 2},
-                                         model_type='chat_model',
-                                         func_type='benchmark')
-    assert len(benchmark_tp2) == 4, len(benchmark_tp2)
-    longtext_tp8 = get_func_config_list(backend,
-                                        parallel_config={'tp': 8},
-                                        model_type='chat_model',
-                                        func_type='longtext')
-    assert len(longtext_tp8) == 12, len(longtext_tp8)
-    evaluate_cptp = get_func_config_list(backend,
-                                         parallel_config={
-                                             'cp': 2,
-                                             'tp': 8
-                                         },
-                                         model_type='chat_model',
-                                         func_type='evaluate')
-    assert len(evaluate_cptp) == 4, len(evaluate_cptp)
-    benchmark_dpep8 = get_func_config_list(backend,
-                                           parallel_config={
-                                               'dp': 8,
-                                               'ep': 8
-                                           },
-                                           model_type='chat_model',
-                                           func_type='benchmark')
-    assert len(benchmark_dpep8) == 0, len(benchmark_dpep8)
-
-    mllm_benchmark_tp1 = get_func_config_list(backend,
-                                              parallel_config={'tp': 1},
-                                              model_type='chat_model',
-                                              func_type='mllm_benchmark')
-    assert len(mllm_benchmark_tp1) == 6, len(mllm_benchmark_tp1)
-    mllm_longtext_tp2 = get_func_config_list(backend,
-                                             parallel_config={'tp': 2},
-                                             model_type='chat_model',
-                                             func_type='mllm_longtext')
-    assert len(mllm_longtext_tp2) == 0, len(mllm_longtext_tp2)
-    mllm_evaluate_tp8 = get_func_config_list(backend,
-                                             parallel_config={'tp': 8},
-                                             model_type='chat_model',
-                                             func_type='mllm_evaluate')
-    assert len(mllm_evaluate_tp8) == 12, len(mllm_evaluate_tp8)
-    mllm_evaluate_dpep16 = get_func_config_list(backend,
-                                                parallel_config={
-                                                    'dp': 16,
-                                                    'ep': 16
-                                                },
-                                                model_type='chat_model',
-                                                func_type='evaluate')
-    assert len(mllm_evaluate_dpep16) == 0, len(mllm_evaluate_dpep16)
-    mllm_benchmark_cptp = get_func_config_list(backend,
-                                               parallel_config={
-                                                   'cp': 2,
-                                                   'tp': 8
-                                               },
-                                               model_type='chat_model',
-                                               func_type='benchmark')
-    assert len(mllm_benchmark_cptp) == 4, len(mllm_benchmark_cptp)
-    os.unsetenv('TEST_ENV')
-
-
-def test_return_info_pytorch():
-    os.environ['TEST_ENV'] = 'test'
-    backend = 'pytorch'
-    func_chat_tp1 = get_func_config_list(backend, parallel_config={'tp': 1}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp1) == 12, len(func_chat_tp1)
-    func_chat_tp2 = get_func_config_list(backend, parallel_config={'tp': 2}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp2) == 19, len(func_chat_tp2)
-    func_chat_tp8 = get_func_config_list(backend, parallel_config={'tp': 8}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp8) == 9, len(func_chat_tp8)
-    func_chat_cptp = get_func_config_list(backend,
-                                          parallel_config={
-                                              'cp': 2,
-                                              'tp': 8
-                                          },
-                                          model_type='chat_model',
-                                          func_type='func')
-    assert len(func_chat_cptp) == 7, len(func_chat_cptp)
-    func_chat_dpep8 = get_func_config_list(backend,
-                                           parallel_config={
-                                               'dp': 8,
-                                               'ep': 8
-                                           },
-                                           model_type='chat_model',
-                                           func_type='func')
-    assert len(func_chat_dpep8) == 8, len(func_chat_dpep8)
-    func_chat_dpep16 = get_func_config_list(backend,
-                                            parallel_config={
-                                                'dp': 16,
-                                                'ep': 16
-                                            },
-                                            model_type='chat_model',
-                                            func_type='func')
-    assert len(func_chat_dpep16) == 6, len(func_chat_dpep16)
-    func_base_tp1 = get_func_config_list(backend, parallel_config={'tp': 1}, model_type='base_model', func_type='func')
-    assert len(func_base_tp1) == 7, len(func_base_tp1)
-    func_base_tp2 = get_func_config_list(backend, parallel_config={'tp': 2}, model_type='base_model', func_type='func')
-    assert len(func_base_tp2) == 4, len(func_base_tp2)
-
-    evaluate_tp1 = get_func_config_list(backend,
-                                        parallel_config={'tp': 1},
-                                        model_type='chat_model',
-                                        func_type='evaluate')
-    assert len(evaluate_tp1) == 7, len(evaluate_tp1)
-    benchmark_tp2 = get_func_config_list(backend,
-                                         parallel_config={'tp': 2},
-                                         model_type='chat_model',
-                                         func_type='benchmark')
-    assert len(benchmark_tp2) == 3, len(benchmark_tp2)
-    longtext_tp8 = get_func_config_list(backend,
-                                        parallel_config={'tp': 8},
-                                        model_type='chat_model',
-                                        func_type='longtext')
-    assert len(longtext_tp8) == 3, len(longtext_tp8)
-    evaluate_cptp = get_func_config_list(backend,
-                                         parallel_config={
-                                             'cp': 2,
-                                             'tp': 8
-                                         },
-                                         model_type='chat_model',
-                                         func_type='evaluate')
-    assert len(evaluate_cptp) == 2, len(evaluate_cptp)
-    benchmark_dpep8 = get_func_config_list(backend,
-                                           parallel_config={
-                                               'dp': 8,
-                                               'ep': 8
-                                           },
-                                           model_type='chat_model',
-                                           func_type='benchmark')
-    assert len(benchmark_dpep8) == 2, len(benchmark_dpep8)
-
-    mllm_benchmark_tp1 = get_func_config_list(backend,
-                                              parallel_config={'tp': 1},
-                                              model_type='chat_model',
-                                              func_type='mllm_benchmark')
-    assert len(mllm_benchmark_tp1) == 5, len(mllm_benchmark_tp1)
-    mllm_longtext_tp2 = get_func_config_list(backend,
-                                             parallel_config={'tp': 2},
-                                             model_type='chat_model',
-                                             func_type='mllm_longtext')
-    assert len(mllm_longtext_tp2) == 0, len(mllm_longtext_tp2)
-    mllm_evaluate_tp8 = get_func_config_list(backend,
-                                             parallel_config={'tp': 8},
-                                             model_type='chat_model',
-                                             func_type='mllm_evaluate')
-    assert len(mllm_evaluate_tp8) == 3, len(mllm_evaluate_tp8)
-    mllm_evaluate_dpep16 = get_func_config_list(backend,
-                                                parallel_config={
-                                                    'dp': 16,
-                                                    'ep': 16
-                                                },
-                                                model_type='chat_model',
-                                                func_type='evaluate')
-    assert len(mllm_evaluate_dpep16) == 3, len(mllm_evaluate_dpep16)
-    mllm_benchmark_cptp = get_func_config_list(backend,
-                                               parallel_config={
-                                                   'cp': 2,
-                                                   'tp': 8
-                                               },
-                                               model_type='chat_model',
-                                               func_type='benchmark')
-    assert len(mllm_benchmark_cptp) == 2, len(mllm_benchmark_cptp)
-    os.unsetenv('TEST_ENV')
-
-
-def test_run_config():
-    os.environ['TEST_ENV'] = 'test'
-    backend = 'turbomind'
-    run_config1 = get_func_config_list(backend, parallel_config={'tp': 1}, model_type='chat_model', func_type='func')[0]
-    assert run_config1['model'] == 'test/test_tp1'
-    assert run_config1['backend'] == 'turbomind'
-    assert run_config1['communicator'] == 'nccl'
-    assert run_config1['quant_policy'] == 0
-    assert run_config1['parallel_config'] == {'tp': 1}
-    os.environ['TEST_ENV'] = 'testascend'
-    backend = 'pytorch'
-    run_config2 = get_func_config_list(backend, parallel_config={'tp': 1}, model_type='chat_model', func_type='func')[0]
-    assert run_config2['model'] == 'test/test_tp1'
-    assert run_config2['backend'] == 'pytorch'
-    assert run_config2['communicator'] == 'nccl'
-    assert run_config2['quant_policy'] == 0
-    assert run_config2['parallel_config'] == {'tp': 1}
-    run_config3 = get_func_config_list(backend,
-                                       parallel_config={'tp': 1},
-                                       model_type='chat_model',
-                                       func_type='func',
-                                       extra={
-                                           'speculative_algorithm': 'eagle',
-                                           'session_len': 1024
-                                       })[0]
-    assert run_config3['model'] == 'test/test_tp1'
-    assert run_config3['backend'] == 'pytorch'
-    assert run_config3['communicator'] == 'nccl'
-    assert run_config3['quant_policy'] == 0
-    assert run_config3['parallel_config'] == {'tp': 1}
-    assert run_config3['extra_params']['speculative_algorithm'] == 'eagle'
-    assert run_config3['extra_params']['session_len'] == 1024
-    os.unsetenv('TEST_ENV')
-
-
-def test_resolve_eval_config_name():
-    run_config = {'model': 'openai/gpt-oss-120b'}
-    assert resolve_eval_config_name({}, run_config) == 'gpt'
-    assert resolve_eval_config_name({'env_tag': 'a100'}, run_config) == 'gpt-32k'
-    assert resolve_eval_config_name({'env_tag': 'ascend'}, run_config) == 'gpt-2batch'
-    assert resolve_eval_config_name({}, run_config, 'longtext-512k') == 'longtext-512k'
-    assert resolve_eval_config_name({'env_tag': 'ascend'}, run_config, 'longtext-512k') == 'longtext-512k'
-
-    sdar_config = {'model': 'inclusionAI/SDAR-30B-A3B'}
-    assert resolve_eval_config_name({}, sdar_config) == 'sdar'
-    qwen_config = {'model': 'Qwen/Qwen3.5-397B-A17B'}
-    assert resolve_eval_config_name({}, qwen_config) == 'qwen3.5'
-    intern_config = {'model': 'internlm/Intern-S1-Pro-FP8'}
-    assert resolve_eval_config_name({}, intern_config) == 'intern-s1-pro'
-    assert resolve_eval_config_name({}, {'model': 'meta/llama'}) == 'default'
-    mllm_config = {'model': 'Qwen/Qwen3.5-VL-7B'}
-    assert resolve_eval_config_name({}, mllm_config) == 'qwen3.5'
-    assert resolve_eval_config_name({'env_tag': 'ascend'}, mllm_config) == 'qwen3.5-2batch'
-
-
-def test_get_parallel_config():
-    test = get_parallel_config({}, 'empty')
-    assert test == [{'tp': 1}]
-    test = get_parallel_config(
-        {
-            'config': {
-                'tp': {
-                    'empty': 1
-                },
-                'dp_ep': {
-                    'empty': {
-                        'dp': 1,
-                        'ep': 8
-                    }
-                },
-                'cp_tp': {
-                    'empty': {
-                        'cp': 8,
-                        'tp': 8
-                    }
-                }
-            }
-        }, 'empty')
-    assert test == [{'tp': 1}, {'dp': 1, 'ep': 8}, {'cp': 8, 'tp': 8}]
-
-
-def _apply_model_run_params_for_test(model: str,
-                                     env_tag: str = '',
-                                     func_type: str = 'func',
-                                     backend: str = 'pytorch',
-                                     extra: dict[str, Any] | None = None,
-                                     parallel_config: dict[str, int] | None = None) -> dict[str, Any]:
-    extra = extra or {}
-    run_config = {
-        'model': model,
-        'extra_params': copy.copy(extra),
-        'parallel_config': parallel_config or {'dp': 1, 'ep': 1, 'tp': 1},
-    }
-    apply_model_run_params(run_config, {'env_tag': env_tag}, extra, func_type, backend)
-    return run_config['extra_params']
-
-
-def test_apply_model_run_params():
-    rules = _load_model_run_params_rules()
-    assert len(rules) == 12
-    assert rules[0]['name'] == 'qwen3-235b-thinking-2507'
-
-    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', func_type='benchmark')
-    assert params['cache-max-entry-count'] == 0.9
-    assert params['max-batch-size'] == 1024
-
-    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507',
-                                              parallel_config={'dp': 8, 'ep': 8, 'tp': 1})
-    assert params['max-batch-size'] == 256
-
-    params = _apply_model_run_params_for_test('org/GLM-5-FP8')
-    assert params['cache-max-entry-count'] == 0.9
-    assert params['max-batch-size'] == 128
-
-    params = _apply_model_run_params_for_test('some/model', func_type='evaluate')
-    assert params['session_len'] == 65536
-
-    params = _apply_model_run_params_for_test('THUDM/cogvlm-chat-hf', func_type='evaluate')
-    assert params['session-len'] == 32568
-
-    params = _apply_model_run_params_for_test('THUDM/cogvlm-chat-hf', func_type='func')
-    assert params['session-len'] == 32568
-
-    params = _apply_model_run_params_for_test('some/model', func_type='evaluate', extra={'session_len': 4096})
-    assert params['session_len'] == 4096
-
-    params = _apply_model_run_params_for_test('Qwen3.5-7B', func_type='evaluate')
-    assert 'session_len' not in params
-    assert 'session-len' not in params
-
-    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', env_tag='3090')
-    assert params['cache-max-entry-count'] == 0.5
-
-    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', env_tag='5080')
-    assert params['cache-max-entry-count'] == 0.5
-
-    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B', env_tag='a100')
-    assert params['cache-max-entry-count'] == 0.6
-
-    params = _apply_model_run_params_for_test('internlm/Intern-S1', env_tag='a100')
-    assert params['cache-max-entry-count'] == 0.6
-
-    params = _apply_model_run_params_for_test('x/Qwen3-235B-A22B-Thinking-2507', env_tag='a100')
-    assert params['cache-max-entry-count'] == 0.6
-
-    params = _apply_model_run_params_for_test('My-SDAR-Model')
-    assert params['dllm-block-length'] == 4
-    assert params['dllm-denoising-steps'] == 4
-    assert params['dllm-confidence-threshold'] == 0.9
-
-    params = _apply_model_run_params_for_test('kimi-k2', parallel_config={'dp': 16, 'ep': 16, 'tp': 1})
-    assert params['max-batch-size'] == 256
-
-    params = _apply_model_run_params_for_test('kimi-k2', parallel_config={'dp': 8, 'ep': 8, 'tp': 1})
-    assert 'max-batch-size' not in params
-
-    params = _apply_model_run_params_for_test('Intern-S1-Pro-FP8', parallel_config={'dp': 16, 'ep': 16, 'tp': 1})
-    assert params['model-format'] == 'fp8'
-    assert params['max-prefill-token-num'] == 1024
-    assert params['max-batch-size'] == 128
-
-    params = _apply_model_run_params_for_test('Intern-S1-Pro-BF16', parallel_config={'dp': 16, 'ep': 16, 'tp': 1})
-    assert 'model-format' not in params
-    assert params['max-prefill-token-num'] == 1024
-
-    params = _apply_model_run_params_for_test('openai/gpt-oss-20b',
-                                              func_type='benchmark',
-                                              backend='turbomind')
-    assert params['model-format'] == 'mxfp4'
-
-    params = _apply_model_run_params_for_test('openai/gpt-oss-20b',
-                                              func_type='benchmark',
-                                              backend='pytorch')
-    assert 'model-format' not in params
-
-    params = _apply_model_run_params_for_test('Qwen3.5-7B', func_type='mtp_evaluate')
-    assert params['reasoning-parser'] == 'qwen-qwq'
-    assert params['speculative-algorithm'] == 'qwen3_5_mtp'
-    assert params['speculative-num-draft-tokens'] == 4
-    assert params['max-batch-size'] == 256
-
-
-if __name__ == '__main__':
-    test_apply_model_run_params()
-    test_resolve_eval_config_name()
-    test_get_parallel_config()
-    test_cli_common_param()
-    test_run_config()
-    test_get_case_str_by_config()
-    test_return_info_pytorch()
-    test_config()
-    test_return_info_turbomind()

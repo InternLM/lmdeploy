@@ -153,11 +153,15 @@ jobs:
     if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
     runs-on: [self-hosted, 5080-r1]
     timeout-minutes: 150
+    strategy:
+      matrix:
+        deps_profile: ['', 'transformers==4.57.6']
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 5080
+      DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -202,7 +206,7 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
@@ -230,7 +234,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
-        transformers: ["5080", "5080_legacy"]
+        deps_profile: ['', 'transformers==4.57.6']
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
@@ -243,7 +247,8 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
-      TEST_ENV: ${{ matrix.transformers }}
+      TEST_ENV: 5080
+      DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -265,10 +270,9 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == '5080_legacy'}}
-        run: |
-          pip install transformers==4.57.6
+      - name: Install pinned deps (DEPS_PROFILE)
+        if: matrix.deps_profile != ''
+        run: pip install ${{ matrix.deps_profile }}
       - name: Check env
         run: |
           for i in $(seq 1 10); do
@@ -324,7 +328,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         model_path: ['meta-llama/Llama-3.2-3B-Instruct', 'Qwen/Qwen3-4B']
-        transformers: ["5080", "5080_legacy"]
+        deps_profile: ['', 'transformers==4.57.6']
         include:
           - tp: 1
             model: Llama-3.2-3B-Instruct
@@ -347,7 +351,11 @@ jobs:
         - /mnt/3090:/mnt/3090
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     env:
-      TEST_ENV: ${{ matrix.transformers }}
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: 5080
+      DEPS_PROFILE: ${{ matrix.deps_profile }}
     steps:
       - name: Copy repository and Artifacts
         run: |
@@ -361,10 +369,9 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == '5080_legacy'}}
-        run: |
-          pip install transformers==4.57.6
+      - name: Install pinned deps (DEPS_PROFILE)
+        if: matrix.deps_profile != ''
+        run: pip install ${{ matrix.deps_profile }}
       - name: Check env
         run: |
           for i in $(seq 1 10); do

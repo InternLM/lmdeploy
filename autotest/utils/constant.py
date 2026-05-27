@@ -4,6 +4,8 @@ DEFAULT_PORT = 23333
 DEFAULT_SERVER = os.getenv('MASTER_ADDR', '127.0.0.1')
 PROXY_PORT = 8000
 
+# Scalar presets for export/normalize fallback. Model-specific sampling (reasoning-effort,
+# top-k, chat-template-kwargs, …) live in per-model ``autotest/configs/**/gen_config``.
 EVAL_CONFIGS = {
     'default': {
         'query_per_second': 4,
@@ -32,9 +34,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 500,
         'temperature': 0.6,
-        'openai_extra_kwargs': {
-            'reasoning_effort': 'high',
-        }
     },
     'gpt-32k': {
         'query_per_second': 4,
@@ -42,9 +41,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 500,
         'temperature': 0.6,
-        'openai_extra_kwargs': {
-            'reasoning_effort': 'high',
-        }
     },
     'gpt-2batch': {
         'query_per_second': 4,
@@ -52,9 +48,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 2,
         'temperature': 0.6,
-        'openai_extra_kwargs': {
-            'reasoning_effort': 'high',
-        }
     },
     'sdar': {
         'query_per_second': 4,
@@ -62,12 +55,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 500,
         'temperature': 1.0,
-        'openai_extra_kwargs': {
-            'top_p': 1.0,
-        },
-        'extra_body': {
-            'top_k': 0,
-        }
     },
     'sdar-32k': {
         'query_per_second': 4,
@@ -75,12 +62,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 500,
         'temperature': 1.0,
-        'openai_extra_kwargs': {
-            'top_p': 1.0,
-        },
-        'extra_body': {
-            'top_k': 0,
-        }
     },
     'sdar-2batch': {
         'query_per_second': 4,
@@ -88,12 +69,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 2,
         'temperature': 1.0,
-        'openai_extra_kwargs': {
-            'top_p': 1.0,
-        },
-        'extra_body': {
-            'top_k': 0,
-        }
     },
     'intern-s1-pro': {
         'query_per_second': 4,
@@ -101,13 +76,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 500,
         'temperature': 0.8,
-        'openai_extra_kwargs': {
-            'top_p': 0.95,
-        },
-        'extra_body': {
-            'top_k': 50,
-            'min_p': 0.0,
-        }
     },
     'intern-s1-pro-32k': {
         'query_per_second': 4,
@@ -115,13 +83,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 500,
         'temperature': 0.8,
-        'openai_extra_kwargs': {
-            'top_p': 0.95,
-        },
-        'extra_body': {
-            'top_k': 50,
-            'min_p': 0.0,
-        }
     },
     'intern-s1-pro-2batch': {
         'query_per_second': 4,
@@ -129,13 +90,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 65536,
         'batch_size': 2,
         'temperature': 0.8,
-        'openai_extra_kwargs': {
-            'top_p': 0.95,
-        },
-        'extra_body': {
-            'top_k': 50,
-            'min_p': 0.0,
-        }
     },
     'qwen3.5': {
         'query_per_second': 4,
@@ -143,12 +97,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 128000,
         'batch_size': 32,
         'temperature': 1.0,
-        'extra_body': {
-            'top_k': 20,
-            'repetition_penalty': 1.0,
-            'top_p': 0.95,
-            'chat_template_kwargs': {'enable_thinking': True},
-        },
     },
     'longtext-256k': {
         'query_per_second': 4,
@@ -156,12 +104,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 400000,
         'batch_size': 32,
         'temperature': 1.0,
-        'extra_body': {
-            'top_k': 20,
-            'repetition_penalty': 1.0,
-            'top_p': 0.95,
-            'chat_template_kwargs': {'enable_thinking': True},
-        },
     },
     'longtext-512k': {
         'query_per_second': 4,
@@ -169,12 +111,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 700000,
         'batch_size': 32,
         'temperature': 1.0,
-        'extra_body': {
-            'top_k': 20,
-            'repetition_penalty': 1.0,
-            'top_p': 0.95,
-            'chat_template_kwargs': {'enable_thinking': True},
-        },
     },
     'qwen3.5-2batch': {
         'query_per_second': 4,
@@ -182,12 +118,6 @@ EVAL_CONFIGS = {
         'max_seq_len': 128000,
         'batch_size': 2,
         'temperature': 1.0,
-        'extra_body': {
-            'top_k': 20,
-            'repetition_penalty': 1.0,
-            'top_p': 0.95,
-            'chat_template_kwargs': {'enable_thinking': True},
-        },
     },
 }
 
@@ -213,7 +143,14 @@ RESTFUL_MODEL_LIST_LATEST = [
 
 RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
 
-_IS_LEGACY = 'legacy' in os.getenv('TEST_ENV', '')
+def _deps_profile_is_legacy() -> bool:
+    """True when ``DEPS_PROFILE`` selects pinned-deps matrix rows
+    (``pkg==ver``)."""
+    raw = os.getenv('DEPS_PROFILE', '').strip()
+    return bool(raw) and raw != 'all' and '==' in raw
+
+
+_IS_LEGACY = _deps_profile_is_legacy()
 
 RESTFUL_MODEL_LIST = RESTFUL_MODEL_LIST_LEGACY if _IS_LEGACY else RESTFUL_MODEL_LIST_LATEST
 

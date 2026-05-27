@@ -160,12 +160,13 @@ jobs:
     timeout-minutes: 150
     strategy:
       matrix:
-        transformers: ["", "legacy"]
+        deps_profile: ['', 'transformers==4.57.6']
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
-      TEST_ENV: ${{ matrix.transformers }}
+      TEST_ENV: a100
+      DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -194,9 +195,11 @@ jobs:
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
           rm -rf ${{env.DEEPSEEK_VL}}/build
+      - name: Install pinned deps (DEPS_PROFILE)
+        if: matrix.deps_profile != ''
+        run: pip install ${{ matrix.deps_profile }}
       - name: Check env
         run: |
-          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -207,7 +210,7 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
@@ -235,7 +238,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
-        transformers: ["", "legacy"]
+        deps_profile: ['', 'transformers==4.57.6']
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
@@ -252,7 +255,8 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
-      TEST_ENV: ${{ matrix.transformers }}
+      TEST_ENV: a100
+      DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -280,10 +284,9 @@ jobs:
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
           rm -rf ${{env.DEEPSEEK_VL}}/build
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == 'legacy'}}
-        run: |
-          pip install transformers==4.57.6
+      - name: Install pinned deps (DEPS_PROFILE)
+        if: matrix.deps_profile != ''
+        run: pip install ${{ matrix.deps_profile }}
       - name: Check env
         run: |
           python3 -m pip list
@@ -470,6 +473,12 @@ jobs:
         - /mnt/104:/mnt/104
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    env:
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: a100
+      DEPS_PROFILE: ''
     steps:
       - name: Copy repository and Artifacts
         run: |
@@ -704,6 +713,12 @@ jobs:
             case_info: ['chat_completions_v1', 'generate']
             generate_type: base
     timeout-minutes: 60
+    env:
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: a100
+      DEPS_PROFILE: transformers==4.57.6
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -729,9 +744,10 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Install pinned deps (DEPS_PROFILE)
+        run: pip install ${{ env.DEPS_PROFILE }}
       - name: Check env
         run: |
-          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -822,6 +838,12 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     needs: test_quantization
     timeout-minutes: 240
+    env:
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: a100
+      DEPS_PROFILE: transformers==4.57.6
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -849,9 +871,10 @@ jobs:
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
           rm -rf ${{env.DEEPSEEK_VL}}/build
+      - name: Install pinned deps (DEPS_PROFILE)
+        run: pip install ${{ env.DEPS_PROFILE }}
       - name: Check env
         run: |
-          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
