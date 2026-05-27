@@ -52,10 +52,6 @@ class BaseSpecModelAgent:
         self.model_config = specdecode_config.model_config if specdecode_config is not None else None
         self.cache_config = specdecode_config.cache_config if specdecode_config is not None else None
 
-    def is_enabled_running(self):
-        """Whether spec agent is running."""
-        return self.proposer is not None
-
     def is_enabled(self):
         return self._enabled
 
@@ -85,6 +81,11 @@ class BaseSpecModelAgent:
                                 sampling_inputs: SamplingInputs):
         """Draft model forward."""
         return extra_inputs
+
+    async def async_sampling_logits(self, model_inputs: 'ModelInputs', extra_inputs: ExtraInputs,
+                                    sampling_inputs: SamplingInputs):
+        """Sample target logits and run rejection sampling."""
+        pass
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""

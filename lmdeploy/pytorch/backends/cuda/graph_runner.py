@@ -8,7 +8,6 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
@@ -182,9 +181,6 @@ class CUDAGraphRunner(GraphRunner):
         strategy_factory: StrategyFactoryBase = build_ctx.strategy_factory
         self.cudagraph_strategy = strategy_factory.build_cudagraph_strategy()
 
-        # enable deepep
-        self.is_ep_mode = get_dist_manager().current_context().dist_config.ep > 1
-
     def check_enable_graph(self):
         """Check enable graph."""
         if self.backend_config.eager_mode:
@@ -291,7 +287,7 @@ class CUDAGraphRunner(GraphRunner):
     ):
         """Prepare inputs."""
 
-        if self.is_ep_mode and get_deepep_state().enabled():
+        if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
             deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
             DeepEPBuffer.set_deepep_mode(deepep_mode)
@@ -305,7 +301,7 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
-        if self.is_ep_mode and get_deepep_state().enabled():
+        if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer
 
             if hasattr(DeepEPBuffer, 'destroy'):
