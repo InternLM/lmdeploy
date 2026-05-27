@@ -5,6 +5,7 @@ from itertools import groupby
 from typing import Any
 
 import numpy as np
+import torch
 from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
 
@@ -57,10 +58,32 @@ class VisionModel(ABC):
         self.with_llm = with_llm
         self.max_memory = max_memory
         self.backend = backend
+        self.mm_feature_dtype: torch.dtype | None = None
         if hf_config is None:
             _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
         self.image_token_id = self.get_pad_token_id(model_path, hf_config, trust_remote_code=trust_remote_code) or 0
+
+    def set_mm_feature_dtype(self, dtype: torch.dtype | None):
+        """Set target dtype for floating MM feature tensors."""
+        self.mm_feature_dtype = dtype
+
+    @classmethod
+    def _postprocess_mm_output(cls, output, target_dtype: torch.dtype | None):
+        """Cast floating processor-output tensors to the target model dtype."""
+        if not isinstance(target_dtype, torch.dtype):
+            return output
+        if not target_dtype.is_floating_point:
+            return output
+        if isinstance(output, torch.Tensor):
+            if output.is_floating_point() and output.dtype != target_dtype:
+                return output.to(dtype=target_dtype)
+            return output
+        if isinstance(output, dict):
+            return {key: cls._postprocess_mm_output(value, target_dtype) for key, value in output.items()}
+        if isinstance(output, list):
+            return [cls._postprocess_mm_output(value, target_dtype) for value in output]
+        return output
 
     def get_pad_token_id(self, model_path, hf_config, trust_remote_code: bool = False):
         """Get pad_token_id from hf_config or tokenizer."""
@@ -172,6 +195,8 @@ class VisionModel(ABC):
                     collected_mm_items[current_modality] = {}
 
                 if attr_name in self.FEATURE_NAMES:
+                    value = self._postprocess_mm_output(value, self.mm_feature_dtype)
+                    processor_outputs[attr_name] = value
                     attr_name = 'feature'
 
                 collected_mm_items[current_modality][attr_name] = value
@@ -190,7 +215,8 @@ class VisionModel(ABC):
         # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
 
-        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+        result = dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+        return result
 
     @staticmethod
     def has_input_ids(messages: list[dict]) -> bool:
