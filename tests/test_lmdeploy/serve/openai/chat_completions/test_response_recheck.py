@@ -131,20 +131,6 @@ async def _collect_sse_payloads(response):
     return chunks
 
 
-def test_chat_stream_sets_assistant_role_only_on_first_chunk():
-    chunks = asyncio.run(
-        _collect_chat_stream(
-            _EchoParser,
-            [
-                dict(text='hello ', token_ids=[1], generate_token_len=1, finish_reason=None),
-                dict(text='world', token_ids=[2], generate_token_len=2, finish_reason='stop'),
-            ],
-        ))
-
-    assert chunks[0]['choices'][0]['delta']['role'] == 'assistant'
-    assert 'role' not in chunks[1]['choices'][0]['delta']
-
-
 def test_chat_stream_skips_parser_validation_without_return_fields():
     chunks = asyncio.run(
         _collect_chat_stream(

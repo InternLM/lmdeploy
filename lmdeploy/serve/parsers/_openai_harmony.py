@@ -212,10 +212,7 @@ class GptOssResponseParser(ResponseParser):
             bool(tool_deltas),
         )]
 
-    def parse_complete(self,
-                       text: str,
-                       token_ids: list[int] | None = None,
-                       **kwargs) -> tuple:
+    def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs) -> tuple:
         if not token_ids:
             # Keep non-streaming behavior consistent with other parsers:
             # when token ids are unavailable, return raw text as assistant content.

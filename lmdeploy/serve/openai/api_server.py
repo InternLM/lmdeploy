@@ -203,10 +203,6 @@ def check_request(request) -> JSONResponse | None:
     return None
 
 
-def _set_stream_delta_role(delta_message: DeltaMessage, is_first_chunk: bool):
-    delta_message.role = 'assistant' if is_first_chunk else None
-
-
 def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
                                      token_ids: list[int] | None = None,
                                      logprobs: list[dict[int, float]] | None = None):
@@ -552,7 +548,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
-        streamed_chunks = 0
         final_usage = None
         async for res in result_generator:
             logprobs = None
@@ -592,7 +587,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
                 finish_reason = res.finish_reason if is_last_delta else None
                 chunk_logprobs = logprobs if is_last_delta else None
-                _set_stream_delta_role(delta_message, streamed_chunks == 0)
 
                 if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
                     if finish_reason == 'stop' and streaming_tools is True:
@@ -614,7 +608,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
-                streamed_chunks += 1
         if final_usage is not None:
             yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
         yield 'data: [DONE]\n\n'
