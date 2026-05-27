@@ -72,29 +72,26 @@ class _EchoParser:
     def __init__(self, request, tokenizer):
         self.request = request
         self.tool_parser = None
-        self.finish_reason = None
+        self.accumulated_text = ''
 
-    def stream_chunk(self, delta_text, delta_token_ids, finish_reason=None, **kwargs):
-        self.finish_reason = finish_reason
-        return DeltaMessage(role='assistant', content=delta_text), False
+    def stream_chunk(self, delta_text, delta_token_ids, **kwargs):
+        self.accumulated_text += delta_text
+        return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
-    def parse_complete(self, text, token_ids=None, finish_reason=None, **kwargs):
-        self.finish_reason = finish_reason
+    def parse_complete(self, text, token_ids=None, **kwargs):
         return text, None, None
+
+    def validate_complete(self, text=None):
+        return True
 
 
 class _InvalidResultParser(_EchoParser):
 
-    def stream_chunk(self, delta_text, delta_token_ids, finish_reason=None, **kwargs):
-        self.finish_reason = 'tool_call_error' if finish_reason in ('stop', 'length') else finish_reason
-        return DeltaMessage(role='assistant', content=delta_text), False
-
-    def parse_complete(self, text, token_ids=None, finish_reason=None, **kwargs):
-        self.finish_reason = 'tool_call_error' if finish_reason in ('stop', 'length') else finish_reason
-        return text, None, None
+    def validate_complete(self, text=None):
+        return False
 
 
-async def _collect_chat_stream(parser_cls, outputs):
+async def _collect_chat_stream(parser_cls, outputs, **request_kwargs):
     from lmdeploy.serve.openai import api_server
 
     old_engine = api_server.VariableInterface.async_engine
@@ -110,6 +107,7 @@ async def _collect_chat_stream(parser_cls, outputs):
             }],
             stream=True,
             max_completion_tokens=8,
+            **request_kwargs,
         )
         response = await api_server.chat_completions_v1(request, _FakeRawRequest())
         return await _collect_sse_payloads(response)
@@ -147,7 +145,7 @@ def test_chat_stream_sets_assistant_role_only_on_first_chunk():
     assert 'role' not in chunks[1]['choices'][0]['delta']
 
 
-def test_chat_stream_uses_parser_validation_finish_reason():
+def test_chat_stream_skips_parser_validation_without_return_fields():
     chunks = asyncio.run(
         _collect_chat_stream(
             _InvalidResultParser,
@@ -157,10 +155,24 @@ def test_chat_stream_uses_parser_validation_finish_reason():
             ],
         ))
 
-    assert chunks[-1]['choices'][0]['finish_reason'] == 'tool_call_error'
+    assert chunks[-1]['choices'][0]['finish_reason'] == 'stop'
 
 
-def test_chat_non_stream_uses_parser_validation_finish_reason():
+def test_chat_stream_uses_parser_validation_finish_reason_with_return_token_ids():
+    chunks = asyncio.run(
+        _collect_chat_stream(
+            _InvalidResultParser,
+            [
+                dict(text='<tool_call>', token_ids=[1], generate_token_len=1, finish_reason=None),
+                dict(text='bad</tool_call>', token_ids=[2], generate_token_len=2, finish_reason='stop'),
+            ],
+            return_token_ids=True,
+        ))
+
+    assert chunks[-1]['choices'][0]['finish_reason'] == 'parse_error'
+
+
+def test_chat_non_stream_skips_parser_validation_without_return_fields():
     from lmdeploy.serve.openai import api_server
 
     old_engine = api_server.VariableInterface.async_engine
@@ -185,4 +197,33 @@ def test_chat_non_stream_uses_parser_validation_finish_reason():
         api_server.VariableInterface.async_engine = old_engine
         api_server.VariableInterface.response_parser_cls = old_parser_cls
 
-    assert data['choices'][0]['finish_reason'] == 'tool_call_error'
+    assert data['choices'][0]['finish_reason'] == 'stop'
+
+
+def test_chat_non_stream_uses_parser_validation_finish_reason_with_return_token_ids():
+    from lmdeploy.serve.openai import api_server
+
+    old_engine = api_server.VariableInterface.async_engine
+    old_parser_cls = api_server.VariableInterface.response_parser_cls
+    try:
+        api_server.VariableInterface.async_engine = _FakeEngine([
+            dict(text='invalid tool', token_ids=[1], generate_token_len=1, finish_reason='stop'),
+        ])
+        api_server.VariableInterface.response_parser_cls = _InvalidResultParser
+        request = ChatCompletionRequest(
+            model='fake-model',
+            messages=[{
+                'role': 'user',
+                'content': 'hello',
+            }],
+            stream=False,
+            max_completion_tokens=8,
+            return_token_ids=True,
+        )
+        response = asyncio.run(api_server.chat_completions_v1(request, _FakeRawRequest()))
+        data = response if isinstance(response, dict) else json.loads(response.body)
+    finally:
+        api_server.VariableInterface.async_engine = old_engine
+        api_server.VariableInterface.response_parser_cls = old_parser_cls
+
+    assert data['choices'][0]['finish_reason'] == 'parse_error'

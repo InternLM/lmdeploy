@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 import partial_json_parser
@@ -27,6 +28,8 @@ ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.t
 
 class ToolParser:
     """Base class for model-specific tool parsers."""
+
+    _json_tool_call_pattern = re.compile(r'^\s*\{(?=.*"name"\s*:\s*"[^"]+").*\}\s*$', re.DOTALL)
 
     def __init__(self):
         self._tool_payload: str = ''
@@ -76,6 +79,44 @@ class ToolParser:
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         """Parse one complete tool payload into OpenAI tool call object."""
         raise NotImplementedError('ToolParser.parse_tool_call_complete has not been implemented!')
+
+    def validate_complete(self, text: str) -> bool:
+        """Return whether complete response text has valid tool calls."""
+        open_tag = self.get_tool_open_tag()
+        close_tag = self.get_tool_close_tag()
+
+        pos = 0
+        while True:
+            open_idx = text.find(open_tag, pos)
+            close_idx = text.find(close_tag, pos)
+            if open_idx < 0:
+                return close_idx < 0
+
+            payload_start = open_idx + len(open_tag)
+            if close_idx < payload_start:
+                return False
+
+            payload = text[payload_start:close_idx].strip()
+            if not self._validate_tool_payload(payload):
+                return False
+
+            pos = close_idx + len(close_tag)
+            if pos >= len(text):
+                return True
+
+    def _validate_tool_payload(self, payload: str) -> bool:
+        """Return whether one complete JSON tool payload is structurally
+        valid."""
+        if not self._json_tool_call_pattern.fullmatch(payload):
+            return False
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(obj, dict):
+            return False
+        name = obj.get('name')
+        return isinstance(name, str) and bool(name)
 
     def _decode_tool_incremental_json(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._tool_payload += added_text

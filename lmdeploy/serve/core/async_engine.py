@@ -47,7 +47,7 @@ class GenOut:
     history_token_len: int
     input_token_len: int
     generate_token_len: int
-    finish_reason: Literal['stop', 'length', 'tool_call_error', 'error', 'abort'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] | None = None
     logprobs: list[dict[int, float]] | None = None
     logits: Any = None
