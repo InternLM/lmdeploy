@@ -310,6 +310,10 @@ class BlockTrie:
 
     def _index_state_checkpoint(self, node: Node):
         """Add a ready state checkpoint to the sparse SSM index."""
+        if node.state_idx < 0 or not node.state_ready:
+            raise RuntimeError('Cannot index an unready SSM prefix-cache checkpoint.')
+        if not self._is_attached_node(node):
+            raise RuntimeError('Cannot index a detached SSM prefix-cache checkpoint node.')
         key = self._make_state_checkpoint_node_key(node)
         nodes = self._state_checkpoint_index.setdefault(key, [])
         if not any(indexed_node is node for indexed_node in nodes):
@@ -518,6 +522,10 @@ class BlockTrie:
         """Mark a node-owned state checkpoint as ready for SSM matching."""
         if node.state_idx < 0:
             raise RuntimeError('Cannot mark an unreserved state checkpoint as ready.')
+        if node.state_ref_count != 0:
+            raise RuntimeError('Cannot publish a pinned SSM prefix-cache checkpoint.')
+        if not self._is_attached_node(node):
+            raise RuntimeError('Cannot publish a detached SSM prefix-cache checkpoint node.')
         if node.state_ready:
             self._unindex_state_checkpoint(node)
         node.state_ready = True
@@ -651,12 +659,13 @@ class BlockTrie:
         if not prefix_cache.restore_state_acquired:
             return False
         node = prefix_cache.restore_node
-        if self._has_restore_checkpoint_ref(node, prefix_cache.restore_state):
-            node.state_ref_count -= 1
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f'Release SSM prefix-cache restore checkpoint: session_id={seq.session_id} '
-                             f'seq_id={seq.seq_id} step={node.num_matched} state_idx={node.state_idx} '
-                             f'ref_count={node.state_ref_count}')
+        if not self._has_restore_checkpoint_ref(node, prefix_cache.restore_state):
+            raise RuntimeError('Acquired SSM prefix-cache restore checkpoint lost its node reference.')
+        node.state_ref_count -= 1
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f'Release SSM prefix-cache restore checkpoint: session_id={seq.session_id} '
+                         f'seq_id={seq.seq_id} step={node.num_matched} state_idx={node.state_idx} '
+                         f'ref_count={node.state_ref_count}')
         prefix_cache.restore_state = -1
         prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
@@ -669,6 +678,8 @@ class BlockTrie:
 
     def release_state_checkpoint(self, node: Node):
         """Release a node-owned state checkpoint while keeping KV ownership."""
+        if node.state_ref_count > 0:
+            raise RuntimeError('Cannot release a pinned SSM prefix-cache checkpoint.')
         if node.state_idx < 0:
             if node.state_ready:
                 self._unindex_state_checkpoint(node)

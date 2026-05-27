@@ -801,8 +801,9 @@ class TestBlockTire:
         state_idx = block_trie.reserve_state_checkpoint(node)
         assert state_idx >= 0
         assert not node.state_ready
-        block_trie._index_state_checkpoint(node)
         key = block_trie._make_state_checkpoint_node_key(node)
+        block_trie._state_checkpoint_index.setdefault(key, []).append(node)
+        block_trie._state_checkpoint_steps.setdefault(node.adapter_name, set()).add(node.num_matched)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         seq = sess.add_sequence(token_ids + [3])
@@ -815,6 +816,22 @@ class TestBlockTire:
         assert node.state_idx == -1
         assert not node.state_ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
+
+    def test_ssm_checkpoint_index_rejects_unready_node(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size * 2
+
+        seq = sess.add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        node = seq.prefix_cache.last_shared_node
+        assert block_trie.reserve_state_checkpoint(node) >= 0
+
+        with pytest.raises(RuntimeError, match='unready SSM prefix-cache checkpoint'):
+            block_trie._index_state_checkpoint(node)
 
     def test_ssm_checkpoint_save_publishes_to_sparse_index(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -868,6 +885,43 @@ class TestBlockTire:
         assert block_trie.release_state_checkpoint_restore_for_seq(seq)
         assert checkpoint_node.state_ref_count == 0
         assert seq.prefix_cache.restore_node is None
+
+    def test_ssm_checkpoint_release_rejects_pinned_state(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size * 2
+
+        _, checkpoint_node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
+
+        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [2])
+        block_trie.match(seq)
+        assert seq.prefix_cache.restore_state == state_idx
+        assert block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+
+        with pytest.raises(RuntimeError, match='Cannot release a pinned'):
+            block_trie.release_state_checkpoint(checkpoint_node)
+
+        assert block_trie.release_state_checkpoint_restore_for_seq(seq)
+        block_trie.release_state_checkpoint(checkpoint_node)
+
+    def test_ssm_checkpoint_restore_release_detects_lost_ref(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size * 2
+
+        _, checkpoint_node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
+
+        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [2])
+        block_trie.match(seq)
+        assert seq.prefix_cache.restore_state == state_idx
+        assert block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+        checkpoint_node.state_ref_count = 0
+
+        with pytest.raises(RuntimeError, match='lost its node reference'):
+            block_trie.release_state_checkpoint_restore_for_seq(seq)
+
+        checkpoint_node.state_ref_count = 1
+        assert block_trie.release_state_checkpoint_restore_for_seq(seq)
 
     def test_ssm_checkpoint_ready_index_is_idempotent(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
