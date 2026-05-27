@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
+from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
 
 from utils.tool_reasoning_definitions import (  # isort: skip
     THINK_END_TOKEN, THINK_START_TOKEN, collect_stream_reasoning, get_reasoning_content, make_logged_client,
@@ -69,10 +69,12 @@ class _ReasoningTestBase:
     def _setup_logging(self, request, config, backend, model_case):
         """Create the log directory and compute the log-file path."""
         self._log_file = setup_log_file(config, request.node.name, 'reasoning')
+        self._model_case = model_case
+        self._client, self._model_name = make_logged_client(self._log_file)
 
     def _get_client(self):
         """Return *(client, model_name)* with transparent logging."""
-        return make_logged_client(self._log_file)
+        return self._client, self._model_name
 
     def _call_api(self, stream, messages, **create_kwargs):
         """Unified API call for both streaming and non-streaming.
@@ -85,7 +87,7 @@ class _ReasoningTestBase:
         """
         client, model_name = self._get_client()
         create_kwargs.setdefault('temperature', 0)
-        create_kwargs.setdefault('max_completion_tokens', 1024)
+        create_kwargs.setdefault('max_completion_tokens', DEFAULT_MAX_COMPLETION_TOKENS)
         create_kwargs.setdefault('logprobs', False)
         extra_body = dict(create_kwargs.pop('extra_body', {}) or {})
         legacy_et = extra_body.pop('enable_thinking', None)
@@ -290,6 +292,8 @@ def _build_search_roundtrip_messages(tool_call_id='call_search_001'):
             'tool',
             'tool_call_id':
             tool_call_id,
+            'name':
+            'web_search',
             'content':
             json.dumps({
                 'title':

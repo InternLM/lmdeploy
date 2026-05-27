@@ -3,6 +3,7 @@ import os
 DEFAULT_PORT = 23333
 DEFAULT_SERVER = os.getenv('MASTER_ADDR', '127.0.0.1')
 PROXY_PORT = 8000
+DEFAULT_MAX_COMPLETION_TOKENS = 8192
 
 EVAL_CONFIGS = {
     'default': {
@@ -222,12 +223,15 @@ TOOL_REASONING_MODEL_LIST_LATEST = [
     'Qwen/Qwen3.5-35B-A3B',
     'Qwen/Qwen3.5-35B-A3B-FP8',
     'Qwen/Qwen3.5-122B-A10B',
+    'Qwen/Qwen3.5-397B-A17B',
+    'Qwen/Qwen3.5-397B-A17B-FP8',
     'meta-llama/Meta-Llama-3.1-70B-Instruct',
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
     'deepseek-ai/DeepSeek-V3',
     'unsloth/gpt-oss-20b-BF16',
     'Qwen/Qwen2.5-7B-Instruct',
     'internlm/Intern-S1-Pro-FP8',
+    'internlm/interns2-preview-0509',
 ]
 
 TOOL_REASONING_MODEL_LIST_LEGACY = [

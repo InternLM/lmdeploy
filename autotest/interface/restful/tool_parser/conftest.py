@@ -1,6 +1,19 @@
 import pytest
-from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
-from utils.tool_reasoning_definitions import make_logged_client, setup_log_file
+from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
+from utils.tool_reasoning_definitions import (
+    CONCURRENT_WEATHER_TOOL,
+    DEFAULT_TOOL_CALL_CONCURRENCY,
+    HttpToolCallError,
+    RoutedExpertsNotSupported,
+    append_concurrent_turn_to_messages,
+    build_input_ids_and_prompt_tokens,
+    collect_stream_tool_call,
+    collect_stream_tool_call_http,
+    make_logged_client,
+    resolve_tokenizer_model_path,
+    run_concurrent_tool_call_workers,
+    setup_log_file,
+)
 
 # ---------------------------------------------------------------------------
 # Marks
@@ -31,14 +44,80 @@ def _apply_marks(cls):
 class _ToolCallTestBase:
     """Mixin providing per-test API request/response logging to *log_path*."""
 
+    _DEFAULT_STREAM_KWARGS = {
+        'temperature': 0,
+        'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+        'logprobs': False,
+    }
+
     @pytest.fixture(autouse=True)
     def _setup_logging(self, request, config, backend, model_case):
         """Create the log directory and compute the log-file path."""
         self._log_file = setup_log_file(config, request.node.name, 'tool_calls')
+        self._model_case = model_case
+        self._client, self._api_model_name = make_logged_client(self._log_file)
+        self._model_name = self._api_model_name
+        self._tokenizer_path = resolve_tokenizer_model_path(config, model_case)
 
     def _get_client(self):
-        """Return *(client, model_name)* with transparent logging."""
-        return make_logged_client(self._log_file)
+        """Return *(client, api_model_name)* with transparent logging."""
+        return self._client, self._api_model_name
+
+    def _stream_tool_call(self, messages, tools=None, **create_kwargs):
+        """Run a streaming tool-call request and return aggregated result."""
+        client, model_name = self._get_client()
+        kwargs = {**self._DEFAULT_STREAM_KWARGS, **create_kwargs}
+        if tools is not None:
+            kwargs['tools'] = tools
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            stream=True,
+            **kwargs,
+        )
+        return collect_stream_tool_call(stream)
+
+    def _stream_tool_call_with_tokens(self, messages, tools=None, use_input_ids=False, **payload_extra):
+        """Stream via HTTP with return_token_ids + return_routed_experts."""
+        if use_input_ids:
+            try:
+                build_input_ids_and_prompt_tokens(messages, self._tokenizer_path, tools)
+            except Exception as exc:
+                pytest.skip(f'input_ids path requires local tokenizer: {exc}')
+        try:
+            return collect_stream_tool_call_http(
+                self._api_model_name,
+                messages,
+                tools=tools,
+                log_file=self._log_file,
+                use_input_ids=use_input_ids,
+                tokenizer_path=self._tokenizer_path,
+                temperature=self._DEFAULT_STREAM_KWARGS['temperature'],
+                max_completion_tokens=self._DEFAULT_STREAM_KWARGS['max_completion_tokens'],
+                **payload_extra,
+            )
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+        except HttpToolCallError as exc:
+            pytest.fail(exc.message)
+
+    def _append_assistant_and_tool_messages(self, messages, stream_result):
+        """Append assistant + tool turns (includes tool ``name``, like
+        concurrent script)."""
+        append_concurrent_turn_to_messages(messages, stream_result)
+
+    def _run_concurrent_workers(self, num_workers=None, num_turns=3, use_input_ids=True, tools=None):
+        """Run parallel multi-turn workers (``test_concurrent_tools``
+        parity)."""
+        return run_concurrent_tool_call_workers(
+            self._api_model_name,
+            tokenizer_path=self._tokenizer_path,
+            num_workers=num_workers or DEFAULT_TOOL_CALL_CONCURRENCY,
+            num_turns=num_turns,
+            tools=tools or [CONCURRENT_WEATHER_TOOL],
+            use_input_ids=use_input_ids,
+            log_file=self._log_file,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +196,16 @@ MESSAGES_PARALLEL_WEATHER = [
         'role': 'user',
         'content': "What's the weather in Dallas, TX and also in "
         'San Francisco, CA?',
+    },
+]
+
+MULTI_TURN_WEATHER_CITIES = ['Tokyo', 'London', 'Paris', 'New York']
+
+MESSAGES_CONCURRENT_WEATHER = [
+    {
+        'role': 'system',
+        'content': 'You are a helpful assistant that can use tools. '
+        'When asked about weather, use the get_weather tool.',
     },
 ]
 
