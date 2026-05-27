@@ -203,6 +203,32 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation='Number of generation tokens processed.',
             labelnames=labelnames).labels(*labelvalues)
 
+        # Speculative decoding counters. Acceptance rate and mean acceptance
+        # length are derived in PromQL from these raw counters.
+        #   rate(accepted_tokens) / rate(draft_tokens)
+        #   1 + rate(accepted_tokens) / rate(drafts)
+        self.counter_spec_decode_num_drafts = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_drafts_total',
+            documentation='Number of speculative decoding drafts.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_spec_decode_num_draft_tokens = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_draft_tokens_total',
+            documentation='Number of speculative decoding draft tokens.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_spec_decode_num_accepted_tokens = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_accepted_tokens_total',
+            documentation='Number of speculative decoding accepted tokens.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_spec_decode_num_accepted_tokens_per_pos_base = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_accepted_tokens_per_pos_total',
+            documentation='Number of accepted speculative decoding tokens per draft position.',
+            labelnames=labelnames + ['position'])
+        self.counter_spec_decode_num_accepted_tokens_per_pos: dict[int, prometheus_client.Counter] = {}
+        self.spec_decode_labelvalues = labelvalues
+
         from lmdeploy.messages import ResponseType
         self.counter_request_success: dict[ResponseType, prometheus_client.Counter] = {}
         counter_request_success_base = prometheus_client.Counter(
@@ -345,7 +371,20 @@ class PrometheusStatLogger(StatLoggerBase):
         self.histogram_num_generation_tokens_request.observe(stats.generation_tokens)
 
     def record_specdecode(self, stats: SpeculativeDecodingStats) -> None:
-        pass
+        """Report speculative decoding metrics to prometheus."""
+        if stats.num_drafts <= 0:
+            return
+
+        self.counter_spec_decode_num_drafts.inc(stats.num_drafts)
+        self.counter_spec_decode_num_draft_tokens.inc(stats.num_draft_tokens)
+        self.counter_spec_decode_num_accepted_tokens.inc(stats.num_accepted_tokens)
+
+        for pos, num_accepted_tokens in enumerate(stats.num_accepted_tokens_per_pos):
+            if pos not in self.counter_spec_decode_num_accepted_tokens_per_pos:
+                labelvalues = self.spec_decode_labelvalues + [str(pos)]
+                counter = self.counter_spec_decode_num_accepted_tokens_per_pos_base.labels(*labelvalues)
+                self.counter_spec_decode_num_accepted_tokens_per_pos[pos] = counter
+            self.counter_spec_decode_num_accepted_tokens_per_pos[pos].inc(float(num_accepted_tokens))
 
 
 def build_buckets(mantissa_lst: list[int], max_value: int) -> list[int]:
