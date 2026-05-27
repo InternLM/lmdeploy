@@ -30,10 +30,15 @@ def test_prometheus_stat_logger_records_specdecode_metrics():
     assert _get_sample_value('lmdeploy:spec_decode_num_drafts_total', labels) == 2
     assert _get_sample_value('lmdeploy:spec_decode_num_draft_tokens_total', labels) == 6
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_total', labels) == 3
+    assert _get_sample_value('lmdeploy:spec_decode_mean_accept_rate', labels) == 0.5
+    assert _get_sample_value('lmdeploy:spec_decode_mean_accept_length', labels) == 2.5
 
     position_labels = labels | {'position': '0'}
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_per_pos_total', position_labels) == 2
+    assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 1
     position_labels = labels | {'position': '1'}
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_per_pos_total', position_labels) == 1
+    assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 0.5
     position_labels = labels | {'position': '2'}
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_per_pos_total', position_labels) == 0
+    assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 0

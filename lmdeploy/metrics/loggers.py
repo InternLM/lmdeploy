@@ -229,6 +229,22 @@ class PrometheusStatLogger(StatLoggerBase):
         self.counter_spec_decode_num_accepted_tokens_per_pos: dict[int, prometheus_client.Counter] = {}
         self.spec_decode_labelvalues = labelvalues
 
+        self.gauge_spec_decode_mean_accept_rate = prometheus_client.Gauge(
+            name='lmdeploy:spec_decode_mean_accept_rate',
+            documentation='Mean speculative decoding acceptance rate. 1 means 100 percent accepted.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_spec_decode_mean_accept_length = prometheus_client.Gauge(
+            name='lmdeploy:spec_decode_mean_accept_length',
+            documentation='Mean speculative decoding acceptance length, including the bonus token.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_spec_decode_per_position_accept_rate_base = prometheus_client.Gauge(
+            name='lmdeploy:spec_decode_per_position_accept_rate',
+            documentation='Speculative decoding acceptance rate per draft position. 1 means 100 percent accepted.',
+            labelnames=labelnames + ['position'])
+        self.gauge_spec_decode_per_position_accept_rate: dict[int, prometheus_client.Gauge] = {}
+
         from lmdeploy.messages import ResponseType
         self.counter_request_success: dict[ResponseType, prometheus_client.Counter] = {}
         counter_request_success_base = prometheus_client.Counter(
@@ -370,6 +386,11 @@ class PrometheusStatLogger(StatLoggerBase):
         self.histogram_num_prompt_tokens_request.observe(stats.prompt_tokens)
         self.histogram_num_generation_tokens_request.observe(stats.generation_tokens)
 
+    @staticmethod
+    def _get_counter_value(counter) -> float:
+        """Get the current value from a prometheus counter child."""
+        return counter._value.get()
+
     def record_specdecode(self, stats: SpeculativeDecodingStats) -> None:
         """Report speculative decoding metrics to prometheus."""
         if stats.num_drafts <= 0:
@@ -379,12 +400,27 @@ class PrometheusStatLogger(StatLoggerBase):
         self.counter_spec_decode_num_draft_tokens.inc(stats.num_draft_tokens)
         self.counter_spec_decode_num_accepted_tokens.inc(stats.num_accepted_tokens)
 
+        num_drafts = self._get_counter_value(self.counter_spec_decode_num_drafts)
+        num_draft_tokens = self._get_counter_value(self.counter_spec_decode_num_draft_tokens)
+        num_accepted_tokens = self._get_counter_value(self.counter_spec_decode_num_accepted_tokens)
+        mean_accept_rate = num_accepted_tokens / num_draft_tokens if num_draft_tokens > 0 else 0.0
+        mean_accept_length = 1 + num_accepted_tokens / num_drafts
+        self.gauge_spec_decode_mean_accept_rate.set(mean_accept_rate)
+        self.gauge_spec_decode_mean_accept_length.set(mean_accept_length)
+
         for pos, num_accepted_tokens in enumerate(stats.num_accepted_tokens_per_pos):
+            num_accepted_tokens = float(num_accepted_tokens)
             if pos not in self.counter_spec_decode_num_accepted_tokens_per_pos:
                 labelvalues = self.spec_decode_labelvalues + [str(pos)]
                 counter = self.counter_spec_decode_num_accepted_tokens_per_pos_base.labels(*labelvalues)
                 self.counter_spec_decode_num_accepted_tokens_per_pos[pos] = counter
-            self.counter_spec_decode_num_accepted_tokens_per_pos[pos].inc(float(num_accepted_tokens))
+                gauge = self.gauge_spec_decode_per_position_accept_rate_base.labels(*labelvalues)
+                self.gauge_spec_decode_per_position_accept_rate[pos] = gauge
+            self.counter_spec_decode_num_accepted_tokens_per_pos[pos].inc(num_accepted_tokens)
+            per_pos_accepted_tokens = self._get_counter_value(
+                self.counter_spec_decode_num_accepted_tokens_per_pos[pos])
+            self.gauge_spec_decode_per_position_accept_rate[pos].set(
+                per_pos_accepted_tokens / num_drafts)
 
 
 def build_buckets(mantissa_lst: list[int], max_value: int) -> list[int]:
