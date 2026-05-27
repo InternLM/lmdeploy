@@ -3,7 +3,7 @@
 
 a100:
 - model_type: base
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
@@ -15,16 +15,14 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     turbomind:
     - kvint8
     pytorch:
-    - kvint42
     - kvint8
 h:
 - model_type: base
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
@@ -36,7 +34,6 @@ h:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     turbomind:
     - kvint8

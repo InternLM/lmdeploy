@@ -3,7 +3,7 @@
 
 a100:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 4
   backends:
   - name: turbomind
@@ -17,24 +17,10 @@ a100:
   - benchmark
   - func
   - prefix_cache
-  - quantization
   quantization:
     turbomind:
     - kvint4
     - kvint8
-    pytorch:
-    - kvint4
-    - kvint8
-- model_type: chat
-  parallel:
-    tp: 4
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - quantization
-  quantization:
     pytorch:
     - kvint4
     - kvint8

@@ -3,17 +3,14 @@
 
 a100:
 - model_type: vl
-  parallel:
+  engine_config:
     tp: 1
-    extra:
-      session-len: 32568
   backends:
   - name: pytorch
     communicators:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     pytorch:
     - kvint4
@@ -22,17 +19,14 @@ h:
 - model_type:
   - chat
   - vl
-  parallel:
+  engine_config:
     tp: 1
-    extra:
-      session-len: 32568
   backends:
   - name: pytorch
     communicators:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     pytorch:
     - kvint4

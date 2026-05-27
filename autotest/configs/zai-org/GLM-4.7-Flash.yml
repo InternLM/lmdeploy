@@ -3,7 +3,7 @@
 
 a100:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
@@ -17,7 +17,7 @@ a100:
   - func
 h:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: pytorch

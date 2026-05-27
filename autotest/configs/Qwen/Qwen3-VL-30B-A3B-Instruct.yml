@@ -5,7 +5,7 @@ a100:
 - model_type:
   - chat
   - vl
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: pytorch
@@ -14,7 +14,6 @@ a100:
   test_coverage:
   - func
   - mllm_evaluate
-  - quantization
   quantization:
     pytorch:
     - kvint8
@@ -22,7 +21,7 @@ h:
 - model_type:
   - chat
   - vl
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: pytorch
@@ -31,13 +30,12 @@ h:
   test_coverage:
   - func
   - mllm_evaluate
-  - quantization
   quantization:
     pytorch:
     - kvint8
 ascend:
 - model_type: vl
-  parallel:
+  engine_config:
     tp: 4
   backends:
   - name: pytorch

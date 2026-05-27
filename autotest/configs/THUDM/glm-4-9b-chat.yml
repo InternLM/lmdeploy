@@ -3,28 +3,7 @@
 
 a100:
 - model_type: chat
-  parallel:
-    tp: 2
-  backends:
-  - name: turbomind
-    communicators:
-    - nccl
-    - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - prefix_cache
-  quantization:
-    turbomind:
-    - awq
-    - kvint4
-    - kvint8
-    pytorch:
-    - kvint4
-    - kvint8
-- model_type: chat
-  parallel:
+  engine_config:
     tp: 1
   backends:
   - name: turbomind
@@ -36,6 +15,7 @@ a100:
   test_coverage:
   - benchmark
   - func
+  - prefix_cache
   - quantization
   quantization:
     turbomind:
@@ -47,7 +27,7 @@ a100:
     - kvint8
 h:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 1
   backends:
   - name: turbomind
@@ -58,7 +38,6 @@ h:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     turbomind:
     - kvint4

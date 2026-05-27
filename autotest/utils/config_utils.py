@@ -20,7 +20,14 @@ CONFIGS_DIR = os.path.join(_AUTOTEST_ROOT, 'configs')
 ENV_PATHS_YML = os.path.join(_AUTOTEST_ROOT, 'env_paths.yml')
 PATHS_YML = ENV_PATHS_YML  # alias for error messages / imports
 PARALLEL_LAYOUT_KEYS = ('tp', 'dp', 'ep', 'cp')
+ENGINE_CONFIG_KEY = 'engine_config'
 TEST_COVERAGE_KEY = 'test_coverage'
+
+
+def _entry_engine_config(entry: dict[str, Any]) -> dict[str, Any]:
+    """Per-model yaml engine / parallel block (``engine_config``; legacy
+    ``parallel``)."""
+    return entry.get(ENGINE_CONFIG_KEY) or entry.get('parallel') or {}
 PROFILE_TO_MODEL_TYPE_KEY = {
     'chat': 'chat_model',
     'vl': 'vl_model',
@@ -264,8 +271,8 @@ def _parallel_layout(parallel: dict[str, Any]) -> dict[str, int]:
     return layout or {'tp': 1}
 
 
-def _parallel_launch_extra(parallel: dict[str, Any]) -> dict[str, Any]:
-    extra = parallel.get('extra')
+def _parallel_launch_extra(engine_config: dict[str, Any]) -> dict[str, Any]:
+    extra = engine_config.get('extra')
     return copy.deepcopy(extra) if isinstance(extra, dict) else {}
 
 
@@ -410,7 +417,7 @@ def _build_run_config_entry(
     func_type: str,
     extra: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    launch_extra = _parallel_launch_extra(entry.get('parallel') or {})
+    launch_extra = _parallel_launch_extra(_entry_engine_config(entry))
     merged_extra = copy.deepcopy(launch_extra)
     if extra:
         merged_extra.update(extra)
@@ -459,7 +466,7 @@ def _get_func_config_list_per_model(
     )
 
     for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
-        layout = _parallel_layout(entry.get('parallel') or {})
+        layout = _parallel_layout(_entry_engine_config(entry))
         if not _parallel_dicts_equal(layout, parallel_config):
             continue
         backend_map = _normalize_entry_backends(entry, config, layout)
@@ -511,7 +518,7 @@ def get_func_config_list(backend: str,
     """Generate all valid running config combinations (communicator + quant
     policy + model).
 
-    Per-model YAML (``autotest/configs/``): ``parallel.extra`` = launch params;
+    Per-model YAML (``autotest/configs/``): ``engine_config.extra`` = launch params;
     ``gen_config`` = request/eval sampling params on each run_config.
     """
     config = get_config()
@@ -587,7 +594,7 @@ def get_parallel_config(config: dict[str, Any], model_name: str) -> list[dict[st
         funcs = entry.get(TEST_COVERAGE_KEY) or []
         if funcs == ['prefix_cache']:
             continue
-        layout = _parallel_layout(entry.get('parallel') or {})
+        layout = _parallel_layout(_entry_engine_config(entry))
         key = tuple(sorted(layout.items()))
         if key not in seen:
             seen.add(key)
@@ -614,7 +621,7 @@ def _model_ids_for_entries(
             continue
         if not _entry_matches_func(entry, func_type, extra):
             continue
-        layout = _parallel_layout(entry.get('parallel') or {})
+        layout = _parallel_layout(_entry_engine_config(entry))
         if not _parallel_dicts_equal(layout, parallel_config):
             continue
         if backend not in _normalize_entry_backends(entry, config, layout):
@@ -662,7 +669,7 @@ def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_poli
     for mid, entry in _iter_per_model_entries(env_key, deps_profile):
         if _base_model_name(mid) != base:
             continue
-        layout = _parallel_layout(entry.get('parallel') or {})
+        layout = _parallel_layout(_entry_engine_config(entry))
         if backend not in _normalize_entry_backends(entry, config, layout):
             continue
         return _is_kvint_enabled_in_entry(backend, base, quant_policy, _quant_cfg_for_entry(entry))
@@ -683,7 +690,7 @@ def get_quantization_model_list(type: str) -> list[str]:
     for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
         if 'quantization' not in (entry.get(TEST_COVERAGE_KEY) or []):
             continue
-        layout = _parallel_layout(entry.get('parallel') or {})
+        layout = _parallel_layout(_entry_engine_config(entry))
         backend_map = _normalize_entry_backends(entry, config, layout)
         quant_cfg = _quant_cfg_for_entry(entry)
         for backend in ('turbomind', 'pytorch'):
@@ -753,6 +760,15 @@ def is_quantization_model(model: str) -> bool:
     """Check if model name contains quantization related keywords."""
     lower_name = model.lower()
     return any(key in lower_name for key in ('awq', '4bits', 'w4', 'int4'))
+
+
+def is_pre_quantized_hf_model(model: str) -> bool:
+    """HF weights are already quantized (AWQ/GPTQ/Int4); skip runtime weight-
+    quant tests."""
+    lower_name = model.lower()
+    if 'gptq' in lower_name:
+        return True
+    return is_quantization_model(model)
 
 
 def _get_communicator_list(config: dict[str, Any],

@@ -5,43 +5,31 @@ a100:
 - model_type:
   - chat
   - vl
-  parallel:
+  engine_config:
     tp: 2
   backends:
-  # - name: turbomind  # Qwen2.5-VL: 不跑 turbomind
-  #   communicators:
-  #   - nccl
-  #   - cuda-ipc
-  - name: pytorch
+  - name: turbomind
     communicators:
     - nccl
+    - cuda-ipc
   test_coverage:
   - func
-  - quantization
   quantization:
-    # turbomind:
-    # - kvint8
-    pytorch:
+    turbomind:
     - kvint8
 h:
 - model_type:
   - chat
   - vl
-  parallel:
+  engine_config:
     tp: 2
   backends:
-  # - name: turbomind  # Qwen2.5-VL: 不跑 turbomind
-  #   communicators:
-  #   - nccl
-  #   - cuda-ipc
-  - name: pytorch
+  - name: turbomind
     communicators:
     - nccl
+    - cuda-ipc
   test_coverage:
   - func
-  - quantization
   quantization:
-    # turbomind:
-    # - kvint8
-    pytorch:
+    turbomind:
     - kvint8

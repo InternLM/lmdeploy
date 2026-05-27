@@ -3,7 +3,7 @@
 
 test:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 8
   backends:
   - name: turbomind

@@ -3,13 +3,13 @@
 
 a100:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
     communicators:
     - nccl
-    # - cuda-ipc  # turbomind tp>1: 不生成 cuda-ipc 用例
+    - cuda-ipc
   - name: pytorch
     communicators:
     - nccl
@@ -24,29 +24,16 @@ a100:
     pytorch:
     - kvint4
     - kvint8
-- model_type: chat
-  parallel:
-    tp: 2
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - quantization
-  quantization:
-    pytorch:
-    - kvint4
-    - kvint8
   deps:
     transformers: 4.57.6
 - model_type: vl
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
     communicators:
     - nccl
-    # - cuda-ipc  # turbomind tp>1: 不生成 cuda-ipc 用例
+    - cuda-ipc
   test_coverage:
   - func
   - quantization
@@ -57,13 +44,13 @@ a100:
     - kvint8
 h:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
     communicators:
     - nccl
-    # - cuda-ipc  # turbomind tp>1: 不生成 cuda-ipc 用例
+    - cuda-ipc
   - name: pytorch
     communicators:
     - nccl
@@ -79,13 +66,13 @@ h:
     - kvint4
     - kvint8
 - model_type: vl
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
     communicators:
     - nccl
-    # - cuda-ipc  # turbomind tp>1: 不生成 cuda-ipc 用例
+    - cuda-ipc
   test_coverage:
   - func
   - quantization

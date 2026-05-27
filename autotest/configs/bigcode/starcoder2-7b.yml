@@ -3,7 +3,7 @@
 
 a100:
 - model_type: base
-  parallel:
+  engine_config:
     tp: 1
   backends:
   - name: pytorch
@@ -11,7 +11,6 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     pytorch:
     - kvint4

@@ -3,7 +3,7 @@
 
 a100:
 - model_type: base
-  parallel:
+  engine_config:
     tp: 1
   backends:
   - name: turbomind

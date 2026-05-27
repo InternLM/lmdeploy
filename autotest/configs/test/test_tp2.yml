@@ -5,7 +5,7 @@ test:
 - model_type:
   - chat
   - base
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind

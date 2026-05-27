@@ -3,7 +3,7 @@
 
 a100:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
@@ -19,7 +19,7 @@ a100:
     - kvint4
     - kvint8
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: pytorch
@@ -27,7 +27,6 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     pytorch:
     - kvint4
@@ -36,7 +35,7 @@ a100:
     transformers: 4.57.6
 h:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind

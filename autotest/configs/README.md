@@ -22,12 +22,14 @@ Per-model YAML: `configs/<org>/<model-name>.yml` → HF id `<org>/<model-name>`.
 - **无 `a100_legacy` 顶层 key**：`config_legacy.yml` 等合并进 `a100` 的 list，与 `config.yml` 行靠 `deps` / `backends` / `test_coverage` 区分
 - **`DEPS_PROFILE`**（环境变量）：按条目 `deps` 筛选矩阵；默认空=仅无 deps 条目（见下）
 
-### `parallel.extra`（服务启动 / CLI 参数）
+### `engine_config.extra`（服务启动 / CLI 参数）
 
-直接写在模型 YAML 的 `parallel.extra` 中，由 `config_utils` 在展开 run_config 时读入 `extra_params`。例如 `session-len`、`cache-max-entry-count`、`max-batch-size`、`model-format`、投机解码相关项等。
+直接写在模型 YAML 的 `engine_config.extra` 中，由 `config_utils` 在展开 run_config 时读入 `extra_params`。例如 `session-len`、`cache-max-entry-count`、`max-batch-size`、`model-format`、投机解码相关项等。
+
+导出/规范化时，`export_model_configs.resolve_launch_extra_overrides()` 会按模型名、环境、`engine_config` 布局、`test_coverage` 合并历史 launch 规则（原在 loader 里对 `run_config['extra_params']` 打补丁的逻辑），写入各条 `engine_config.extra`。
 
 ```yaml
-parallel:
+engine_config:
   dp: 8
   ep: 8
   extra:
@@ -54,38 +56,41 @@ gen_config:
     enable_thinking: true         # Qwen3.5
 ```
 
-**不要**把 `session-len` 写在 `gen_config`；**不要**把 `temperature` 写在 `parallel.extra`。
+**不要**把 `session-len` 写在 `gen_config`；**不要**把 `temperature` 写在 `engine_config.extra`。
 
 ## 单条 list 项
 
-| 字段             | 说明                                                                                                  |
-| ---------------- | ----------------------------------------------------------------------------------------------------- |
-| `model_type`     | **字符串或列表**：`chat` / `vl` / `base`；列表表示同一矩阵复用到多种 profile（展开为多条 run_config） |
-| `parallel`       | `tp` / `dp`+`ep` / `cp`+`tp`                                                                          |
-| `backends`       | 支持两种写法：`[turbomind, pytorch]`；或冗余 communicator 的对象数组（见下）                          |
-| `test_coverage`  | 见下表                                                                                                |
-| `quantization`   | 各 backend 启用的量化：`awq` `gptq` `w8a8` `kvint4` `kvint8` `kvint42`                                |
-| `parallel.extra` | 服务启动 / CLI 参数（写在模型 YAML 中）                                                               |
-| `gen_config`     | 请求/评测采样（`EVAL_CONFIGS` / `MLLM_EVAL_CONFIGS`）                                                 |
-| `deps`           | 可选；Python 依赖覆盖，见下表                                                                         |
+| 字段                  | 说明                                                                                                  |
+| --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `model_type`          | **字符串或列表**：`chat` / `vl` / `base`；列表表示同一矩阵复用到多种 profile（展开为多条 run_config） |
+| `engine_config`       | `tp` / `dp`+`ep` / `cp`+`tp`                                                                          |
+| `backends`            | 支持两种写法：`[turbomind, pytorch]`；或冗余 communicator 的对象数组（见下）                          |
+| `test_coverage`       | 见下表                                                                                                |
+| `quantization`        | 各 backend 启用的量化：`awq` `gptq` `w8a8` `kvint4` `kvint8` `kvint42`                                |
+| `engine_config.extra` | 服务启动 / CLI 参数（写在模型 YAML 中）                                                               |
+| `gen_config`          | 请求/评测采样（`EVAL_CONFIGS` / `MLLM_EVAL_CONFIGS`）                                                 |
+| `deps`                | 可选；Python 依赖覆盖，见下表                                                                         |
 
 ### `test_coverage` 与条目拆分
 
-| function             | 对应用例                                                                   |
-| -------------------- | -------------------------------------------------------------------------- |
-| `func`               | pipeline / restful / chat 接口功能                                         |
-| `evaluate`           | API 评测                                                                   |
-| `benchmark`          | 吞吐 / apiserver benchmark                                                 |
-| `longtext_benchmark` | 长上下文 benchmark                                                         |
-| `mllm_evaluate`      | 多模态评测                                                                 |
-| `mtp_evaluate`       | MTP 推测解码评测                                                           |
-| `quantization`       | AWQ / GPTQ / KVINT 等量化衍生                                              |
-| **`prefix_cache`**   | **前缀缓存**：`benchmark/test_prefixcache_*`、`test_*_prefix_cache_tp2` 等 |
+| function             | 对应用例                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| `func`               | pipeline / restful / chat 接口功能                                                 |
+| `evaluate`           | API 评测                                                                           |
+| `benchmark`          | 吞吐 / apiserver benchmark                                                         |
+| `longtext_benchmark` | 长上下文 benchmark                                                                 |
+| `mllm_evaluate`      | 多模态评测                                                                         |
+| `mtp_evaluate`       | MTP 推测解码评测                                                                   |
+| `quantization`       | 仅当条目含 **AWQ / GPTQ / W8A8** 时添加；KVINT 只写在 `quantization:` 块，不占此项 |
+
+**已量化 HF 权重**（模型 id 含 `AWQ` / `GPTQ` / `Int4` 等）：`test_coverage` **不含** `quantization`；`quantization` 块**不写** `awq` / `gptq` / `w8a8` / `fp8`（仅保留 KV 类如 `kvint4` / `kvint8`）。导出与 `normalize_model_configs.py` 会自动清理。
+| **`prefix_cache`**   | **前缀缓存**：`benchmark/test_prefixcache_*`、`test_*_prefix_cache_tp2` 等                                                                                |
+| **`mtp_evaluate`**   | **MTP 推测解码评测**：须单独一条矩阵（`test_coverage` 仅含此项），`engine_config.extra` 含 `speculative-algorithm` 等；勿与 `evaluate`/`func` 合并 dedupe |
 
 **拆分原则**（与现有 autotest 一致）：
 
-1. `test_coverage` 列出该矩阵要跑的全部用例（可含 `prefix_cache` / `benchmark` / `func` / …）；**不要**在 `parallel.extra` 里写 `enable-prefix-caching`（由 loader 根据 `prefix_cache` 注入 CLI）。
-2. 仅当 `prefix_cache` 需要 **不同** `parallel`（常见为 prefix 用 `tp: 2`、常规定义 `tp: 1`）时，才拆成两条 list 项；否则与常规矩阵合并为一条，避免重复 `parallel` / `quantization`。
+1. `test_coverage` 列出该矩阵要跑的全部用例（可含 `prefix_cache` / `benchmark` / `func` / …）；**不要**在 `engine_config.extra` 里写 `enable-prefix-caching`（由 loader 根据 `prefix_cache` 注入 CLI）。
+2. `prefix_cache` 与当前条目的 `engine_config` 一致（写在同一条 `test_coverage` 里），不再单独拆 `tp: 2` 行。
 3. **不支持 prefix cache 的模型**（如含 `Qwen3.5` 且引擎限制）不要写 `prefix_cache`。
 
 ### `backends` 冗余 communicator
@@ -114,7 +119,7 @@ backends:
 
 ### `model_type` 用 list 的时机
 
-当 **同一环境** 下 chat / vl 的 `parallel`、`backends`、`test_coverage`（除 profile 专属项外）、`quantization` 一致时，合并为一项：
+当 **同一环境** 下 chat / vl 的 `engine_config`、`backends`、`test_coverage`（除 profile 专属项外）、`quantization` 一致时，合并为一项：
 
 ```yaml
 model_type: [chat, vl]

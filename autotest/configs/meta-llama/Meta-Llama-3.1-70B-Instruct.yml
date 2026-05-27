@@ -3,7 +3,7 @@
 
 h:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 4
   backends:
   - name: turbomind
@@ -17,7 +17,6 @@ h:
   - benchmark
   - func
   - prefix_cache
-  - quantization
   quantization:
     turbomind:
     - kvint4

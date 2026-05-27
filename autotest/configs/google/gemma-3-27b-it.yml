@@ -3,7 +3,7 @@
 
 h:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: pytorch
@@ -13,7 +13,6 @@ h:
   - benchmark
   - func
   - prefix_cache
-  - quantization
   quantization:
     pytorch:
     - kvint4

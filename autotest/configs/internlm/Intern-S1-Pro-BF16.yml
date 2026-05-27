@@ -3,7 +3,7 @@
 
 ascend:
 - model_type: chat
-  parallel:
+  engine_config:
     dp: 64
     ep: 64
   backends:
@@ -13,7 +13,7 @@ ascend:
   test_coverage:
   - func
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 64
   backends:
   - name: pytorch

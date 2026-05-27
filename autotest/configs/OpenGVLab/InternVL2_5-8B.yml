@@ -5,7 +5,7 @@ a100:
 - model_type:
   - chat
   - vl
-  parallel:
+  engine_config:
     tp: 1
   backends:
   - name: turbomind

@@ -3,7 +3,7 @@
 
 ascend:
 - model_type: vl
-  parallel:
+  engine_config:
     tp: 1
   backends:
   - name: pytorch

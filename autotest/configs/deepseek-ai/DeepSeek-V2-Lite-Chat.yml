@@ -3,7 +3,7 @@
 
 h:
 - model_type: chat
-  parallel:
+  engine_config:
     tp: 2
   backends:
   - name: turbomind
@@ -12,7 +12,6 @@ h:
     - cuda-ipc
   test_coverage:
   - func
-  - quantization
   quantization:
     turbomind:
     - kvint8
