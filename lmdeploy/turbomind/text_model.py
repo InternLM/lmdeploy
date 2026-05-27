@@ -40,34 +40,19 @@ class TextModel(ABC):
         return self.cfg.vocab_size
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, ep_size, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp):
         self._ctx = ctx
         self._root_handles = root_handles
         self._attn_tp = attn_tp
         self._mlp_tp = mlp_tp
-        # EP is a relabel of MLP-TP (TurboMind asserts mlp_tp_size == ep and
-        # mlp_tp_rank == ep_rank), so the per-GPU EP ranks live in
-        # ``self._mlp_tp``; only the EP size is tracked separately.
-        self._ep_size_val = max(1, ep_size or 1)
+        self._ep = ep
         self._model_tp = model_tp
 
-    def _ep_size(self) -> int:
-        return self._ep_size_val
-
-    def _ep_group(self) -> ParallelGroup | None:
-        """EP group for MoeBuilder, or None when EP is disabled."""
-        return self._mlp_tp if self._ep_size() > 1 else None
-
-    def _ffn_tp_group(self) -> ParallelGroup:
-        if self._ep_size() > 1:
-            return ParallelGroup(1, None)
-        return self._mlp_tp
-
     def _expert_active_mask(self, expert_num: int, expert_idx: int):
-        ep_size = self._ep_size()
+        ep_size = self._ep.size
         if ep_size <= 1:
             return None
-        ranks = self._mlp_tp.ranks
+        ranks = self._ep.ranks
         assert ranks is not None
         local = expert_num // ep_size
         return [rank * local <= expert_idx < (rank + 1) * local

@@ -738,5 +738,6 @@ PYBIND11_MODULE(_turbomind, m)
         .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); })
         .def("attn_tp_rank", &TurboMind::GetAttnTpRank, "index"_a)
         .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a)
+        .def("ep_rank", &TurboMind::GetEpRank, "index"_a)
         .def("model_tp_rank", &TurboMind::GetModelTpRank, "index"_a);
 }

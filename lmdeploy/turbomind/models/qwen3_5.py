@@ -169,14 +169,14 @@ class Qwen3_5TextModel(TextModel):
         cfg.inter_size = inter_size
         cfg.is_expert  = is_expert
 
-        m = FfnBuilder(cfg, self._ctx, tp=self._ffn_tp_group(), active_mask=active_mask)
+        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp, active_mask=active_mask)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx, ep=self._ep_group())
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
@@ -203,7 +203,7 @@ class Qwen3_5TextModel(TextModel):
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = inter_size
         cfg.is_expert  = True
-        m = FfnBuilder(cfg, self._ctx, tp=self._ffn_tp_group(), active_mask=active_mask)
+        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp, active_mask=active_mask)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
@@ -245,13 +245,13 @@ class Qwen3_5Model:
         self.vision_model = None
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, ep_size, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp):
         self.text_model.bind_runtime(
             ctx=ctx,
             root_handles=root_handles,
             attn_tp=attn_tp,
             mlp_tp=mlp_tp,
-            ep_size=ep_size,
+            ep=ep,
             model_tp=model_tp,
         )
 

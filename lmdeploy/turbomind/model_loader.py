@@ -36,19 +36,17 @@ class ModelLoader:
                                 [mc.attn_tp_rank(g) for g in range(self.gpu_count)])
         mlp_tp = ParallelGroup(ec.mlp_tp_size,
                                [mc.mlp_tp_rank(g) for g in range(self.gpu_count)])
+        ep = ParallelGroup(ec.ep,
+                            [mc.ep_rank(g) for g in range(self.gpu_count)])
         model_tp = ParallelGroup(ec.attn_tp_size * ec.attn_cp_size,
                                  [mc.model_tp_rank(g) for g in range(self.gpu_count)])
 
-        # EP is a relabel of MLP-TP: TurboMind asserts mlp_tp_size == ep and
-        # the C++ side sets mlp_tp_rank == ep_rank == inner_rank, so the
-        # mlp_tp group already carries the per-GPU EP rank. Only the EP
-        # size (a scalar) is needed to enable the EP conversion path.
         self.model.bind_runtime(
             ctx=ctx,
             root_handles=[mc.root(g) for g in range(self.gpu_count)],
             attn_tp=attn_tp,
             mlp_tp=mlp_tp,
-            ep_size=ec.ep,
+            ep=ep,
             model_tp=model_tp,
         )
 

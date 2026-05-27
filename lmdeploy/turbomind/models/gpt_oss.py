@@ -107,7 +107,7 @@ class GptOssModel(TextModel):
 
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
-        m = MoeBuilder(cfg, self._ctx, ep=self._ep_group())
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
         m.add_gate('gate', self._linear(pfx + 'router'))
         experts_pfx = pfx + 'experts'
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
@@ -138,6 +138,6 @@ class GptOssModel(TextModel):
             trans=True,
         )
         cfg = self._ffn_cfg.clone()
-        m = FfnBuilder(cfg, self._ctx, tp=self._ffn_tp_group(), active_mask=active_mask)
+        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp, active_mask=active_mask)
         m.add_ffn(w1, w2, w3)
         return m.build()
