@@ -642,7 +642,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
                 model=model_name,
                 messages=MESSAGES_NO_TOOL_NEEDED,
                 temperature=0,
-                max_completion_tokens=4096,
+                max_completion_tokens=100,
                 tools=[],
                 logprobs=False,
             )
