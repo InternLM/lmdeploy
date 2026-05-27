@@ -57,6 +57,11 @@ h:
     - awq
   gen_config:
     temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
 - model_type: chat
   engine_config:
     tp: 2
@@ -77,6 +82,11 @@ h:
   - mtp_evaluate
   gen_config:
     temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
 - model_type: vl
   engine_config:
     tp: 2
@@ -93,6 +103,11 @@ h:
   - mllm_evaluate
   gen_config:
     temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
 - model_type: vl
   engine_config:
     tp: 2
@@ -109,3 +124,8 @@ h:
   - mtp_evaluate
   gen_config:
     temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true

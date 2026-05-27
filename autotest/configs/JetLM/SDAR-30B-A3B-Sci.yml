@@ -23,5 +23,7 @@ h:
     - kvint8
   gen_config:
     temperature: 1.0
+    top-p: 1.0
+    top-k: 0
   deps:
     transformers: 4.57.6

@@ -611,9 +611,14 @@ def _model_ids_for_entries(
     extra: dict[str, Any] | None,
 ) -> list[str]:
     """Model ids from yaml entries matching backend / profile / parallel /
-    function."""
+    function.
+
+    Always ignores rows with entry-level ``deps`` pins (see
+    :func:`get_model_list`); use :func:`get_func_config_list` for
+    ``DEPS_PROFILE``-scoped runs.
+    """
     env_key = _model_matrix_env_key(config)
-    deps_profile = get_deps_profile_selector()
+    deps_profile = EMPTY_DEPS_SELECTOR
     models: list[str] = []
     extended: list[str] = []
     for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
@@ -646,6 +651,8 @@ def get_model_list(config: dict[str, Any],
 
     Non-``func`` types use ``pytorch/turbomind_{profile}`` ∩ ``{func_type}_model`` semantics:
     the model must appear under ``func`` for the same slice **and** under the target function.
+
+    Rows with entry-level ``deps`` are never included (regardless of ``DEPS_PROFILE``).
     """
     parallel_config = parallel_config or {'tp': 1}
     if extra and (extra.get('enable-prefix-caching') is not None or extra.get('enable_prefix_caching') is not None):
