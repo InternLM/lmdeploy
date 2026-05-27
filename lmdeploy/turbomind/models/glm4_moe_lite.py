@@ -101,14 +101,14 @@ class Glm4MoeLiteModel(TextModel):
     # FFN / MoE factories
     # ------------------------------------------------------------------
 
-    def ffn(self, pfx, inter_size, is_expert=False, active_mask=None):
+    def ffn(self, pfx, inter_size, is_expert=False):
         w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = inter_size
         cfg.is_expert  = is_expert
 
-        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp, active_mask=active_mask)
+        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
@@ -122,12 +122,10 @@ class Glm4MoeLiteModel(TextModel):
         correction = pfx.pop('gate.e_score_correction_bias')
         m.add_param('score_correction_bias', correction)
 
-        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(cfg.expert_num):
-            experts[e] = self.ffn(pfx + 'experts' + e,
-                                  self.cfg.moe_intermediate_size, is_expert=True,
-                                  active_mask=self._expert_active_mask(cfg.expert_num, e))
-        m.experts = experts.build()
+        m.add_experts(
+            lambda e: self.ffn(pfx + 'experts' + e,
+                               self.cfg.moe_intermediate_size,
+                               is_expert=True))
 
         shared = self.ffn(pfx + 'shared_experts',
                           self.cfg.intermediate_size * self.cfg.n_shared_experts)

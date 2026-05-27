@@ -173,8 +173,8 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
 class FfnBuilder(Builder):
     """FFN weight loading builder with w1+w3 fusion."""
 
-    def __init__(self, config, ctx, tp: ParallelGroup, active_mask=None):
-        super().__init__(config, ctx, active_mask=active_mask)
+    def __init__(self, config, ctx, tp: ParallelGroup):
+        super().__init__(config, ctx)
         self.tp = tp
         self.config.tp_size = tp.size
 

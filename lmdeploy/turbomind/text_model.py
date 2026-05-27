@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC
 from typing import TYPE_CHECKING
 
-from .builders import NormBuilder, ParallelGroup, make_norm_config
+from .builders import NormBuilder, make_norm_config
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
@@ -47,16 +47,6 @@ class TextModel(ABC):
         self._mlp_tp = mlp_tp
         self._ep = ep
         self._model_tp = model_tp
-
-    def _expert_active_mask(self, expert_num: int, expert_idx: int):
-        ep_size = self._ep.size
-        if ep_size <= 1:
-            return None
-        ranks = self._ep.ranks
-        assert ranks is not None
-        local = expert_num // ep_size
-        return [rank * local <= expert_idx < (rank + 1) * local
-                for rank in ranks]
 
     def _linear(self, pfx: Prefix, *,
                 optional: bool = False) -> Linear | None:

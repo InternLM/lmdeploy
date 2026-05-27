@@ -142,6 +142,33 @@ class Context:
     def __init__(self, devices, data_type):
         self.devices = devices
         self.data_type = data_type
+        self._active_mask_stack = []
+
+    @property
+    def active_mask(self):
+        if self._active_mask_stack:
+            return self._active_mask_stack[-1]
+        return None
+
+    def active_mask_scope(self, active_mask):
+        return _ActiveMaskScope(self, active_mask)
+
+
+class _ActiveMaskScope:
+    """Temporarily restrict builders created under the context."""
+
+    def __init__(self, ctx, active_mask):
+        assert active_mask is not None
+        assert len(active_mask) == len(ctx.devices)
+        self._ctx = ctx
+        self._active_mask = tuple(bool(x) for x in active_mask)
+
+    def __enter__(self):
+        self._ctx._active_mask_stack.append(self._active_mask)
+
+    def __exit__(self, exc_type, exc, tb):
+        self._ctx._active_mask_stack.pop()
+        return False
 
 
 class ParallelGroup:
@@ -165,7 +192,7 @@ class Builder:
     attachments raise.
     """
 
-    def __init__(self, config, ctx, active_mask=None):
+    def __init__(self, config, ctx):
         """Initialise the builder with staging dicts.
 
         Parameters
@@ -181,6 +208,7 @@ class Builder:
         # __setattr__.
         self._built = False
         self._ctx = ctx
+        active_mask = ctx.active_mask
         if active_mask is None:
             active_mask = [True] * len(ctx.devices)
         assert len(active_mask) == len(ctx.devices)
