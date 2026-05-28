@@ -14,7 +14,9 @@ logger = get_logger('lmdeploy')
 
 def check_transformers():
     try:
-        from transformers import Qwen3_5ForConditionalGeneration, Qwen3_5MoeForConditionalGeneration  # noqa: F401
+        # import config instead of model to avoid import error on windows
+        from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config  # noqa: F401
+        from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5MoeConfig  # noqa: F401
     except ImportError:
         raise ImportError('please install latest transformers by '
                           'pip install git+https://github.com/huggingface/transformers.git')
