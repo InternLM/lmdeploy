@@ -7,7 +7,7 @@ aggregates TTFT/ITL/TPOT metrics, and writes table plus report artifacts for con
 
 Generation options include ``--output-tokens`` (``max_completion_tokens``),
 ``--ignore-eos``, ``--return-token-ids``, ``--return-routed-experts``,
-and ``--return-logprob``.
+``--return-logprob``, and ``--logprobs`` / ``--top-logprobs``.
 """
 
 from __future__ import annotations
@@ -337,6 +337,8 @@ def build_payload(
     return_token_ids: bool = False,
     return_routed_experts: bool = False,
     return_logprob: bool = False,
+    logprobs: bool = False,
+    top_logprobs: int | None = None,
     extra_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -366,6 +368,10 @@ def build_payload(
         payload['return_routed_experts'] = True
     if return_logprob:
         payload['return_logprob'] = True
+    if logprobs:
+        payload['logprobs'] = True
+        if top_logprobs is not None:
+            payload['top_logprobs'] = top_logprobs
     if extra_body:
         payload.update(extra_body)
     return payload
@@ -413,6 +419,8 @@ async def request_chat_completion(
     return_token_ids: bool,
     return_routed_experts: bool,
     return_logprob: bool,
+    logprobs: bool,
+    top_logprobs: int | None,
     extra_body: dict[str, Any] | None,
     headers: dict[str, str] | None = None,
     save_response_text: bool = False,
@@ -429,6 +437,8 @@ async def request_chat_completion(
         return_token_ids=return_token_ids,
         return_routed_experts=return_routed_experts,
         return_logprob=return_logprob,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
         extra_body=extra_body,
     )
     trace = RequestTrace(
@@ -1002,6 +1012,8 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
             print('return_routed_experts=True')
         if args.return_logprob:
             print('return_logprob=True')
+        if args.logprobs:
+            print(f'logprobs=True top_logprobs={args.top_logprobs!r}')
 
         async def send_one(request: BenchmarkRequest, mode: str, setting: float, repeat: int) -> RequestTrace:
             return await request_chat_completion(
@@ -1020,6 +1032,8 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                 return_token_ids=args.return_token_ids,
                 return_routed_experts=args.return_routed_experts,
                 return_logprob=args.return_logprob,
+                logprobs=args.logprobs,
+                top_logprobs=args.top_logprobs,
                 extra_body=extra_body,
                 headers=headers,
                 save_response_text=args.save_response_text,
@@ -1216,6 +1230,18 @@ def parse_args() -> argparse.Namespace:
         '--return-logprob',
         action='store_true',
         help='Set return_logprob=true to include raw (logprob, token_id) pairs without OpenAI token formatting.',
+    )
+    parser.add_argument(
+        '--logprobs',
+        action='store_true',
+        help='Set logprobs=true to return OpenAI-compatible per-token logprobs.',
+    )
+    parser.add_argument(
+        '--top-logprobs',
+        type=int,
+        default=None,
+        metavar='N',
+        help='When --logprobs is set, request top_logprobs=N (default: server uses 1).',
     )
     parser.add_argument(
         '--extra-request-body',
