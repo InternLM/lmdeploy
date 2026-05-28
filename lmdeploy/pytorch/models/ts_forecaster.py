@@ -80,10 +80,6 @@ class ResidualBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.output_layer(self.activation(self.hidden_layer(x))) + self.residual_layer(x)
 
-
-_TOLERANCE = 1e-6
-
-
 @dataclasses.dataclass(frozen=False)
 class DecodeCache:
     """Cache for decoding."""
@@ -148,10 +144,11 @@ def revin(
         mu = mu[..., None, None]
         sigma = sigma[..., None, None]
 
+    _tolerance = 1e-6
     if reverse:
         return x * sigma + mu
     else:
-        return (x - mu) / torch.where(sigma < _TOLERANCE, 1.0, sigma)
+        return (x - mu) / torch.where(sigma < _tolerance, 1.0, sigma)
 
 
 def make_attn_mask(
@@ -504,9 +501,7 @@ class Transformer(nn.Module):
         hidden_dims: int,
         num_heads: int,
         *,
-        use_cross_attn: bool = False,
         cross_attn_kv_dim: int = 0,
-        use_cross_attn_gate: bool = True,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -522,25 +517,16 @@ class Transformer(nn.Module):
             device=device,
         )
 
-        if use_cross_attn:
-            _cross_kv_dim = cross_attn_kv_dim or model_dims
-            self.cross_attn_ln = RMSNorm(model_dims, dtype=dtype, device=device)
-            self.cross_attn = MultiHeadCrossAttention(
-                num_heads=num_heads,
-                in_features=model_dims,
-                kv_features=_cross_kv_dim,
-                dtype=dtype,
-                device=device,
-            )
-            if use_cross_attn_gate:
-                # tanh(0)=0, so cross-attn contributes zero at init.
-                self.cross_attn_gate = nn.Parameter(torch.zeros(1, dtype=dtype, device=device))
-            else:
-                self.cross_attn_gate = None
-        else:
-            self.cross_attn_ln = None
-            self.cross_attn = None
-            self.cross_attn_gate = None
+        _cross_kv_dim = cross_attn_kv_dim or model_dims
+        self.cross_attn_ln = RMSNorm(model_dims, dtype=dtype, device=device)
+        self.cross_attn = MultiHeadCrossAttention(
+            num_heads=num_heads,
+            in_features=model_dims,
+            kv_features=_cross_kv_dim,
+            dtype=dtype,
+            device=device,
+        )
+        self.cross_attn_gate = nn.Parameter(torch.zeros(1, dtype=dtype, device=device))
 
         self.pre_ff_ln = RMSNorm(model_dims, dtype=dtype, device=device)
         self.post_ff_ln = RMSNorm(model_dims, dtype=dtype, device=device)
@@ -575,13 +561,12 @@ class Transformer(nn.Module):
         )
         attn_output = self.post_attn_ln(attn_output) + input_embeddings
 
-        if self.cross_attn is not None and cross_kv is not None:
+        if cross_kv is not None:
             cross_out = self.cross_attn(
                 self.cross_attn_ln(attn_output),
                 kv=cross_kv,
             )
-            if self.cross_attn_gate is not None:
-                cross_out = torch.tanh(self.cross_attn_gate) * cross_out
+            cross_out = torch.tanh(self.cross_attn_gate) * cross_out
             attn_output = attn_output + cross_out
 
         output_embeddings = (self.post_ff_ln(self.ff1(self.activation(self.ff0(self.pre_ff_ln(attn_output))))) +
@@ -621,7 +606,7 @@ def linear_interpolation(arr):
 
 
 class ForecasterBackbone(nn.Module):
-    """Forecaster 2.5 with 200M parameters (cross-attention capable)."""
+    """Forecaster 2.5 with 200M parameters."""
 
     context_limit = 16384
     _quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -644,9 +629,7 @@ class ForecasterBackbone(nn.Module):
 
     def __init__(
         self,
-        use_cross_attn: bool = False,
         cross_attn_kv_dim: int = 0,
-        use_cross_attn_gate: bool = True,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -663,13 +646,8 @@ class ForecasterBackbone(nn.Module):
         self.q = len(self._quantiles) + 1
         self.aridx = 5
 
-        self.use_cross_attn = bool(use_cross_attn)
-
         xf_kwargs = dict(self._xf_kwargs)
-        if self.use_cross_attn:
-            xf_kwargs['use_cross_attn'] = True
-            xf_kwargs['cross_attn_kv_dim'] = int(cross_attn_kv_dim) or self.md
-            xf_kwargs['use_cross_attn_gate'] = bool(use_cross_attn_gate)
+        xf_kwargs['cross_attn_kv_dim'] = int(cross_attn_kv_dim) or self.md
 
         self.tokenizer = ResidualBlock(**self._tokenizer_kwargs, dtype=dtype, device=device)
         self.stacked_xf = nn.ModuleList([Transformer(**xf_kwargs, dtype=dtype, device=device) for _ in range(self.x)])
@@ -689,10 +667,6 @@ class ForecasterBackbone(nn.Module):
     ):
         """Forward pass for the history-only path with cross-attention
         injection."""
-        if cross_kv is not None and not getattr(self, 'use_cross_attn', False):
-            raise ValueError('cross_kv was supplied but the Forecaster module was constructed with'
-                             ' use_cross_attn=False; rebuild the module with use_cross_attn=True.')
-
         input_dtype = inputs.dtype
         model_dtype = next(self.parameters()).dtype
         if inputs.dtype != model_dtype:
@@ -1159,27 +1133,24 @@ class Aligner(nn.Module):
         self.ts_qformer = QFormer(in_dim=config.d_ts_encoder, **qformer_kwargs)
         self.llm_qformer = QFormer(in_dim=config.d_llm, **qformer_kwargs)
 
-        if config.use_horizon_head:
-            self.horizon_head = nn.Sequential(
-                LayerNorm(config.qformer_hidden_dim, eps=1e-5, dtype=dtype, device=device),
-                build_colwise_linear(
-                    config.qformer_hidden_dim,
-                    config.qformer_hidden_dim,
-                    bias=True,
-                    dtype=dtype,
-                    device=device,
-                ),
-                nn.SiLU(),
-                build_rowwise_linear(
-                    config.qformer_hidden_dim,
-                    1,
-                    bias=True,
-                    dtype=dtype,
-                    device=device,
-                ),
-            )
-        else:
-            self.horizon_head = None
+        self.horizon_head = nn.Sequential(
+            LayerNorm(config.qformer_hidden_dim, eps=1e-5, dtype=dtype, device=device),
+            build_colwise_linear(
+                config.qformer_hidden_dim,
+                config.qformer_hidden_dim,
+                bias=True,
+                dtype=dtype,
+                device=device,
+            ),
+            nn.SiLU(),
+            build_rowwise_linear(
+                config.qformer_hidden_dim,
+                1,
+                bias=True,
+                dtype=dtype,
+                device=device,
+            ),
+        )
 
     def forward(
         self,
@@ -1233,8 +1204,6 @@ class Aligner(nn.Module):
         Returns:
             (B,) float32 tensor of predicted log1p(horizon).
         """
-        if self.horizon_head is None:
-            raise RuntimeError('horizon_head is not enabled but predict_horizon was called')
         if llm_chunk.dim() != 3:
             raise ValueError(f"Expected llm_chunk with shape (B, Q, D), got {tuple(llm_chunk.shape)}")
         head_param = next(self.horizon_head.parameters())
@@ -1275,16 +1244,13 @@ class TSForecasterConfig:
         qformer_num_query_tokens: int = 32,
         qformer_num_heads: int = 8,
         qformer_num_layers: int = 2,
-        use_horizon_head: bool = True,
         horizon_max_length: int = 0,
-        use_cross_attn_gate: bool = True,
         max_context: int = 2048,
         max_horizon: int = 1024,
         normalize_inputs: bool = True,
         force_flip_invariance: bool = True,
         infer_is_positive: bool = True,
         fix_quantile_crossing: bool = True,
-        default_pred_len: int = 720,
     ):
         self.d_llm = int(d_llm)
         self.d_ts_encoder = int(d_ts_encoder)
@@ -1294,10 +1260,8 @@ class TSForecasterConfig:
         self.qformer_num_heads = int(qformer_num_heads)
         self.qformer_num_layers = int(qformer_num_layers)
 
-        self.use_horizon_head = bool(use_horizon_head)
         self.horizon_max_length = int(horizon_max_length)
 
-        self.use_cross_attn_gate = bool(use_cross_attn_gate)
         self.cross_attn_kv_dim = self.qformer_hidden_dim
 
         self.max_context = int(max_context)
@@ -1307,7 +1271,6 @@ class TSForecasterConfig:
         self.infer_is_positive = bool(infer_is_positive)
         self.fix_quantile_crossing = bool(fix_quantile_crossing)
 
-        self.default_pred_len = int(default_pred_len)
 
 
 @dataclass
@@ -1319,7 +1282,7 @@ class TSForecasterOutput:
         quantile_forecast: list of (horizon_i, C_i, 10) per-sample quantile
             forecasts (quantile order: [median, 0.1, 0.2, ..., 0.9]).
         predicted_horizon: (B,) long tensor of horizons predicted by the horizon
-            head, or None when the head is disabled / a horizon override was given.
+            head, or None when a horizon override was given.
     """
 
     point_forecast: list[torch.Tensor] | None = None
@@ -1349,9 +1312,7 @@ class TSForecaster(nn.Module):
 
         self.aligner = Aligner(config, dtype=dtype, device=device)
         self.forecaster = ForecasterBackbone(
-            use_cross_attn=True,
             cross_attn_kv_dim=config.cross_attn_kv_dim,
-            use_cross_attn_gate=config.use_cross_attn_gate,
             dtype=dtype,
             device=device,
         )
@@ -1575,7 +1536,7 @@ class TSForecaster(nn.Module):
                 (True = valid). Default: all valid.
             override_horizon: optional forecast horizon. An int applies to every
                 sample; a sequence gives one horizon per sample. When omitted, the
-                horizon head predicts it (if enabled), else ``config.default_pred_len``.
+                horizon head predicts it.
         Returns:
             :class:`TSForecasterOutput` with per-sample ``point_forecast`` /
             ``quantile_forecast`` lists and the predicted horizon.
@@ -1601,7 +1562,7 @@ class TSForecaster(nn.Module):
                 per_sample_horizons = [int(override_horizon)] * batch_size
             else:
                 per_sample_horizons = [int(h) for h in override_horizon]
-        elif self.aligner.horizon_head is not None:
+        else:
             pred_log_horizon = self.aligner.predict_horizon(llm_chunk)
             predicted_horizon = self.aligner.decode_horizon(
                 pred_log_horizon,
@@ -1609,8 +1570,6 @@ class TSForecaster(nn.Module):
                 max_h=self._horizon_max_length,
             )
             per_sample_horizons = [int(v) for v in predicted_horizon.tolist()]
-        else:
-            per_sample_horizons = [int(self.config.default_pred_len)] * batch_size
 
         if len(per_sample_horizons) != batch_size:
             raise ValueError(f"per-sample horizon count ({len(per_sample_horizons)}) does not match"
