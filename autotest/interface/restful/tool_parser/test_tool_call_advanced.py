@@ -751,7 +751,7 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
             })
             try:
                 r = self._stream_tool_call_with_tokens(messages, tools=[WEATHER_TOOL])
-                prompt_tokens = r.get('prompt_tokens_computed') or r.get('prompt_tokens')
+                prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
                 validate_stream_tool_call_with_tokens(
                     r,
                     prompt_tokens=prompt_tokens,
@@ -894,8 +894,8 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
                 parsed = json.loads(r['args_str'])
                 assert 'query' in parsed
         else:
-            assert len((r.get('content') or '').strip()) > 0
-            assert_no_parser_drop(r.get('raw_text', ''), r.get('tool_calls'))
+            assert len(r['content'].strip()) > 0
+            assert_no_parser_drop(r['raw_text'], r['tool_calls'])
 
     def test_special_characters_in_query(self, backend, model_case):
         """Quotes, angle brackets, Unicode → JSON args still parseable."""

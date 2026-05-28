@@ -70,7 +70,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             use_input_ids=True,
             reference_payload=True,
         )
-        prompt_tokens = r.get('prompt_tokens_computed') or r.get('prompt_tokens')
+        prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
         assert prompt_tokens > 0
         validate_reference_turn_result(
             r,
@@ -87,7 +87,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             tools=[CONCURRENT_WEATHER_TOOL],
             use_input_ids=False,
         )
-        prompt_tokens = r.get('prompt_tokens_computed') or r.get('prompt_tokens')
+        prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
         try:
             validate_stream_tool_call_with_tokens(
                 r,
@@ -107,7 +107,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             use_input_ids=True,
             reference_payload=True,
         )
-        prompt_tokens = r.get('prompt_tokens_computed') or r.get('prompt_tokens')
+        prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
         validate_reference_turn_result(
             r,
             prompt_tokens,
@@ -129,7 +129,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
                 use_input_ids=True,
                 reference_payload=True,
             )
-            prompt_tokens = r.get('prompt_tokens_computed') or r.get('prompt_tokens')
+            prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
             validate_reference_turn_result(
                 r,
                 prompt_tokens,

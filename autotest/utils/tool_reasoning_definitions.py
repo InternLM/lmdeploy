@@ -363,15 +363,13 @@ def build_input_ids_and_prompt_tokens(
 
 
 def attach_decoded_output_ids(result: dict, tokenizer_path: str) -> dict:
-    output_ids = result.get('output_ids') or []
-    if output_ids:
+    if result['output_ids']:
         try:
             tokenizer = get_chat_tokenizer(tokenizer_path)
-            result['decoded_str'] = tokenizer.decode(output_ids, skip_special_tokens=False)
+            result['decoded_str'] = tokenizer.decode(
+                result['output_ids'], skip_special_tokens=False)
         except Exception:
-            result.setdefault('decoded_str', '')
-    else:
-        result.setdefault('decoded_str', '')
+            result['decoded_str'] = ''
     return result
 
 
@@ -639,7 +637,7 @@ def collect_stream_tool_call_http(
             pass
 
     result['prompt_tokens_computed'] = prompt_tokens_computed
-    if prompt_tokens_computed and not result.get('prompt_tokens'):
+    if prompt_tokens_computed and not result['prompt_tokens']:
         result['prompt_tokens'] = prompt_tokens_computed
 
     result = _finalize_stream_tool_call_result(result, tool_calls)
@@ -798,7 +796,7 @@ async def collect_stream_tool_call_http_async(
                 result['chunk_count'] += 1
                 _merge_stream_choice_json(choices[0], result, tool_calls)
 
-            if result.get('stream_complete'):
+            if result['stream_complete']:
                 break
 
     if log_file:
@@ -809,7 +807,7 @@ async def collect_stream_tool_call_http_async(
             pass
 
     result['prompt_tokens_computed'] = prompt_tokens_computed
-    if prompt_tokens_computed and not result.get('prompt_tokens'):
+    if prompt_tokens_computed and not result['prompt_tokens']:
         result['prompt_tokens'] = prompt_tokens_computed
 
     result = _finalize_stream_tool_call_result(result, tool_calls)
@@ -857,7 +855,7 @@ def _has_parsed_tool_calls(tool_calls) -> bool:
 
 
 def assert_parser_drop_decoded_only(decoded_str: str, tool_calls) -> None:
-    if '<tool_call>' in (decoded_str or '').lower() and not _has_parsed_tool_calls(tool_calls):
+    if '<tool_call>' in decoded_str.lower() and not _has_parsed_tool_calls(tool_calls):
         raise AssertionError(
             'Parser dropped tool call: model emitted <tool_call> in decoded output '
             'but parser returned nothing')
@@ -887,43 +885,43 @@ def validate_stream_tool_call_result(
         assert result['finish_reason'] == expected_finish_reason, (
             f"finish_reason={result['finish_reason']!r}, expected {expected_finish_reason!r}")
 
-    if result.get('finish_reason_count', 0) > 0:
+    if result['finish_reason_count'] > 0:
         assert result['finish_reason_count'] == 1, (
             f'Expected exactly 1 finish_reason chunk, got {result["finish_reason_count"]}')
 
     if require_tool_call:
-        assert result.get('function_name'), 'stream ended without function name'
-        assert result.get('args_str'), f'stream ended without arguments for {result["function_name"]!r}'
-        assert result.get('tool_call_id'), 'stream ended without tool_call id'
+        assert result['function_name'], 'stream ended without function name'
+        assert result['args_str'], f'stream ended without arguments for {result["function_name"]!r}'
+        assert result['tool_call_id'], 'stream ended without tool_call id'
         assert isinstance(result['tool_call_id'], str) and len(result['tool_call_id']) >= 1
         assert result['tool_call_id'].strip() == result['tool_call_id'], (
             'tool_call_id has leading/trailing whitespace')
         assert_arguments_parseable(result['args_str'])
 
-    if expected_function_name is not None and result.get('function_name'):
+    if expected_function_name is not None and result['function_name']:
         assert result['function_name'] == expected_function_name, (
             f"function_name={result['function_name']!r}, expected {expected_function_name!r}")
 
     assert_no_parser_drop(
-        result.get('raw_text', ''),
-        result.get('tool_calls'),
-        result.get('decoded_str', ''),
+        result['raw_text'],
+        result['tool_calls'],
+        result['decoded_str'],
     )
 
 
 def validate_output_ids_present(result: dict) -> None:
-    output_ids = result.get('output_ids') or []
+    output_ids = result['output_ids']
     assert isinstance(output_ids, list), f'output_ids should be list, got {type(output_ids)}'
     assert len(output_ids) > 0, (
         'return_token_ids=True but no output_ids in stream '
-        f'(finish_reason={result.get("finish_reason")!r})')
+        f'(finish_reason={result["finish_reason"]!r})')
 
 
 def validate_output_ids_match_usage(result: dict) -> None:
     """return_token_ids stream must emit one output_ids entry per completion
     token."""
-    output_id_count = len(result.get('output_ids') or [])
-    usage_completion = result.get('completion_tokens') or 0
+    output_id_count = len(result['output_ids'])
+    usage_completion = result['completion_tokens']
     assert usage_completion > 0, (
         'stream_options.include_usage=True but usage.completion_tokens missing '
         'from stream (cannot verify return_token_ids parity)')
@@ -934,17 +932,17 @@ def validate_output_ids_match_usage(result: dict) -> None:
 
 
 def validate_routed_experts_length(result: dict, prompt_tokens: int | None = None) -> None:
-    routed_experts = result.get('routed_experts')
+    routed_experts = result['routed_experts']
     if routed_experts is None:
         raise RoutedExpertsNotSupported(
             'return_routed_experts=True but routed_experts missing in final stream chunk')
 
     if prompt_tokens is None:
-        prompt_tokens = result.get('prompt_tokens_computed') or result.get('prompt_tokens') or 0
-    completion_tokens = len(result.get('output_ids') or [])
+        prompt_tokens = result['prompt_tokens_computed'] or result['prompt_tokens']
+    completion_tokens = len(result['output_ids'])
     expected_len = prompt_tokens + completion_tokens - 1 if prompt_tokens > 0 else 0
     actual_len = len(routed_experts)
-    usage_completion = result.get('completion_tokens') or 0
+    usage_completion = result['completion_tokens']
 
     assert prompt_tokens > 0, (
         'prompt_tokens missing from stream usage; enable stream_options.include_usage')
@@ -960,7 +958,7 @@ def validate_routed_experts_length(result: dict, prompt_tokens: int | None = Non
 
 def validate_stream_tool_call_with_tokens(result: dict, prompt_tokens: int | None = None, **kwargs) -> None:
     validate_stream_tool_call_result(result, **kwargs)
-    assert result.get('stream_complete'), 'stream ended before data: [DONE]'
+    assert result['stream_complete'], 'stream ended before data: [DONE]'
     validate_output_ids_present(result)
     validate_output_ids_match_usage(result)
     validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
@@ -972,8 +970,8 @@ def _tool_calls_for_reference_validation(tool_calls) -> list[dict]:
     if isinstance(tool_calls, dict):
         return [{
             'function': {
-                'name': data.get('name', ''),
-                'arguments': data.get('args_str', ''),
+                'name': data['name'],
+                'arguments': data['args_str'],
             },
         } for idx in sorted(tool_calls) for data in [tool_calls[idx]]]
     return list(tool_calls)
@@ -986,11 +984,11 @@ def validate_reference_turn_result(
     expected_function_name: str | None = None,
 ) -> None:
     """Per-turn validation for concurrent input_ids streaming tool calls."""
-    assert result.get('stream_complete'), 'stream ended before data: [DONE]'
-    assert result.get('finish_reason') == 'tool_calls', (
-        f"finish_reason={result.get('finish_reason')!r}, expected 'tool_calls'")
+    assert result['stream_complete'], 'stream ended before data: [DONE]'
+    assert result['finish_reason'] == 'tool_calls', (
+        f"finish_reason={result['finish_reason']!r}, expected 'tool_calls'")
 
-    tool_calls = _tool_calls_for_reference_validation(result.get('tool_calls'))
+    tool_calls = _tool_calls_for_reference_validation(result['tool_calls'])
     if not tool_calls:
         raise AssertionError('no tool_calls after stream completed')
 
@@ -1010,10 +1008,10 @@ def validate_reference_turn_result(
         assert first_name == expected_function_name, (
             f'function_name={first_name!r}, expected {expected_function_name!r}')
 
-    assert_parser_drop_decoded_only(result.get('decoded_str', ''), result.get('tool_calls'))
+    assert_parser_drop_decoded_only(result['decoded_str'], result['tool_calls'])
 
-    if result.get('routed_experts') is not None and prompt_tokens > 0:
-        completion_tokens = len(result.get('output_ids') or [])
+    if result['routed_experts'] is not None and prompt_tokens > 0:
+        completion_tokens = len(result['output_ids'])
         expected_re_len = prompt_tokens + completion_tokens - 1
         actual_re_len = len(result['routed_experts'])
         assert expected_re_len == actual_re_len, (
@@ -1026,40 +1024,39 @@ def validate_concurrent_turn_result(
     *,
     expected_function_name: str | None = None,
 ) -> None:
-    assert result.get('stream_complete'), 'stream ended before data: [DONE]'
+    assert result['stream_complete'], 'stream ended before data: [DONE]'
     validate_stream_tool_call_result(
         result,
         expected_function_name=expected_function_name,
     )
     validate_output_ids_present(result)
     validate_output_ids_match_usage(result)
-    assert_parser_drop_decoded_only(result.get('decoded_str', ''), result.get('tool_calls'))
-    if result.get('routed_experts') is not None and prompt_tokens > 0:
+    assert_parser_drop_decoded_only(result['decoded_str'], result['tool_calls'])
+    if result['routed_experts'] is not None and prompt_tokens > 0:
         validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
 
 
 def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
-    ast_msg = {'role': 'assistant', 'content': result.get('content') or ''}
-    if result.get('reasoning_content'):
+    ast_msg = {'role': 'assistant', 'content': result['content']}
+    if result['reasoning_content']:
         ast_msg['reasoning_content'] = result['reasoning_content']
 
     tool_calls_out = []
-    if result.get('tool_calls') and isinstance(result['tool_calls'], dict):
+    if result['tool_calls'] and isinstance(result['tool_calls'], dict):
         for idx in sorted(result['tool_calls']):
             data = result['tool_calls'][idx]
-            args = data.get('args_str', '')
             tool_calls_out.append({
-                'id': data.get('id') or f'call_{uuid.uuid4().hex[:8]}',
+                'id': data['id'],
                 'type': 'function',
-                'function': {'name': data['name'], 'arguments': args},
+                'function': {'name': data['name'], 'arguments': data['args_str']},
             })
-    elif result.get('function_name'):
+    elif result['function_name']:
         tool_calls_out.append({
-            'id': result.get('tool_call_id') or f'call_{uuid.uuid4().hex[:8]}',
+            'id': result['tool_call_id'],
             'type': 'function',
             'function': {
                 'name': result['function_name'],
-                'arguments': result.get('args_str', ''),
+                'arguments': result['args_str'],
             },
         })
 
@@ -1115,7 +1112,7 @@ async def _async_concurrent_worker_turns(
                 f'worker {worker_id} turn {turn + 1}: HTTP tool-call request failed: {exc}'
             ) from exc
 
-        prompt_tokens = result.get('prompt_tokens_computed') or result.get('prompt_tokens') or 0
+        prompt_tokens = result['prompt_tokens_computed'] or result['prompt_tokens']
         try:
             validate_reference_turn_result(
                 result,
