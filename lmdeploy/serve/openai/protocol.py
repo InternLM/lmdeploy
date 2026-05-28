@@ -171,6 +171,7 @@ class ChatCompletionRequest(BaseModel):
     min_p: float = 0.0
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False
+    return_logprob: bool | None = False
     include_stop_str_in_output: bool | None = False
     # kwargs for chat template renderer
     chat_template_kwargs: dict[str, Any] | None = Field(
@@ -270,6 +271,7 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     logprobs: ChoiceLogprobs | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     output_ids: list[int] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
@@ -311,6 +313,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: ChoiceLogprobs | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
     output_ids: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
