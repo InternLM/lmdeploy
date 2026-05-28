@@ -59,15 +59,15 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
         self.layer_norm = LayerNorm(config.d_model, eps=1e-5, dtype=dtype, device=device)
 
         self.adapt_in = build_colwise_linear(
-            config.ts_adapt_in_dim,
-            80,
+            in_features=config.ts_adapt_in_dim,
+            out_features=80,
             bias=True,
             dtype=dtype,
             device=device,
         )
         self.adapt_out = build_rowwise_linear(
-            self.embed_dim,
-            config.ts_adapt_out_dim,
+            in_features=self.embed_dim,
+            out_features=config.ts_adapt_out_dim,
             bias=True,
             dtype=dtype,
             device=device,
@@ -242,8 +242,8 @@ class MRQFormer(nn.Module):
 
         if encoder_hidden_size is not None and encoder_hidden_size != hidden_size:
             self.encoder_proj = build_colwise_linear(
-                encoder_hidden_size,
-                hidden_size,
+                in_features=encoder_hidden_size,
+                out_features=hidden_size,
                 bias=True,
                 dtype=dtype,
                 device=device,
