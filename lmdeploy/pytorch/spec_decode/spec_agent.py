@@ -172,6 +172,27 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                 world_size=draft_tp,
                                                 cache_stream=cache_stream)
 
+    def _build_draft_dp_meta(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
+        """Build DP meta for draft inputs after MTP input shifting."""
+        if dp_meta is None:
+            return None
+
+        all_num_tokens = dp_meta.dp_draft_num_tokens
+        if all_num_tokens is None:
+            return dp_meta
+
+        all_num_tokens = list(all_num_tokens)
+        all_num_tokens[self.rank] = input_ids.numel()
+        with self.draft_context():
+            draft_dp_meta = DPMeta.build(input_ids.numel(), all_num_tokens)
+        draft_dp_meta.dp_batches = dp_meta.dp_batches
+        draft_dp_meta.is_decoding = dp_meta.is_decoding
+        draft_dp_meta.dp_is_decoding = dp_meta.dp_is_decoding
+        draft_dp_meta.dp_num_tokens = all_num_tokens
+        draft_dp_meta.dp_draft_num_tokens = all_num_tokens
+        draft_dp_meta.dp_has_non_last_chunk = dp_meta.dp_has_non_last_chunk
+        return draft_dp_meta
+
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
         """Update inputs from main model inputs."""
         next_token_ids = extra_inputs.next_token_ids
@@ -188,8 +209,10 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
-            # clear each time
-            self._prev_chunk_last.clear()
+            # Dummy inputs are DP placeholders and should not disturb
+            # local long-context carry-over state.
+            if not model_inputs.is_dummy:
+                self._prev_chunk_last.clear()
             # Case A: non-chunked — shift left by 1, place next_token at end
             input_ids = model_inputs.input_ids.clone()
             input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
@@ -267,6 +290,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         # update when dp > 1
         is_decoding = model_inputs.is_decoding if model_inputs.dp_meta is None else model_inputs.dp_meta.dp_is_decoding
+        dp_meta = self._build_draft_dp_meta(input_ids, model_inputs.dp_meta)
 
         new_model_inputs = ModelInputs(
             input_ids=input_ids,
@@ -286,13 +310,13 @@ class SpecModelAgent(BaseSpecModelAgent):
             is_first_chunk=model_inputs.is_first_chunk,
             is_last_chunk=model_inputs.is_last_chunk,
             is_dummy=model_inputs.is_dummy,
-            dp_meta=model_inputs.dp_meta,
+            dp_meta=dp_meta,
         )
 
         # update if dp > 1
-        if model_inputs.dp_meta is not None:
+        if dp_meta is not None:
             if is_decoding:
-                padding_batch_size = max(model_inputs.dp_meta.dp_batches)
+                padding_batch_size = max(dp_meta.dp_batches)
                 meta = self.proposer.model.get_meta()
                 meta.padding_batch_size = padding_batch_size
             new_model_inputs = self.proposer.model.update_inputs(new_model_inputs)
@@ -427,6 +451,9 @@ class SpecModelAgent(BaseSpecModelAgent):
                      f'is_dummy={inputs.is_dummy} '
                      f'is_decoding={inputs.is_decoding} '
                      f'dp_meta={inputs.dp_meta} '
+                     f'is_chunk={inputs.is_chunk} '
+                     f'is_first_chunk={inputs.is_first_chunk} '
+                     f'is_last_chunk={inputs.is_last_chunk} '
                      f'target_hidden_states={inputs.target_hidden_states.shape} '
                      f'target_position_ids='
                      f'{inputs.target_position_ids.shape if inputs.target_position_ids is not None else None} ')
@@ -472,9 +499,12 @@ class SpecModelAgent(BaseSpecModelAgent):
 
 
         outputs = self._forward_impl(inputs)
-        if inputs.is_chunk and not inputs.is_last_chunk:
+        has_non_last_chunk = inputs.is_chunk and not inputs.is_last_chunk
+        if inputs.dp_meta is not None:
+            has_non_last_chunk = inputs.dp_meta.dp_has_non_last_chunk
+        if has_non_last_chunk:
             # create dummy draft tokens
-            output_draft_ids = inputs.input_ids.new_zeros(1, self.num_spec_tokens)
+            output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
         else:
             loop_count = self.num_spec_tokens - 1
             draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(

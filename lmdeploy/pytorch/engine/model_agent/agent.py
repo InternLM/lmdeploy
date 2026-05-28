@@ -512,7 +512,22 @@ class BaseModelAgent:
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
         is_sleeping = self.state.is_sleeping
-        dp_forward_meta = [int(is_decoding), int(is_dummy), num_tokens, int(is_sleeping), batch_size]
+        draft_num_tokens = num_tokens
+        dp_has_non_last_chunk = inputs.is_chunk and not inputs.is_last_chunk
+        if inputs.is_chunk:
+            if inputs.is_first_chunk:
+                draft_num_tokens -= batch_size
+            elif inputs.is_last_chunk:
+                draft_num_tokens += batch_size
+        dp_forward_meta = [
+            int(is_decoding),
+            int(is_dummy),
+            num_tokens,
+            int(is_sleeping),
+            batch_size,
+            int(dp_has_non_last_chunk),
+            draft_num_tokens,
+        ]
         # check enable_microbatch
         if self.enable_microbatch:
             tokens_num = inputs.input_ids.numel()
@@ -543,6 +558,7 @@ class BaseModelAgent:
 
         # pad batch size for decoding
         all_num_tokens = gathered_meta[:, 2].tolist()
+        all_draft_num_tokens = gathered_meta[:, 6].tolist()
         if is_decoding:
             padding_batch_size = max(all_num_tokens)
             padding_batch_size = self.spec_agent.get_padding_batch_size(padding_batch_size)
@@ -552,13 +568,16 @@ class BaseModelAgent:
 
         # update if enable_microbatch
         if self.enable_microbatch:
-            inputs.enable_microbatch = gathered_meta[:, 5].all().item()
+            inputs.enable_microbatch = gathered_meta[:, 7].all().item()
 
         # update dp meta
         inputs.build_dp_meta(all_num_tokens)
         inputs.dp_meta.dp_batches = all_batch_sizes
         inputs.dp_meta.is_decoding = local_is_decoding
         inputs.dp_meta.dp_is_decoding = is_decoding
+        inputs.dp_meta.dp_num_tokens = all_num_tokens
+        inputs.dp_meta.dp_draft_num_tokens = all_draft_num_tokens
+        inputs.dp_meta.dp_has_non_last_chunk = bool(gathered_meta[:, 5].any().item())
         inputs = self.patched_model.update_inputs(inputs)
         return inputs, is_all_sleeping
 
@@ -757,6 +776,9 @@ class BaseModelAgent:
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
                      f'is_dummy={inputs.is_dummy} '
+                     f'is_chunk={inputs.is_chunk} '
+                     f'is_first_chunk={inputs.is_first_chunk} '
+                     f'is_last_chunk={inputs.is_last_chunk} '
                      f'dp_meta={inputs.dp_meta} '
                      f'is_decoding={is_decoding}')
         output = await self._async_model_forward(
