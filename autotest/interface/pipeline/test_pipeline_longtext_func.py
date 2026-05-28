@@ -33,37 +33,6 @@ def run_case_in_spawn(target, args):
         name = getattr(target, '__name__', repr(target))
         raise AssertionError(f'spawn worker {name!r} failed with exit code {process.exitcode!r}')
 
-
-def _assert_stream_single(pipe, prompt, gen_config, msg):
-    """Merge multiplex stream chunks for a single prompt and validate."""
-    resp = None
-    n_chunks = 0
-    for chunk in pipe.stream_infer(prompt, gen_config=gen_config):
-        assert isinstance(chunk, Response), (msg, type(chunk))
-        resp = resp.extend(chunk) if resp else chunk
-        n_chunks += 1
-    assert resp is not None, f'{msg}: no stream output'
-    assert n_chunks > 0, f'{msg}: zero chunks'
-    assert resp.finish_reason in ('stop', 'length'), f'{msg}: {resp!r}'
-    assert resp.generate_token_len > 0, f'{msg}: {resp!r}'
-    assert len(resp.text) > 0, f'{msg}: empty text {resp!r}'
-    assert resp.input_token_len > 0, f'{msg}: {resp!r}'
-
-
-def _assert_stream_batch(pipe, prompts, gen_config, msg):
-    """Merge chunks per batch index (multiplex interleaving) and validate."""
-    by_index = {}
-    for chunk in pipe.stream_infer(prompts, gen_config=gen_config):
-        assert isinstance(chunk, Response), (msg, type(chunk))
-        by_index.setdefault(chunk.index, []).append(chunk)
-    assert len(by_index) == len(prompts), f'{msg}: expected {len(prompts)} sequences, got {by_index!r}'
-    for idx, chunks in sorted(by_index.items()):
-        full = ''.join(c.text for c in chunks)
-        assert len(chunks) > 0, f'{msg}: index {idx} no chunks'
-        assert chunks[-1].finish_reason in ('stop', 'length'), f'{msg}: index {idx} {chunks[-1]!r}'
-        assert chunks[-1].generate_token_len > 0, f'{msg}: index {idx} {chunks[-1]!r}'
-        assert len(full) > 0, f'{msg}: index {idx} empty merged text'
-
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'])
 @pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])

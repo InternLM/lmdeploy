@@ -5,7 +5,7 @@ from utils.config_utils import get_func_config_list
 
 def get_models(backend, parallel_config):
     return get_func_config_list(backend, parallel_config, func_type='benchmark') + \
-        get_func_config_list(backend, parallel_config, func_type='benchmark', extra={'enable-prefix-caching': None})
+        get_func_config_list(backend, parallel_config, func_type='benchmark', extra={'enable-prefix-caching': True})
 
 
 @pytest.mark.turbomind
