@@ -21,9 +21,17 @@ def bootstrap():
         conda_prefix = os.getenv('CONDA_PREFIX')
         if conda_prefix is not None:
             dll_paths.append(os.path.join(conda_prefix, 'Library', 'bin'))
-        # de-duplicate while preserving order
+        # de-duplicate while preserving order; normalize Windows paths so
+        # case and slash differences do not bypass de-duplication
         seen = set()
-        dll_paths = [p for p in dll_paths if not (p in seen or seen.add(p))]
+        deduped_dll_paths = []
+        for dll_path in dll_paths:
+            dll_path_key = os.path.normcase(os.path.normpath(dll_path))
+            if dll_path_key in seen:
+                continue
+            seen.add(dll_path_key)
+            deduped_dll_paths.append(dll_path)
+        dll_paths = deduped_dll_paths
         _dll_dirs = []  # keep directory handles alive
         for dll_path in dll_paths:
             if os.path.isdir(dll_path):
