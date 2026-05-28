@@ -141,6 +141,7 @@ class Scheduler:
             seq.state.free()
         elif seq.num_history_ids > 0:
             seq.set_step(0)
+        seq.kv_token_limit = None
         prefix_cache = seq.prefix_cache
         prefix_cache.last_shared_node = None
         prefix_cache.restore_state = -1
@@ -153,13 +154,83 @@ class Scheduler:
         if seq.num_history_ids <= 0:
             return False
 
+        max_prefill_num = self._long_context_chunk_limit(seq)
+        return seq.num_token_ids > max_prefill_num
+
+    def _long_context_chunk_limit(self, seq: SchedulerSequence):
+        """Return the token budget for one long-context chunk."""
         max_prefill_num = self.cache_config.max_prefill_token_num
         mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
         for value in mm_for_chunk_limit.values():
             max_mm_size = max([v.end - v.start for v in value], default=0)
             max_prefill_num = max(max_prefill_num, max_mm_size)
 
-        return seq.num_token_ids > max_prefill_num
+        return max_prefill_num
+
+    def _next_long_context_chunk_end(self, seq: SchedulerSequence):
+        """Return the exclusive absolute token end for the next chunk."""
+        max_prefill_num = self._long_context_chunk_limit(seq)
+        chunk_size = min(seq.num_token_ids, max_prefill_num)
+        start = seq.num_history_ids
+        end = start + chunk_size
+
+        input_mm = seq.get_input_multimodals()
+        if len(input_mm) == 0:
+            return end
+
+        multimodal_data = []
+        for modal_type, modal_datas in input_mm.items():
+            multimodal_data += [(modal_type, data) for data in modal_datas]
+        multimodal_data = sorted(multimodal_data, key=lambda x: x[1].start)
+
+        for _, data in multimodal_data:
+            assert data.start >= start, 'multimodal data should be sorted by start'
+            if data.start >= end:
+                break
+            if data.end > end:
+                end = data.start
+                break
+
+        return end
+
+    def _prefill_kv_token_limit(self, seq: SchedulerSequence):
+        """Limit KV allocation for a non-final long-context prefill chunk."""
+        max_prefill_num = self._long_context_chunk_limit(seq)
+        if seq.num_token_ids <= max_prefill_num:
+            return None
+        return self._next_long_context_chunk_end(seq)
+
+    def _prepare_prefill_allocation(self, seq: SchedulerSequence, prealloc_size: int):
+        """Apply chunk KV limit and return the effective prealloc size."""
+        kv_token_limit = self._prefill_kv_token_limit(seq)
+        if kv_token_limit is None:
+            seq.kv_token_limit = None
+            return prealloc_size
+
+        seq.kv_token_limit = kv_token_limit
+        return 0
+
+    def reserve_long_context_chunk(self,
+                                   seq: SchedulerSequence,
+                                   chunk_size: int,
+                                   prealloc_size: int = 0,
+                                   is_last_chunk: bool = False):
+        """Reserve KV blocks for the next chunk of a running long prefill."""
+        old_kv_token_limit = seq.kv_token_limit
+        if is_last_chunk:
+            seq.kv_token_limit = None
+        else:
+            seq.kv_token_limit = seq.num_history_ids + chunk_size
+            prealloc_size = 0
+
+        evictable = self.hanging + self.waiting
+        if not self.eviction_helper.evict_for_seq(seq, evictable, prealloc_size):
+            seq.kv_token_limit = old_kv_token_limit
+            return False
+
+        self.block_manager.allocate(seq, prealloc_size)
+        self.block_trie.allocate(seq)
+        return True
 
     @staticmethod
     def create_status_list_property(status: MessageStatus):
@@ -279,13 +350,13 @@ class Scheduler:
             nonlocal token_count
             token_count += seq.num_token_ids
 
-        def __evict_for_seq(seq: SchedulerSequence, waiting):
+        def __evict_for_seq(seq: SchedulerSequence, waiting, evict_prealloc_size: int):
             """Evict until can append."""
             from itertools import chain
             hanging = reversed(self.hanging)
             waiting = reversed(waiting)
             evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
+            return eviction_helper.evict_for_seq(seq, evictable, evict_prealloc_size)
 
         def _reorder_waiting():
             """Reorder waiting."""
@@ -323,32 +394,42 @@ class Scheduler:
                 if not self._acquire_ssm_restore_if_needed(seq):
                     __rollback_prefix_match('failed to acquire SSM restore checkpoint')
 
-                if not __evict_for_seq(seq, waiting):
+                alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
+
+                if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
                     if not had_ssm_restore:
                         __rollback_prefix_match('eviction failed')
+                        seq.kv_token_limit = None
                         break
                     # A matched SSM restore may be pinning the only checkpoint
                     # state that eviction would otherwise free.  Roll it back once
                     # and retry eviction before declaring the sequence unschedulable.
                     __rollback_prefix_match('eviction failed with pinned SSM restore')
-                    if not __evict_for_seq(seq, waiting):
+                    alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
+                    if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
+                        seq.kv_token_limit = None
                         break
 
                 # allocate session memory
                 if self.is_ssm and not self._ensure_runtime_state_available():
                     __rollback_prefix_match('no runtime SSM state available')
-                    if not __evict_for_seq(seq, waiting):
+                    alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
+                    if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
+                        seq.kv_token_limit = None
                         break
                     if not self._ensure_runtime_state_available():
+                        seq.kv_token_limit = None
                         break
                 if rolled_back_match:
                     # The tentative hit was not used, but the request still queried
                     # the cache and will recompute from token 0 after rollback.
                     self.block_trie.record_recompute_after_rollback(seq, stats_snapshot)
             else:
-                if not __evict_for_seq(seq, waiting):
+                alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
+                if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
+                    seq.kv_token_limit = None
                     break
-            self.block_manager.allocate(seq, prealloc_size)
+            self.block_manager.allocate(seq, alloc_prealloc_size)
             if self.block_trie.enable:
                 self.block_trie.allocate(seq)
             if self.is_ssm:

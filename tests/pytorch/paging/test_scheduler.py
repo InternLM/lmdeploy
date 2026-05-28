@@ -481,6 +481,175 @@ def test_schedule_migration_matches_current_sequence():
     assert seq.status == MessageStatus.MIGRATION_READY
 
 
+def _make_scheduler_for_decode_growth(num_gpu_blocks: int = 2):
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 4
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=2,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=num_gpu_blocks,
+                               max_prefill_token_num=block_size * 4)
+    scheduler_config = SchedulerConfig(max_batches=2,
+                                       max_session_len=64,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+    return scheduler, block_size
+
+
+def _make_scheduler_for_long_context_chunks(num_gpu_blocks: int = 6):
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 4
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=2,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=num_gpu_blocks,
+                               max_prefill_token_num=block_size * 2)
+    scheduler_config = SchedulerConfig(max_batches=2,
+                                       max_session_len=64,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+    return scheduler, block_size
+
+
+def _make_ssm_scheduler_for_long_context_chunks(num_gpu_blocks: int = 2):
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 4
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=num_gpu_blocks,
+                               max_prefill_token_num=block_size * 2,
+                               num_state_caches=2,
+                               states_shapes=[((1, ), torch.float32)])
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=64,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+    return scheduler, block_size
+
+
+def test_schedule_running_reclaims_waiting_blocks_for_decode_growth():
+    scheduler, block_size = _make_scheduler_for_decode_growth(num_gpu_blocks=2)
+    decode = scheduler.add_session(100).add_sequence([1] * block_size)
+    waiting = scheduler.add_session(101).add_sequence([2] * block_size)
+
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [decode, waiting]
+    scheduler.activate_seqs([decode])
+    waiting.state.evict()
+    assert decode.status == MessageStatus.RUNNING
+    assert waiting.status == MessageStatus.WAITING
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+
+    valid_mask = scheduler.schedule_running([decode], num_required_tokens=1, prealloc_size=1)
+
+    assert valid_mask == [True]
+    assert decode.status == MessageStatus.RUNNING
+    assert decode.num_blocks == 2
+    assert waiting.status == MessageStatus.WAITING
+    assert waiting.num_blocks == 0
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+
+
+def test_schedule_running_keeps_other_running_sequence_when_decode_growth_fails():
+    scheduler, block_size = _make_scheduler_for_decode_growth(num_gpu_blocks=2)
+    decode = scheduler.add_session(100).add_sequence([1] * block_size)
+    long_chunk = scheduler.add_session(101).add_sequence([2] * block_size)
+
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [decode, long_chunk]
+    scheduler.activate_seqs([decode, long_chunk])
+    assert decode.status == MessageStatus.RUNNING
+    assert long_chunk.status == MessageStatus.RUNNING
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+
+    valid_mask = scheduler.schedule_running([decode], num_required_tokens=1, prealloc_size=1)
+
+    assert valid_mask == [False]
+    assert decode.status == MessageStatus.WAITING
+    assert long_chunk.status == MessageStatus.RUNNING
+    assert long_chunk.num_blocks == 1
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+
+
+def test_schedule_prefill_allocates_only_first_long_context_chunk():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=2)
+    long_seq = scheduler.add_session(100).add_sequence([1] * (block_size * 4))
+
+    output = scheduler.schedule(is_prefill=True, prealloc_size=1)
+
+    assert output.running == [long_seq]
+    assert long_seq.status == MessageStatus.READY
+    assert long_seq.kv_token_limit == block_size * 2
+    assert long_seq.num_blocks == 2
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+
+
+def test_schedule_prefill_reapplies_chunk_limit_after_ssm_state_rollback():
+    scheduler, block_size = _make_ssm_scheduler_for_long_context_chunks(num_gpu_blocks=2)
+    long_seq = scheduler.add_session(100).add_sequence([1] * (block_size * 4))
+
+    ensure_results = iter([False, True])
+
+    def _ensure_runtime_state_available_once_then_succeed():
+        return next(ensure_results)
+
+    scheduler._ensure_runtime_state_available = _ensure_runtime_state_available_once_then_succeed
+
+    output = scheduler.schedule(is_prefill=True, prealloc_size=1)
+
+    assert output.running == [long_seq]
+    assert long_seq.status == MessageStatus.READY
+    assert long_seq.kv_token_limit == block_size * 2
+    assert long_seq.num_blocks == 2
+
+
+def test_reserve_long_context_chunk_grows_one_chunk_at_a_time():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=6)
+    long_seq = scheduler.add_session(100).add_sequence([1] * (block_size * 5))
+
+    output = scheduler.schedule(is_prefill=True, prealloc_size=1)
+    assert output.running == [long_seq]
+    assert long_seq.kv_token_limit == block_size * 2
+    assert long_seq.num_blocks == 2
+
+    scheduler.activate_seqs([long_seq])
+    long_seq.set_step(block_size * 2)
+
+    assert scheduler.reserve_long_context_chunk(long_seq, block_size * 2)
+    assert long_seq.status == MessageStatus.RUNNING
+    assert long_seq.kv_token_limit == block_size * 4
+    assert long_seq.num_blocks == 4
+
+    long_seq.set_step(block_size * 4)
+
+    assert scheduler.reserve_long_context_chunk(long_seq, block_size, prealloc_size=1, is_last_chunk=True)
+    assert long_seq.kv_token_limit is None
+    assert long_seq.num_blocks == 6
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+
+
+def test_reserve_long_context_chunk_failure_preserves_committed_prefix():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=2)
+    long_seq = scheduler.add_session(100).add_sequence([1] * (block_size * 4))
+
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [long_seq]
+    scheduler.activate_seqs([long_seq])
+    long_seq.set_step(block_size * 2)
+
+    assert not scheduler.reserve_long_context_chunk(long_seq, block_size * 2)
+    assert long_seq.status == MessageStatus.RUNNING
+    assert long_seq.kv_token_limit == block_size * 2
+    assert long_seq.num_blocks == 2
+
+
 def test_scheduler_rolls_back_prefix_hit_that_would_start_long_context_chunk_from_middle():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16

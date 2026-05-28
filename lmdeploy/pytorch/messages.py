@@ -690,6 +690,9 @@ class SchedulerSequence:
     meta: Any = None
     num_ignored_history: int = 0
     model_meta: dict[str, Any] = None
+    # Exclusive absolute token limit for temporary KV ownership. Non-final
+    # long-context chunks use this to allocate only the computed prefix.
+    kv_token_limit: int | None = None
 
     # For Disaggregation
     migration_request: None | MigrationRequest = None

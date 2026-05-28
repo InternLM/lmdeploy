@@ -35,6 +35,10 @@ class _DummySeq:
         self.prefix_cache = SimpleNamespace(match_start_step=match_start_step)
         self.return_logits = False
         self.return_routed_experts = False
+        self.status = MessageStatus.RUNNING
+
+    def set_step(self, step: int):
+        self.num_history_ids = step
 
     def get_input_multimodals(self):
         return self._input_multimodals
@@ -57,11 +61,26 @@ def _state_seq(logical_state: int, restore_state: int = -1):
 
 class _FakeScheduler:
 
-    def __init__(self, running):
+    def __init__(self, running, waiting=None, num_ready=0, num_running=0):
         self.running = running
+        self.waiting = waiting or []
+        self._num_ready = num_ready
+        self._num_running = num_running
 
     def schedule(self, is_prefill: bool, prealloc_size: int):
         return SimpleNamespace(running=self.running, swap_in_map={}, swap_out_map={})
+
+    def reserve_long_context_chunk(self, seq, chunk_size: int, prealloc_size: int = 0, is_last_chunk: bool = False):
+        return True
+
+    def has_waiting(self):
+        return len(self.waiting) > 0
+
+    def num_ready(self):
+        return self._num_ready
+
+    def num_running(self):
+        return self._num_running
 
 
 class _FakeEngineStrategy:
@@ -163,6 +182,23 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         ('release_save', True),
     ]
     assert not block_trie.pinned
+
+
+def _make_policy_maker(long_seq, decode_seq=None):
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode)
+    maker.spec_decoding = False
+    maker.scheduler = _FakeScheduler([])
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.long_context_chunker.set_seq(long_seq)
+    maker.running_seqs = [] if decode_seq is None else [decode_seq]
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker._last_forward_kind = None
+    return maker
 
 
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():
@@ -284,6 +320,7 @@ def test_long_context_final_chunk_preserves_multimodal_flag_for_spec_decoding():
         all_multimodals={'image': [image]},
         input_multimodals={},
     )
+
     model_inputs = SimpleNamespace(is_decoding=False,
                                    is_chunk=False,
                                    is_first_chunk=False,
@@ -315,6 +352,136 @@ def test_long_context_final_chunk_preserves_multimodal_flag_for_spec_decoding():
     assert model_inputs.is_last_chunk
     assert model_inputs.is_chunk_multimodal
     assert not maker.long_context_chunker.enabled()
+
+
+def test_long_context_chunk_defers_to_decode_after_chunk_forward():
+    long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
+    delta = SimpleNamespace(is_decoding=True)
+    maker = _make_policy_maker(long_seq, decode_seq)
+    maker._last_forward_kind = 'long_context_chunk'
+    maker.create_model_inputs_delta = lambda: (delta, [decode_seq], [])
+    maker.create_model_inputs_long_context = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError('long chunk should wait behind decode'))
+
+    forward_inputs = maker._make_forward_inputs(prefill=False)
+
+    assert forward_inputs['inputs'] is None
+    assert forward_inputs['delta'] is delta
+    assert maker.to_evict_seqs == []
+
+
+def test_long_context_chunk_runs_after_decode_forward():
+    long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
+    model_inputs = SimpleNamespace(is_decoding=False,
+                                   is_chunk=True,
+                                   is_first_chunk=False,
+                                   is_last_chunk=False,
+                                   is_chunk_multimodal=False)
+    maker = _make_policy_maker(long_seq, decode_seq)
+    maker._last_forward_kind = 'decode'
+    maker.create_model_inputs_delta = lambda: (_ for _ in ()).throw(AssertionError('decode should not repeat'))
+    maker.create_model_inputs_long_context = lambda seq, chunk_size, multimodals: model_inputs
+
+    forward_inputs = maker._make_forward_inputs(prefill=False)
+
+    assert forward_inputs['inputs'] is model_inputs
+    assert forward_inputs['delta'] is None
+    assert not model_inputs.is_first_chunk
+    assert not model_inputs.is_last_chunk
+
+
+def test_deferred_long_context_chunk_runs_when_decode_has_no_valid_seqs():
+    long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
+    model_inputs = SimpleNamespace(is_decoding=False,
+                                   is_chunk=True,
+                                   is_first_chunk=False,
+                                   is_last_chunk=False,
+                                   is_chunk_multimodal=False)
+    maker = _make_policy_maker(long_seq, decode_seq)
+    maker._decode_count = 3
+    maker._last_forward_kind = 'long_context_chunk'
+    maker.create_model_inputs_delta = lambda: (None, [], [decode_seq])
+    maker.create_model_inputs_long_context = lambda seq, chunk_size, multimodals: model_inputs
+
+    forward_inputs = maker._make_forward_inputs(prefill=False)
+
+    assert forward_inputs['inputs'] is model_inputs
+    assert forward_inputs['delta'] is None
+    assert maker.to_evict_seqs == [decode_seq]
+    assert maker._decode_count == 0
+
+
+def test_long_context_chunk_falls_back_to_decode_when_chunk_reservation_fails():
+    long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
+    delta = SimpleNamespace(is_decoding=True)
+    maker = _make_policy_maker(long_seq, decode_seq)
+    maker._last_forward_kind = 'decode'
+    maker.scheduler.reserve_long_context_chunk = lambda *args, **kwargs: False
+    maker.create_model_inputs_delta = lambda: (delta, [decode_seq], [])
+    maker.create_model_inputs_long_context = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError('chunk inputs should not be created without KV reservation'))
+
+    forward_inputs = maker._make_forward_inputs(prefill=False)
+
+    assert forward_inputs['inputs'] is None
+    assert forward_inputs['delta'] is delta
+
+
+def test_last_long_context_chunk_waits_for_prefill_turn_with_decode_ready():
+    long_seq = _DummySeq(history_ids=512, token_ids=256, all_multimodals={}, input_multimodals={})
+    decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
+    delta = SimpleNamespace(is_decoding=True)
+    maker = _make_policy_maker(long_seq, decode_seq)
+    maker._last_forward_kind = 'long_context_chunk'
+    maker.create_model_inputs_delta = lambda: (delta, [decode_seq], [])
+
+    forward_inputs = maker._make_forward_inputs(prefill=False)
+
+    assert forward_inputs['inputs'] is None
+    assert forward_inputs['delta'] is delta
+    assert maker.long_context_chunker.enabled()
+
+
+def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
+    image = _DummyMultiModal(start=600, end=700)
+    long_seq = _DummySeq(history_ids=512,
+                         token_ids=256,
+                         all_multimodals={'image': [image]},
+                         input_multimodals={'image': [image]})
+    decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
+    model_inputs = SimpleNamespace(is_decoding=False,
+                                   is_chunk=False,
+                                   is_first_chunk=False,
+                                   is_last_chunk=False,
+                                   is_chunk_multimodal=False)
+    maker = _make_policy_maker(long_seq, decode_seq)
+    maker._last_forward_kind = 'long_context_chunk'
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [decode_seq], [])
+
+    forward_inputs = maker._make_forward_inputs(prefill=True)
+
+    assert forward_inputs['inputs'] is model_inputs
+    assert model_inputs.is_chunk
+    assert model_inputs.is_last_chunk
+    assert model_inputs.is_chunk_multimodal
+    assert not maker.long_context_chunker.enabled()
+
+
+def test_do_prefill_default_treats_pending_last_chunk_as_waiting_work():
+    long_seq = _DummySeq(history_ids=512, token_ids=256, all_multimodals={}, input_multimodals={})
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode, max_prefill_token_num=512, max_batches=1, prefill_interval=1)
+    maker.scheduler = _FakeScheduler([], num_ready=1, num_running=1)
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.long_context_chunker.set_seq(long_seq)
+    maker._decode_count = 1
+
+    assert maker.do_prefill_default()
 
 
 def test_state_prefix_cache_restore_offsets_are_compact():
