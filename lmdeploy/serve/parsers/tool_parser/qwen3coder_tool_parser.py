@@ -17,8 +17,6 @@ from .xml_tool_parser import XmlToolParser
 class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
-    tool_start_token = '<tool_call>'
-    tool_end_token = '</tool_call>'
     func_prefix = '<function='
     func_end_token = '</function>'
     param_prefix = '<parameter='
@@ -31,13 +29,16 @@ class Qwen3CoderToolParser(XmlToolParser):
     def _close_json_on_final(self) -> bool:
         return False
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.tool_start_token
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        return '<tool_call>'
 
-    def get_tool_close_tag(self) -> str | None:
-        return self.tool_end_token
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
+        return '</tool_call>'
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'xml'
 
     def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
@@ -53,7 +54,7 @@ class Qwen3CoderToolParser(XmlToolParser):
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""
-        content = content.replace(self.tool_start_token, '').replace(self.tool_end_token, '').strip()
+        content = content.replace('<tool_call>', '').replace('</tool_call>', '').strip()
 
         func_name = None
         func_start = content.find(self.func_prefix)

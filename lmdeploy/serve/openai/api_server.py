@@ -1326,7 +1326,10 @@ def set_parsers(reasoning_parser_name: str | None = None, tool_parser_name: str 
     if cls is None:
         raise ValueError(f'The response parser {name} is not in the parser list: '
                          f'{ResponseParserManager.module_dict.keys()}')
-    cls.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
+    tokenizer = VariableInterface.async_engine.tokenizer.model.model
+    cls.set_parsers(reasoning_parser_name=reasoning_parser_name,
+                    tool_parser_name=tool_parser_name,
+                    tokenizer=tokenizer)
     VariableInterface.response_parser_cls = cls
 
 def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindEngineConfig):

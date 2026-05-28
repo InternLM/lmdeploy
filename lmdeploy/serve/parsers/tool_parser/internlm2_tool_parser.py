@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING
 from .tool_parser import ToolParser, ToolParserManager
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
-
     from lmdeploy.serve.openai.protocol import (
         ChatCompletionRequest,
         DeltaToolCall,
@@ -18,9 +16,6 @@ if TYPE_CHECKING:
 class Internlm2ToolParser(ToolParser):
     """Tool parser for InternLM JSON tool-call payloads."""
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase):
-        super().__init__(tokenizer)
-
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         if request.tools and request.tool_choice != 'none':
             # do not skip special tokens because internlm use the special
@@ -30,13 +25,16 @@ class Internlm2ToolParser(ToolParser):
         request.spaces_between_special_tokens = False
         return super().adjust_request(request)
 
-    def get_tool_open_tag(self) -> str | None:
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
         return '<|action_start|><|plugin|>'
 
-    def get_tool_close_tag(self) -> str | None:
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
         return '<|action_end|>'
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'json'
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:

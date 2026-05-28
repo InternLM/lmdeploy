@@ -130,7 +130,12 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
 
 class ResponseParser:
     @classmethod
-    def set_parsers(cls, reasoning_parser_name: str | None = None, tool_parser_name: str | None = None) -> None:
+    def set_parsers(
+        cls,
+        reasoning_parser_name: str | None = None,
+        tool_parser_name: str | None = None,
+        tokenizer: PreTrainedTokenizerBase | None = None,
+    ) -> None:
         pass
 
     def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
@@ -206,6 +211,7 @@ class BaseResponseParser(ResponseParser):
         cls,
         reasoning_parser_name: str | None = None,
         tool_parser_name: str | None = None,
+        tokenizer: PreTrainedTokenizerBase | None = None,
     ) -> None:
         """Configure reasoning/tool parser classes by registry name."""
         from .reasoning_parser import ReasoningParserManager
@@ -220,6 +226,8 @@ class BaseResponseParser(ResponseParser):
         if reasoning_parser_name is not None:
             if reasoning_parser_name in ReasoningParserManager.module_dict:
                 cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
+                if tokenizer is not None:
+                    cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
             else:
                 raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
                                  f'{ReasoningParserManager.module_dict.keys()}')
@@ -259,12 +267,8 @@ class BaseResponseParser(ResponseParser):
         tcls = type(self).tool_parser_cls
         self._kwargs = type(self).chat_template_kwargs_from_request(request)
         self.enable_thinking: bool | None = self._kwargs.get('enable_thinking', None)
-        self.reasoning_parser: ReasoningParser | None = (
-            rcls(tokenizer, **self._kwargs) if rcls else None
-        )
-        self.tool_parser: ToolParser | None = (
-            tcls(tokenizer) if tcls else None
-        )
+        self.reasoning_parser: ReasoningParser | None = rcls(**self._kwargs) if rcls else None
+        self.tool_parser: ToolParser | None = tcls() if tcls else None
         if self.tool_parser is not None:
             self.request = self.tool_parser.adjust_request(request)
         else:

@@ -20,20 +20,21 @@ class Glm47ToolParser(XmlToolParser):
     ``function_name<arg_key>k</arg_key><arg_value>v</arg_value>...``
     """
 
-    tool_start_token = '<tool_call>'
-    tool_end_token = '</tool_call>'
     arg_key_start_token = '<arg_key>'
     arg_key_end_token = '</arg_key>'
     arg_value_start_token = '<arg_value>'
     arg_value_end_token = '</arg_value>'
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.tool_start_token
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        return '<tool_call>'
 
-    def get_tool_close_tag(self) -> str | None:
-        return self.tool_end_token
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
+        return '</tool_call>'
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'xml'
 
     def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, str], bool]:
