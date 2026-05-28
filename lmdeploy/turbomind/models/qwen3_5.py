@@ -21,11 +21,14 @@ from __future__ import annotations
 
 import math
 import re
+from typing import Any
 
 import _turbomind as _tm
 import torch
 from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config, Qwen3_5TextConfig
 from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5MoeConfig, Qwen3_5MoeTextConfig
+
+from lmdeploy.vl.constants import Modality
 
 from ..builders import (
     AttentionBuilder,
@@ -354,6 +357,60 @@ class Qwen3_5VisionModel(TextModel):
                               * self._vis_patch
                               * self._vis_patch)
 
+    @staticmethod
+    def _offset_pair(offset) -> tuple[int, int]:
+        if isinstance(offset, torch.Tensor):
+            values = offset.flatten().tolist()
+        else:
+            values = list(offset)
+        if len(values) != 2:
+            raise ValueError(f'Qwen3.5 ViT offset should contain 2 values, got {values!r}')
+        return int(values[0]), int(values[1])
+
+    @staticmethod
+    def _grid_thw(grid_thw) -> tuple[int, int, int]:
+        if isinstance(grid_thw, torch.Tensor):
+            values = grid_thw.flatten().tolist()
+        else:
+            values = list(grid_thw)
+        if len(values) != 3:
+            raise ValueError(f'Qwen3.5 ViT grid_thw should contain 3 values, got {values!r}')
+        return int(values[0]), int(values[1]), int(values[2])
+
+    @staticmethod
+    def _tm_tensor(tensor: torch.Tensor):
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(f'Qwen3.5 ViT multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
+        return _tm.from_dlpack(tensor.contiguous())
+
+    def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
+        """Convert Qwen3.5 VL preprocessor outputs to typed TurboMind input."""
+        items = []
+        for input_mm in multimodal:
+            modality = input_mm.get('modality')
+            if modality == Modality.IMAGE or modality == Modality.IMAGE.value:
+                data = self._tm_tensor(input_mm['pixel_values'])
+                grid_thw = self._grid_thw(input_mm['image_grid_thw'])
+                tm_modality = _tm.multimodal.Modality.IMAGE
+            elif modality == Modality.VIDEO or modality == Modality.VIDEO.value:
+                data = self._tm_tensor(input_mm['pixel_values_videos'])
+                grid_thw = self._grid_thw(input_mm['video_grid_thw'])
+                tm_modality = _tm.multimodal.Modality.VIDEO
+            else:
+                raise ValueError(f'Qwen3.5 TurboMind does not support modality {modality!r}')
+
+            token_begin, token_end = self._offset_pair(input_mm['offset'])
+            items.append(
+                _tm.multimodal.Qwen3_5VitItem(
+                    modality=tm_modality,
+                    data=data,
+                    token_begin=token_begin,
+                    token_end=token_end,
+                    grid_thw=grid_thw,
+                ))
+
+        return _tm.multimodal.Qwen3_5VitInput(items)
+
     # ------------------------------------------------------------------
     # model() — build the visual sub-tree
     # ------------------------------------------------------------------
@@ -552,6 +609,11 @@ class Qwen3_5Model:
     @property
     def _loader_mappings(self):
         return list(getattr(type(self.text_model), '_loader_mappings', []))
+
+    def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
+        if self.vision_model is None:
+            raise ValueError('Qwen3.5 TurboMind vision encoder is not available.')
+        return self.vision_model.to_turbomind_multimodal(multimodal)
 
     def model(self, pfx):
         # Text root child must be attached before the visual one, since both

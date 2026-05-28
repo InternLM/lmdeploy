@@ -163,6 +163,7 @@ class TurboMind:
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
         self.model_comm, model_loader = self._from_hf(model_path=model_path, engine_config=_engine_config,
                                                       trust_remote_code=trust_remote_code)
+        self.source_model = model_loader.model
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         if not _engine_config.empty_init:
@@ -273,6 +274,20 @@ class TurboMind:
         )
 
         return model_comm, model_loader
+
+    def prepare_multimodal_inputs(self, multimodal: list[dict[str, Any]] | None):
+        """Convert frontend multimodal data into model-specific TurboMind
+        input."""
+        if not multimodal:
+            return None
+        if self.engine_config.disable_vision_encoder:
+            logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+            return None
+
+        parser = getattr(self.source_model, 'to_turbomind_multimodal', None)
+        if parser is None:
+            raise ValueError(f'{type(self.source_model).__name__} does not support TurboMind multimodal inputs.')
+        return parser(multimodal)
 
     async def sleep(self, level: int = 1):
         """Sleep the model."""
@@ -710,7 +725,7 @@ class TurboMindInstance:
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
         inputs = _np_dict_to_tm_dict(inputs)
-        mm_inputs = _tm.multimodal.Value.from_list(multimodal) if multimodal else None
+        mm_inputs = self.tm_model.prepare_multimodal_inputs(multimodal)
 
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)

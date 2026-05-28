@@ -28,7 +28,7 @@ public:
 
     struct InputParam {
         std::shared_ptr<TensorMap>         tensors;
-        std::shared_ptr<multimodal::Value> mm_inputs;
+        std::shared_ptr<multimodal::Input> mm_inputs;
 
         SessionParam     session;
         GenerationConfig gen_cfg;

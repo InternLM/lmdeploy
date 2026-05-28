@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <array>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -31,6 +32,7 @@
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
+#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_input.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
 #include "src/turbomind/models/visual_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
@@ -288,69 +290,6 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
     }
 }
 
-namespace multimodal {
-
-using Value    = ft::multimodal::Value;
-using Array    = ft::multimodal::Array;
-using Document = ft::multimodal::Document;
-
-Value py_to_value(py::handle obj)
-{
-    if (obj.is_none())
-        return Value{};
-    if (py::hasattr(obj, "__dlpack__")) {
-        py::capsule cap  = obj.attr("__dlpack__")();
-        auto*       dlmt = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
-        auto        ret  = DLManagedTensorToTritonTensor(dlmt);
-        cap.set_name("used_dltensor");
-        return Value{std::move(*ret)};
-    }
-    if (py::isinstance<py::bool_>(obj))
-        return Value{obj.cast<bool>()};
-    if (py::isinstance<py::int_>(obj))
-        return Value{obj.cast<int64_t>()};
-    if (py::isinstance<py::float_>(obj))
-        return Value{obj.cast<double>()};
-    if (py::isinstance<py::str>(obj))
-        return Value{obj.cast<std::string>()};
-    if (py::isinstance(obj, py::module_::import("enum").attr("Enum"))) {
-        return py_to_value(obj.attr("value"));
-    }
-
-    if (py::isinstance<py::list>(obj) || py::isinstance<py::tuple>(obj)) {
-        Array list;
-        for (auto& item : obj) {
-            list.push_back(py_to_value(item));
-        }
-        return Value{std::move(list)};
-    }
-    if (py::isinstance<py::dict>(obj)) {
-        Document dict;
-        for (auto& [k, v] : obj.cast<py::dict>()) {
-            dict[k.cast<std::string>()] = py_to_value(v);
-        }
-        return Value{std::move(dict)};
-    }
-    throw std::runtime_error("unsupported Python type for Value conversion");
-}
-
-std::shared_ptr<ft::multimodal::Value> make_multimodal_input(py::list mm_inputs)
-{
-    Array items;
-    for (auto& py_item : mm_inputs) {
-        auto d = py_item.cast<py::dict>();
-
-        Document doc;
-        for (auto& [k, v] : d) {
-            auto key = k.cast<std::string>();
-            doc.insert({key, py_to_value(v)});
-        }
-        items.push_back(std::move(doc));
-    }
-    return std::make_shared<ft::multimodal::Value>(std::move(items));
-}
-}  // namespace multimodal
-
 namespace {
 
 struct ScopedGIL {
@@ -393,12 +332,44 @@ void bind_struct(py::module_& m, const char* name)
 PYBIND11_MODULE(_turbomind, m)
 {
     py::module_ multimodal = m.def_submodule("multimodal");
-    py::class_<turbomind::multimodal::Value, std::shared_ptr<turbomind::multimodal::Value>>(multimodal, "Value")
+
+    using MMInput      = ft::multimodal::Input;
+    using MMModality   = ft::multimodal::Modality;
+    using QwenVitItem  = ft::multimodal::Qwen3_5VitItem;
+    using QwenVitInput = ft::multimodal::Qwen3_5VitInput;
+    py::class_<MMInput, std::shared_ptr<MMInput>>(multimodal, "Input");
+    py::enum_<MMModality>(multimodal, "Modality")
+        .value("IMAGE", MMModality::kImage)
+        .value("VIDEO", MMModality::kVideo)
+        .value("AUDIO", MMModality::kAudio)
+        .value("TIME_SERIES", MMModality::kTimeSeries)
+        .export_values();
+    py::class_<QwenVitItem>(multimodal, "Qwen3_5VitItem")
         .def(py::init<>())
-        .def_static(
-            "from_list",
-            [](py::list mm_inputs) { return multimodal::make_multimodal_input(mm_inputs); },
-            "mm_inputs"_a);
+        .def(py::init([](MMModality              modality,
+                         std::shared_ptr<Tensor> data,
+                         int                     token_begin,
+                         int                     token_end,
+                         std::array<int, 3>      grid_thw) {
+                 return QwenVitItem{modality, *data, token_begin, token_end, grid_thw};
+             }),
+             "modality"_a,
+             "data"_a,
+             "token_begin"_a,
+             "token_end"_a,
+             "grid_thw"_a)
+        .def_readwrite("modality", &QwenVitItem::modality)
+        .def_property(
+            "data",
+            [](const QwenVitItem& self) { return std::make_shared<Tensor>(self.data); },
+            [](QwenVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
+        .def_readwrite("token_begin", &QwenVitItem::token_begin)
+        .def_readwrite("token_end", &QwenVitItem::token_end)
+        .def_readwrite("grid_thw", &QwenVitItem::grid_thw);
+    py::class_<QwenVitInput, MMInput, std::shared_ptr<QwenVitInput>>(multimodal, "Qwen3_5VitInput")
+        .def(py::init<>())
+        .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
+        .def_readwrite("items", &QwenVitInput::items);
 
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
@@ -598,7 +569,6 @@ PYBIND11_MODULE(_turbomind, m)
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
     using ft::ModelRequest;
-    using MMInput = ft::multimodal::Value;
     py::class_<ModelRequest>(m, "ModelRequest")
         .def(
             "forward",

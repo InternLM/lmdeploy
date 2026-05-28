@@ -17,6 +17,7 @@
 #include "src/turbomind/models/qwen3_5vit/mrope_position_ids.h"
 #include "src/turbomind/models/qwen3_5vit/qkv_preprocess.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
+#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_input.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -211,39 +212,29 @@ struct Qwen3_5Vit::Impl {
     int Add(RequestCache& c)
     {
         const auto& [r, s] = std::tie(*c.req, *c.seq);
-        if (r.mm_inputs && !r.mm_inputs->is_null()) {
+        if (r.mm_inputs) {
             if ((not r.session.start_flag) or (not r.session.end_flag)) {
                 // only support non-interactive inference
                 return Request::kInvalid;
             }
 
-            const auto& mm_inputs = r.mm_inputs->get<multimodal::Array>();
-            for (const auto& item : mm_inputs) {
-                const auto& doc      = item.get<multimodal::Document>();
-                const auto& modality = doc.at("modality").get<std::string>();
-                const auto& ranges   = doc.at("offset").get<multimodal::Array>();
-                const int   offset   = ranges[0].get<int64_t>();
-                const int   tokens   = ranges[1].get<int64_t>() - offset;
+            const auto mm_inputs = std::dynamic_pointer_cast<multimodal::Qwen3_5VitInput>(r.mm_inputs);
+            if (!mm_inputs) {
+                return Request::kInvalid;
+            }
 
-                if (modality != "image" && modality != "video") {
+            for (const auto& item : mm_inputs->items) {
+                if (item.modality != multimodal::Modality::kImage && item.modality != multimodal::Modality::kVideo) {
                     return Request::kInvalid;
                 }
-                const bool is_image = modality == "image";
 
-                std::array<int, 3> grid_thw = [&]() {
-                    const auto  key  = is_image ? "image_grid_thw" : "video_grid_thw";
-                    const auto& ten  = doc.at(key).get<Tensor>();
-                    auto        data = ten.data<int64_t>();
-                    return std::array<int, 3>{(int)data[0], (int)data[1], (int)data[2]};
-                }();
-
-                auto data = [&]() {
-                    const auto key = is_image ? "pixel_values" : "pixel_values_videos";
-                    return doc.at(key).get<Tensor>();
-                }();
+                const int tokens = item.token_end - item.token_begin;
+                if (tokens <= 0) {
+                    return Request::kInvalid;
+                }
 
                 auto mm_item = std::make_shared<MultiModalData>(
-                    MultiModalData{data, Interval{offset, Interval::Size{tokens}}, grid_thw});
+                    MultiModalData{item.data, Interval{item.token_begin, Interval::Size{tokens}}, item.grid_thw});
                 s.multimodal_inputs.push_back(mm_item);
             }
         }
@@ -253,7 +244,7 @@ struct Qwen3_5Vit::Impl {
 
     void Add(int phase, TensorMap& env)
     {
-        // convert mm_inputs(list[dict]) to internal MultiModalData
+        // convert model-specific multimodal inputs to internal MultiModalData
         const Buffer_<RequestCache*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
             auto& c = *TM_CHECK_NOTNULL(rc[i]);

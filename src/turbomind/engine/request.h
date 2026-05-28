@@ -98,7 +98,7 @@ struct Request {
     TensorMap inputs;
     TensorMap outputs;
     // TODO: update serdes to support multiple nodes inference
-    std::shared_ptr<multimodal::Value> mm_inputs;
+    std::shared_ptr<multimodal::Input> mm_inputs;
     // fast path for accessing common output buffers
     Tensor_<int> output_ids;
     Tensor_<int> sequence_length;
