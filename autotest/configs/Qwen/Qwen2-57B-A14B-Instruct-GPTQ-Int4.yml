@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
-# Normalized by autotest/tools/normalize_model_configs.py
 
 a100:
 - model_type: chat

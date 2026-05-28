@@ -1,5 +1,4 @@
 # HF model id: internlm/internlm3-8b-instruct
-# Normalized by autotest/tools/normalize_model_configs.py
 
 a100:
 - model_type: chat

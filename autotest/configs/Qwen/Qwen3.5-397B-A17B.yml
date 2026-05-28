@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3.5-397B-A17B
-# Normalized by autotest/tools/normalize_model_configs.py
 
 h:
 - model_type:

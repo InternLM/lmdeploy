@@ -1,5 +1,4 @@
 # HF model id: internlm/Intern-S1-Pro-FP8
-# Normalized by autotest/tools/normalize_model_configs.py
 
 h:
 - model_type: chat

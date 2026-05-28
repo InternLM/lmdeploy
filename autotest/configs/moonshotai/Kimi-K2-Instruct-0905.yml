@@ -1,5 +1,4 @@
 # HF model id: moonshotai/Kimi-K2-Instruct-0905
-# Normalized by autotest/tools/normalize_model_configs.py
 
 h:
 - model_type: chat

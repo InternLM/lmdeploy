@@ -1,5 +1,4 @@
 # HF model id: test/test_tp1
-# Normalized by autotest/tools/normalize_model_configs.py
 
 test:
 - model_type:

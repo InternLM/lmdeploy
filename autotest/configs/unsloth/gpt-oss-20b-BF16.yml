@@ -1,5 +1,4 @@
 # HF model id: unsloth/gpt-oss-20b-BF16
-# Normalized by autotest/tools/normalize_model_configs.py
 
 a100:
 - model_type: chat

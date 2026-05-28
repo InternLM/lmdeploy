@@ -1,5 +1,4 @@
 # HF model id: google/gemma-2-27b-it
-# Normalized by autotest/tools/normalize_model_configs.py
 
 a100:
 - model_type: chat

@@ -1,5 +1,4 @@
 # HF model id: meta-llama/Meta-Llama-3.1-8B-Instruct
-# Normalized by autotest/tools/normalize_model_configs.py
 
 h:
 - model_type: chat

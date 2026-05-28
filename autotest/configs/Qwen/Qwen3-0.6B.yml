@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3-0.6B
-# Normalized by autotest/tools/normalize_model_configs.py
 
 a100:
 - model_type: chat

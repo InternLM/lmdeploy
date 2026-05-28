@@ -1,5 +1,4 @@
 # HF model id: test/test_vl_tp8
-# Normalized by autotest/tools/normalize_model_configs.py
 
 test:
 - model_type: chat

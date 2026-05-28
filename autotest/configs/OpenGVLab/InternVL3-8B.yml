@@ -1,5 +1,4 @@
 # HF model id: OpenGVLab/InternVL3-8B
-# Normalized by autotest/tools/normalize_model_configs.py
 
 a100:
 - model_type:

@@ -1,5 +1,4 @@
 # HF model id: JetLM/SDAR-30B-A3B-Sci
-# Normalized by autotest/tools/normalize_model_configs.py
 
 h:
 - model_type: chat

@@ -1,5 +1,4 @@
 # HF model id: OpenGVLab/InternVL3-1B-Instruct
-# Normalized by autotest/tools/normalize_model_configs.py
 
 '3090':
 - model_type:
