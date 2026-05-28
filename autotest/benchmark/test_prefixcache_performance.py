@@ -118,7 +118,7 @@ def test_pytorch_prefix_tp16(config, run_config, worker_id):
     'parallel_config': {
         'tp': 2
     },
-    'extra_params': {'enable-prefix-caching': None}
+    'extra_params': {'enable-prefix-caching': True}
 }, {
     'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
     'backend': 'pytorch',
@@ -127,7 +127,7 @@ def test_pytorch_prefix_tp16(config, run_config, worker_id):
     'parallel_config': {
         'tp': 2
     },
-    'extra_params': {'enable-prefix-caching': None}
+    'extra_params': {'enable-prefix-caching': True}
 }])
 def test_pytorch_prefix_pr_test_tp1(config, run_config, worker_id):
     result, msg = prefixcache_throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)
