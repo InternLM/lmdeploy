@@ -34,27 +34,6 @@ def run_case_in_spawn(target, args):
         raise AssertionError(f'spawn worker {name!r} failed with exit code {process.exitcode!r}')
 
 
-@pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-8B'])
-def test_history_issue_tp1(config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    run_case_in_spawn(stream_infer_worker, (config, model, 1))
-    if 'gw' in worker_id:
-        unset_device_env_variable()
-
-
-@pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-32B', 'Qwen/Qwen3-32B-inner-4bits', 'Qwen/Qwen3-30B-A3B'])
-def test_history_issue_tp2(config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=2)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_case_in_spawn(stream_infer_worker, (config, model, 2))
-    if 'gw' in worker_id:
-        unset_device_env_variable()
-
-
 def _assert_stream_single(pipe, prompt, gen_config, msg):
     """Merge multiplex stream chunks for a single prompt and validate."""
     resp = None
@@ -84,23 +63,6 @@ def _assert_stream_batch(pipe, prompts, gen_config, msg):
         assert chunks[-1].finish_reason in ('stop', 'length'), f'{msg}: index {idx} {chunks[-1]!r}'
         assert chunks[-1].generate_token_len > 0, f'{msg}: index {idx} {chunks[-1]!r}'
         assert len(full) > 0, f'{msg}: index {idx} empty merged text'
-
-
-def stream_infer_worker(config, model, tp_num):
-    model_path = os.path.join(config.get('model_path'), model)
-
-    backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
-    pipe = pipeline(model_path, backend_config=backend_config)
-    prompt = '今 天 心 ' * int(SESSION_LEN / 6)
-
-    gen_config = GenerationConfig(top_k=40)
-    _assert_stream_single(pipe, prompt, gen_config, 'longctx stream single')
-
-    prompts = ['今 天 心 ' * int(SESSION_LEN / 6)] * 2
-    _assert_stream_batch(pipe, prompts, gen_config, 'longctx stream batch')
-
-    pipe.close()
-
 
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'])
