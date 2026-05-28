@@ -24,14 +24,17 @@ CONCURRENT_WEATHER_TOOL = {
     'type': 'function',
     'function': {
         'name': 'get_weather',
-        'description': 'Get current weather',
+        'description': 'Get the current weather in a given location',
         'parameters': {
             'type': 'object',
             'properties': {
                 'location': {
                     'type': 'string',
+                    'description': 'The location to find the weather for, '
+                    'e.g. London or Tokyo, Japan',
                 },
             },
+            'required': ['location'],
         },
     },
 }

@@ -55,6 +55,15 @@ def _assert_no_tag_leakage(reasoning, content):
         assert THINK_END_TOKEN not in text, (f'</think> leaked into {label}: {text[:100]}')
 
 
+_SUM_100_PATTERNS = ('5050', '5,050', '5{,}050')
+
+
+def _assert_content_has_sum_5050(content: str) -> None:
+    """Accept plain or LaTeX-formatted 5050 in final answer text."""
+    assert any(p in content for p in _SUM_100_PATTERNS), (
+        f'Expected 5050 in content (plain, comma, or LaTeX 5{{,}}050); got: {content[:300]!r}...')
+
+
 # ---------------------------------------------------------------------------
 # Logging helpers – uses shared StreamTee / setup_log_file / make_logged_client
 # from utils.tool_reasoning_definitions.

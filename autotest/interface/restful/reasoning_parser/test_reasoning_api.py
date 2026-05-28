@@ -28,6 +28,7 @@ from .conftest import (
     MESSAGES_REASONING_WEATHER_TOOL,
     _apply_marks,
     _apply_marks_stream,
+    _assert_content_has_sum_5050,
     _assert_no_tag_leakage,
     _build_search_roundtrip_messages,
     _ReasoningTestBase,
@@ -586,9 +587,11 @@ class TestReasoningMultiTurn(_ReasoningTestBase):
         r = self._call_api(stream, MESSAGES_REASONING_MULTI_TURN, max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['reasoning']) > 20
-        assert any(kw in r['reasoning'] for kw in ('100', '101', '5050', '5,050', 'formula', 'Gauss', 'n(n', 'n *'))
+        assert any(
+            kw in r['reasoning']
+            for kw in ('100', '101', '5050', '5,050', '5{,}050', 'formula', 'Gauss', 'n(n', 'n *'))
         assert len(r['content'].strip()) > 0
-        assert '5050' in r['content'] or '5,050' in r['content']
+        _assert_content_has_sum_5050(r['content'])
         _assert_no_tag_leakage(r['reasoning'], r['content'])
 
 

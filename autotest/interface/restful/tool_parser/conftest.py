@@ -36,6 +36,41 @@ def _apply_marks(cls):
     return cls
 
 
+def llama31_single_tool_only(model_case: str) -> bool:
+    """True when the model uses Meta-Llama-3.1 chat template (one tool call per
+    turn)."""
+    return 'llama-3.1' in model_case.lower().replace('_', '-')
+
+
+LLAMA31_SKIP_PARALLEL_REASON = (
+    'Meta-Llama 3.1 chat template allows only one tool call per turn '
+    '(apply_chat_template: single tool-calls at once)')
+
+
+def _llama31_parallel_skip_target(item) -> bool:
+    """True for TestToolCallParallel and test_multiple_results (parametrize-
+    safe)."""
+    cls_name = item.cls.__name__ if item.cls is not None else ''
+    if cls_name == 'TestToolCallParallel':
+        return True
+    test_name = getattr(item, 'originalname', None) or item.name.split('[')[0]
+    return test_name == 'test_multiple_results'
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip parallel-tool tests on Llama 3.1 at collection time (reliable vs
+    node.name)."""
+    for item in items:
+        if not _llama31_parallel_skip_target(item):
+            continue
+        callspec = getattr(item, 'callspec', None)
+        if callspec is None:
+            continue
+        model_case = callspec.params.get('model_case')
+        if model_case and llama31_single_tool_only(model_case):
+            item.add_marker(pytest.mark.skip(reason=LLAMA31_SKIP_PARALLEL_REASON))
+
+
 # ---------------------------------------------------------------------------
 # Logging helpers – uses shared StreamTee / setup_log_file / make_logged_client
 # from utils.tool_reasoning_definitions.
