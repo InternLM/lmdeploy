@@ -1,7 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+# Module-level list to keep DLL directory handles alive for the process
+# lifetime. os.add_dll_directory() returns a handle that removes the
+# directory from the search path when garbage-collected, so we must
+# retain a reference.
+_dll_dirs = []
+
 
 def bootstrap():
+    import importlib.util
     import os
 
     has_turbomind = False
@@ -13,11 +20,9 @@ def bootstrap():
         cuda_path = os.getenv('CUDA_PATH')
         if cuda_path is not None:
             dll_paths.append(os.path.join(cuda_path, 'bin'))
-        try:
-            import torch
-            dll_paths.append(os.path.join(os.path.dirname(torch.__file__), 'lib'))
-        except ImportError:
-            pass
+        torch_spec = importlib.util.find_spec('torch')
+        if torch_spec is not None and torch_spec.origin is not None:
+            dll_paths.append(os.path.join(os.path.dirname(torch_spec.origin), 'lib'))
         conda_prefix = os.getenv('CONDA_PREFIX')
         if conda_prefix is not None:
             dll_paths.append(os.path.join(conda_prefix, 'Library', 'bin'))
@@ -32,7 +37,7 @@ def bootstrap():
             seen.add(dll_path_key)
             deduped_dll_paths.append(dll_path)
         dll_paths = deduped_dll_paths
-        _dll_dirs = []  # keep directory handles alive
+        global _dll_dirs
         for dll_path in dll_paths:
             if os.path.isdir(dll_path):
                 _dll_dirs.append(os.add_dll_directory(dll_path))
