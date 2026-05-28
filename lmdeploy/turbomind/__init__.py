@@ -9,12 +9,23 @@ def bootstrap():
     if os.path.exists(os.path.join(pwd, '..', 'lib')):
         has_turbomind = True
     if os.name == 'nt' and has_turbomind:
-        CUDA_PATH = os.getenv('CUDA_PATH')
-        assert CUDA_PATH is not None, 'Can not find $env:CUDA_PATH'
-        dll_path = os.path.join(CUDA_PATH, 'bin')
-        print(f'Add dll path {dll_path}, please note cuda version '
-              'should >= 11.3 when compiled with cuda 11')
-        os.add_dll_directory(dll_path)
+        dll_paths = []
+        cuda_path = os.getenv('CUDA_PATH')
+        if cuda_path is not None:
+            dll_paths.append(os.path.join(cuda_path, 'bin'))
+        try:
+            import torch
+            dll_paths.append(os.path.join(os.path.dirname(torch.__file__), 'lib'))
+        except ImportError:
+            pass
+        conda_prefix = os.getenv('CONDA_PREFIX')
+        if conda_prefix is not None:
+            dll_paths.append(os.path.join(conda_prefix, 'Library', 'bin'))
+        for dll_path in dll_paths:
+            if os.path.isdir(dll_path):
+                print(f'Add dll path {dll_path}, please note cuda version '
+                      'should >= 11.3 when compiled with cuda 11')
+                os.add_dll_directory(dll_path)
 
 
 bootstrap()
