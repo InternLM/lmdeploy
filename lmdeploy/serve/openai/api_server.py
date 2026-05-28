@@ -46,7 +46,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     MigrationRequest,
 )
 from lmdeploy.serve.anthropic import create_anthropic_router
-from lmdeploy.serve.core import AsyncEngine
+from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
     ChatCompletionRequest,
@@ -94,6 +94,7 @@ logger = get_logger('lmdeploy')
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
+    health_monitor: EngineHealthMonitor | None = None
     request_hosts = []
     # following are for registering to proxy server
     proxy_url: str | None = None
@@ -239,9 +240,16 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
 
 
 @router.get('/health')
-async def health() -> Response:
+async def health() -> JSONResponse:
     """Health check."""
-    return Response(status_code=200)
+    monitor = VariableInterface.health_monitor
+    if monitor is None:
+        data = dict(status='unhealthy',
+                    message='Engine health monitor is not initialized.')
+        return JSONResponse(jsonable_encoder(data), status_code=HTTPStatus.SERVICE_UNAVAILABLE)
+    data = monitor.snapshot()
+    status_code = HTTPStatus.OK if data['status'] in ('healthy', 'sleeping') else HTTPStatus.SERVICE_UNAVAILABLE
+    return JSONResponse(jsonable_encoder(data), status_code=status_code)
 
 
 @router.get('/terminate')
@@ -1342,7 +1350,10 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
     @asynccontextmanager
     async def lifespan_handler(app: FastAPI):
         task = None
+        health_monitor = EngineHealthMonitor(async_engine)
+        VariableInterface.health_monitor = health_monitor
         try:
+            health_monitor.start()
             if getattr(backend_config, 'enable_metrics', False):
                 metrics_processor.start_metrics_handler(enable_metrics=True)
                 log_interval = 10.
@@ -1361,6 +1372,9 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
 
             yield
         finally:
+            await health_monitor.stop()
+            if VariableInterface.health_monitor is health_monitor:
+                VariableInterface.health_monitor = None
             if task:
                 task.cancel()
             await metrics_processor.stop_metrics_handler()
