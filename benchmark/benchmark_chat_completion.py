@@ -18,6 +18,7 @@ import html
 import importlib
 import json
 import math
+import os
 import random
 import time
 from collections import defaultdict
@@ -49,6 +50,7 @@ class SSEEvent:
     usage: dict[str, int] | None = None
     done: bool = False
     raw: dict[str, Any] | None = None
+    routed_experts: str | None = None
 
     @property
     def token_text(self) -> str:
@@ -102,6 +104,34 @@ class RequestTrace:
 
 
 SendOne = Callable[[BenchmarkRequest, str, float, int], Awaitable[RequestTrace]]
+SHARED_STORE = 'shared_store'
+SHARED_STORE_NAMESPACE = 'lmdeploy'
+_shared_store_actor: Any | None = None
+
+
+def init_shared_store() -> Any:
+    """Connect to the Ray cluster and return the LMDeploy shared_store
+    actor."""
+    global _shared_store_actor
+    if _shared_store_actor is not None:
+        return _shared_store_actor
+
+    import ray
+
+    ray_address = os.environ.get('RAY_ADDRESS', 'auto')
+    ctx = ray.init(address=ray_address, namespace=SHARED_STORE_NAMESPACE, ignore_reinit_error=True)
+    print(f'ray cluster address: {ctx.address_info["address"]}')
+    _shared_store_actor = ray.get_actor(SHARED_STORE, namespace=SHARED_STORE_NAMESPACE)
+    return _shared_store_actor
+
+
+async def fetch_routed_experts(shared_store: Any, key: str) -> Any:
+    """Fetch routed_experts from shared_store without blocking the event
+    loop."""
+    import ray
+
+    ref = shared_store.get.remote(key)
+    return await asyncio.to_thread(ray.get, ref)
 
 
 def _split_csv(value: str | None) -> list[str] | None:
@@ -171,11 +201,11 @@ def _normalize_row(row: dict[str, Any], dataset: str, row_index: int) -> Benchma
     if messages is None:
         prompt = row.get('prompt')
         if prompt is None:
-            raise ValueError(f"row {row_index} in {dataset} must contain either messages or prompt")
+            raise ValueError(f'row {row_index} in {dataset} must contain either messages or prompt')
         messages = [{'role': 'user', 'content': prompt}]
     if not isinstance(messages, list) or not messages:
-        raise ValueError(f"row {row_index} in {dataset} has invalid messages")
-    request_id = str(row.get('id', f"{dataset}-{row_index}"))
+        raise ValueError(f'row {row_index} in {dataset} has invalid messages')
+    request_id = str(row.get('id', f'{dataset}-{row_index}'))
     metadata = row.get('metadata', {})
     if metadata is None:
         metadata = {}
@@ -245,6 +275,7 @@ def parse_sse_line(line: bytes | str) -> SSEEvent:
         finish_reason=choice.get('finish_reason'),
         usage=data.get('usage'),
         raw=data,
+        routed_experts=choice.get('routed_experts'),
     )
 
 
@@ -295,22 +326,22 @@ def _chat_completions_url(base_url: str, api_path: str) -> str:
     if not api_path:
         api_path = '/chat/completions' if base_url.endswith('/v1') else '/v1/chat/completions'
     if not api_path.startswith('/'):
-        api_path = f"/{api_path}"
-    return f"{base_url}{api_path}"
+        api_path = f'/{api_path}'
+    return f'{base_url}{api_path}'
 
 
 def _models_url(base_url: str) -> str:
     base_url = base_url.rstrip('/')
     if base_url.endswith('/v1'):
-        return f"{base_url}/models"
-    return f"{base_url}/v1/models"
+        return f'{base_url}/models'
+    return f'{base_url}/v1/models'
 
 
 async def fetch_model_id(session: Any, base_url: str, api_key: str | None = None) -> str:
-    headers = {'Authorization': f"Bearer {api_key}"} if api_key else None
+    headers = {'Authorization': f'Bearer {api_key}'} if api_key else None
     async with session.get(_models_url(base_url), headers=headers) as response:
         if response.status != 200:
-            raise RuntimeError(f"Failed to fetch model from /v1/models: {response.status} {response.reason}")
+            raise RuntimeError(f'Failed to fetch model from /v1/models: {response.status} {response.reason}')
         payload = await response.json()
     model_list = payload.get('data') or []
     if not model_list or not model_list[0].get('id'):
@@ -338,6 +369,7 @@ async def request_chat_completion(
     extra_body: dict[str, Any] | None,
     headers: dict[str, str] | None = None,
     save_response_text: bool = False,
+    shared_store: Any | None = None,
 ) -> RequestTrace:
     payload = build_payload(
         request=request,
@@ -366,7 +398,7 @@ async def request_chat_completion(
         async with session.post(url, json=payload, headers=headers) as response:
             trace.http_status = response.status
             if response.status != 200:
-                trace.error = f"{response.status} {response.reason}: {await response.text()}"
+                trace.error = f'{response.status} {response.reason}: {await response.text()}'
                 trace.end_time = time.perf_counter()
                 return trace
 
@@ -394,6 +426,12 @@ async def request_chat_completion(
                         trace.completion_tokens = int(
                             event.usage.get('completion_tokens', trace.completion_tokens) or 0
                         )
+                    if event.routed_experts and shared_store is not None:
+                        try:
+                            await fetch_routed_experts(shared_store, event.routed_experts)
+                        except Exception as e:  # noqa: BLE001 - record and keep consuming SSE.
+                            trace.error = repr(e)
+
             trace.end_time = time.perf_counter()
             trace.success = trace.error == ''
             return trace
@@ -480,22 +518,22 @@ def _latency_stats(prefix: str, values_s: Sequence[float]) -> dict[str, float]:
     values_ms = [value * 1000 for value in values_s]
     if not values_ms:
         return {
-            f"ave_{prefix}_ms": 0.0,
-            f"min_{prefix}_ms": 0.0,
-            f"max_{prefix}_ms": 0.0,
-            f"p50_{prefix}_ms": 0.0,
-            f"p75_{prefix}_ms": 0.0,
-            f"p95_{prefix}_ms": 0.0,
-            f"p99_{prefix}_ms": 0.0,
+            f'ave_{prefix}_ms': 0.0,
+            f'min_{prefix}_ms': 0.0,
+            f'max_{prefix}_ms': 0.0,
+            f'p50_{prefix}_ms': 0.0,
+            f'p75_{prefix}_ms': 0.0,
+            f'p95_{prefix}_ms': 0.0,
+            f'p99_{prefix}_ms': 0.0,
         }
     return {
-        f"ave_{prefix}_ms": _mean(values_ms),
-        f"min_{prefix}_ms": min(values_ms),
-        f"max_{prefix}_ms": max(values_ms),
-        f"p50_{prefix}_ms": percentile(values_ms, 50),
-        f"p75_{prefix}_ms": percentile(values_ms, 75),
-        f"p95_{prefix}_ms": percentile(values_ms, 95),
-        f"p99_{prefix}_ms": percentile(values_ms, 99),
+        f'ave_{prefix}_ms': _mean(values_ms),
+        f'min_{prefix}_ms': min(values_ms),
+        f'max_{prefix}_ms': max(values_ms),
+        f'p50_{prefix}_ms': percentile(values_ms, 50),
+        f'p75_{prefix}_ms': percentile(values_ms, 75),
+        f'p95_{prefix}_ms': percentile(values_ms, 95),
+        f'p99_{prefix}_ms': percentile(values_ms, 99),
     }
 
 
@@ -673,7 +711,7 @@ def _plot_metric(
             [float(item['setting']) for item in rows],
             [float(item.get(metric, 0.0)) for item in rows],
             marker='o',
-            label=f"{dataset} ({mode})",
+            label=f'{dataset} ({mode})',
         )
     ax.set_title(title)
     ax.set_xlabel(_mode_axis_label(mode))
@@ -681,7 +719,7 @@ def _plot_metric(
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize='small')
     fig.tight_layout()
-    path = output_dir / f"{metric}.png"
+    path = output_dir / f'{metric}.png'
     fig.savefig(path)
     plt.close(fig)
     return path
@@ -699,11 +737,11 @@ def _plot_latency_stats(
         return None
 
     stats = [
-        (f"ave_{prefix}_ms", 'ave'),
-        (f"p50_{prefix}_ms", 'p50'),
-        (f"p75_{prefix}_ms", 'p75'),
-        (f"p95_{prefix}_ms", 'p95'),
-        (f"p99_{prefix}_ms", 'p99'),
+        (f'ave_{prefix}_ms', 'ave'),
+        (f'p50_{prefix}_ms', 'p50'),
+        (f'p75_{prefix}_ms', 'p75'),
+        (f'p95_{prefix}_ms', 'p95'),
+        (f'p99_{prefix}_ms', 'p99'),
     ]
     by_series: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for summary in summaries:
@@ -722,7 +760,7 @@ def _plot_latency_stats(
                 x_values,
                 [float(item.get(key, 0.0)) for item in rows],
                 marker='o',
-                label=f"{dataset} ({mode}) {stat_label}",
+                label=f'{dataset} ({mode}) {stat_label}',
             )
     ax.set_title(title)
     ax.set_xlabel(_mode_axis_label(mode))
@@ -730,7 +768,7 @@ def _plot_latency_stats(
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize='x-small', ncol=2)
     fig.tight_layout()
-    path = output_dir / f"{prefix}_latency_stats.png"
+    path = output_dir / f'{prefix}_latency_stats.png'
     fig.savefig(path)
     plt.close(fig)
     return path
@@ -756,7 +794,7 @@ def _plot_token_histogram(output_dir: Path,
             color=TOKEN_STAT_COLORS[label],
             linestyle='--',
             linewidth=1.4,
-            label=f"{label}: {value:.1f}",
+            label=f'{label}: {value:.1f}',
         )
     ax.set_title(title)
     ax.set_xlabel('Tokens')
@@ -764,7 +802,7 @@ def _plot_token_histogram(output_dir: Path,
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize='small')
     fig.tight_layout()
-    path = output_dir / f"{token_field}_histogram.png"
+    path = output_dir / f'{token_field}_histogram.png'
     fig.savefig(path)
     plt.close(fig)
     return path
@@ -775,15 +813,15 @@ def _write_html_report(path: Path, summaries: Sequence[dict[str, Any]], plot_pat
     table_rows = []
     for summary in summaries:
         cells = ''.join(f"<td>{html.escape(str(summary.get(header, '')))}</td>" for header in headers)
-        table_rows.append(f"<tr>{cells}</tr>")
-    header_html = ''.join(f"<th>{html.escape(header)}</th>" for header in headers)
+        table_rows.append(f'<tr>{cells}</tr>')
+    header_html = ''.join(f'<th>{html.escape(header)}</th>' for header in headers)
     plots_html = '\n'.join(
         f'<figure><img src="{html.escape(str(path.relative_to(path.parent.parent)))}" alt="{html.escape(path.stem)}">'
-        f"<figcaption>{html.escape(path.stem)}</figcaption></figure>"
+        f'<figcaption>{html.escape(path.stem)}</figcaption></figure>'
         for path in plot_paths
     )
     path.write_text(
-        f"""<!doctype html>
+        f'''<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -807,7 +845,7 @@ def _write_html_report(path: Path, summaries: Sequence[dict[str, Any]], plot_pat
   <table><thead><tr>{header_html}</tr></thead><tbody>{''.join(table_rows)}</tbody></table>
 </body>
 </html>
-""",
+''',
         encoding='utf-8',
     )
 
@@ -880,22 +918,26 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
     url = _chat_completions_url(args.base_url, args.api_path)
     headers = {}
     if args.api_key:
-        headers['Authorization'] = f"Bearer {args.api_key}"
+        headers['Authorization'] = f'Bearer {args.api_key}'
     extra_body = json.loads(args.extra_request_body) if args.extra_request_body else {}
+
+    shared_store = None
+    if args.return_routed_experts:
+        shared_store = init_shared_store()
 
     levels = _parse_number_list(args.levels, as_int=(args.mode == 'concurrency'))
     pool_limit, pool_limit_per_host = _client_connector_limits(args.mode, levels, len(requests))
     connector = aiohttp.TCPConnector(limit=pool_limit, limit_per_host=pool_limit_per_host)
-    print(f"aiohttp connection pool: limit={pool_limit}, limit_per_host={pool_limit_per_host}")
+    print(f'aiohttp connection pool: limit={pool_limit}, limit_per_host={pool_limit_per_host}')
 
     async with aiohttp.ClientSession(
         connector=connector,
         timeout=aiohttp.ClientTimeout(total=None),
     ) as session:
         model = await fetch_model_id(session, args.base_url, args.api_key)
-        print(f"Using model from /v1/models: {model}")
+        print(f'Using model from /v1/models: {model}')
         if args.max_completion_tokens is not None:
-            print(f"max_completion_tokens={args.max_completion_tokens}")
+            print(f'max_completion_tokens={args.max_completion_tokens}')
         if args.ignore_eos:
             print('ignore_eos=True')
         if args.return_token_ids:
@@ -903,7 +945,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         if args.return_routed_experts:
             print('return_routed_experts=True')
         if args.logprobs:
-            print(f"logprobs=True top_logprobs={args.top_logprobs!r}")
+            print(f'logprobs=True top_logprobs={args.top_logprobs!r}')
 
         async def send_one(request: BenchmarkRequest, mode: str, setting: float, repeat: int) -> RequestTrace:
             return await request_chat_completion(
@@ -926,6 +968,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                 extra_body=extra_body,
                 headers=headers,
                 save_response_text=args.save_response_text,
+                shared_store=shared_store,
             )
 
         all_traces: list[RequestTrace] = []
@@ -933,14 +976,14 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         for repeat in range(args.repeats):
             if args.mode == 'concurrency':
                 for concurrency in _parse_number_list(args.levels, as_int=True):
-                    print(f"benchmark with {len(requests)} for case concurrency-{concurrency}...")
+                    print(f'benchmark with {len(requests)} for case concurrency-{concurrency}...')
                     completed_count = 0
                     failed_count = 0
                     pbar = None
                     if tqdm is not None:
                         pbar = tqdm(
                             total=len(requests),
-                            desc=f"repeat-{repeat} concurrency-{int(concurrency)}",
+                            desc=f'repeat-{repeat} concurrency-{int(concurrency)}',
                             unit='req',
                             dynamic_ncols=True,
                         )
@@ -966,7 +1009,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                     )
                     if pbar is not None:
                         pbar.close()
-                    print(f"write report for case concurrency-{concurrency}...")
+                    print(f'write report for case concurrency-{concurrency}...')
                     summaries = aggregate_traces(all_traces)
                     write_report_artifacts(
                         args.output_dir,
@@ -984,7 +1027,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                     if tqdm is not None:
                         pbar = tqdm(
                             total=len(requests),
-                            desc=f"repeat-{repeat} request-rate-{float(request_rate):g}",
+                            desc=f'repeat-{repeat} request-rate-{float(request_rate):g}',
                             unit='req',
                             dynamic_ncols=True,
                         )
@@ -1141,7 +1184,7 @@ def main() -> None:
     traces, summaries = asyncio.run(run_benchmark(parse_args()))
     completed = sum(summary['completed'] for summary in summaries)
     failed = sum(summary['failed'] for summary in summaries)
-    print(f"Recorded {len(traces)} requests: {completed} completed, {failed} failed.")
+    print(f'Recorded {len(traces)} requests: {completed} completed, {failed} failed.')
 
 
 if __name__ == '__main__':
