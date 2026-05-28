@@ -15,3 +15,5 @@ h:
   - benchmark
   - func
   - prefix_cache
+  gen_config:
+    reasoning-effort: high
