@@ -28,6 +28,7 @@ from .conftest import (
     MESSAGES_REASONING_WEATHER_TOOL,
     _apply_marks,
     _apply_marks_stream,
+    _assert_after_tool_turn,
     _assert_content_has_sum_5050,
     _assert_no_tag_leakage,
     _build_search_roundtrip_messages,
@@ -212,20 +213,15 @@ class TestReasoningParallelToolCalls(_ReasoningTestBase):
 
 @_apply_marks_stream
 class TestReasoningToolRoundTrip(_ReasoningTestBase):
-    """Multi-turn: reason → tool → result → reasoning → answer."""
+    """Multi-turn: tool → result → answer (second turn may omit reasoning_content)."""
 
     def test_after_tool_result(self, backend, model_case, stream):
         r = self._call_api(stream, build_reasoning_tool_roundtrip_messages(), tools=[WEATHER_TOOL])
-        assert r['finish_reason'] in ('stop', 'length')
-        assert len(r['tool_calls']) == 0
-        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
-                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (f'Expected non-empty content after tool result, '
-                                               f'got content={r["content"]!r}')
-        has_ref = any(kw in r['content'].lower()
-                      for kw in ('sunny', 'umbrella', 'dallas', 'clear', 'rain', 'weather', 'no'))
-        assert has_ref, f'Content should reference weather: {r["content"][:200]}'
-        _assert_no_tag_leakage(r['reasoning'], r['content'])
+        _assert_after_tool_turn(
+            r,
+            ('sunny', 'umbrella', 'dallas', 'clear', 'rain', 'weather', 'no'),
+            hint='weather',
+        )
 
 
 # ===========================================================================
@@ -440,16 +436,11 @@ class TestReasoningWebSearchTool(_ReasoningTestBase):
 
     def test_web_search_roundtrip(self, backend, model_case, stream):
         r = self._call_api(stream, _build_search_roundtrip_messages(), tools=[SEARCH_TOOL])
-        assert r['finish_reason'] in ('stop', 'length')
-        assert len(r['tool_calls']) == 0
-        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
-                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (f'Expected non-empty content after search result, '
-                                               f'got content={r["content"]!r}')
-        has_ref = any(kw in r['content'].lower()
-                      for kw in ('hopfield', 'hinton', 'nobel', 'physics', 'machine learning', 'neural network'))
-        assert has_ref, f'Content should reference Nobel Prize: {r["content"][:200]}'
-        _assert_no_tag_leakage(r['reasoning'], r['content'])
+        _assert_after_tool_turn(
+            r,
+            ('hopfield', 'hinton', 'nobel', 'physics', 'machine learning', 'neural network'),
+            hint='Nobel Prize',
+        )
 
 
 # ===========================================================================

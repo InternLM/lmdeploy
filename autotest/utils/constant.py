@@ -232,6 +232,7 @@ TOOL_REASONING_MODEL_LIST_LATEST = [
     'Qwen/Qwen2.5-7B-Instruct',
     'internlm/Intern-S1-Pro-FP8',
     'internlm/interns2-preview-0509',
+    'zai-org/GLM-4.7-Flash',
 ]
 
 TOOL_REASONING_MODEL_LIST_LEGACY = [

@@ -55,6 +55,21 @@ def _assert_no_tag_leakage(reasoning, content):
         assert THINK_END_TOKEN not in text, (f'</think> leaked into {label}: {text[:100]}')
 
 
+def _assert_after_tool_turn(r, content_keywords, *, hint):
+    """Post-tool second turn: content must answer; reasoning_content is optional."""
+    assert r['finish_reason'] in ('stop', 'length')
+    assert len(r['tool_calls']) == 0
+    content = r['content']
+    assert len(content.strip()) > 0, f'Expected non-empty content after tool result, got: {content!r}'
+    lower = content.lower()
+    assert any(kw in lower for kw in content_keywords), (
+        f'Content should reference {hint}: {content[:200]}')
+    assert THINK_START_TOKEN not in content, (
+        f'<think> leaked into content: {content[:100]}')
+    assert THINK_END_TOKEN not in content, (
+        f'</think> leaked into content: {content[:100]}')
+
+
 _SUM_100_PATTERNS = ('5050', '5,050', '5{,}050')
 
 
