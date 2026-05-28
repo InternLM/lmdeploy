@@ -7,14 +7,50 @@ import torch
 
 
 @T.macro
-def vec_store_state(State: T.Buffer, h_local: T.Buffer, state_id, state_update_id, hv_id, k_off, v_off, K: int, V: int,
-                    k_per_thr: int, v_per_warp: int, state_vw: int) -> None:
-    """Per-warp vectorized store of h_local[k_per_thr, v_per_warp] to global
-    State.
+def load_state_tile_from_smem(h_smem: T.Buffer, h_local: T.Buffer, k_off, v_warp_off, K: int, k_per_thr: int,
+                              v_per_warp: int, state_vw: int) -> None:
+    """Load one warp's logical [K, V] state tile from shared memory."""
+    for j in T.Unroll(k_per_thr):
+        k_idx = k_off + j
+        if k_idx < K:
+            for vg in T.Unroll(v_per_warp // state_vw):
+                for i in T.Vectorized(state_vw):
+                    idx = vg * state_vw + i
+                    h_local[j, idx] = h_smem[k_idx, v_warp_off + idx]
 
-    Each warp writes its own V-slice independently. Access pattern is K-strided (uncoalesced) since each lane owns a
-    K-slice. Used as fallback for circular buffer when the coalesced path is not available.
-    """
+
+@T.macro
+def load_transposed_state_tile(State: T.Buffer, h_local: T.Buffer, state_id, state_seq_id, hv_id, k_off, v_off,
+                               K: int, V: int, k_per_thr: int, v_per_warp: int) -> None:
+    """Load one warp's state tile directly from transposed State [V, K]."""
+    for i in T.Unroll(v_per_warp):
+        v_idx = v_off + i
+        if v_idx < V and state_id >= 0:
+            for j in T.Vectorized(k_per_thr):
+                h_local[j, i] = State[state_id, state_seq_id, hv_id, v_idx, k_off + j]
+        else:
+            for j in T.Vectorized(k_per_thr):
+                h_local[j, i] = 0.0
+
+
+@T.macro
+def stage_state_tile_to_smem(h_smem: T.Buffer, h_local: T.Buffer, k_off, v_warp_off, K: int, k_per_thr: int,
+                             v_per_warp: int, state_vw: int) -> None:
+    """Stage one warp's logical [K, V] state tile to shared memory."""
+    for j in T.Unroll(k_per_thr):
+        k_idx = k_off + j
+        if k_idx < K:
+            for vg in T.Unroll(v_per_warp // state_vw):
+                for i in T.Vectorized(state_vw):
+                    idx = vg * state_vw + i
+                    h_smem[k_idx, v_warp_off + idx] = h_local[j, idx]
+
+
+@T.macro
+def store_default_state_tile_direct(State: T.Buffer, h_local: T.Buffer, state_id, state_update_id, hv_id, k_off,
+                                    v_off, K: int, V: int, k_per_thr: int, v_per_warp: int,
+                                    state_vw: int) -> None:
+    """Per-warp store for the default State layout [K, V]."""
     for j in T.Unroll(k_per_thr):
         if (k_off + j) < K:
             for vg in T.Unroll(v_per_warp // state_vw):
@@ -22,6 +58,17 @@ def vec_store_state(State: T.Buffer, h_local: T.Buffer, state_id, state_update_i
                     idx = vg * state_vw + i
                     if v_off + idx < V:
                         State[state_id, state_update_id, hv_id, k_off + j, v_off + idx] = h_local[j, idx]
+
+
+@T.macro
+def store_transposed_state_tile(State: T.Buffer, h_local: T.Buffer, state_id, state_update_id, hv_id, k_off, v_off,
+                                K: int, V: int, k_per_thr: int, v_per_warp: int) -> None:
+    """Per-warp store for transposed State layout [V, K]."""
+    for i in T.Unroll(v_per_warp):
+        v_idx = v_off + i
+        if v_idx < V:
+            for j in T.Vectorized(k_per_thr):
+                State[state_id, state_update_id, hv_id, v_idx, k_off + j] = h_local[j, i]
 
 
 @T.macro
@@ -79,6 +126,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                          output_final_state: bool = False,
                                          use_state_indices: bool = False,
                                          is_circular_buffer: bool = False,
+                                         transpose_state_layout: bool = False,
                                          num_warps: int = 1):
     """JIT-compiled recurrent gated delta rule forward kernel.
 
@@ -89,14 +137,15 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
       - V dimension is partitioned across warps: v_per_warp elements per warp
       - State tile h_local[k_per_thr, v_per_warp] lives in f32 registers
 
-    Two execution paths (compile-time branched, zero overhead for unused path):
-      - Circular buffer (is_circular_buffer=True): state written every timestep.
-        v_per_warp is increased to make num_waves=1, so h_local stays in
-        registers for the entire sequence. State writeback uses shared memory
-        staging + T.Parallel for coalesced global writes.
-      - Non-circular (is_circular_buffer=False): state written once after all
-        timesteps. Multiple waves allowed to reduce grid size. Final state
-        writeback also uses smem + T.Parallel.
+    State layout paths:
+      - Default [K, V]: use shared-memory staging so cooperative T.Parallel
+        reads/writes are coalesced along V.
+      - Transposed [V, K]: load/store state directly. Each lane owns a small
+        contiguous K vector for one V element, avoiding shared-memory staging.
+
+    Circular buffer mode writes state at every timestep. Non-circular mode
+    writes only once after all timesteps. All flags below are compile-time
+    constants for TileLang, so unused branches are eliminated.
 
     Note: All ``if`` conditions on function parameters (is_circular_buffer,
     use_coalesced_circular_write, use_g, etc.) are evaluated at JIT compile
@@ -124,10 +173,9 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
     if is_circular_buffer:
         # Circular buffer writes state to global memory at EVERY timestep
         # (not just after the final step). To avoid re-loading state from
-        # smem between waves, we increase v_per_warp so that num_waves == 1.
-        # This keeps h_local in f32 registers across all T timesteps,
-        # eliminating wave-loop overhead and enabling the coalesced write
-        # optimization below.
+        # smem between waves, we increase v_per_warp to reduce wave-loop
+        # overhead while keeping register pressure bounded. With fewer warps,
+        # multiple waves may still be needed.
         #
         # Constraint: each lane holds k_per_thr * v_per_warp f32 registers.
         # max_v_per_warp = 128 / k_per_thr keeps register pressure under
@@ -153,6 +201,8 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
 
     B = T.dynamic('B')
     N = B if not use_state_indices else T.dynamic('N')
+    state_dim0 = V if transpose_state_layout else K
+    state_dim1 = K if transpose_state_layout else V
 
     # dtype
     if g_dtype is None:
@@ -168,7 +218,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
         Out: T.Tensor([B, SEQLEN, HV, V], dtype=dtype),
         G: T.Tensor([B, SEQLEN, HV], dtype=g_dtype),
         Beta: T.Tensor([B, SEQLEN, HV], dtype=beta_dtype),
-        State: T.StridedTensor([N, NUM_STATE, HV, K, V], dtype=state_dtype, strides=state_stride),
+        State: T.StridedTensor([N, NUM_STATE, HV, state_dim0, state_dim1], dtype=state_dtype, strides=state_stride),
         StateIndices: T.Tensor([B], dtype=torch.int64) = None,
         CacheSeqlens: T.Tensor([B], dtype=torch.int32) = None,
     ):
@@ -195,42 +245,36 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                 state_seq_id = 0
                 state_update_id = 0
 
-            # --- Load initial state from global to shared memory ---
-            # State layout: [N, NUM_STATE, HV, K, V]. We load a [K, v_per_cta]
-            # tile via T.Parallel which distributes K*v_per_cta iterations
-            # across all CTA threads for coalesced V-dimension reads.
-            h_smem = T.alloc_shared([K, v_per_cta], state_dtype)
-            T.annotate_layout({h_smem: tilelang.layout.make_swizzled_layout(h_smem)})
-            for i, j in T.Parallel(K, v_per_cta):
-                v_idx = v_start * v_per_cta + j
-                if v_idx < V and state_id >= 0:
-                    h_smem[i, j] = State[state_id, state_seq_id, hv_id, i, v_idx]
-                else:
-                    h_smem[i, j] = 0.0
+            if not transpose_state_layout:
+                # --- Load initial state from global to shared memory ---
+                # State layout: [N, NUM_STATE, HV, K, V]. We load a [K, v_per_cta]
+                # tile via T.Parallel which distributes K*v_per_cta iterations
+                # across all CTA threads for coalesced V-dimension reads.
+                h_smem = T.alloc_shared([K, v_per_cta], state_dtype)
+                T.annotate_layout({h_smem: tilelang.layout.make_swizzled_layout(h_smem)})
+                for i, j in T.Parallel(K, v_per_cta):
+                    v_idx = v_start * v_per_cta + j
+                    if v_idx < V and state_id >= 0:
+                        h_smem[i, j] = State[state_id, state_seq_id, hv_id, i, v_idx]
+                    else:
+                        h_smem[i, j] = 0.0
 
-            # --- Wave loop: iterate over V-tiles within this CTA ---
-            # When num_waves == 1 (always for circular buffer), each warp
-            # processes its V-slice once and h_local stays in registers for
-            # the entire sequence. When num_waves > 1 (non-circular only),
-            # h_local is reloaded from smem for each wave.
+            # Iterate over V-tiles within this CTA. Each wave loads its tile
+            # into h_local, runs the recurrent update, then writes the tile
+            # back if requested.
             for wave_id in range(num_waves):
-                # Each warp's V-offset within the CTA tile
                 v_warp_off = wave_id * num_warps * v_per_warp + warp_id * v_per_warp
                 v_off = v_start * v_per_cta + v_warp_off
 
-                # h_local[k_per_thr, v_per_warp]: per-lane state tile in f32
-                # registers. Each lane holds k_per_thr rows of the K dimension
-                # and v_per_warp columns of the V dimension.
                 h_local = T.alloc_local([k_per_thr, v_per_warp], T.float32)
                 if is_circular_buffer:
                     state_update_id = (state_seq_id + 1) % NUM_STATE
-                for j in T.Unroll(k_per_thr):
-                    k_idx = k_off + j
-                    if k_idx < K:
-                        for vg in T.Unroll(v_per_warp // state_vw):
-                            for i in T.Vectorized(state_vw):
-                                idx = vg * state_vw + i
-                                h_local[j, idx] = h_smem[k_idx, v_warp_off + idx]
+
+                if transpose_state_layout:
+                    load_transposed_state_tile(State, h_local, state_id, state_seq_id, hv_id, k_off, v_off, K, V,
+                                               k_per_thr, v_per_warp)
+                else:
+                    load_state_tile_from_smem(h_smem, h_local, k_off, v_warp_off, K, k_per_thr, v_per_warp, state_vw)
 
                 for seq_id in range(SEQLEN):
                     # load q, k, g, beta
@@ -283,19 +327,19 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                             h_local[j, i] = h_local[j, i] * g_exp
                             hk += h_local[j, i] * k_local[j]
                         hk = T.warp_reduce_sum(hk)
-                        v = (v_local[i] - hk) * beta
+                        v_delta = (v_local[i] - hk) * beta
                         for j in T.Unroll(k_per_thr):
-                            h_local[j, i] = h_local[j, i] + k_local[j] * v
+                            h_local[j, i] = h_local[j, i] + k_local[j] * v_delta
 
-                    # --- Per-warp uncoalesced circular state store (fallback) ---
-                    # Each warp writes its own [k_per_thr, v_per_warp] tile
-                    # directly to global State. Access is K-strided (each lane
-                    # writes different K rows), which is uncoalesced.
-                    # Only used when use_coalesced_circular_write is False.
+                    # Circular buffers publish a state slot after every token.
                     if output_final_state and state_id >= 0:
-                        if is_circular_buffer and not use_coalesced_circular_write:
-                            vec_store_state(State, h_local, state_id, state_update_id, hv_id, k_off, v_off, K, V,
-                                            k_per_thr, v_per_warp, state_vw)
+                        if is_circular_buffer and transpose_state_layout:
+                            store_transposed_state_tile(State, h_local, state_id, state_update_id, hv_id, k_off,
+                                                        v_off, K, V, k_per_thr, v_per_warp)
+                            state_update_id = (state_update_id + 1) % NUM_STATE
+                        if is_circular_buffer and not transpose_state_layout and not use_coalesced_circular_write:
+                            store_default_state_tile_direct(State, h_local, state_id, state_update_id, hv_id, k_off,
+                                                            v_off, K, V, k_per_thr, v_per_warp, state_vw)
                             state_update_id = (state_update_id + 1) % NUM_STATE
 
                     # compute output: o[v] = sum_k(q[k] * h[k,v])
@@ -312,46 +356,30 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                     if lane_id == 0 and state_id >= 0:
                         vec_store_output(Out, o_local, b_id, seq_id, hv_id, v_off, V, v_per_warp, data_vw)
 
-                    # --- Coalesced circular state writeback (optimized path) ---
-                    # Instead of each warp writing its own K-strided slice
-                    # (uncoalesced), all warps cooperate:
-                    #   1. Each warp writes h_local to its slice of h_smem
-                    #   2. T.Parallel distributes the full [K, v_per_cta] write
-                    #      across all CTA threads, giving consecutive threads
-                    #      consecutive V addresses → coalesced global writes
-                    # This yields ~2.5x speedup over the per-warp path because
-                    # state writes dominate memory traffic (~78% of total).
-                    if use_coalesced_circular_write and output_final_state and state_id >= 0:
-                        for j in T.Unroll(k_per_thr):
-                            k_idx = k_off + j
-                            if k_idx < K:
-                                for vg in T.Unroll(v_per_warp // state_vw):
-                                    for i in T.Vectorized(state_vw):
-                                        idx = vg * state_vw + i
-                                        h_smem[k_idx, v_warp_off + idx] = h_local[j, idx]
+                    # Coalesced circular writeback for the default [K, V] path.
+                    if (use_coalesced_circular_write and not transpose_state_layout and output_final_state
+                            and state_id >= 0):
+                        stage_state_tile_to_smem(h_smem, h_local, k_off, v_warp_off, K, k_per_thr, v_per_warp,
+                                                 state_vw)
                         for i, j in T.Parallel(K, v_per_cta):
                             v_idx = v_start * v_per_cta + j
                             if v_idx < V:
                                 State[state_id, state_update_id, hv_id, i, v_idx] = h_smem[i, j]
                         state_update_id = (state_update_id + 1) % NUM_STATE
 
-                # --- Non-circular: write h_local to smem after all timesteps ---
-                # Each warp copies its register tile back to the shared memory
-                # staging buffer. The actual global write happens once after
-                # the wave loop exits (outside all waves).
+                # Non-circular state is published once after all timesteps.
                 if output_final_state and state_id >= 0 and not is_circular_buffer:
-                    for j in T.Unroll(k_per_thr):
-                        k_idx = k_off + j
-                        if k_idx < K:
-                            for vg in T.Unroll(v_per_warp // state_vw):
-                                for i in T.Vectorized(state_vw):
-                                    idx = vg * state_vw + i
-                                    h_smem[k_idx, v_warp_off + idx] = h_local[j, idx]
+                    if transpose_state_layout:
+                        store_transposed_state_tile(State, h_local, state_id, state_update_id, hv_id, k_off, v_off, K,
+                                                    V, k_per_thr, v_per_warp)
+                    else:
+                        stage_state_tile_to_smem(h_smem, h_local, k_off, v_warp_off, K, k_per_thr, v_per_warp,
+                                                 state_vw)
 
             # --- Non-circular: coalesced state writeback from smem to global ---
             # After all waves have written their tiles to h_smem, do one
             # cooperative coalesced write of the full [K, v_per_cta] tile.
-            if output_final_state and state_id >= 0 and not is_circular_buffer:
+            if not transpose_state_layout and output_final_state and state_id >= 0 and not is_circular_buffer:
                 for i, j in T.Parallel(K, v_per_cta):
                     v_idx = v_start * v_per_cta + j
                     if v_idx < V:
@@ -372,6 +400,7 @@ def fused_recurrent_gated_delta_rule(
     use_qk_l2norm_in_kernel: bool = False,
     state_indices: torch.Tensor | None = None,
     cache_seqlens: torch.Tensor | None = None,
+    transpose_state_layout: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Fused recurrent gated delta rule.
 
@@ -383,22 +412,25 @@ def fused_recurrent_gated_delta_rule(
         beta: [B, T, HV], optional
         scale: float, optional
         initial_state: Tensor, optional. Recurrent state with shape
-            [N, HV, K, V] or [N, NUM_STATE, HV, K, V]. If ``state_indices``
-            is not provided, N = B. When using circular buffers
-            (i.e. ``cache_seqlens`` is not None), ``NUM_STATE`` specifies
-            the number of state slots per sequence (e.g. buffer size).
+            [N, HV, K, V] or [N, NUM_STATE, HV, K, V]. If
+            ``transpose_state_layout`` is True, the last two dimensions are
+            [V, K]. If ``state_indices`` is not provided, N = B. When using
+            circular buffers (i.e. ``cache_seqlens`` is not None),
+            ``NUM_STATE`` specifies the number of state slots per sequence
+            (e.g. buffer size).
         use_qk_l2norm_in_kernel: whether to apply l2 normalization on q and k
             in the kernel
         state_indices: [B], optional, the indices to update in the recurrent
             state, required
         cache_seqlens: [B], optional, the cached sequence lengths for each
             batch element
+        transpose_state_layout: whether recurrent state is stored as [V, K]
+            instead of [K, V]
     Returns:
         o: [B, T, HV, V]
         final_state: Recurrent state if ``output_final_state`` is True,
-            otherwise None. The returned state has shape [N, HV, K, V] if
-            the input ``initial_state`` was 4D, or [N, NUM_STATE, HV, K, V]
-            if a 5D state was provided (e.g. when using circular buffers).
+            otherwise None. The returned state has the same layout and rank as
+            the input ``initial_state``.
     """
     # T is imported as tilelang.language, use seqlen instead
     _, seqlen, H, K, V = *k.shape, v.shape[-1]
@@ -434,6 +466,10 @@ def fused_recurrent_gated_delta_rule(
     state_dtype = q.dtype
     if final_state is not None:
         state_dim = final_state.dim()
+        expected_state_shape = (V, K) if transpose_state_layout else (K, V)
+        assert final_state.shape[-2:] == expected_state_shape, (
+            f'initial_state last two dims must be {expected_state_shape} when '
+            f'transpose_state_layout={transpose_state_layout}, got {tuple(final_state.shape[-2:])}')
         # expand dim
         if state_dim == 4:
             final_state = final_state.unsqueeze(1)
@@ -447,7 +483,7 @@ def fused_recurrent_gated_delta_rule(
         state_stride = (0, 0, 0, 0, 0)
         num_states = 1
 
-    num_warps = 4
+    num_warps = 2 if transpose_state_layout and cache_seqlens is not None else 4
     kernel = fused_recurrent_gated_delta_rule_fwd(
         seqlen,
         H,
@@ -470,6 +506,7 @@ def fused_recurrent_gated_delta_rule(
         output_final_state=output_final_state,
         use_state_indices=state_indices is not None,
         is_circular_buffer=cache_seqlens is not None,
+        transpose_state_layout=transpose_state_layout,
         num_warps=num_warps,
     )
 

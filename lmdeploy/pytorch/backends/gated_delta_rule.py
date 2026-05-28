@@ -22,6 +22,7 @@ class GatedDeltaRuleImpl(ABC):
         cu_seqlens: torch.Tensor | None = None,
         output_final_state: bool = False,
         spec_state_offsets: torch.Tensor | None = None,
+        transpose_state_layout: bool = False,
     ):
         """forward."""
         raise NotImplementedError
@@ -37,7 +38,9 @@ class GatedDeltaRuleImpl(ABC):
                                          state_indices: torch.Tensor | None = None,
                                          scale: float | None = None,
                                          use_qk_l2norm_in_kernel: bool = False,
-                                         output_final_state: bool = False):
+                                         output_final_state: bool = False,
+                                         cache_seqlens: torch.Tensor | None = None,
+                                         transpose_state_layout: bool = False):
         """forward."""
         raise NotImplementedError
 
