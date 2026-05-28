@@ -65,8 +65,9 @@ struct MultiModalEmbeddingData {
 private:
     static Buffer_<MultiModalEmbeddingData*> MakeBuffer(std::shared_ptr<MultiModalEmbeddingData> payload)
     {
-        auto slot = std::shared_ptr<MultiModalEmbeddingData*>{
-            new MultiModalEmbeddingData*(payload.get()),
+        auto* raw_ptr = payload.get();
+        auto  slot    = std::shared_ptr<MultiModalEmbeddingData*>{
+            new MultiModalEmbeddingData*(raw_ptr),
             [payload = std::move(payload)](MultiModalEmbeddingData** p) { delete p; }};
 
         return {std::static_pointer_cast<void>(slot), 1, kCPU};
