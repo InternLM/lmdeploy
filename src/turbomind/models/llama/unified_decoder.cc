@@ -76,7 +76,8 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
                                                           phases,
                                                           (bool)moe_ffn_layer_);
 
-    bool has_linear_attn = false;
+    bool                  has_linear_attn       = false;
+    const DeltaNetWeight* linear_attn_prototype = nullptr;
     for (auto t : model_weight.layer_types) {
         if (t == 1) {
             has_linear_attn = true;
@@ -84,8 +85,17 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
         }
     }
     if (has_linear_attn) {
-        linear_attn_layer_ =
-            std::make_unique<GatedDeltaNetLayer>(model_weight.data_type, model_weight.layer_types, engine, ctx, phases);
+        for (int i = 0; i < model_weight.num_layer; ++i) {
+            if (auto* linear_attn = model_weight.layer(i)->linear_attn.get()) {
+                linear_attn_prototype = linear_attn;
+                break;
+            }
+        }
+        TM_CHECK(linear_attn_prototype != nullptr);
+    }
+    if (has_linear_attn) {
+        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(
+            model_weight.data_type, *linear_attn_prototype, model_weight.layer_types, engine, ctx, phases);
     }
 
     bool has_ffn = false;

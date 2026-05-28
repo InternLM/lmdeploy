@@ -19,6 +19,12 @@ def get_shifts(bits: int, device: torch.device):
 def unpack_awq(qweight: torch.Tensor, qzeros: torch.Tensor, bits: int):
     shifts = get_shifts(bits, qzeros.device)
 
+    # Normalize to int32 before bit ops (CUDA rshift not implemented for Half).
+    if qweight.dtype != torch.int32:
+        qweight = qweight.to(torch.int32)
+    if qzeros.dtype != torch.int32:
+        qzeros = qzeros.to(torch.int32)
+
     # unpacking columnwise
     iweights = torch.bitwise_right_shift(qweight[:, :, None], shifts[None, None, :]).to(torch.int8)
     iweights = iweights.view(iweights.shape[0], -1)

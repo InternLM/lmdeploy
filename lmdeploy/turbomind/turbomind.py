@@ -238,6 +238,7 @@ class TurboMind:
         ec.cache_max_block_count = engine_config.cache_max_entry_count
         ec.cache_chunk_size = engine_config.cache_chunk_size
         ec.enable_prefix_caching = engine_config.enable_prefix_caching
+        ec.linear_prefix_cache_interval_blocks = engine_config.linear_prefix_cache_interval_blocks
         ec.enable_metrics = engine_config.enable_metrics
         ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
         ec.max_prefill_iters = engine_config.max_prefill_iters
