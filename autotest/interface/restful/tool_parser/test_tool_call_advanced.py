@@ -636,7 +636,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
 
 
 # ===========================================================================
-# return_token_ids + routed_experts (mirrors test_concurrent_tools.py)
+# return_token_ids + routed_experts
 # ===========================================================================
 
 
@@ -694,7 +694,7 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
 
 
 # ===========================================================================
-# Multi-turn streaming (mirrors test_concurrent_tools.py loop)
+# Multi-turn streaming
 # ===========================================================================
 
 

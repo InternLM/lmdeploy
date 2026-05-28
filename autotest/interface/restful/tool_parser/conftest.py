@@ -11,6 +11,7 @@ from utils.tool_reasoning_definitions import (
     collect_stream_tool_call_http,
     make_logged_client,
     resolve_tokenizer_model_path,
+    run_concurrent_http_error_workers,
     run_concurrent_tool_call_workers,
     setup_log_file,
 )
@@ -77,13 +78,25 @@ class _ToolCallTestBase:
         )
         return collect_stream_tool_call(stream)
 
-    def _stream_tool_call_with_tokens(self, messages, tools=None, use_input_ids=False, **payload_extra):
+    def _stream_tool_call_with_tokens(
+        self,
+        messages,
+        tools=None,
+        use_input_ids=False,
+        reference_payload=False,
+        **payload_extra,
+    ):
         """Stream via HTTP with return_token_ids + return_routed_experts."""
         if use_input_ids:
             try:
                 build_input_ids_and_prompt_tokens(messages, self._tokenizer_path, tools)
             except Exception as exc:
                 pytest.skip(f'input_ids path requires local tokenizer: {exc}')
+        if not reference_payload:
+            payload_extra = {
+                **self._DEFAULT_STREAM_KWARGS,
+                **payload_extra,
+            }
         try:
             return collect_stream_tool_call_http(
                 self._api_model_name,
@@ -92,8 +105,7 @@ class _ToolCallTestBase:
                 log_file=self._log_file,
                 use_input_ids=use_input_ids,
                 tokenizer_path=self._tokenizer_path,
-                temperature=self._DEFAULT_STREAM_KWARGS['temperature'],
-                max_completion_tokens=self._DEFAULT_STREAM_KWARGS['max_completion_tokens'],
+                reference_payload=reference_payload,
                 **payload_extra,
             )
         except RoutedExpertsNotSupported as exc:
@@ -106,9 +118,15 @@ class _ToolCallTestBase:
         concurrent script)."""
         append_concurrent_turn_to_messages(messages, stream_result)
 
-    def _run_concurrent_workers(self, num_workers=None, num_turns=3, use_input_ids=True, tools=None):
-        """Run parallel multi-turn workers (``test_concurrent_tools``
-        parity)."""
+    def _run_concurrent_workers(
+        self,
+        num_workers=None,
+        num_turns=3,
+        use_input_ids=True,
+        tools=None,
+        reference_payload=True,
+    ):
+        """Run parallel multi-turn asyncio workers."""
         return run_concurrent_tool_call_workers(
             self._api_model_name,
             tokenizer_path=self._tokenizer_path,
@@ -117,6 +135,15 @@ class _ToolCallTestBase:
             tools=tools or [CONCURRENT_WEATHER_TOOL],
             use_input_ids=use_input_ids,
             log_file=self._log_file,
+            reference_payload=reference_payload,
+        )
+
+    def _run_concurrent_http_error_workers(self, num_workers=None, invalid_model_name=None):
+        """Concurrent invalid-model HTTP error probes."""
+        return run_concurrent_http_error_workers(
+            self._api_model_name,
+            num_workers=num_workers,
+            invalid_model_name=invalid_model_name,
         )
 
 

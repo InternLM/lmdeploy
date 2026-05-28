@@ -1,10 +1,11 @@
+import asyncio
 import json
 import os
 import re
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import aiohttp
 import requests
 from openai import OpenAI
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
@@ -316,6 +317,18 @@ def assert_arguments_parseable(arguments_str):
 _TOKENIZER_CACHE: dict[str, object] = {}
 
 
+def _parse_tool_call_arguments(tool_calls: list) -> None:
+    for tc in tool_calls:
+        try:
+            fn = tc.get('function') or {}
+            args_str = fn.get('arguments', '')
+            if isinstance(args_str, str) and args_str.strip():
+                fn['arguments'] = json.loads(args_str)
+                tc['function'] = fn
+        except Exception:
+            pass
+
+
 def resolve_tokenizer_model_path(config: dict, model_case: str) -> str:
     """Local HF path for tokenizer: ``{model_path}/{model_case}``."""
     if os.path.isabs(model_case):
@@ -366,6 +379,7 @@ def attach_decoded_output_ids(result: dict, tokenizer_path: str) -> dict:
 
 _TOOL_CALL_RAW_MARKERS = ('<tool_call>', '<function=')
 DEFAULT_TOOL_CALL_CONCURRENCY = int(os.getenv('TOOL_CALL_CONCURRENCY', '50'))
+DEFAULT_TOOL_CALL_HTTP_ERROR_WORKERS = int(os.getenv('TOOL_CALL_HTTP_ERROR_WORKERS', '5'))
 
 
 def format_error_response(status: int, body_text: str) -> str:
@@ -409,7 +423,12 @@ def _merge_stream_tool_call_delta(tool_calls: dict, tc, default_idx: int = 0) ->
         if tc.function.name:
             tool_calls[idx]['name'] += tc.function.name
         if tc.function.arguments:
-            tool_calls[idx]['args_str'] += tc.function.arguments
+            arg = tc.function.arguments
+            if isinstance(arg, dict):
+                arg = json.dumps(arg, ensure_ascii=False, separators=(',', ':'))
+            elif not isinstance(arg, str):
+                arg = json.dumps(arg, ensure_ascii=False, separators=(',', ':'))
+            tool_calls[idx]['args_str'] += arg
 
 
 def _new_stream_tool_call_result() -> dict:
@@ -550,42 +569,20 @@ def collect_stream_tool_call_http(
     *,
     use_input_ids: bool = False,
     tokenizer_path: str | None = None,
+    reference_payload: bool = False,
     **payload_extra,
 ) -> dict:
     tok_path = tokenizer_path or api_model_name
     url = f'{base_url or BASE_URL}/v1/chat/completions'
-    prompt_tokens_computed = 0
-    if use_input_ids:
-        if not messages:
-            raise ValueError('messages required when use_input_ids=True')
-        input_ids, prompt_tokens_computed = build_input_ids_and_prompt_tokens(messages, tok_path, tools)
-        payload = {
-            'model': api_model_name,
-            'input_ids': input_ids,
-            'messages': [],
-            'stream': True,
-            'temperature': 0,
-            'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
-            'return_token_ids': True,
-            'return_routed_experts': True,
-            'stream_options': {'include_usage': True},
-            'spaces_between_special_tokens': False,
-        }
-    else:
-        payload = {
-            'model': api_model_name,
-            'messages': messages,
-            'stream': True,
-            'temperature': 0,
-            'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
-            'return_token_ids': True,
-            'return_routed_experts': True,
-            'stream_options': {'include_usage': True},
-            'spaces_between_special_tokens': False,
-        }
-    if tools is not None and not use_input_ids:
-        payload['tools'] = tools
-    payload.update(payload_extra)
+    payload, prompt_tokens_computed = _build_stream_tool_call_payload(
+        api_model_name,
+        messages,
+        tools,
+        use_input_ids=use_input_ids,
+        tokenizer_path=tok_path,
+        reference_payload=reference_payload,
+        **payload_extra,
+    )
 
     headers = {
         'Authorization': 'Bearer YOUR_API_KEY',
@@ -633,6 +630,176 @@ def collect_stream_tool_call_http(
 
             result['chunk_count'] += 1
             _merge_stream_choice_json(choices[0], result, tool_calls)
+
+    if log_file:
+        try:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write('\n'.join(raw_lines) + '\n')
+        except Exception:
+            pass
+
+    result['prompt_tokens_computed'] = prompt_tokens_computed
+    if prompt_tokens_computed and not result.get('prompt_tokens'):
+        result['prompt_tokens'] = prompt_tokens_computed
+
+    result = _finalize_stream_tool_call_result(result, tool_calls)
+    return attach_decoded_output_ids(result, tok_path)
+
+
+def _build_stream_tool_call_payload(
+    api_model_name: str,
+    messages: list | None,
+    tools,
+    *,
+    use_input_ids: bool,
+    tokenizer_path: str,
+    reference_payload: bool = False,
+    **payload_extra,
+) -> tuple[dict, int]:
+    prompt_tokens_computed = 0
+    if use_input_ids:
+        if messages is None:
+            raise ValueError('messages required when use_input_ids=True')
+        input_ids, prompt_tokens_computed = build_input_ids_and_prompt_tokens(
+            messages, tokenizer_path, tools)
+        if reference_payload:
+            payload = {
+                'model': api_model_name,
+                'input_ids': input_ids,
+                'messages': [],
+                'stream': True,
+                'return_token_ids': True,
+                'return_routed_experts': True,
+                'stream_options': {'include_usage': True},
+            }
+        else:
+            payload = {
+                'model': api_model_name,
+                'input_ids': input_ids,
+                'messages': [],
+                'stream': True,
+                'temperature': 0,
+                'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+                'return_token_ids': True,
+                'return_routed_experts': True,
+                'stream_options': {'include_usage': True},
+                'spaces_between_special_tokens': False,
+            }
+    elif reference_payload:
+        payload = {
+            'model': api_model_name,
+            'messages': messages,
+            'stream': True,
+            'return_token_ids': True,
+            'return_routed_experts': True,
+            'stream_options': {'include_usage': True},
+        }
+    else:
+        payload = {
+            'model': api_model_name,
+            'messages': messages,
+            'stream': True,
+            'temperature': 0,
+            'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+            'return_token_ids': True,
+            'return_routed_experts': True,
+            'stream_options': {'include_usage': True},
+            'spaces_between_special_tokens': False,
+        }
+    if tools is not None and not use_input_ids:
+        payload['tools'] = tools
+    payload.update(payload_extra)
+    return payload, prompt_tokens_computed
+
+
+async def _read_stream_tool_call_error_body(resp: aiohttp.ClientResponse) -> str:
+    try:
+        return await resp.text()
+    except Exception as exc:
+        return f'<failed to read response body: {exc}>'
+
+
+async def collect_stream_tool_call_http_async(
+    session: aiohttp.ClientSession,
+    api_model_name: str,
+    messages: list | None = None,
+    tools=None,
+    base_url: str | None = None,
+    timeout: int = 600,
+    log_file: str | None = None,
+    *,
+    use_input_ids: bool = False,
+    tokenizer_path: str | None = None,
+    reference_payload: bool = False,
+    **payload_extra,
+) -> dict:
+    """Async SSE collector for streaming tool-call HTTP responses."""
+    tok_path = tokenizer_path or api_model_name
+    url = f'{base_url or BASE_URL}/v1/chat/completions'
+    payload, prompt_tokens_computed = _build_stream_tool_call_payload(
+        api_model_name,
+        messages,
+        tools,
+        use_input_ids=use_input_ids,
+        tokenizer_path=tok_path,
+        reference_payload=reference_payload,
+        **payload_extra,
+    )
+    headers = {
+        'Authorization': 'Bearer YOUR_API_KEY',
+        'Content-Type': 'application/json',
+    }
+
+    tool_calls: dict = {}
+    result = _new_stream_tool_call_result()
+    raw_lines: list[str] = []
+    buffer = b''
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+
+    async with session.post(url, json=payload, headers=headers, timeout=client_timeout) as resp:
+        if resp.status != 200:
+            body = await _read_stream_tool_call_error_body(resp)
+            if resp.status == 400 and 'routed experts' in body.lower():
+                raise RoutedExpertsNotSupported(body)
+            raise HttpToolCallError(resp.status, format_error_response(resp.status, body))
+
+        async for raw_chunk in resp.content.iter_any():
+            buffer += raw_chunk
+            while b'\n' in buffer:
+                line_bytes, buffer = buffer.split(b'\n', 1)
+                line = line_bytes.decode('utf-8', errors='replace').strip()
+                if not line:
+                    continue
+                raw_lines.append(line)
+                if not line.startswith('data: '):
+                    continue
+
+                data = line[6:]
+                if data == '[DONE]':
+                    result['stream_complete'] = True
+                    break
+
+                try:
+                    item = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                usage = item.get('usage')
+                if isinstance(usage, dict):
+                    if usage.get('prompt_tokens'):
+                        result['prompt_tokens'] = usage['prompt_tokens']
+                    if usage.get('completion_tokens'):
+                        result['completion_tokens'] = usage['completion_tokens']
+
+                choices = item.get('choices') or []
+                if not choices:
+                    continue
+
+                result['chunk_count'] += 1
+                _merge_stream_choice_json(choices[0], result, tool_calls)
+
+            if result.get('stream_complete'):
+                break
 
     if log_file:
         try:
@@ -799,6 +966,60 @@ def validate_stream_tool_call_with_tokens(result: dict, prompt_tokens: int | Non
     validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
 
 
+def _tool_calls_for_reference_validation(tool_calls) -> list[dict]:
+    if not tool_calls:
+        return []
+    if isinstance(tool_calls, dict):
+        return [{
+            'function': {
+                'name': data.get('name', ''),
+                'arguments': data.get('args_str', ''),
+            },
+        } for idx in sorted(tool_calls) for data in [tool_calls[idx]]]
+    return list(tool_calls)
+
+
+def validate_reference_turn_result(
+    result: dict,
+    prompt_tokens: int,
+    *,
+    expected_function_name: str | None = None,
+) -> None:
+    """Per-turn validation for concurrent input_ids streaming tool calls."""
+    assert result.get('stream_complete'), 'stream ended before data: [DONE]'
+    assert result.get('finish_reason') == 'tool_calls', (
+        f"finish_reason={result.get('finish_reason')!r}, expected 'tool_calls'")
+
+    tool_calls = _tool_calls_for_reference_validation(result.get('tool_calls'))
+    if not tool_calls:
+        raise AssertionError('no tool_calls after stream completed')
+
+    for tc in tool_calls:
+        fn = tc.get('function') or {}
+        name = fn.get('name', '')
+        args = fn.get('arguments')
+        if not name:
+            raise AssertionError('tool call missing function name')
+        if not args:
+            raise AssertionError(f'tool call {name!r} missing arguments')
+        if isinstance(args, str):
+            json.loads(args)
+
+    if expected_function_name is not None:
+        first_name = tool_calls[0]['function']['name']
+        assert first_name == expected_function_name, (
+            f'function_name={first_name!r}, expected {expected_function_name!r}')
+
+    assert_parser_drop_decoded_only(result.get('decoded_str', ''), result.get('tool_calls'))
+
+    if result.get('routed_experts') is not None and prompt_tokens > 0:
+        completion_tokens = len(result.get('output_ids') or [])
+        expected_re_len = prompt_tokens + completion_tokens - 1
+        actual_re_len = len(result['routed_experts'])
+        assert expected_re_len == actual_re_len, (
+            f'Routed Experts Mismatch (Expected {expected_re_len}, got {actual_re_len})')
+
+
 def validate_concurrent_turn_result(
     result: dict,
     prompt_tokens: int,
@@ -818,7 +1039,7 @@ def validate_concurrent_turn_result(
 
 
 def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
-    ast_msg = {'role': 'assistant', 'content': result.get('content') or None}
+    ast_msg = {'role': 'assistant', 'content': result.get('content') or ''}
     if result.get('reasoning_content'):
         ast_msg['reasoning_content'] = result['reasoning_content']
 
@@ -843,6 +1064,7 @@ def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
         })
 
     if tool_calls_out:
+        _parse_tool_call_arguments(tool_calls_out)
         ast_msg['tool_calls'] = tool_calls_out
     messages.append(ast_msg)
 
@@ -859,7 +1081,8 @@ def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
         })
 
 
-def _concurrent_worker_turns(
+async def _async_concurrent_worker_turns(
+    session: aiohttp.ClientSession,
     worker_id: int,
     api_model_name: str,
     tokenizer_path: str,
@@ -868,28 +1091,25 @@ def _concurrent_worker_turns(
     cities: list[str],
     use_input_ids: bool,
     log_file: str | None,
+    reference_payload: bool,
 ) -> bool:
-    messages = [{
-        'role': 'system',
-        'content': 'You are a helpful assistant that can use tools. '
-        'When asked about weather, use the get_weather tool.',
-    }]
+    messages: list = []
     expected_name = tools[0]['function']['name'] if tools else None
 
     for turn in range(num_turns):
         city = cities[turn % len(cities)]
         messages.append({'role': 'user', 'content': f'What is the weather in {city}?'})
         try:
-            result = collect_stream_tool_call_http(
+            result = await collect_stream_tool_call_http_async(
+                session,
                 api_model_name,
                 messages,
                 tools=tools,
                 use_input_ids=use_input_ids,
                 log_file=log_file,
                 tokenizer_path=tokenizer_path,
+                reference_payload=reference_payload,
             )
-        except RoutedExpertsNotSupported:
-            raise
         except HttpToolCallError as exc:
             raise AssertionError(
                 f'worker {worker_id} turn {turn + 1}: HTTP tool-call request failed: {exc}'
@@ -897,7 +1117,7 @@ def _concurrent_worker_turns(
 
         prompt_tokens = result.get('prompt_tokens_computed') or result.get('prompt_tokens') or 0
         try:
-            validate_concurrent_turn_result(
+            validate_reference_turn_result(
                 result,
                 prompt_tokens,
                 expected_function_name=expected_name,
@@ -910,6 +1130,117 @@ def _concurrent_worker_turns(
     return True
 
 
+async def _run_concurrent_tool_call_workers_async(
+    api_model_name: str,
+    *,
+    tokenizer_path: str | None = None,
+    num_workers: int | None = None,
+    num_turns: int = 3,
+    tools: list | None = None,
+    cities: list[str] | None = None,
+    use_input_ids: bool = True,
+    log_file: str | None = None,
+    reference_payload: bool = True,
+) -> tuple[int, int]:
+    tok_path = tokenizer_path or api_model_name
+    if num_workers is None:
+        num_workers = DEFAULT_TOOL_CALL_CONCURRENCY
+    if tools is None:
+        tools = [CONCURRENT_WEATHER_TOOL]
+    if cities is None:
+        cities = ['Tokyo', 'London', 'Paris', 'New York']
+
+    timeout = aiohttp.ClientTimeout(total=600)
+    read_bufsize = 1024 * 1024 * 100
+    connector = aiohttp.TCPConnector(limit=num_workers)
+    async with aiohttp.ClientSession(
+            timeout=timeout,
+            read_bufsize=read_bufsize,
+            connector=connector,
+    ) as session:
+        tasks = [
+            _async_concurrent_worker_turns(
+                session,
+                i,
+                api_model_name,
+                tok_path,
+                num_turns,
+                tools,
+                cities,
+                use_input_ids,
+                log_file,
+                reference_payload,
+            ) for i in range(num_workers)
+        ]
+        await asyncio.gather(*tasks)
+
+    return num_workers, num_workers
+
+
+async def _async_concurrent_http_error_worker(
+    session: aiohttp.ClientSession,
+    worker_id: int,
+    invalid_model_name: str,
+) -> bool:
+    """One-shot request expected to fail with formatted
+    ``HttpToolCallError``."""
+    try:
+        await collect_stream_tool_call_http_async(
+            session,
+            invalid_model_name,
+            messages=[{'role': 'user', 'content': 'What is the weather in Tokyo?'}],
+            use_input_ids=False,
+        )
+        raise AssertionError(f'worker {worker_id}: expected HTTP error, request succeeded')
+    except HttpToolCallError as exc:
+        if 'HTTP' not in exc.message:
+            raise AssertionError(
+                f'worker {worker_id}: error message not formatted: {exc.message!r}'
+            ) from exc
+        return True
+
+
+async def _run_concurrent_http_error_workers_async(
+    api_model_name: str,
+    *,
+    num_workers: int | None = None,
+    invalid_model_name: str | None = None,
+) -> tuple[int, int]:
+    if num_workers is None:
+        num_workers = DEFAULT_TOOL_CALL_HTTP_ERROR_WORKERS
+    invalid_name = invalid_model_name or f'{api_model_name}__invalid_for_http_error_test__'
+
+    timeout = aiohttp.ClientTimeout(total=120)
+    connector = aiohttp.TCPConnector(limit=num_workers)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+        results = await asyncio.gather(*[
+            _async_concurrent_http_error_worker(session, i, invalid_name)
+            for i in range(num_workers)
+        ])
+
+    successes = sum(results)
+    if successes != num_workers:
+        raise AssertionError(
+            f'concurrent HTTP error probe: {successes}/{num_workers} workers '
+            'received formatted HttpToolCallError')
+    return successes, num_workers
+
+
+def run_concurrent_http_error_workers(
+    api_model_name: str,
+    *,
+    num_workers: int | None = None,
+    invalid_model_name: str | None = None,
+) -> tuple[int, int]:
+    """Concurrent invalid requests; each worker must get
+    ``HttpToolCallError``."""
+    return asyncio.run(_run_concurrent_http_error_workers_async(
+        api_model_name,
+        num_workers=num_workers,
+        invalid_model_name=invalid_model_name,
+    ))
+
+
 def run_concurrent_tool_call_workers(
     api_model_name: str,
     *,
@@ -920,33 +1251,20 @@ def run_concurrent_tool_call_workers(
     cities: list[str] | None = None,
     use_input_ids: bool = True,
     log_file: str | None = None,
+    reference_payload: bool = True,
 ) -> tuple[int, int]:
-    tok_path = tokenizer_path or api_model_name
-    if num_workers is None:
-        num_workers = DEFAULT_TOOL_CALL_CONCURRENCY
-    if tools is None:
-        tools = [CONCURRENT_WEATHER_TOOL]
-    if cities is None:
-        cities = ['Tokyo', 'London', 'Paris', 'New York']
-
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = [
-            executor.submit(
-                _concurrent_worker_turns,
-                i,
-                api_model_name,
-                tok_path,
-                num_turns,
-                tools,
-                cities,
-                use_input_ids,
-                log_file,
-            ) for i in range(num_workers)
-        ]
-        for fut in as_completed(futures):
-            fut.result()
-
-    return num_workers, num_workers
+    """Run N asyncio workers for multi-turn concurrent tool-call stress."""
+    return asyncio.run(_run_concurrent_tool_call_workers_async(
+        api_model_name,
+        tokenizer_path=tokenizer_path,
+        num_workers=num_workers,
+        num_turns=num_turns,
+        tools=tools,
+        cities=cities,
+        use_input_ids=use_input_ids,
+        log_file=log_file,
+        reference_payload=reference_payload,
+    ))
 
 
 def collect_stream_reasoning(stream):
