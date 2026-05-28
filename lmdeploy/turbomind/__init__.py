@@ -21,14 +21,14 @@ def bootstrap():
         conda_prefix = os.getenv('CONDA_PREFIX')
         if conda_prefix is not None:
             dll_paths.append(os.path.join(conda_prefix, 'Library', 'bin'))
-        added = False
+        # de-duplicate while preserving order
+        seen = set()
+        dll_paths = [p for p in dll_paths if not (p in seen or seen.add(p))]
+        _dll_dirs = []  # keep directory handles alive
         for dll_path in dll_paths:
             if os.path.isdir(dll_path):
-                print(f'Add dll path {dll_path}, please note cuda version '
-                      'should >= 11.3 when compiled with cuda 11')
-                os.add_dll_directory(dll_path)
-                added = True
-        if not added:
+                _dll_dirs.append(os.add_dll_directory(dll_path))
+        if not _dll_dirs:
             print('Warning: no CUDA DLL directory found. Set CUDA_PATH or '
                   'install PyTorch with CUDA support, otherwise TurboMind '
                   'may fail to load.')
