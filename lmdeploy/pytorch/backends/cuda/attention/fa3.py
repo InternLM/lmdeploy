@@ -14,7 +14,7 @@ class FA3Impl(TritonAttentionImpl):
 
     This implementation leverages Flash Attention 3's optimized kernels for both
     prefill and decoding stages. FA3 provides significant performance improvements
-    on Hopper architecture (SM90) with CUDA >= 12.3.
+    on Ampere and above (SM80+) with CUDA >= 12.3.
 
     Key features:
     - Optimized prefill using flash_attn_varlen_func
@@ -217,9 +217,15 @@ class FA3Impl(TritonAttentionImpl):
         """
         if max_q_seqlen > 1:
             return self._decoding_speculative(query, k_cache, v_cache, attn_metadata, max_q_seqlen)
-        else:
-            return self._decoding_standard(query, k_cache, v_cache, attn_metadata, max_q_seqlen, k_scales_zeros,
-                                           v_scales_zeros)
+        return self._decoding_standard(
+            query,
+            k_cache,
+            v_cache,
+            attn_metadata,
+            max_q_seqlen,
+            k_scales_zeros,
+            v_scales_zeros,
+        )
 
     def _forward_prefill(
         self,

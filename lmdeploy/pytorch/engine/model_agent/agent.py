@@ -171,11 +171,6 @@ def model_forward(
         context.named_state_caches = state_cache_engine.named_state_caches
 
         with ctx_mgr.context(context):
-            # initialize cache for ssm
-            # chunk_indices in gated delta kernel requires cuda synchronize
-            # so we have to init cache after build_context
-            if not inputs.is_decoding and not inputs.is_dummy and inputs.state_offsets is not None:
-                state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
 
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,

@@ -46,7 +46,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     MigrationRequest,
 )
 from lmdeploy.serve.anthropic import create_anthropic_router
-from lmdeploy.serve.core import AsyncEngine
+from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
     ChatCompletionRequest,
@@ -94,6 +94,7 @@ logger = get_logger('lmdeploy')
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
+    health_monitor: EngineHealthMonitor | None = None
     request_hosts = []
     # following are for registering to proxy server
     proxy_url: str | None = None
@@ -239,9 +240,16 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
 
 
 @router.get('/health')
-async def health() -> Response:
+async def health() -> JSONResponse:
     """Health check."""
-    return Response(status_code=200)
+    monitor = VariableInterface.health_monitor
+    if monitor is None:
+        data = dict(status='unhealthy',
+                    message='Engine health monitor is not initialized.')
+        return JSONResponse(jsonable_encoder(data), status_code=HTTPStatus.SERVICE_UNAVAILABLE)
+    data = monitor.snapshot()
+    status_code = HTTPStatus.OK if data['status'] in ('healthy', 'sleeping') else HTTPStatus.SERVICE_UNAVAILABLE
+    return JSONResponse(jsonable_encoder(data), status_code=status_code)
 
 
 @router.get('/terminate')
@@ -379,6 +387,32 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return error_check_ret
     session = VariableInterface.create_session(request.session_id)
 
+    # Resolve input: messages has priority over input_ids/image_data
+    messages_empty = (request.messages is None
+                      or request.messages == ''
+                      or (isinstance(request.messages, list) and len(request.messages) == 0))
+    resolved_input_ids = None
+    if messages_empty and request.input_ids is not None:
+        # /generate-style input: use input_ids (+ optional image_data)
+        resolved_input_ids = request.input_ids
+        if request.image_data is not None:
+            # Convert image_data to OpenAI multimodal content format
+            image_data = request.image_data
+            image_input = []
+            if not isinstance(image_data, list):
+                image_data = [image_data]
+            for img in image_data:
+                if isinstance(img, str):
+                    image_input.append(dict(type='image_url', image_url=dict(url=img)))
+                else:
+                    image_input.append(dict(type='image_url', image_url=img))
+            text_input = dict(type='text', text=request.input_ids)
+            request.messages = [dict(role='user', content=[text_input] + image_input)]
+            resolved_input_ids = None  # image_data conversion takes over
+        else:
+            # input_ids only — engine requires messages=None
+            request.messages = None
+
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -395,8 +429,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
     gen_logprobs, logits_processors = None, None
-    if request.logprobs and request.top_logprobs:
-        gen_logprobs = request.top_logprobs
+    if request.logprobs:
+        gen_logprobs = request.top_logprobs or 1
     if request.logit_bias is not None:
         try:
             logits_processors = [
@@ -415,7 +449,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     random_seed = request.seed if request.seed is not None else None
 
     parser_cls = VariableInterface.response_parser_cls
-    response_parser = parser_cls(request=request, tokenizer=tokenizer)
+    try:
+        response_parser = parser_cls(request=request, tokenizer=tokenizer)
+    except ValueError as e:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(e))
     # request is normalized and may be adjusted by the parser
     # (e.g. GPT-OSS clears response_format and injects the schema into messages)
     request = response_parser.request
@@ -443,10 +480,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         preserve_cache=preserve_cache,
         repetition_ngram_size=request.repetition_ngram_size,
         repetition_ngram_threshold=request.repetition_ngram_threshold,
+        return_routed_experts=request.return_routed_experts,
     )
 
-    # text completion for string input
-    do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
+    # text completion for string input or input_ids
+    do_preprocess = (False if isinstance(request.messages, str)
+                     or resolved_input_ids is not None else request.do_preprocess)
     chat_template_kwargs = request.chat_template_kwargs or {}
     if request.enable_thinking is not None:
         logger.warning('`enable_thinking` will be deprecated in the future, '
@@ -468,75 +507,103 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
+        input_ids=resolved_input_ids,
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
+    include_usage = bool(request.stream_options and request.stream_options.include_usage)
 
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,
                                     finish_reason: str | None = None,
                                     logprobs: LogProbs | None = None,
-                                    usage: UsageInfo | None = None) -> str:
+                                    routed_experts=None,
+                                    output_ids=None) -> dict:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
-                                                         logprobs=logprobs)
+                                                         logprobs=logprobs,
+                                                         output_ids=output_ids,
+                                                         routed_experts=routed_experts)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=None,
+        )
+        response_dict = response.model_dump(mode='json', exclude_none=True)
+        if include_usage:
+            response_dict['usage'] = None
+        return response_dict
+
+    def create_stream_usage_response_json(usage: UsageInfo) -> str:
+        response = ChatCompletionStreamResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=[],
             usage=usage,
         )
-        response_json = response.model_dump_json()
-
-        return response_json
+        return response.model_dump_json(exclude_none=True)
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
+        final_usage = None
         async for res in result_generator:
-            logprobs, usage = None, None
+            logprobs = None
             if gen_logprobs and res.logprobs:
                 logprobs = _create_chat_completion_logprobs(tokenizer, res.token_ids, res.logprobs)
-            # Only stream chunk `usage` in the final chunk according to OpenAI API spec
-            if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
+            if res.finish_reason and include_usage:
                 total_tokens = sum([res.input_token_len, res.generate_token_len])
-                usage = UsageInfo(
+                final_usage = UsageInfo(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
-            delta_message, tool_emitted = response_parser.stream_chunk(
+            stream_deltas = response_parser.stream_chunk(
                 res.response,
                 delta_token_ids
             )
-            if tool_emitted:
-                streaming_tools = True
-
-            if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
-                if res.finish_reason == 'stop' and streaming_tools is True:
-                    res.finish_reason = 'tool_calls'
-
-            # The parser may intentionally suppress no-op chunks by returning
-            # ``None``. Keep them suppressed unless this is a visible terminal
-            # frame (finish/usage/logprobs), where OpenAI-style streams still
-            # expect a delta object.
-            if delta_message is None:
-                if res.finish_reason is None and usage is None and logprobs is None:
+            if not stream_deltas:
+                # Parser may buffer partial protocol tags and emit no visible delta
+                # while the engine still produced new tokens (e.g. MTP batch). Do not
+                # drop those token ids; emit them once on a placeholder delta.
+                if res.finish_reason is None and logprobs is None and not delta_token_ids:
                     continue
-                delta_message = DeltaMessage(role='assistant')
+                stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
 
-            if request.return_token_ids:
-                delta_message.gen_tokens = delta_token_ids
-            response_json = create_stream_response_json(index=0,
-                                                        delta_message=delta_message,
-                                                        finish_reason=res.finish_reason,
-                                                        logprobs=logprobs,
-                                                        usage=usage)
-            if res.cache_block_ids is not None:
-                response_json['cache_block_ids'] = res.cache_block_ids
-                response_json['remote_token_ids'] = res.token_ids
-            yield f'data: {response_json}\n\n'
+            for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
+                if tool_emitted:
+                    streaming_tools = True
+
+                is_last_delta = delta_index == len(stream_deltas) - 1
+
+                finish_reason = res.finish_reason if is_last_delta else None
+                chunk_logprobs = logprobs if is_last_delta else None
+
+                if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
+                    if finish_reason == 'stop' and streaming_tools is True:
+                        finish_reason = 'tool_calls'
+
+                # Only output routed_experts in the final chunk
+                routed_experts = res.routed_experts if finish_reason is not None else None
+                # Emit token ids once per engine yield on the last parsed delta, when
+                # accumulated delta text and token ids for this step are aligned.
+                stream_output_ids = delta_token_ids if (request.return_token_ids and is_last_delta) else None
+
+                response_json = create_stream_response_json(index=0,
+                                                            delta_message=delta_message,
+                                                            finish_reason=finish_reason,
+                                                            logprobs=chunk_logprobs,
+                                                            routed_experts=routed_experts,
+                                                            output_ids=stream_output_ids)
+                if res.cache_block_ids is not None and is_last_delta:
+                    response_json['cache_block_ids'] = res.cache_block_ids
+                    response_json['remote_token_ids'] = res.token_ids
+                yield f'data: {json.dumps(response_json)}\n\n'
+        if final_usage is not None:
+            yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -589,13 +656,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     assert final_res is not None
     choices = []
-    if request.return_token_ids:
-        message.gen_tokens = final_token_ids
     choice_data = ChatCompletionResponseChoice(
         index=0,
         message=message,
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
+        output_ids=final_token_ids if request.return_token_ids else None,
+        routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     )
     choices.append(choice_data)
 
@@ -741,15 +808,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             adapter_name=adapter_name)
         generators.append(result_generator)
 
+    include_usage = bool(request.stream_options and request.stream_options.include_usage)
+
     def create_stream_response_json(index: int,
                                     text: str,
                                     finish_reason: str | None = None,
-                                    logprobs: LogProbs | None = None,
-                                    gen_tokens: list[int] | None = None,
-                                    usage: UsageInfo | None = None) -> str:
+                                    logprobs: LogProbs | None = None) -> dict:
         choice_data = CompletionResponseStreamChoice(index=index,
                                                      text=text,
-                                                     gen_tokens=gen_tokens,
                                                      finish_reason=finish_reason,
                                                      logprobs=logprobs)
         response = CompletionStreamResponse(
@@ -757,41 +823,47 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=None,
+        )
+        response_json = response.model_dump(mode='json', exclude_none=True)
+        if include_usage:
+            response_json['usage'] = None
+        return response_json
+
+    def create_stream_usage_response_json(usage: UsageInfo) -> dict:
+        response = CompletionStreamResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=[],
             usage=usage,
         )
-        response_json = response.model_dump()
-        return response_json
+        return response.model_dump(mode='json', exclude_none=True)
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
+        final_usage = UsageInfo() if include_usage else None
         for generator in generators:
             async for res in generator:
                 logprobs = None
-                usage = None
                 if request.logprobs and res.logprobs:
                     raise ValueError('logprobs is removed')
-                # Only stream chunk `usage` in the final chunk according to OpenAI API spec
-                if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
+                if res.finish_reason and final_usage is not None:
                     final_res = res
                     total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-                    usage = UsageInfo(
-                        prompt_tokens=final_res.input_token_len,
-                        completion_tokens=final_res.generate_token_len,
-                        total_tokens=total_tokens,
-                    )
-                gen_tokens = None
-                if request.return_token_ids:
-                    gen_tokens = res.token_ids or []
+                    final_usage.prompt_tokens += final_res.input_token_len
+                    final_usage.completion_tokens += final_res.generate_token_len
+                    final_usage.total_tokens += total_tokens
                 response_json = create_stream_response_json(index=0,
                                                             text=res.response,
-                                                            gen_tokens=gen_tokens,
                                                             finish_reason=res.finish_reason,
-                                                            logprobs=logprobs,
-                                                            usage=usage)
+                                                            logprobs=logprobs)
                 if res.cache_block_ids is not None:
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
+        if final_usage is not None:
+            yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -829,8 +901,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         choice_data = CompletionResponseChoice(index=i,
                                                text=text,
                                                finish_reason=final_res.finish_reason,
-                                               logprobs=logprobs,
-                                               gen_tokens=final_token_ids if request.return_token_ids else None)
+                                               logprobs=logprobs)
         choices[i] = choice_data
 
         if with_cache:
@@ -1255,7 +1326,10 @@ def set_parsers(reasoning_parser_name: str | None = None, tool_parser_name: str 
     if cls is None:
         raise ValueError(f'The response parser {name} is not in the parser list: '
                          f'{ResponseParserManager.module_dict.keys()}')
-    cls.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
+    tokenizer = VariableInterface.async_engine.tokenizer.model.model
+    cls.set_parsers(reasoning_parser_name=reasoning_parser_name,
+                    tool_parser_name=tool_parser_name,
+                    tokenizer=tokenizer)
     VariableInterface.response_parser_cls = cls
 
 def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindEngineConfig):
@@ -1279,7 +1353,10 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
     @asynccontextmanager
     async def lifespan_handler(app: FastAPI):
         task = None
+        health_monitor = EngineHealthMonitor(async_engine)
+        VariableInterface.health_monitor = health_monitor
         try:
+            health_monitor.start()
             if getattr(backend_config, 'enable_metrics', False):
                 metrics_processor.start_metrics_handler(enable_metrics=True)
                 log_interval = 10.
@@ -1298,6 +1375,9 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
 
             yield
         finally:
+            await health_monitor.stop()
+            if VariableInterface.health_monitor is health_monitor:
+                VariableInterface.health_monitor = None
             if task:
                 task.cancel()
             await metrics_processor.stop_metrics_handler()

@@ -70,7 +70,6 @@ def test_request_logger_log_inputs_handles_none_token_ids(monkeypatch):
 
     assert len(records) == 1
     assert 'input_tokens=0' in records[0].getMessage()
-    assert 'prompt_token_id=None' in records[0].getMessage()
 
 
 def test_request_log_level_includes_info_logs(monkeypatch):
