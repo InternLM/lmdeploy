@@ -684,22 +684,10 @@ class BaseResponseParser(ResponseParser):
             if close_idx < 0:
                 return False
 
-        open_tag = self.profile.tool_open_tag
-        close_tag = self.profile.tool_close_tag
-        open_idx = text.find(open_tag) if open_tag else -1
-        close_idx = text.find(close_tag) if close_tag else -1
+        if self.tool_parser is None or self.request.tool_choice == 'none':
+            return True
 
-        if open_idx >= 0 and close_idx >= 0 and close_idx > open_idx:
-            if self.tool_parser is None or self.request.tool_choice == 'none':
-                return True
-            payload_start = open_idx + len(open_tag)
-            tool_payload = text[payload_start:close_idx].strip()
-            return self.tool_parser.validate_complete(tool_payload)
-
-        if open_idx >= 0 or close_idx >= 0:
-            return False
-
-        return True
+        return self.tool_parser.validate_complete(text)
 
     @staticmethod
     def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:

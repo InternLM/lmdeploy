@@ -57,9 +57,8 @@ class Qwen3CoderToolParser(XmlToolParser):
         args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
         return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
 
-    def validate_complete(self, payload: str) -> bool:
-        content = payload.replace(self.tool_start_token, '').replace(self.tool_end_token, '').strip()
-        return bool(self._complete_payload_pattern.fullmatch(content))
+    def _validate_tool_payload(self, payload: str) -> bool:
+        return bool(self._complete_payload_pattern.fullmatch(payload))
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""

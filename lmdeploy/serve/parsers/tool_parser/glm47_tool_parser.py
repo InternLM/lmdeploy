@@ -53,7 +53,7 @@ class Glm47ToolParser(XmlToolParser):
         args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
         return ToolCall(function=FunctionCall(name=func_name, arguments=json.dumps(args_dict, ensure_ascii=False)))
 
-    def validate_complete(self, payload: str) -> bool:
+    def _validate_tool_payload(self, payload: str) -> bool:
         return bool(self._complete_payload_pattern.fullmatch(payload))
 
     def _parse_payload(self, payload: str, *, final: bool = False) -> tuple[str | None, dict[str, str]]:

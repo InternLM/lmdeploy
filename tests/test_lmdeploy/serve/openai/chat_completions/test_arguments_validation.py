@@ -64,31 +64,31 @@ def test_json_tool_parsers_use_default_validate_complete():
     validation."""
     from lmdeploy.serve.parsers.tool_parser import (
         Internlm2ToolParser,
-        Llama3JsonToolParser,
         Qwen2d5ToolParser,
         Qwen3ToolParser,
     )
     from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
 
     assert not hasattr(ToolParser, '_validate_complete_json_payload')
-    for parser_cls in (Internlm2ToolParser, Llama3JsonToolParser, Qwen2d5ToolParser, Qwen3ToolParser):
+    for parser_cls in (Internlm2ToolParser, Qwen2d5ToolParser, Qwen3ToolParser):
         assert parser_cls.validate_complete is ToolParser.validate_complete
 
 
-def test_xml_tool_parsers_override_validate_complete():
+def test_xml_tool_parsers_override_payload_validation():
     """XML-like tool parsers keep model-specific complete-payload
     validation."""
     from lmdeploy.serve.parsers.tool_parser import Glm47ToolParser, Qwen3CoderToolParser
+    from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
 
     for parser_cls in (Glm47ToolParser, Qwen3CoderToolParser):
-        assert 'validate_complete' in parser_cls.__dict__
+        assert parser_cls.validate_complete is ToolParser.validate_complete
+        assert '_validate_tool_payload' in parser_cls.__dict__
 
 
-def test_json_tool_parsers_validate_complete_payload():
-    """JSON tool parsers validate complete JSON payloads themselves."""
+def test_json_tool_parsers_validate_complete_text():
+    """JSON tool parsers validate tool tags and JSON payloads themselves."""
     from lmdeploy.serve.parsers.tool_parser import (
         Internlm2ToolParser,
-        Llama3JsonToolParser,
         Qwen2d5ToolParser,
         Qwen3ToolParser,
     )
@@ -96,31 +96,57 @@ def test_json_tool_parsers_validate_complete_payload():
     valid_payload = '{"name": "get_weather", "arguments": {"city": "NYC"}}'
     invalid_payload = '{"name": "get_weather", "arguments": {"city":'
 
-    for parser_cls in (Internlm2ToolParser, Llama3JsonToolParser, Qwen2d5ToolParser, Qwen3ToolParser):
-        parser = parser_cls(tokenizer=object())
+    for parser_cls in (Internlm2ToolParser, Qwen2d5ToolParser, Qwen3ToolParser):
+        parser = parser_cls()
         parser.parse_tool_call_complete = _fail_parse_tool_call_complete
-        assert parser.validate_complete(valid_payload) is True
-        assert parser.validate_complete(invalid_payload) is False
+        open_tag = parser.get_tool_open_tag()
+        close_tag = parser.get_tool_close_tag()
+
+        assert parser.validate_complete(f'before{open_tag}{valid_payload}{close_tag}after') is True
+        assert parser.validate_complete(f'before{open_tag}{invalid_payload}{close_tag}after') is False
+        assert parser.validate_complete(f'before{open_tag}{valid_payload}') is False
+        assert parser.validate_complete(f'before{close_tag}after') is False
+        assert parser.validate_complete('plain text') is True
 
 
-def test_xml_tool_parsers_validate_complete_payload():
-    """XML tool parsers validate complete XML payloads themselves."""
+def test_llama3_tool_parser_skips_complete_validation():
+    """Llama3 has no close tag, so it does not recheck complete text."""
+    from lmdeploy.serve.parsers.tool_parser import Llama3JsonToolParser
+
+    parser = Llama3JsonToolParser()
+    open_tag = parser.get_tool_open_tag()
+
+    assert parser.validate_complete('plain text') is True
+    assert parser.validate_complete(f'{open_tag}{{"name": "get_weather"}}') is True
+
+
+def test_xml_tool_parsers_validate_complete_text():
+    """XML tool parsers validate tool tags and XML payloads themselves."""
     from lmdeploy.serve.parsers.tool_parser import Glm47ToolParser, InternS2PreviewToolParser, Qwen3CoderToolParser
 
-    glm_parser = Glm47ToolParser(tokenizer=object())
+    glm_parser = Glm47ToolParser()
     glm_parser.parse_tool_call_complete = _fail_parse_tool_call_complete
+    glm_open_tag = glm_parser.get_tool_open_tag()
+    glm_close_tag = glm_parser.get_tool_close_tag()
     assert glm_parser.validate_complete(
-        'get_weather<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
+        f'before{glm_open_tag}get_weather<arg_key>location</arg_key><arg_value>Beijing</arg_value>{glm_close_tag}after'
     ) is True
-    assert glm_parser.validate_complete('') is False
+    assert glm_parser.validate_complete(f'{glm_open_tag}{glm_close_tag}') is False
+    assert glm_parser.validate_complete(f'{glm_open_tag}get_weather') is False
+    assert glm_parser.validate_complete('plain text') is True
 
     qwen_payload = '<function=get_weather><parameter=city>NYC</parameter></function>'
     qwen_incomplete_payload = '<function=get_weather><parameter=city>NYC</parameter>'
     for parser_cls in (InternS2PreviewToolParser, Qwen3CoderToolParser):
-        parser = parser_cls(tokenizer=object())
+        parser = parser_cls()
         parser.parse_tool_call_complete = _fail_parse_tool_call_complete
-        assert parser.validate_complete(qwen_payload) is True
-        assert parser.validate_complete(qwen_incomplete_payload) is False
+        open_tag = parser.get_tool_open_tag()
+        close_tag = parser.get_tool_close_tag()
+
+        assert parser.validate_complete(f'before{open_tag}{qwen_payload}{close_tag}after') is True
+        assert parser.validate_complete(f'before{open_tag}{qwen_incomplete_payload}{close_tag}after') is False
+        assert parser.validate_complete(f'before{open_tag}{qwen_payload}') is False
+        assert parser.validate_complete('plain text') is True
 
 
 def _fail_parse_tool_call_complete(payload):
@@ -229,6 +255,47 @@ def test_validate_complete_reports_invalid_tool_arguments_after_parse_complete()
         cls.tool_parser_cls = old_tool_cls
 
 
+def test_validate_complete_checks_each_tool_call_block():
+    """Every tool block in the final text must be complete and valid."""
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    from lmdeploy.serve.parsers import ResponseParserManager
+    from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+
+    cls = ResponseParserManager.get('default')
+    old_reasoning_cls = cls.reasoning_parser_cls
+    old_tool_cls = cls.tool_parser_cls
+    try:
+        cls.reasoning_parser_cls = None
+        cls.tool_parser_cls = ToolParserManager.get('qwen3')
+        request = ChatCompletionRequest(
+            model='test',
+            messages=[],
+            tool_choice='auto',
+        )
+        parser = cls(request=request, tokenizer=object())
+        open_tag = parser.profile.tool_open_tag
+        close_tag = parser.profile.tool_close_tag
+        first_payload = '{"name": "get_weather", "arguments": {"city": "NYC"}}'
+        second_payload = '{"name": "get_time", "arguments": {"tz": "UTC"}}'
+        incomplete_payload = '{"name": "get_time", "arguments": {"tz":'
+
+        valid_text = f'{open_tag}{first_payload}{close_tag}{open_tag}{second_payload}{close_tag}'
+        invalid_text = f'{open_tag}{first_payload}{close_tag}{open_tag}{incomplete_payload}{close_tag}'
+        unclosed_text = f'{open_tag}{first_payload}{close_tag}{open_tag}{second_payload}'
+
+        content, tool_calls, reasoning = parser.parse_complete(valid_text)
+
+        assert content is None
+        assert reasoning is None
+        assert [call.function.name for call in tool_calls] == ['get_weather', 'get_time']
+        assert parser.validate_complete(valid_text) is True
+        assert parser.validate_complete(invalid_text) is False
+        assert parser.validate_complete(unclosed_text) is False
+    finally:
+        cls.reasoning_parser_cls = old_reasoning_cls
+        cls.tool_parser_cls = old_tool_cls
+
+
 def test_validate_complete_reports_invalid_tool_arguments_after_stream_chunk():
     """stream_chunk accumulates text for final validation."""
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
@@ -284,8 +351,8 @@ def test_validate_complete_rejects_unpaired_tool_close_tag():
         cls.tool_parser_cls = old_tool_cls
 
 
-def test_validate_complete_delegates_tool_payload_between_tags():
-    """Complete tool pairs are validated by the concrete tool parser."""
+def test_validate_complete_delegates_complete_text_to_tool_parser():
+    """Complete text validation is owned by the concrete tool parser."""
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
     from lmdeploy.serve.parsers import ResponseParserManager
     from lmdeploy.serve.parsers.tool_parser import ToolParserManager
@@ -302,17 +369,17 @@ def test_validate_complete_delegates_tool_payload_between_tags():
             tool_choice='auto',
         )
         parser = cls(request=request, tokenizer=object())
-        payloads = []
+        texts = []
 
-        def _validate_payload(payload):
-            payloads.append(payload)
+        def _validate_text(text):
+            texts.append(text)
             return True
 
-        parser.tool_parser.validate_complete = _validate_payload
+        parser.tool_parser.validate_complete = _validate_text
         text = 'before<tool_call>{"name": "get_weather"}</tool_call>after'
 
         assert parser.validate_complete(text) is True
-        assert payloads == ['{"name": "get_weather"}']
+        assert texts == [text]
     finally:
         cls.reasoning_parser_cls = old_reasoning_cls
         cls.tool_parser_cls = old_tool_cls
@@ -345,8 +412,8 @@ def test_validate_complete_allows_tool_pair_when_tool_parser_disabled():
         cls.tool_parser_cls = old_tool_cls
 
 
-def test_validate_complete_rejects_tool_open_tag_without_close_tag_configured():
-    """A tool payload must have both open and close tags before validation."""
+def test_validate_complete_allows_llama3_tool_open_tag_without_close_tag():
+    """Llama3 complete validation is skipped because it has no close tag."""
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
     from lmdeploy.serve.parsers import ResponseParserManager
     from lmdeploy.serve.parsers.tool_parser import ToolParserManager
@@ -365,7 +432,7 @@ def test_validate_complete_rejects_tool_open_tag_without_close_tag_configured():
         parser = cls(request=request, tokenizer=object())
 
         text = '<|python_tag|>{"name": "get_weather", "arguments": {"city": "NYC"}}'
-        assert parser.validate_complete(text) is False
+        assert parser.validate_complete(text) is True
     finally:
         cls.reasoning_parser_cls = old_reasoning_cls
         cls.tool_parser_cls = old_tool_cls
