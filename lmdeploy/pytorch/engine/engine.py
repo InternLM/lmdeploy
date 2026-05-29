@@ -647,3 +647,39 @@ class Engine(EngineBase):
 
     def get_schedule_metrics(self):
         return self.scheduler.schedule_metrics
+
+    @staticmethod
+    def _health_check_tasks(tasks):
+        done_tasks = []
+        for task in list(tasks):
+            if task.done():
+                done_tasks.append(task.get_name())
+        return len(done_tasks) == 0, done_tasks
+
+    async def get_health_status(self) -> dict:
+        """Get lightweight health status.
+
+        Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
+        before returning metrics.
+        """
+        if not self.req_manager.is_loop_alive():
+            return dict(alive=False,
+                        message='PyTorch engine request loop is not alive.',
+                        schedule_metrics=None)
+
+        if self._loop_main is not None:
+            if self._loop_main.done():
+                return dict(alive=False,
+                            message='PyTorch engine main loop has stopped.',
+                            schedule_metrics=None)
+
+        if self._engine_loop is not None:
+            engine_loop_ok, done_tasks = self._health_check_tasks(self._engine_loop.tasks)
+            if not engine_loop_ok:
+                return dict(alive=False,
+                            message=f'PyTorch engine loop task has stopped: {done_tasks}.',
+                            schedule_metrics=None)
+
+        return dict(alive=True,
+                    message='PyTorch engine is healthy.',
+                    schedule_metrics=self.get_schedule_metrics())

@@ -474,6 +474,7 @@ class EngineLoop:
                 running=next_running,
                 forward_inputs=forward_inputs,
             )
+            scheduler.tick()
             self.inputs_maker.deactivate_evict_seqs()
             has_runable_event.set()
 

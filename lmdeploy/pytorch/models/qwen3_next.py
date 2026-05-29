@@ -187,9 +187,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         beta = b
         # If the model is loaded in fp16, without the .float() here, A might be -inf
         g = self.get_A_log_exp() * F.softplus(a + self.dt_bias)
-        if self.kv_ratio > 1:
-            query = query.repeat_interleave(self.kv_ratio, dim=-2)
-            key = key.repeat_interleave(self.kv_ratio, dim=-2)
 
         core_attn_out, recurrent_state = self.gated_delta(
             query,
@@ -199,6 +196,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             beta=beta,
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
+            kv_ratio=self.kv_ratio,
         )
 
         z_shape_og = z.shape

@@ -228,6 +228,9 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
             auto& d = data_.at(phase);
             Clear(tmp_attn_.slice(0, d->decode.n + d->prefill.q_sum));
             Clear(split_cnt_);
+            if (engine_param_.attn_cp_size > 1) {
+                invokeFillNegInfML(partial_ML_.data(), partial_ML_.size() / 2, core::Context::stream().handle());
+            }
         }
     }
 }

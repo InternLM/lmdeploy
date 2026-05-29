@@ -1,24 +1,17 @@
 import json
 
-import pytest
-from transformers import AutoTokenizer
-
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
+from .helpers import first_stream_delta
+
 MODEL_ID = 'Qwen/Qwen3.5-35B-A3B'
 
 
-@pytest.fixture(scope='module')
-def tokenizer():
-    return AutoTokenizer.from_pretrained(MODEL_ID)
-
-
-@pytest.fixture()
-def response_parser(tokenizer):
+def _build_response_parser():
     cls = ResponseParserManager.get('default')
     cls.reasoning_parser_cls = ReasoningParserManager.get('default')
     cls.tool_parser_cls = ToolParserManager.get('qwen3coder')
@@ -30,7 +23,7 @@ def response_parser(tokenizer):
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=object())
 
 
 REFERENCE_CHUNKS = [
@@ -88,25 +81,21 @@ class TestQwen3_5ResponseParserStreaming:
     """Integration test for ResponseParser.stream_chunk with Qwen3.5 Coder
     parsers."""
 
-    @staticmethod
-    def _encode_ids(tokenizer, text: str) -> list[int]:
-        return tokenizer.encode(text, add_bos=False, add_special_tokens=False)
-
-    def test_stream_chunk_matches_reference(self, tokenizer, response_parser):
+    def test_stream_chunk_matches_reference(self):
         """Feed the real streaming sequence into ResponseParser.stream_chunk
         and verify each parsed chunk.
 
         Expectations for tool_calls will be refined once the Qwen3.5 ground-truth stream is finalized.
         """
 
+        response_parser = _build_response_parser()
         for (delta_text, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted,
              exp_function_name, exp_function_arguments,
              exp_type) in REFERENCE_CHUNKS:
-            delta_ids = self._encode_ids(tokenizer, delta_text)
-            delta_msg, tool_emitted = response_parser.stream_chunk(
+            delta_msg, tool_emitted = first_stream_delta(response_parser.stream_chunk(
                 delta_text=delta_text,
-                delta_token_ids=delta_ids,
-            )
+                delta_token_ids=[],
+            ))
             if exp_delta_msg is False:
                 assert delta_msg is None
                 continue
@@ -139,7 +128,7 @@ class TestQwen3_5ResponseParserStreaming:
                 assert call.function.arguments == exp_function_arguments
 
     def test_parse_tool_call_complete_treats_params_as_strings(self):
-        parser = Qwen3CoderToolParser(tokenizer=None)
+        parser = Qwen3CoderToolParser()
         payload = """
 <tool_call>
 <function=find_user_id_by_name_zip>
@@ -167,7 +156,7 @@ Johnson
         }
 
     def test_parse_tool_call_complete_coerces_types_by_schema(self):
-        parser = Qwen3CoderToolParser(tokenizer=None)
+        parser = Qwen3CoderToolParser()
         request = ChatCompletionRequest(
             model=MODEL_ID,
             messages=[],
