@@ -27,7 +27,6 @@ class DPMeta:
     is_decoding: bool = False
     dp_is_decoding: bool = False
     dp_batches: list[int] = None
-    dp_num_tokens: list[int] = None
     dp_draft_num_tokens: list[int] = None
     dp_has_non_last_chunk: bool = False
 

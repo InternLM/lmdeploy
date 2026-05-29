@@ -2,6 +2,7 @@
 import asyncio
 
 import pytest
+import torch
 
 
 @pytest.fixture
@@ -136,3 +137,87 @@ class TestDrainQueues:
         agent._out_que.put_nowait('new')
         assert agent._out_que.qsize() == 1
         assert agent._out_que.get_nowait() == 'new'
+
+
+class TestDPForwardMeta:
+
+    def test_field_names_follow_enabled_features(self):
+        from lmdeploy.pytorch.engine.model_agent.dp_utils import DPForwardMeta
+
+        assert DPForwardMeta.field_names(is_spec_enabled=False, is_microbatch_enabled=False) == (
+            'is_decoding',
+            'is_dummy',
+            'num_tokens',
+            'is_sleeping',
+            'batch_size',
+        )
+        assert DPForwardMeta.field_names(is_spec_enabled=True, is_microbatch_enabled=False) == (
+            'is_decoding',
+            'is_dummy',
+            'num_tokens',
+            'is_sleeping',
+            'batch_size',
+            'has_non_last_chunk',
+            'draft_num_tokens',
+        )
+        assert DPForwardMeta.field_names(is_spec_enabled=False, is_microbatch_enabled=True) == (
+            'is_decoding',
+            'is_dummy',
+            'num_tokens',
+            'is_sleeping',
+            'batch_size',
+            'enable_microbatch',
+        )
+
+    def test_values_omit_disabled_optional_fields(self):
+        from lmdeploy.pytorch.engine.model_agent.dp_utils import DPForwardMeta
+
+        meta = DPForwardMeta(is_decoding=True,
+                             is_dummy=False,
+                             num_tokens=8,
+                             is_sleeping=True,
+                             batch_size=2,
+                             has_non_last_chunk=True,
+                             draft_num_tokens=7,
+                             enable_microbatch=True)
+
+        assert meta.values(is_spec_enabled=False, is_microbatch_enabled=False) == [1, 0, 8, 1, 2]
+        assert meta.values(is_spec_enabled=True, is_microbatch_enabled=False) == [1, 0, 8, 1, 2, 1, 7]
+        assert meta.values(is_spec_enabled=False, is_microbatch_enabled=True) == [1, 0, 8, 1, 2, 1]
+        assert meta.values(is_spec_enabled=True, is_microbatch_enabled=True) == [1, 0, 8, 1, 2, 1, 7, 1]
+
+    def test_gathered_meta_deserializes_named_columns(self):
+        from lmdeploy.pytorch.engine.model_agent.dp_utils import GatheredDPForwardMeta
+
+        values = torch.tensor([
+            [1, 0, 8, 0, 2, 0, 7, 1],
+            [1, 0, 6, 1, 3, 1, 6, 1],
+        ])
+        gathered = GatheredDPForwardMeta.from_values(values, is_spec_enabled=True, is_microbatch_enabled=True)
+
+        assert gathered.global_is_decoding is True
+        assert gathered.is_all_dummy is False
+        assert gathered.is_all_sleeping is False
+        assert gathered.all_num_tokens == [8, 6]
+        assert gathered.all_batch_sizes == [2, 3]
+        assert gathered.all_draft_num_tokens == [7, 6]
+        assert gathered.dp_has_non_last_chunk is True
+        assert gathered.global_enable_microbatch is True
+
+    def test_gathered_meta_supports_base_schema(self):
+        from lmdeploy.pytorch.engine.model_agent.dp_utils import GatheredDPForwardMeta
+
+        values = torch.tensor([
+            [1, 1, 4, 1, 2],
+            [0, 1, 5, 1, 1],
+        ])
+        gathered = GatheredDPForwardMeta.from_values(values, is_spec_enabled=False, is_microbatch_enabled=False)
+
+        assert gathered.global_is_decoding is False
+        assert gathered.is_all_dummy is True
+        assert gathered.is_all_sleeping is True
+        assert gathered.all_num_tokens == [4, 5]
+        assert gathered.all_batch_sizes == [2, 1]
+        assert gathered.draft_num_tokens is None
+        assert gathered.has_non_last_chunk is None
+        assert gathered.enable_microbatch is None

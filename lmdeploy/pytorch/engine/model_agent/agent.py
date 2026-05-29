@@ -32,6 +32,7 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
 
+from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
 from .profiler import AgentProfiler
 
@@ -203,27 +204,6 @@ def _try_to_cuda(val, non_blocking: bool = False):
         return val.to_device('cuda', non_blocking=non_blocking)
     else:
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
-
-
-class DistGatherScalar:
-    """Distribute value gather."""
-
-    def __init__(self, val, size: int, device: str = 'cpu', group: dist.ProcessGroup = None):
-        self.val = val
-        self.device = device
-        self.group = group
-
-        self.all_vals = torch.tensor([val] * size, device=device)
-        self.worker = dist.all_gather_into_tensor(self.all_vals,
-                                                  self.all_vals.new_tensor([val]),
-                                                  group=group,
-                                                  async_op=True)
-
-    async def async_wait(self, timeout: float = 0.001):
-        while not self.worker.is_completed():
-            await asyncio.sleep(timeout)
-        self.worker.wait()
-        return self.all_vals
 
 
 SwapMap = dict[int, int]
@@ -508,28 +488,32 @@ class BaseModelAgent:
         local_is_decoding = is_decoding = inputs.is_decoding
         num_tokens = inputs.input_ids.numel()
         is_dummy = inputs.is_dummy
+        is_spec_enabled = self.spec_agent.is_enabled()
+        is_microbatch_enabled = self.enable_microbatch
 
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
         is_sleeping = self.state.is_sleeping
-        draft_num_tokens = num_tokens
-        dp_has_non_last_chunk = inputs.is_chunk and not inputs.is_last_chunk
-        if inputs.is_chunk:
-            if inputs.is_first_chunk:
-                draft_num_tokens -= batch_size
-            elif inputs.is_last_chunk:
-                draft_num_tokens += batch_size
-        dp_forward_meta = [
-            int(is_decoding),
-            int(is_dummy),
-            num_tokens,
-            int(is_sleeping),
-            batch_size,
-            int(dp_has_non_last_chunk),
-            draft_num_tokens,
-        ]
+        draft_num_tokens = None
+        has_non_last_chunk = None
+        if is_spec_enabled:
+            draft_num_tokens = num_tokens
+            has_non_last_chunk = inputs.is_chunk and not inputs.is_last_chunk
+            if inputs.is_chunk:
+                if inputs.is_first_chunk:
+                    draft_num_tokens -= batch_size
+                elif inputs.is_last_chunk:
+                    draft_num_tokens += batch_size
+
+        dp_forward_meta = DPForwardMeta(is_decoding=is_decoding,
+                                        is_dummy=is_dummy,
+                                        num_tokens=num_tokens,
+                                        is_sleeping=is_sleeping,
+                                        batch_size=batch_size,
+                                        has_non_last_chunk=has_non_last_chunk,
+                                        draft_num_tokens=draft_num_tokens)
         # check enable_microbatch
-        if self.enable_microbatch:
+        if is_microbatch_enabled:
             tokens_num = inputs.input_ids.numel()
             if is_decoding:
                 enable_microbatch = batch_size >= \
@@ -538,27 +522,38 @@ class BaseModelAgent:
                 enable_microbatch = batch_size >= \
                     self.enable_microbatch_prefill_batchsize_threshold and \
                     tokens_num >= self.enable_microbatch_prefill_token_threshold
-            dp_forward_meta.append(int(enable_microbatch))
+            dp_forward_meta.enable_microbatch = enable_microbatch
         group = self.dist_ctx.cpu_group
         device = 'cpu'
-        gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device=device, group=group)
-        gathered_meta = (await gathered_meta.async_wait()).cpu()
+        gathered_meta = DistGatherScalar(
+            dp_forward_meta.values(
+                is_spec_enabled=is_spec_enabled,
+                is_microbatch_enabled=is_microbatch_enabled,
+            ),
+            world_size,
+            device=device,
+            group=group,
+        )
+        gathered_meta = GatheredDPForwardMeta.from_values(
+            (await gathered_meta.async_wait()).cpu(),
+            is_spec_enabled=is_spec_enabled,
+            is_microbatch_enabled=is_microbatch_enabled,
+        )
 
         # check is_decoding
         # if any one of the rank is prefill, then all ranks are prefill
-        is_decoding = gathered_meta[:, 0].all().item()
+        is_decoding = gathered_meta.global_is_decoding
         inputs.is_decoding = is_decoding
 
         # check if all inputs are dummy inputs
-        is_all_dummy = gathered_meta[:, 1].all().item()
-        is_all_sleeping = gathered_meta[:, 3].all().item()
-        all_batch_sizes = gathered_meta[:, 4].tolist()
+        is_all_dummy = gathered_meta.is_all_dummy
+        is_all_sleeping = gathered_meta.is_all_sleeping
+        all_batch_sizes = gathered_meta.all_batch_sizes
         if is_all_dummy:
             return None, is_all_sleeping
 
         # pad batch size for decoding
-        all_num_tokens = gathered_meta[:, 2].tolist()
-        all_draft_num_tokens = gathered_meta[:, 6].tolist()
+        all_num_tokens = gathered_meta.all_num_tokens
         if is_decoding:
             padding_batch_size = max(all_num_tokens)
             padding_batch_size = self.spec_agent.get_padding_batch_size(padding_batch_size)
@@ -567,17 +562,17 @@ class BaseModelAgent:
             logger.debug(f'padding_batch_size={padding_batch_size}')
 
         # update if enable_microbatch
-        if self.enable_microbatch:
-            inputs.enable_microbatch = gathered_meta[:, 7].all().item()
+        if is_microbatch_enabled:
+            inputs.enable_microbatch = gathered_meta.global_enable_microbatch
 
         # update dp meta
         inputs.build_dp_meta(all_num_tokens)
         inputs.dp_meta.dp_batches = all_batch_sizes
         inputs.dp_meta.is_decoding = local_is_decoding
         inputs.dp_meta.dp_is_decoding = is_decoding
-        inputs.dp_meta.dp_num_tokens = all_num_tokens
-        inputs.dp_meta.dp_draft_num_tokens = all_draft_num_tokens
-        inputs.dp_meta.dp_has_non_last_chunk = bool(gathered_meta[:, 5].any().item())
+        if is_spec_enabled:
+            inputs.dp_meta.dp_draft_num_tokens = gathered_meta.all_draft_num_tokens
+            inputs.dp_meta.dp_has_non_last_chunk = gathered_meta.dp_has_non_last_chunk
         inputs = self.patched_model.update_inputs(inputs)
         return inputs, is_all_sleeping
 
@@ -772,7 +767,7 @@ class BaseModelAgent:
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
-        logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
+        logger.info(f'<ForwardTask> rank[{rank}]: model forward. '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
                      f'is_dummy={inputs.is_dummy} '

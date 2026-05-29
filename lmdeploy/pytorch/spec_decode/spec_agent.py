@@ -172,7 +172,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                 world_size=draft_tp,
                                                 cache_stream=cache_stream)
 
-    def _build_draft_dp_meta(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
+    def _build_dp_meta_from_main(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
         """Build DP meta for draft inputs after MTP input shifting."""
         if dp_meta is None:
             return None
@@ -182,14 +182,11 @@ class SpecModelAgent(BaseSpecModelAgent):
             return dp_meta
 
         all_num_tokens = list(all_num_tokens)
-        all_num_tokens[self.rank] = input_ids.numel()
         with self.draft_context():
             draft_dp_meta = DPMeta.build(input_ids.numel(), all_num_tokens)
         draft_dp_meta.dp_batches = dp_meta.dp_batches
         draft_dp_meta.is_decoding = dp_meta.is_decoding
         draft_dp_meta.dp_is_decoding = dp_meta.dp_is_decoding
-        draft_dp_meta.dp_num_tokens = all_num_tokens
-        draft_dp_meta.dp_draft_num_tokens = all_num_tokens
         draft_dp_meta.dp_has_non_last_chunk = dp_meta.dp_has_non_last_chunk
         return draft_dp_meta
 
@@ -290,7 +287,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         # update when dp > 1
         is_decoding = model_inputs.is_decoding if model_inputs.dp_meta is None else model_inputs.dp_meta.dp_is_decoding
-        dp_meta = self._build_draft_dp_meta(input_ids, model_inputs.dp_meta)
+        dp_meta = self._build_dp_meta_from_main(input_ids, model_inputs.dp_meta)
 
         new_model_inputs = ModelInputs(
             input_ids=input_ids,
