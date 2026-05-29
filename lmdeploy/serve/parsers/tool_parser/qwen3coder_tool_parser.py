@@ -54,7 +54,7 @@ class Qwen3CoderToolParser(XmlToolParser):
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""
-        content = content.replace('<tool_call>', '').replace('</tool_call>', '').strip()
+        content = content.replace(self.get_tool_open_tag(), '').replace(self.get_tool_close_tag(), '').strip()
 
         func_name = None
         func_start = content.find(self.func_prefix)

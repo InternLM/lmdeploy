@@ -142,21 +142,10 @@ def _split_csv(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(',') if item.strip()]
 
 
-def _parse_number_list(value: str, as_int: bool = False) -> list[int | float]:
-    numbers: list[int | float] = []
-    for item in value.split(','):
-        item = item.strip()
-        if not item:
-            continue
-        numbers.append(int(item) if as_int else float(item))
-    if not numbers:
-        raise ValueError('list argument must contain at least one value')
-    return numbers
-
 
 def _client_connector_limits(
     mode: str,
-    levels: Sequence[int | float],
+    levels: Sequence[int],
     num_requests: int,
 ) -> tuple[int, int]:
     """Return (limit, limit_per_host) for aiohttp.TCPConnector.
@@ -523,7 +512,7 @@ async def closed_loop_runner(
             except asyncio.QueueEmpty:
                 return
             try:
-                trace = await send_one(request, 'concurrency', float(concurrency), repeat)
+                trace = await send_one(request, 'concurrency', concurrency, repeat)
                 traces.append(trace)
                 if on_done is not None:
                     on_done(trace)
@@ -537,7 +526,7 @@ async def closed_loop_runner(
 
 async def request_rate_runner(
     requests: Sequence[BenchmarkRequest],
-    request_rate: float,
+    request_rate: int,
     repeat: int,
     send_one: SendOne,
     seed: int = 1,
@@ -546,9 +535,8 @@ async def request_rate_runner(
     rng = random.Random(seed)
     tasks: list[asyncio.Task[RequestTrace]] = []
     for request in requests:
-        tasks.append(asyncio.create_task(send_one(request, 'request-rate', float(request_rate), repeat)))
-        if request_rate != float('inf'):
-            await asyncio.sleep(rng.expovariate(request_rate))
+        tasks.append(asyncio.create_task(send_one(request, 'request-rate', request_rate, repeat)))
+        await asyncio.sleep(rng.expovariate(request_rate))
     traces: list[RequestTrace] = []
     for task in asyncio.as_completed(tasks):
         trace = await task
@@ -979,8 +967,6 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
     if args.return_routed_experts:
         shared_store = init_shared_store()
 
-    levels = _parse_number_list(args.levels, as_int=(args.mode == 'concurrency'))
-
     tokenizer = None
     if args.input_ids:
         model_path = args.model_path
@@ -999,7 +985,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         seed=args.seed,
         tokenizer=tokenizer,
     )
-    pool_limit, pool_limit_per_host = _client_connector_limits(args.mode, levels, len(requests))
+    pool_limit, pool_limit_per_host = _client_connector_limits(args.mode, args.levels, len(requests))
     connector = aiohttp.TCPConnector(limit=pool_limit, limit_per_host=pool_limit_per_host)
     print(f'aiohttp connection pool: limit={pool_limit}, limit_per_host={pool_limit_per_host}')
 
@@ -1050,7 +1036,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         await _run_warmup(requests, args.warmup_requests, send_one)
         for repeat in range(args.repeats):
             if args.mode == 'concurrency':
-                for concurrency in _parse_number_list(args.levels, as_int=True):
+                for concurrency in args.levels:
                     print(f'benchmark with {len(requests)} for case concurrency-{concurrency}...')
                     completed_count = 0
                     failed_count = 0
@@ -1095,14 +1081,14 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                     )
 
             elif args.mode == 'request-rate':
-                for request_rate in _parse_number_list(args.levels, as_int=False):
+                for request_rate in args.levels:
                     completed_count = 0
                     failed_count = 0
                     pbar = None
                     if tqdm is not None:
                         pbar = tqdm(
                             total=len(requests),
-                            desc=f'repeat-{repeat} request-rate-{float(request_rate):g}',
+                            desc=f'repeat-{repeat} request-rate-{request_rate}',
                             unit='req',
                             dynamic_ncols=True,
                         )
@@ -1120,7 +1106,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                     all_traces.extend(
                         await request_rate_runner(
                             requests,
-                            request_rate=float(request_rate),
+                            request_rate=request_rate,
                             repeat=repeat,
                             send_one=send_one,
                             seed=args.seed + repeat,
@@ -1181,7 +1167,7 @@ def parse_args() -> argparse.Namespace:
         '--datasets',
         help='Comma-separated dataset names or filename-stem prefixes, e.g. "bbeh" matches bbeh*.jsonl.',
     )
-    parser.add_argument('--num-prompts', type=int, help='Maximum number of prompts sampled per dataset.')
+    parser.add_argument('--num-prompts', type=int, help='Maximum number of sampled prompts from dataset.')
     parser.add_argument('--shuffle', action='store_true', help='Shuffle each dataset before applying --num-prompts.')
     parser.add_argument('--seed', type=int, default=1, help='Random seed for shuffling and request-rate scheduling.')
     parser.add_argument(
@@ -1192,8 +1178,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         '--levels',
-        default='1,2,4,8,16,32,64,128',
-        help='Comma-separated sweep values. Interpreted as concurrency levels or request rates based on --mode.',
+        nargs='+',
+        type=int,
+        default=[1, 16, 32, 64, 128, 256, 512],
+        help='Space-separated sweep values. Interpreted as concurrency levels or request rates based on --mode.',
     )
     parser.add_argument('--repeats', type=int, default=1, help='Number of times to repeat each dataset/level run.')
     parser.add_argument(
