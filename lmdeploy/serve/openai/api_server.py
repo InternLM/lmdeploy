@@ -603,7 +603,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     streaming_tools = True
 
                 is_last_delta = delta_index == len(stream_deltas) - 1
-
+                # The chat parser may split one engine yield into multiple protocol deltas,
+                # so attach the engine-level metadata to the last parsed delta.
                 finish_reason = res.finish_reason if is_last_delta else None
                 chunk_logprobs = logprobs if is_last_delta else None
                 chunk_output_token_logprobs = output_token_logprobs if is_last_delta else None
