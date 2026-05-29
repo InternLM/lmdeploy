@@ -228,6 +228,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                 # Case B: first chunk — skip first token, save last for next chunk
                 input_ids = model_inputs.input_ids[:, 1:]
                 seq_length = model_inputs.seq_length - 1
+                # Shift indices into the draft layout after dropping the first token.
+                last_token_indices = last_token_indices - 1
                 max_q_seqlen = model_inputs.max_q_seqlen - 1
                 max_kv_seqlen = model_inputs.max_kv_seqlen - 1
                 sum_kv_seqlen = model_inputs.sum_kv_seqlen - 1
