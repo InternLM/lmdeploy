@@ -157,7 +157,6 @@ class TestDPForwardMeta:
             'num_tokens',
             'is_sleeping',
             'batch_size',
-            'has_non_last_chunk',
             'draft_num_tokens',
         )
         assert DPForwardMeta.field_names(is_spec_enabled=False, is_microbatch_enabled=True) == (
@@ -177,21 +176,20 @@ class TestDPForwardMeta:
                              num_tokens=8,
                              is_sleeping=True,
                              batch_size=2,
-                             has_non_last_chunk=True,
                              draft_num_tokens=7,
                              enable_microbatch=True)
 
         assert meta.values(is_spec_enabled=False, is_microbatch_enabled=False) == [1, 0, 8, 1, 2]
-        assert meta.values(is_spec_enabled=True, is_microbatch_enabled=False) == [1, 0, 8, 1, 2, 1, 7]
+        assert meta.values(is_spec_enabled=True, is_microbatch_enabled=False) == [1, 0, 8, 1, 2, 7]
         assert meta.values(is_spec_enabled=False, is_microbatch_enabled=True) == [1, 0, 8, 1, 2, 1]
-        assert meta.values(is_spec_enabled=True, is_microbatch_enabled=True) == [1, 0, 8, 1, 2, 1, 7, 1]
+        assert meta.values(is_spec_enabled=True, is_microbatch_enabled=True) == [1, 0, 8, 1, 2, 7, 1]
 
     def test_gathered_meta_deserializes_named_columns(self):
         from lmdeploy.pytorch.engine.model_agent.dp_utils import GatheredDPForwardMeta
 
         values = torch.tensor([
-            [1, 0, 8, 0, 2, 0, 7, 1],
-            [1, 0, 6, 1, 3, 1, 6, 1],
+            [1, 0, 8, 0, 2, 7, 1],
+            [1, 0, 6, 1, 3, 6, 1],
         ])
         gathered = GatheredDPForwardMeta.from_values(values, is_spec_enabled=True, is_microbatch_enabled=True)
 
@@ -201,7 +199,6 @@ class TestDPForwardMeta:
         assert gathered.all_num_tokens == [8, 6]
         assert gathered.all_batch_sizes == [2, 3]
         assert gathered.all_draft_num_tokens == [7, 6]
-        assert gathered.dp_has_non_last_chunk is True
         assert gathered.global_enable_microbatch is True
 
     def test_gathered_meta_supports_base_schema(self):
@@ -219,5 +216,4 @@ class TestDPForwardMeta:
         assert gathered.all_num_tokens == [4, 5]
         assert gathered.all_batch_sizes == [2, 1]
         assert gathered.draft_num_tokens is None
-        assert gathered.has_non_last_chunk is None
         assert gathered.enable_microbatch is None

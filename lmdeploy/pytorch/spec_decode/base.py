@@ -51,6 +51,7 @@ class BaseSpecModelAgent:
         self.proposer = None
         self.model_config = specdecode_config.model_config if specdecode_config is not None else None
         self.cache_config = specdecode_config.cache_config if specdecode_config is not None else None
+        self.method = specdecode_config.method if specdecode_config is not None else None
 
     def is_enabled(self):
         return self._enabled

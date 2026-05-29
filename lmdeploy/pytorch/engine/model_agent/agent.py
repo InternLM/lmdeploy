@@ -495,10 +495,8 @@ class BaseModelAgent:
         batch_size = inputs.seq_length.numel()
         is_sleeping = self.state.is_sleeping
         draft_num_tokens = None
-        has_non_last_chunk = None
         if is_spec_enabled:
             draft_num_tokens = num_tokens
-            has_non_last_chunk = inputs.is_chunk and not inputs.is_last_chunk
             if inputs.is_chunk:
                 if inputs.is_first_chunk:
                     draft_num_tokens -= batch_size
@@ -510,7 +508,6 @@ class BaseModelAgent:
                                         num_tokens=num_tokens,
                                         is_sleeping=is_sleeping,
                                         batch_size=batch_size,
-                                        has_non_last_chunk=has_non_last_chunk,
                                         draft_num_tokens=draft_num_tokens)
         # check enable_microbatch
         if is_microbatch_enabled:
@@ -572,7 +569,6 @@ class BaseModelAgent:
         inputs.dp_meta.dp_is_decoding = is_decoding
         if is_spec_enabled:
             inputs.dp_meta.dp_draft_num_tokens = gathered_meta.all_draft_num_tokens
-            inputs.dp_meta.dp_has_non_last_chunk = gathered_meta.dp_has_non_last_chunk
         inputs = self.patched_model.update_inputs(inputs)
         return inputs, is_all_sleeping
 
@@ -767,7 +763,7 @@ class BaseModelAgent:
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
-        logger.info(f'<ForwardTask> rank[{rank}]: model forward. '
+        logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
                      f'is_dummy={inputs.is_dummy} '

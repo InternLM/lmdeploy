@@ -28,7 +28,6 @@ class DPMeta:
     dp_is_decoding: bool = False
     dp_batches: list[int] = None
     dp_draft_num_tokens: list[int] = None
-    dp_has_non_last_chunk: bool = False
 
     @staticmethod
     def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):

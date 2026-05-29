@@ -37,7 +37,6 @@ class DPForwardMeta:
     num_tokens: int
     is_sleeping: bool
     batch_size: int
-    has_non_last_chunk: bool | None = None
     draft_num_tokens: int | None = None
     enable_microbatch: bool | None = None
 
@@ -49,7 +48,6 @@ class DPForwardMeta:
         'batch_size',
     )
     SPEC_FIELDS: ClassVar[tuple[str, ...]] = (
-        'has_non_last_chunk',
         'draft_num_tokens',
     )
     MICRO_BATCH_FIELDS: ClassVar[tuple[str, ...]] = ('enable_microbatch', )
@@ -72,7 +70,6 @@ class DPForwardMeta:
             'num_tokens': self.num_tokens,
             'is_sleeping': int(self.is_sleeping),
             'batch_size': self.batch_size,
-            'has_non_last_chunk': int(self.has_non_last_chunk or False),
             'draft_num_tokens': self.draft_num_tokens if self.draft_num_tokens is not None else self.num_tokens,
             'enable_microbatch': int(self.enable_microbatch or False),
         }
@@ -94,7 +91,6 @@ class GatheredDPForwardMeta:
     num_tokens: torch.Tensor
     is_sleeping: torch.Tensor
     batch_size: torch.Tensor
-    has_non_last_chunk: torch.Tensor | None = None
     draft_num_tokens: torch.Tensor | None = None
     enable_microbatch: torch.Tensor | None = None
 
@@ -138,12 +134,6 @@ class GatheredDPForwardMeta:
         """Draft model token count on each DP rank."""
         assert self.draft_num_tokens is not None
         return self.draft_num_tokens.tolist()
-
-    @property
-    def dp_has_non_last_chunk(self):
-        """Whether any DP rank is handling a non-last chunk."""
-        assert self.has_non_last_chunk is not None
-        return bool(self.has_non_last_chunk.any().item())
 
     @property
     def global_enable_microbatch(self):

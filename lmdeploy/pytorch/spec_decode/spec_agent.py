@@ -187,7 +187,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         draft_dp_meta.dp_batches = dp_meta.dp_batches
         draft_dp_meta.is_decoding = dp_meta.is_decoding
         draft_dp_meta.dp_is_decoding = dp_meta.dp_is_decoding
-        draft_dp_meta.dp_has_non_last_chunk = dp_meta.dp_has_non_last_chunk
         return draft_dp_meta
 
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
@@ -442,19 +441,6 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def _forward_impl(self, inputs: ModelInputs):
         """Forward impl."""
-        logger.debug(f'<SpecAgent> rank[{self.rank}]: model forward. '
-                     f'batch_size={inputs.seq_length.size(0)} '
-                     f'num_tokens={inputs.input_ids.size(-1)} '
-                     f'is_dummy={inputs.is_dummy} '
-                     f'is_decoding={inputs.is_decoding} '
-                     f'dp_meta={inputs.dp_meta} '
-                     f'is_chunk={inputs.is_chunk} '
-                     f'is_first_chunk={inputs.is_first_chunk} '
-                     f'is_last_chunk={inputs.is_last_chunk} '
-                     f'target_hidden_states={inputs.target_hidden_states.shape} '
-                     f'target_position_ids='
-                     f'{inputs.target_position_ids.shape if inputs.target_position_ids is not None else None} ')
-
         with self.draft_context():
             output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
@@ -487,6 +473,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         def _update_dp_model_inputs(inputs: ModelInputs, dp_meta: DPMeta, padding_batch_size: int | None):
             if dp_meta is None:
                 return inputs
+
+            inputs.dp_meta = dp_meta
             meta = self.proposer.model.get_meta()
             meta.padding_batch_size = padding_batch_size
             logger.debug(f'SpecAgent rank={self.rank} padding_batch_size={padding_batch_size} dp_meta={dp_meta}')
@@ -494,13 +482,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             inputs = self.proposer.model.update_inputs(inputs)
             return inputs
 
-
         outputs = self._forward_impl(inputs)
-        has_non_last_chunk = inputs.is_chunk and not inputs.is_last_chunk
-        if inputs.dp_meta is not None:
-            has_non_last_chunk = inputs.dp_meta.dp_has_non_last_chunk
-        if has_non_last_chunk:
-            # create dummy draft tokens
+        if inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk:
+            # DP=1 non-last chunks do not consume draft tokens, so skip the
+            # remaining speculative forwards.
             output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
         else:
             loop_count = self.num_spec_tokens - 1
