@@ -200,10 +200,8 @@ def make_attention_config(cfg, *, head_dim=None):
     """Build common AttentionConfig fields from attention-module geometry."""
     hidden_dim = cfg.hidden_size
     head_num = cfg.num_attention_heads
-    cfg_head_dim = getattr(cfg, 'head_dim', None)
-    head_dim = head_dim if head_dim is not None else (
-        cfg_head_dim if cfg_head_dim is not None else hidden_dim // head_num
-    )
+    if head_dim is None:
+        head_dim = getattr(cfg, 'head_dim', None) or hidden_dim // head_num
     kv_head_num = cfg.num_key_value_heads
     rope, max_position_embeddings = parse_rope_param(cfg, head_dim)
     attn_cfg = _tm.AttentionConfig()

@@ -36,41 +36,23 @@ class MixtralModel(TextModel):
         super().__init__(cfg, resolver=resolver)
 
         self._attn_cfg = make_attention_config(cfg)
-
-        self._ffn_cfg = make_ffn_config(cfg,
-                                        act_type=_act_type_id('silu'))
-
-        self._n_experts = getattr(cfg, 'num_experts', 0)
-
-        if self._n_experts > 0:
-            self._moe_cfg = make_moe_config(
-                cfg,
-                experts_per_token=cfg.num_experts_per_tok)
-            self._moe_cfg.expert_num = self._n_experts
-
-    # ------------------------------------------------------------------
-    # model() — walks full hierarchy
-    # ------------------------------------------------------------------
+        self._ffn_cfg = make_ffn_config(cfg, act_type=_act_type_id('silu'))
+        self._n_experts = cfg.num_local_experts
+        self._moe_cfg = make_moe_config(cfg, experts_per_token=cfg.num_experts_per_tok)
+        self._moe_cfg.expert_num = self._n_experts
 
     def model(self, pfx):
         root_cfg = make_model_weight_config(self.cfg)
-        builder = TextModelBuilder(
-            root_cfg, self._ctx,
-            root_handles=self._root_handles,
-            tp=self._model_tp,
-            vocab_size=self.cfg.vocab_size)
+        builder = TextModelBuilder(root_cfg,
+                                   self._ctx,
+                                   root_handles=self._root_handles,
+                                   tp=self._model_tp,
+                                   vocab_size=self.cfg.vocab_size)
         builder.add_token_embeds(pfx.get('model.embed_tokens.weight'))
         builder.norm = self.norm(pfx + 'model.norm')
-        lm_pfx = (pfx + 'model.embed_tokens'
-                  if self.cfg.tie_word_embeddings
-                  else pfx + 'lm_head')
-        builder.add_lm_head(self._linear(lm_pfx))
+        builder.add_lm_head(self._linear(pfx + 'lm_head'))
         builder.layers = self.layers(pfx + 'model.layers')
         builder.build()
-
-    # ------------------------------------------------------------------
-    # Attention / FFN / MoE factories
-    # ------------------------------------------------------------------
 
     def attn(self, pfx):
         q, k, v, o = [self._linear(pfx + f'{x}_proj') for x in 'qkvo']
@@ -105,7 +87,7 @@ class MixtralModel(TextModel):
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(self.cfg.num_experts):
+        for e in range(self._n_experts):
             experts[e] = self.ffn(pfx + 'experts' + e, is_expert=True)
         m.experts = experts.build()
 
@@ -118,9 +100,6 @@ class MixtralModel(TextModel):
             d.attention_norm = self.norm(p + 'input_layernorm')
             d.attention = self.attn(p + 'self_attn')
             d.ffn_norm = self.norm(p + 'post_attention_layernorm')
-            if self._n_experts:
-                d.moe_ffn = self.moe(p + 'block_sparse_moe')
-            else:
-                d.feed_forward = self.ffn(p + 'block_sparse_moe')
+            d.moe_ffn = self.moe(p + 'block_sparse_moe')
             layers[i] = d.build()
         return layers.build()
