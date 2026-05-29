@@ -1,8 +1,9 @@
 """Benchmark OpenAI-compatible /v1/chat/completions endpoints.
 
 This script focuses on eval-style JSONL dumps where each row contains OpenAI
-chat ``messages``. It records streaming latency traces, aggregates TTFT/ITL/TPOT
-metrics, and writes table plus report artifacts for concurrency/RPS sweeps.
+chat ``messages``, or a string/list ``prompt`` (e.g. dapo-math-17k). List-type
+``prompt`` values are treated as message lists. It records streaming latency traces,
+aggregates TTFT/ITL/TPOT metrics, and writes table plus report artifacts for concurrency/RPS sweeps.
 
 Generation options include ``--output-tokens`` (``max_completion_tokens``),
 ``--ignore-eos``, ``--return-token-ids``, ``--return-routed-experts``, and
@@ -38,8 +39,9 @@ except Exception:  # noqa: BLE001 - tqdm is optional for CLI progress display.
 class BenchmarkRequest:
     dataset: str
     id: str
-    messages: list[dict[str, Any]]
-    metadata: dict[str, Any] = field(default_factory=dict)
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    input_ids: list[int] | None = None
+    image_data: Any = None
 
 
 @dataclass
@@ -196,36 +198,62 @@ def _dataset_longest_prefix_match(dataset: str, selected: Sequence[str]) -> str 
     return best
 
 
-def _normalize_row(row: dict[str, Any], dataset: str, row_index: int) -> BenchmarkRequest:
+def _load_tokenizer(model_path: str, trust_remote_code: bool = False):
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+
+
+def _extract_messages(row: dict[str, Any]) -> list[dict[str, Any]]:
     messages = row.get('messages') or row.get('message')
-    if messages is None:
-        prompt = row.get('prompt')
-        if prompt is None:
-            raise ValueError(f'row {row_index} in {dataset} must contain either messages or prompt')
-        messages = [{'role': 'user', 'content': prompt}]
-    if not isinstance(messages, list) or not messages:
-        raise ValueError(f'row {row_index} in {dataset} has invalid messages')
+    if messages is not None:
+        return messages
+    prompt = row.get('prompt')
+    if isinstance(prompt, list):
+        return prompt
+    if isinstance(prompt, str):
+        return [{'role': 'user', 'content': prompt}]
+    raise ValueError('row must contain messages or prompt')
+
+
+def _normalize_row(
+    row: dict[str, Any],
+    dataset: str,
+    row_index: int,
+    tokenizer=None,
+) -> BenchmarkRequest:
     request_id = str(row.get('id', f'{dataset}-{row_index}'))
-    metadata = row.get('metadata', {})
-    if metadata is None:
-        metadata = {}
-    if not isinstance(metadata, dict):
-        metadata = {'value': metadata}
-    return BenchmarkRequest(dataset=dataset, id=request_id, messages=messages, metadata=metadata)
+    messages = _extract_messages(row)
+
+    if tokenizer is not None:
+        prompt_str = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        return BenchmarkRequest(
+            dataset=dataset,
+            id=request_id,
+            input_ids=tokenizer.encode(prompt_str, add_special_tokens=False),
+            image_data=row.get('image_data'),
+        )
+
+    if not messages:
+        raise ValueError(f'row {row_index} in {dataset} has invalid messages')
+    return BenchmarkRequest(dataset=dataset, id=request_id, messages=messages)
 
 
-def load_requests(
+def _read_raw_rows(
     dataset_dir: str | Path | None = None,
     dataset_files: Sequence[str | Path] | None = None,
     datasets: Sequence[str] | None = None,
     num_prompts: int | None = None,
     shuffle: bool = False,
-    seed: int = 1,
-) -> list[BenchmarkRequest]:
-    """Load JSONL chat requests.
+) -> list[tuple[dict[str, Any], str, int]]:
+    """Read JSONL rows without normalization.
 
-    ``num_prompts`` is applied per dataset file so datasets with different sizes
-    remain balanced in sweeps.
+    When ``shuffle`` is false and ``num_prompts`` is set, stop reading after enough
+    rows are collected so large files are not fully scanned.
     """
     selected = list(dict.fromkeys(datasets or []))
     files = _discover_dataset_files(
@@ -233,7 +261,7 @@ def load_requests(
         [Path(path) for path in dataset_files] if dataset_files is not None else None,
     )
 
-    all_requests: list[BenchmarkRequest] = []
+    raw_rows: list[tuple[dict[str, Any], str, int]] = []
     dataset = 'all'
     for file_path in files:
         if selected:
@@ -245,14 +273,44 @@ def load_requests(
                 line = line.strip()
                 if not line:
                     continue
-                all_requests.append(_normalize_row(json.loads(line), dataset, row_index))
+                raw_rows.append((json.loads(line), dataset, row_index))
+                if not shuffle and num_prompts is not None and len(raw_rows) >= num_prompts:
+                    break
+        if not shuffle and num_prompts is not None and len(raw_rows) >= num_prompts:
+            break
+    return raw_rows
+
+
+def load_requests(
+    dataset_dir: str | Path | None = None,
+    dataset_files: Sequence[str | Path] | None = None,
+    datasets: Sequence[str] | None = None,
+    num_prompts: int | None = None,
+    shuffle: bool = False,
+    seed: int = 1,
+    tokenizer=None,
+) -> list[BenchmarkRequest]:
+    """Load JSONL chat requests.
+
+    Rows with list-type ``prompt`` (e.g. dapo-math-17k) are treated as message lists,
+    matching ``benchmark_generate.py``. When ``tokenizer`` is provided (``--input-ids``),
+    rows are converted to ``input_ids`` client-side.
+    """
+    raw_rows = _read_raw_rows(
+        dataset_dir=dataset_dir,
+        dataset_files=dataset_files,
+        datasets=datasets,
+        num_prompts=num_prompts,
+        shuffle=shuffle,
+    )
     if shuffle:
-        random.Random(seed).shuffle(all_requests)
+        random.Random(seed).shuffle(raw_rows)
     if num_prompts is not None:
-        all_requests = all_requests[:num_prompts]
-    if not all_requests:
+        raw_rows = raw_rows[:num_prompts]
+    if not raw_rows:
         raise ValueError('No benchmark requests were loaded.')
-    return all_requests
+
+    return [_normalize_row(row, dataset, row_index, tokenizer) for row, dataset, row_index in raw_rows]
 
 
 def parse_sse_line(line: bytes | str) -> SSEEvent:
@@ -295,12 +353,19 @@ def build_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         'model': model,
-        'messages': request.messages,
         'temperature': temperature,
         'top_p': top_p,
         'stream': True,
         'stream_options': {'include_usage': True},
     }
+    if request.input_ids is not None:
+        payload['messages'] = []
+        payload['input_ids'] = request.input_ids
+        payload['do_preprocess'] = False
+        if request.image_data is not None:
+            payload['image_data'] = request.image_data
+    else:
+        payload['messages'] = request.messages
     if top_k is not None:
         payload['top_k'] = top_k
     if max_completion_tokens is not None:
@@ -320,14 +385,11 @@ def build_payload(
     return payload
 
 
-def _chat_completions_url(base_url: str, api_path: str) -> str:
+def _chat_completions_url(base_url: str) -> str:
     base_url = base_url.rstrip('/')
-    api_path = api_path.strip()
-    if not api_path:
-        api_path = '/chat/completions' if base_url.endswith('/v1') else '/v1/chat/completions'
-    if not api_path.startswith('/'):
-        api_path = f'/{api_path}'
-    return f'{base_url}{api_path}'
+    if base_url.endswith('/v1'):
+        return f'{base_url}/chat/completions'
+    return f'{base_url}/v1/chat/completions'
 
 
 def _models_url(base_url: str) -> str:
@@ -907,15 +969,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         raise RuntimeError('aiohttp is required for live chat-completions benchmarking.') from e
 
     dataset_files = [Path(path) for path in args.dataset_files] if args.dataset_files else None
-    requests = load_requests(
-        dataset_dir=args.dataset_dir,
-        dataset_files=dataset_files,
-        datasets=_split_csv(args.datasets),
-        num_prompts=args.num_prompts,
-        shuffle=args.shuffle,
-        seed=args.seed,
-    )
-    url = _chat_completions_url(args.base_url, args.api_path)
+    url = _chat_completions_url(args.base_url)
     headers = {}
     if args.api_key:
         headers['Authorization'] = f'Bearer {args.api_key}'
@@ -926,6 +980,25 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         shared_store = init_shared_store()
 
     levels = _parse_number_list(args.levels, as_int=(args.mode == 'concurrency'))
+
+    tokenizer = None
+    if args.input_ids:
+        model_path = args.model_path
+        if not model_path:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as probe_session:
+                model_path = await fetch_model_id(probe_session, args.base_url, args.api_key or None)
+        print(f'Using tokenizer from: {model_path}')
+        tokenizer = _load_tokenizer(model_path, trust_remote_code=args.trust_remote_code)
+
+    requests = load_requests(
+        dataset_dir=args.dataset_dir,
+        dataset_files=dataset_files,
+        datasets=_split_csv(args.datasets),
+        num_prompts=args.num_prompts,
+        shuffle=args.shuffle,
+        seed=args.seed,
+        tokenizer=tokenizer,
+    )
     pool_limit, pool_limit_per_host = _client_connector_limits(args.mode, levels, len(requests))
     connector = aiohttp.TCPConnector(limit=pool_limit, limit_per_host=pool_limit_per_host)
     print(f'aiohttp connection pool: limit={pool_limit}, limit_per_host={pool_limit_per_host}')
@@ -936,6 +1009,8 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
     ) as session:
         model = await fetch_model_id(session, args.base_url, args.api_key)
         print(f'Using model from /v1/models: {model}')
+        if args.input_ids:
+            print('input_ids=True (client-side apply_chat_template, do_preprocess=False)')
         if args.max_completion_tokens is not None:
             print(f'max_completion_tokens={args.max_completion_tokens}')
         if args.ignore_eos:
@@ -1071,18 +1146,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--base-url',
         default='http://127.0.0.1:23333/v1',
-        help='OpenAI-compatible API base URL. The model id is fetched from BASE_URL/models.',
-    )
-    parser.add_argument(
-        '--api-path',
-        default='',
-        help='Chat completions API path. Defaults to /chat/completions when base URL ends with /v1.',
+        help='OpenAI-compatible API base URL. Requests go to /v1/chat/completions.',
     )
     parser.add_argument('--api-key', default='', help='Bearer token used for /v1/models and chat requests.')
     parser.add_argument(
+        '--input-ids',
+        action='store_true',
+        help='Pre-tokenize prompts client-side (apply_chat_template) and send input_ids with do_preprocess=false, '
+        'matching benchmark_generate.py and POST /generate.',
+    )
+    parser.add_argument(
+        '--model-path',
+        default='',
+        help='Tokenizer/model path for --input-ids. Defaults to the id from /v1/models.',
+    )
+    parser.add_argument(
+        '--trust-remote-code',
+        action='store_true',
+        help='Pass trust_remote_code=True when loading the tokenizer for --input-ids.',
+    )
+    parser.add_argument(
         '--dataset-dir',
         type=Path,
-        default=Path('/data/lvhan/lmdeploy/workspace/oc_data'),
+        default=Path('./workspace/oc_data'),
         help='Directory containing eval JSONL files. Each file stem is used as the dataset name.',
     )
     parser.add_argument(
