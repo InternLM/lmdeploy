@@ -12,22 +12,8 @@ from .helpers import first_stream_delta
 MODEL_ID = 'zai-org/GLM-4.7'
 
 
-class _ReasoningTokenizerStub:
-
-    def get_vocab(self):
-        return {
-            '<think>': 1,
-            '</think>': 2,
-        }
-
-
-@pytest.fixture(scope='module')
-def tokenizer():
-    return _ReasoningTokenizerStub()
-
-
 @pytest.fixture()
-def response_parser(tokenizer):
+def response_parser():
     cls = ResponseParserManager.get('default')
     cls.reasoning_parser_cls = None
     cls.tool_parser_cls = ToolParserManager.get('glm47')
@@ -37,11 +23,11 @@ def response_parser(tokenizer):
         stream=True,
         tool_choice='auto',
     )
-    return cls(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=object())
 
 
 @pytest.fixture()
-def response_parser_with_reasoning(tokenizer):
+def response_parser_with_reasoning():
     cls = ResponseParserManager.get('default')
     cls.reasoning_parser_cls = ReasoningParserManager.get('default')
     cls.tool_parser_cls = ToolParserManager.get('glm47')
@@ -52,7 +38,7 @@ def response_parser_with_reasoning(tokenizer):
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=object())
 
 
 REFERENCE_CHUNKS = [
@@ -192,7 +178,7 @@ class TestGlm47ToolParserComplete:
     """Complete-parse tests for glm47 tool payloads."""
 
     def test_parse_tool_call_complete_with_arguments(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         payload = (
             'get_weather'
             '<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
@@ -207,14 +193,14 @@ class TestGlm47ToolParserComplete:
         }
 
     def test_parse_tool_call_complete_without_arguments(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         tool_call = parser.parse_tool_call_complete('get_time')
         assert tool_call is not None
         assert tool_call.function.name == 'get_time'
         assert json.loads(tool_call.function.arguments) == {}
 
     def test_parse_tool_call_complete_coerces_types_by_schema(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         request = ChatCompletionRequest(
             model=MODEL_ID,
             messages=[],
@@ -279,7 +265,7 @@ class TestGlm47ToolParserComplete:
         }
 
     def test_parse_tool_call_complete_keeps_string_without_schema(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         payload = (
             'no_schema_tool'
             '<arg_key>zip</arg_key><arg_value>77004</arg_value>'

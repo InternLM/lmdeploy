@@ -12,17 +12,16 @@ from .tool_parser import ToolParser, ToolParserManager
 class Llama3JsonToolParser(ToolParser):
     """Tool parser for Llama3 JSON tool-call payloads."""
 
-    def __init__(self, tokenizer: object):
-        super().__init__(tokenizer)
-        self.bot_token = '<|python_tag|>'
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        return '<|python_tag|>'
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.bot_token
-
-    def get_tool_close_tag(self) -> str | None:
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
         return None
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'json'
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
