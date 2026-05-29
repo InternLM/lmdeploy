@@ -473,6 +473,33 @@ class UpdateParamsRequest(BaseModel):
     finished: bool = False
 
 
+class InitWeightsUpdateGroupRequest(BaseModel):
+    """Initialize a torch.distributed process group used to broadcast weights
+    from an external trainer into the rollout engine."""
+    master_address: str
+    master_port: int
+    rank_offset: int
+    world_size: int
+    group_name: str
+    backend: str = 'nccl'
+
+
+class UpdateWeightsFromDistributedRequest(BaseModel):
+    """Receive weights through a previously initialized distributed group and
+    load them into the running model."""
+    names: list[str]
+    dtypes: list[str]
+    shapes: list[list[int]]
+    group_name: str
+    load_format: str | None = None  # 'flattened_bucket' or None
+    finished: bool = False  # trigger mod.update_weights() finalization when True
+
+
+class DestroyWeightsUpdateGroupRequest(BaseModel):
+    """Tear down a previously initialized weights-update process group."""
+    group_name: str
+
+
 
 # /generate input
 class GenerateReqInput(BaseModel):

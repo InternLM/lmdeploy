@@ -28,9 +28,14 @@ from lmdeploy.pytorch.strategies import build_strategy_factory
 from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache, wait_for_async_tasks
 from lmdeploy.pytorch.weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
-from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.serve.openai.protocol import (
+    DestroyWeightsUpdateGroupRequest,
+    InitWeightsUpdateGroupRequest,
+    UpdateParamsRequest,
+    UpdateWeightsFromDistributedRequest,
+)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
+from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger, init_custom_process_group
 
 from .inputs_maker import build_inputs_maker
 from .profiler import AgentProfiler
@@ -308,6 +313,9 @@ class BaseModelAgent:
         # update_params_ipc_buffer
         self._update_params_ipc_tensor: torch.Tensor | None = None
         self._update_params_ipc_event: torch.cuda.Event | None = None
+
+        # disaggregated weight-update process groups, keyed by group_name
+        self._model_update_group: dict[str, dist.ProcessGroup] = {}
 
         # microbatch
         self.enable_microbatch = self.dist_config.enable_microbatch
@@ -1158,6 +1166,125 @@ class BaseModelAgent:
                     self._update_params_ipc_tensor = None
 
             torch.cuda.empty_cache()
+
+    def init_weights_update_group(self, request: InitWeightsUpdateGroupRequest):
+        """Create a NCCL process group with an external trainer for the
+        disaggregated weight-update path.
+
+        rank 0 is the trainer; this engine's local TP ranks fill `rank_offset .. rank_offset + tp - 1`.
+        """
+        with self.all_context():
+            group_name = request.group_name
+            if not group_name:
+                return False, 'group_name cannot be empty'
+            if group_name in self._model_update_group:
+                return False, f'group {group_name!r} already initialized'
+
+            local_rank = self.dist_ctx.tp_group.rank
+            rank = request.rank_offset + local_rank
+            init_method = f'tcp://{request.master_address}:{request.master_port}'
+            logger.info(f'init weights update group: master={request.master_address}:{request.master_port}, '
+                        f'rank_offset={request.rank_offset}, rank={rank}, world_size={request.world_size}, '
+                        f'group_name={group_name}, backend={request.backend}')
+            try:
+                pg = init_custom_process_group(
+                    backend=request.backend,
+                    init_method=init_method,
+                    world_size=request.world_size,
+                    rank=rank,
+                    group_name=group_name,
+                )
+                self._model_update_group[group_name] = pg
+                return True, 'Succeeded to initialize weights update group.'
+            except Exception as e:
+                msg = f'Failed to initialize weights update group: {e}'
+                logger.exception(msg)
+                return False, msg
+
+    @torch.inference_mode()
+    def update_weights_from_distributed(self, request: UpdateWeightsFromDistributedRequest):
+        """Receive a bucket of weights through the previously initialized NCCL
+        group and load them into the running model."""
+        with self.all_context():
+            group_name = request.group_name
+            pg = self._model_update_group.get(group_name)
+            if pg is None:
+                return False, (f'group {group_name!r} not initialized. '
+                               'Call init_weights_update_group first.')
+
+            device = torch.cuda.current_device()
+            try:
+                if request.names:
+                    named_tensors = []
+                    for name, dtype_str, shape in zip(request.names, request.dtypes, request.shapes):
+                        target_dtype = getattr(torch, dtype_str) if isinstance(dtype_str, str) else dtype_str
+                        named_tensors.append((name, torch.empty(shape, dtype=target_dtype, device=device)))
+
+                    if request.load_format == 'flattened_bucket':
+                        bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+                        flattened_tensor = bucket.get_flattened_tensor()
+                        dist.broadcast(flattened_tensor, src=0, group=pg)
+                        weights = list(bucket.reconstruct_tensors())
+                    else:
+                        handles = []
+                        for _, tensor in named_tensors:
+                            handles.append(dist.broadcast(tensor, src=0, group=pg, async_op=True))
+                        for handle in handles:
+                            handle.wait()
+                        weights = named_tensors
+                else:
+                    weights = []
+
+                model = self.patched_model.get_model() if self.patched_model is not None else None
+                spec_model = self.spec_agent.get_model()
+                # Same draft-split rule as update_params (currently only qwen3_5_mtp).
+                if self.spec_agent.is_enabled() and self.spec_agent.method == 'qwen3_5_mtp':
+                    main_weights = [(n, w) for n, w in weights if not n.startswith('mtp.')]
+                    draft_weights = [(n, w) for n, w in weights if n.startswith('mtp.')]
+                else:
+                    main_weights, draft_weights = weights, []
+
+                for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
+                    if m is None or not w:
+                        continue
+                    renamed = list(ModelWeightLoader._rename_weights_iterator(w, m))
+                    logger.info(f'update_weights_from_distributed: {tag}_num_tensors={len(renamed)}')
+                    m.load_weights(iter(renamed))
+
+                if request.finished:
+                    for m in filter(None, [model, spec_model]):
+                        for _, mod in m.named_modules():
+                            if hasattr(mod, 'update_weights'):
+                                mod.update_weights()
+                        torch.cuda.synchronize()
+                    # FusedMoE.update_weights() above replaces the gate_up / down
+                    # Parameter objects (LinearWeights.update_weight registers a new
+                    # nn.Parameter), so any CUDA graph captured before the update
+                    # still references the freed old pointers. Drop the captured
+                    # graphs so the next forward re-captures with the new params.
+                    self.reset_graph_runner()
+
+                torch.cuda.empty_cache()
+                return True, 'Succeeded to update parameter online.'
+            except Exception as e:
+                msg = (f'Failed to update parameter online: {e}. The model weights are partially updated; '
+                       'please discard them and reload.')
+                logger.exception(msg)
+                return False, msg
+
+    def destroy_weights_update_group(self, request: DestroyWeightsUpdateGroupRequest):
+        """Destroy a previously initialized weights-update process group."""
+        group_name = request.group_name
+        pg = self._model_update_group.pop(group_name, None)
+        if pg is None:
+            return False, f'group {group_name!r} not initialized'
+        try:
+            dist.destroy_process_group(pg)
+            return True, f'Succeeded to destroy group {group_name!r}.'
+        except Exception as e:
+            msg = f'Failed to destroy weights update group {group_name!r}: {e}'
+            logger.exception(msg)
+            return False, msg
 
     @torch.inference_mode()
     async def sleep(self, level: int = 1):

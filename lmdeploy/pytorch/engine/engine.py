@@ -449,6 +449,18 @@ class Engine(EngineBase):
         """Update params."""
         self.executor.update_params(request)
 
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return self.executor.init_weights_update_group(request)
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return self.executor.update_weights_from_distributed(request)
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return self.executor.destroy_weights_update_group(request)
+
     def _block_new_inputs(self):
         """Block new inference work from engine instances."""
         logger.info('PyTorch engine is blocking new inference requests.')

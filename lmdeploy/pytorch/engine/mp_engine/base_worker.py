@@ -112,6 +112,18 @@ class EngineWorkerBase:
         """Update params."""
         return self.engine.update_params(request)
 
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return self.engine.init_weights_update_group(request)
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return self.engine.update_weights_from_distributed(request)
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return self.engine.destroy_weights_update_group(request)
+
     def close(self) -> None:
         """Close engine worker."""
         self.engine.close()

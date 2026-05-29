@@ -118,6 +118,18 @@ class WorkerWrapperBase:
         """Update params."""
         self.model_agent.update_params(request)
 
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return self.model_agent.init_weights_update_group(request)
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return self.model_agent.update_weights_from_distributed(request)
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return self.model_agent.destroy_weights_update_group(request)
+
     def warmup(self):
         """warmup."""
         self.model_agent.warmup()

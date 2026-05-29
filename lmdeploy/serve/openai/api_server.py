@@ -63,6 +63,7 @@ from lmdeploy.serve.openai.protocol import (
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
     DeltaMessage,
+    DestroyWeightsUpdateGroupRequest,
     EmbeddingsRequest,
     EncodeRequest,
     EncodeResponse,
@@ -70,6 +71,7 @@ from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
+    InitWeightsUpdateGroupRequest,
     LogProbs,
     ModelCard,
     ModelList,
@@ -78,6 +80,7 @@ from lmdeploy.serve.openai.protocol import (
     PoolingResponse,
     TopLogprob,
     UpdateParamsRequest,
+    UpdateWeightsFromDistributedRequest,
     UsageInfo,
 )
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
@@ -1109,6 +1112,52 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
+
+
+def _check_pytorch_backend_for_disagg_weight_update():
+    """Disaggregated weight-update endpoints are PyTorch-backend only for
+    now."""
+    backend = getattr(VariableInterface.async_engine, 'backend', None)
+    if backend != 'pytorch':
+        return create_error_response(
+            HTTPStatus.NOT_IMPLEMENTED,
+            f'Disaggregated weight-update endpoints require backend="pytorch", got {backend!r}.')
+    return None
+
+
+@router.post('/init_weights_update_group', dependencies=[Depends(validate_json_request)])
+def init_weights_update_group(request: InitWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Initialize the torch.distributed process group used by an external
+    trainer to broadcast weights into this rollout engine."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = VariableInterface.async_engine.engine.init_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/update_weights_from_distributed', dependencies=[Depends(validate_json_request)])
+def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest, raw_request: Request = None):
+    """Receive a bucket of weights through a previously initialized weights-
+    update group and load them into the running model."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = VariableInterface.async_engine.engine.update_weights_from_distributed(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/destroy_weights_update_group', dependencies=[Depends(validate_json_request)])
+def destroy_weights_update_group(request: DestroyWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Tear down a previously initialized weights-update group."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = VariableInterface.async_engine.engine.destroy_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
 
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
