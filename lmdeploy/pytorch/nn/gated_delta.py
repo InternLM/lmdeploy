@@ -40,6 +40,7 @@ class GatedDeltaMeta:
         self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
         self.spec_conv_offsets = None
         self.spec_state_offsets = None
+        self.is_init_token = None
 
         device = self.cu_seqlens.device
 
@@ -226,8 +227,10 @@ class GatedDelta:
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        g: torch.Tensor,
-        beta: torch.Tensor,
+        b: torch.Tensor,
+        a: torch.Tensor,
+        dt_bias: torch.Tensor,
+        a_log_exp: torch.Tensor,
         recurrent_state: torch.Tensor,
         gated_delta_meta: GatedDeltaMeta,
         kv_ratio: int = 1,
@@ -239,11 +242,20 @@ class GatedDelta:
         spec_state_offsets = gated_delta_meta.spec_state_offsets
         cache_seqlens = gated_delta_meta.cache_seqlens
 
+        query, key, g, beta, qk_l2norm_done = self.impl.prepare_inputs(
+            query,
+            key,
+            b,
+            a,
+            dt_bias,
+            a_log_exp,
+            kv_ratio,
+            use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+            is_decoding=is_decoding,
+            init_token_mask=gated_delta_meta.is_init_token,
+        )
+
         if not is_decoding:
-            is_init_token = gated_delta_meta.is_init_token
-            # set gate to 0 for init tokens to avoid attention to invalid kv
-            g = g.masked_fill(is_init_token[None, :, None], -1e6)
-            query, key = repeat_and_l2norm(query, key, kv_ratio, do_norm=self.use_qk_l2norm_in_kernel)
             core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
                 query,
                 key,
@@ -253,15 +265,12 @@ class GatedDelta:
                 initial_state=recurrent_state,
                 state_indices=state_ids,
                 output_final_state=True,
-                use_qk_l2norm_in_kernel=False,
+                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
                 cu_seqlens=cu_seqlens,
                 spec_state_offsets=spec_state_offsets,
                 transpose_state_layout=True,
             )
         else:
-            if kv_ratio > 1:
-                query = query.repeat_interleave(kv_ratio, dim=-2)
-                key = key.repeat_interleave(kv_ratio, dim=-2)
             # qkvgb (1, seqlen, ...) -> (B, seqlen, ...)
             batch_size = state_ids.size(0)
             core_attn_out, last_recurrent_state = self.impl.fused_recurrent_gated_delta_rule(
@@ -272,7 +281,7 @@ class GatedDelta:
                 beta=beta[0].unflatten(0, (batch_size, -1)).contiguous(),
                 initial_state=recurrent_state,
                 output_final_state=True,
-                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
                 state_indices=gated_delta_meta.origin_state_ids,
                 cache_seqlens=cache_seqlens,
                 transpose_state_layout=True,
