@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from functools import cached_property
 from typing import TYPE_CHECKING
 
 import partial_json_parser
@@ -29,33 +28,29 @@ ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.t
 class ToolParser:
     """Base class for model-specific tool parsers."""
 
-    def __init__(self, tokenizer: object):
-        self.model_tokenizer = tokenizer
+    def __init__(self):
         self._tool_payload: str = ''
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
 
-    @cached_property
-    def vocab(self) -> dict[str, int]:
-        # NOTE: Only PreTrainedTokenizerFast is guaranteed to have .vocab
-        # whereas all tokenizers have .get_vocab()
-        return self.model_tokenizer.get_vocab()
-
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
         return BaseResponseParser.dump_tools(request)
 
-    def get_tool_open_tag(self) -> str | None:
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
         """Return tool opening tag string, or None if unsupported."""
         raise NotImplementedError('ToolParser.get_tool_open_tag has not been implemented!')
 
-    def get_tool_close_tag(self) -> str | None:
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
         """Return tool closing tag string, or None if unsupported."""
         raise NotImplementedError('ToolParser.get_tool_close_tag has not been implemented!')
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         """Return payload format for tool call body."""
         raise NotImplementedError('ToolParser.get_tool_payload_format has not been implemented!')
 
