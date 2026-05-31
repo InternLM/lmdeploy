@@ -39,6 +39,10 @@ class EngineBase:
         """Create instance."""
         raise NotImplementedError('This method is not implemented.')
 
+    async def get_health_status(self) -> dict:
+        """Get backend health status."""
+        raise NotImplementedError('This method is not implemented.')
+
 
 class EngineInstanceBase:
 

@@ -381,7 +381,32 @@ class TurboMind:
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
                                active_blocks=tm_metrics.active_blocks,
-                               free_blocks=tm_metrics.free_blocks)
+                               free_blocks=tm_metrics.free_blocks,
+                               scheduler_tick=tm_metrics.scheduler_tick)
+
+    def _get_health_status(self) -> dict:
+        """Get lightweight health status."""
+        if self.model_comm is None:
+            return dict(alive=False,
+                        message='TurboMind model communicator is not available.',
+                        schedule_metrics=None)
+
+        if not self._engine_created:
+            if self.engine_config.empty_init:
+                return dict(alive=True,
+                            message='TurboMind engine is waiting for weights in empty-init mode.',
+                            schedule_metrics=None)
+            return dict(alive=False,
+                        message='TurboMind engine has not been created.',
+                        schedule_metrics=None)
+
+        return dict(alive=True,
+                    message='TurboMind engine is healthy.',
+                    schedule_metrics=self.get_schedule_metrics())
+
+    async def get_health_status(self) -> dict:
+        """Get backend health status without blocking the event loop."""
+        return await asyncio.to_thread(self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):

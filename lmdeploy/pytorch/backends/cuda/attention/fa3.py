@@ -217,9 +217,15 @@ class FA3Impl(TritonAttentionImpl):
         """
         if max_q_seqlen > 1:
             return self._decoding_speculative(query, k_cache, v_cache, attn_metadata, max_q_seqlen)
-        else:
-            return self._decoding_standard(query, k_cache, v_cache, attn_metadata, max_q_seqlen, k_scales_zeros,
-                                           v_scales_zeros)
+        return self._decoding_standard(
+            query,
+            k_cache,
+            v_cache,
+            attn_metadata,
+            max_q_seqlen,
+            k_scales_zeros,
+            v_scales_zeros,
+        )
 
     def _forward_prefill(
         self,
