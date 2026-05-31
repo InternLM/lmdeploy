@@ -46,8 +46,9 @@ class SchedulerSequenceDefault(SchedulerSequence):
         token_ids = _to_ndarray(token_ids)
 
         num_valid = len(token_ids)
+        expert_start_pos = self.num_history_ids if mode != UpdateTokenMode.INPUTS else None
         # record cached expert ids
-        self.append_routed_experts(routed_experts)
+        self.append_routed_experts(routed_experts, start_pos=expert_start_pos)
 
         if mode == UpdateTokenMode.INPUTS:
             self.arrive_time = time.perf_counter()
@@ -81,11 +82,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
         self.num_ignored_history = min(step, self.num_ignored_history)
 
         self.model_meta = None
-
-        if self.return_routed_experts:
-            # chunk long context might not have all routed experts
-            if len(self.all_routed_experts) > step:
-                self.all_routed_experts.resize(step)
 
     def cleanup(self):
         """Setup history meta after sequence stopped or cancelled."""

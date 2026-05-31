@@ -301,7 +301,8 @@ class EngineLoop:
         if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
-            seq.append_routed_experts(all_routed_experts)
+            start_pos = int(model_inputs.history_lengths[0].item())
+            seq.append_routed_experts(all_routed_experts, start_pos=start_pos)
             seq.append_logits(logits)
             return dict()
 

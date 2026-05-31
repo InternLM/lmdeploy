@@ -738,14 +738,27 @@ class SchedulerSequence:
         else:
             return None
 
-    def append_routed_experts(self, routed_experts: Tensor | np.ndarray):
-        """Append routed experts."""
+    def append_routed_experts(self, routed_experts: Tensor | np.ndarray, start_pos: int):
+        """Append routed experts, deduplicating by absolute token position.
+
+        Args:
+            routed_experts (Tensor | np.ndarray): Expert rows returned by the
+                model. The first dimension is aligned with token positions.
+            start_pos (int): Absolute token position of the first expert row
+                in ``routed_experts``. Rows already covered by the contiguous
+                cached expert history are skipped.
+        """
         if not self.return_routed_experts:
             return
         if routed_experts is None:
             return
         if isinstance(routed_experts, Tensor):
             routed_experts = routed_experts.cpu().numpy()
+        cur_len = len(self.all_routed_experts)
+        assert cur_len >= start_pos, f'cached length must >= start_pos, but given: {cur_len} vs {start_pos}'
+        offset = cur_len - start_pos
+        if offset > 0:
+            routed_experts = routed_experts[offset:]
         self.all_routed_experts.append(routed_experts)
 
     @property
