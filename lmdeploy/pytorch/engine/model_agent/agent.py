@@ -1102,10 +1102,11 @@ class BaseModelAgent:
 
     def reset_graph_runner(self):
         """Reset graph runner to prevent tp hanging."""
-        if hasattr(self.patched_model, 'reset'):
-            self.patched_model.reset()
+        with self.all_context():
+            if hasattr(self.patched_model, 'reset'):
+                self.patched_model.reset()
 
-        self.spec_agent.reset_graph_runner()
+            self.spec_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
