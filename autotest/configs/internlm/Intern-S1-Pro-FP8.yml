@@ -7,7 +7,6 @@ h:
     ep: 16
     extra:
       session-len: 65536
-      model-format: fp8
       max-prefill-token-num: 1024
       max-batch-size: 128
   backends:
@@ -27,7 +26,6 @@ h:
     tp: 16
     extra:
       session-len: 65536
-      model-format: fp8
   backends:
   - name: pytorch
     communicators:
