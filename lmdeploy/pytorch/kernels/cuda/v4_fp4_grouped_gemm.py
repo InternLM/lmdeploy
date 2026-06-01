@@ -195,11 +195,10 @@ def fused_moe_v4_fp4_ep_normal(
         group_size: Quantization group size.
         out_dtype: Output dtype.
     """
-    all_tokens = recv_tokens_per_expert.sum().item()
-    if all_tokens <= 0:
+    M, K = recv_x.size()
+    if M <= 0:
         return recv_x.new_empty(0, w2.size(1), dtype=out_dtype)
 
-    M, K = recv_x.size()
     N = w1.size(1)
 
     # Build grouped_layout from recv_tokens_per_expert.
@@ -211,7 +210,7 @@ def fused_moe_v4_fp4_ep_normal(
     input_quant, input_scale = quant_fp8(recv_x, group_size, dtype=torch.float8_e4m3fn, scale_fmt='ue8m0')
 
     # --- Gate-up GEMM (contiguous) ---
-    gateup_output = recv_x.new_empty((all_tokens, N), dtype=out_dtype)
+    gateup_output = recv_x.new_empty((M, N), dtype=out_dtype)
     m_grouped_fp8_fp4_gemm_nt_contiguous(
         (input_quant, input_scale),
         (w1, w1_scale),
@@ -229,7 +228,7 @@ def fused_moe_v4_fp4_ep_normal(
     del gateup_output
 
     # --- Down GEMM (contiguous) ---
-    down_output = recv_x.new_empty((all_tokens, w2.size(1)), dtype=out_dtype)
+    down_output = recv_x.new_empty((M, w2.size(1)), dtype=out_dtype)
     m_grouped_fp8_fp4_gemm_nt_contiguous(
         (act_quant, act_scale),
         (w2, w2_scale),
