@@ -63,6 +63,8 @@ install/
 # LMDeploy
 workspace/
 work_dir*/
+workdir/
+wscripts/
 
 # Huggingface
 *.bin

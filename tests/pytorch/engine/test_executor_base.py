@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
 
 
@@ -58,6 +59,38 @@ def test_get_rank_cache_block_sizes_only_charges_spec_rank():
     cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
 
     assert cache_block_sizes == [384, 256, 384, 256]
+
+
+def test_get_rank_cache_block_sizes_charges_all_ranks_when_spec_tp_matches_target():
+    executor = object.__new__(ExecutorBase)
+    executor.dist_config = SimpleNamespace(attn_tp=4)
+    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
+
+    cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
+
+    assert cache_block_sizes == [384, 384, 384, 384]
+
+
+def test_get_cache_block_sizes_uses_spec_tp(monkeypatch):
+    executor = object.__new__(ExecutorBase)
+    executor.dist_config = SimpleNamespace(attn_tp=4)
+    executor.cache_config = object()
+    executor.model_config = object()
+    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
+    spec_cache_config = object()
+    spec_model_config = object()
+    world_sizes = []
+
+    def fake_get_cache_block_size(cache_config, model_config, world_size):
+        world_sizes.append(world_size)
+        return 256 if model_config is executor.model_config else 128
+
+    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
+
+    cache_block_size = executor._get_cache_block_sizes(spec_cache_config, spec_model_config)
+
+    assert cache_block_size == _CacheBlockSize(target=256, spec=128)
+    assert world_sizes == [4, 4]
 
 
 def test_update_num_gpu_blocks_can_be_limited_by_non_spec_rank():

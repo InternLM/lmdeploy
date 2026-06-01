@@ -108,8 +108,6 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            is_tp=False,
-            dp_disable_tp=True,
             prefix=add_prefix('fc', prefix=prefix),
         )
 
