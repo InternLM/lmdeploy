@@ -13,6 +13,7 @@ from openai.types.responses import (
     ResponseTextConfig,
 )
 from openai.types.responses.response import ToolChoice as ResponseToolChoice
+from openai.types.responses.response_create_params import StreamOptions as ResponseStreamOptions
 from openai.types.responses.tool import Tool as ResponseTool
 from openai.types.shared import Metadata, Reasoning
 from pydantic import BaseModel, ConfigDict, Field
@@ -74,7 +75,7 @@ class ResponsesRequest(BaseModel):
     service_tier: Literal['auto', 'default', 'flex', 'scale', 'priority'] | None = 'auto'
     store: bool | None = True
     stream: bool | None = False
-    stream_options: dict[str, Any] | None = None
+    stream_options: ResponseStreamOptions | None = None
     temperature: float | None = 1.0
     text: ResponseTextConfig | dict[str, Any] | None = None
     tool_choice: ResponseToolChoice = 'auto'

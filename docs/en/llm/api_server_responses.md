@@ -22,6 +22,7 @@ For `POST /v1/responses`, include:
 - Function tools are converted to LMDeploy's OpenAI-compatible tool format. Tool calling requires launching API server with a configured tool parser (`--tool-call-parser ...`).
 - `parallel_tool_calls` defaults to `true`. When it is `false`, LMDeploy follows vLLM-style compatibility and returns only the first parsed function call.
 - Non-function hosted tools, such as `web_search`, are accepted but ignored by LMDeploy.
+- Responses-only logprob serialization and stream obfuscation options are accepted but currently ignored.
 - `background` mode and `previous_response_id` are not supported.
 
 ## Example: `/v1/responses`
