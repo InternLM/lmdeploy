@@ -33,6 +33,24 @@ def _validate_headers(raw_request: Request):
     return None
 
 
+def _validate_return_logprob(request: MessagesRequest, server_context):
+    if not request.return_logprob:
+        return None
+    get_engine_config = getattr(server_context, 'get_engine_config', None)
+    if get_engine_config is None:
+        return None
+    try:
+        logprobs_mode = get_engine_config().logprobs_mode
+    except AttributeError:
+        return None
+    if logprobs_mode is None:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'return_logprob({request.return_logprob}) requested but not enabled '
+            'logprobs_mode in engine configuration.')
+    return None
+
+
 def register(router: APIRouter, server_context) -> None:
     """Register endpoint onto router."""
 
@@ -48,6 +66,10 @@ def register(router: APIRouter, server_context) -> None:
                 f'The model {request.model!r} does not exist.',
                 error_type='not_found_error',
             )
+
+        logprob_error = _validate_return_logprob(request, server_context)
+        if logprob_error is not None:
+            return logprob_error
 
         # Validate input_ids and image_data constraints.
         # messages has higher priority. input_ids and image_data are only used when
@@ -72,6 +94,15 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'image_data requires input_ids to be set when messages is empty.')
+            if request.input_ids is not None and request.system is not None:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'system cannot be used when input_ids is set because raw input_ids bypass message rendering.')
+            if request.input_ids is not None and (request.tools is not None or request.tool_choice is not None):
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'tools and tool_choice cannot be used when input_ids is set because '
+                    'raw input_ids bypass tool parsing.')
 
         # Resolve fallback input when messages is empty.
         parser_messages = None
@@ -88,7 +119,7 @@ def register(router: APIRouter, server_context) -> None:
                         image_input.append(dict(type='image_url', image_url=dict(url=img)))
                     else:
                         image_input.append(dict(type='image_url', image_url=img))
-                text_input = dict(type='text', text=str(request.input_ids))
+                text_input = dict(type='text', text=request.input_ids)
                 parser_messages = [dict(role='user', content=[text_input] + image_input)]
                 resolved_input_ids = None
         else:
@@ -151,7 +182,7 @@ def register(router: APIRouter, server_context) -> None:
                     response_parser=response_parser,
                     return_token_ids=request.return_token_ids or False,
                     return_routed_experts=request.return_routed_experts or False,
-                    logprobs=request.logprobs or False,
+                    logprobs=request.return_logprob or False,
                 ),
                 media_type='text/event-stream',
             )
@@ -189,7 +220,7 @@ def register(router: APIRouter, server_context) -> None:
             content_blocks = [MessageTextBlock(text='')]
 
         output_token_logprobs = None
-        if request.logprobs and final_logprobs and final_token_ids:
+        if request.return_logprob and final_logprobs and final_token_ids:
             output_token_logprobs = [
                 (tok_logprobs[tok], tok)
                 for tok, tok_logprobs in zip(final_token_ids, final_logprobs)

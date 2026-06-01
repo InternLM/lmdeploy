@@ -40,13 +40,16 @@ class _FakeChatTemplate:
 
 class _FakeEngine:
 
-    def __init__(self):
+    def __init__(self, *, logprobs_mode='raw_logprobs'):
         self.model_name = 'fake-model'
-        self.backend_config = SimpleNamespace(adapters=['adapter-model'])
+        self.backend_config = SimpleNamespace(adapters=['adapter-model'], logprobs_mode=logprobs_mode)
         self.tokenizer = _FakeTokenizer()
         self.chat_template = _FakeChatTemplate()
+        self.generate_calls = []
 
     def generate(self, *args, **kwargs):
+        self.generate_calls.append((args, kwargs))
+
         async def _gen():
             yield SimpleNamespace(
                 response='Hello ',
@@ -71,12 +74,15 @@ class _FakeEngine:
 
 
 class _FakeServerContext:
-    def __init__(self, *, response_parser_cls=None):
-        self.async_engine = _FakeEngine()
+    def __init__(self, *, response_parser_cls=None, logprobs_mode='raw_logprobs'):
+        self.async_engine = _FakeEngine(logprobs_mode=logprobs_mode)
         self.response_parser_cls = response_parser_cls
 
     def create_session(self, _session_id: int):
         return _FakeSession()
+
+    def get_engine_config(self):
+        return self.async_engine.backend_config
 
 
 class _ToolAndReasoningParser:
@@ -125,9 +131,11 @@ class _ToolAndReasoningParser:
         )
 
 
-def _make_client(response_parser_cls=None) -> TestClient:
+def _make_client(response_parser_cls=None, *, server_context=None, logprobs_mode='raw_logprobs') -> TestClient:
     app = FastAPI()
-    app.include_router(create_anthropic_router(_FakeServerContext(response_parser_cls=response_parser_cls)))
+    context = server_context or _FakeServerContext(response_parser_cls=response_parser_cls,
+                                                  logprobs_mode=logprobs_mode)
+    app.include_router(create_anthropic_router(context))
     return TestClient(app)
 
 
@@ -778,6 +786,71 @@ def test_messages_input_ids_streaming():
     assert 'event: message_stop' in body
 
 
+def test_messages_image_data_preserves_input_ids_in_multimodal_content():
+    context = _FakeServerContext()
+    client = _make_client(server_context=context)
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [],
+            'input_ids': [1, 2, 3],
+            'image_data': 'https://example.com/img.png',
+        },
+    )
+    assert response.status_code == 200
+    args, kwargs = context.async_engine.generate_calls[-1]
+    messages_arg = args[0]
+    assert messages_arg[0]['content'][0] == {'type': 'text', 'text': [1, 2, 3]}
+    assert kwargs['input_ids'] is None
+
+
+def test_messages_rejects_system_with_input_ids():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [],
+            'input_ids': [1, 2, 3],
+            'system': 'ignored system prompt',
+        },
+    )
+    assert response.status_code == 400
+    assert 'system' in response.json()['error']['message']
+
+
+def test_messages_rejects_tools_with_input_ids():
+    client = _make_client(response_parser_cls=_ToolAndReasoningParser)
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [],
+            'input_ids': [1, 2, 3],
+            'tools': [{
+                'name': 'search',
+                'description': 'demo',
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {},
+                },
+            }],
+            'tool_choice': {
+                'type': 'auto',
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert 'tools' in response.json()['error']['message']
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(
@@ -843,7 +916,7 @@ def test_messages_non_stream_includes_logprobs():
             'model': 'fake-model',
             'max_tokens': 16,
             'messages': [{'role': 'user', 'content': 'Hi'}],
-            'logprobs': True,
+            'return_logprob': True,
         },
     )
     assert response.status_code == 200
@@ -868,6 +941,22 @@ def test_messages_non_stream_logprobs_default_off():
     assert data.get('output_token_logprobs') is None
 
 
+def test_messages_rejects_logprobs_when_engine_logprobs_mode_disabled():
+    client = _make_client(logprobs_mode=None)
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Hi'}],
+            'return_logprob': True,
+        },
+    )
+    assert response.status_code == 400
+    assert 'return_logprob' in response.json()['error']['message']
+
+
 def test_messages_streaming_includes_logprobs():
     client = _make_client()
     with client.stream(
@@ -879,7 +968,7 @@ def test_messages_streaming_includes_logprobs():
                 'max_tokens': 16,
                 'stream': True,
                 'messages': [{'role': 'user', 'content': 'Hi there'}],
-                'logprobs': True,
+                'return_logprob': True,
             },
     ) as response:
         body = '\n'.join(response.iter_lines())

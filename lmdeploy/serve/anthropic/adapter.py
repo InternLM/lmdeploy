@@ -354,7 +354,7 @@ def to_generation_config(request: MessagesRequest) -> GenerationConfig:
         skip_special_tokens=True,
         spaces_between_special_tokens=True,
         return_routed_experts=request.return_routed_experts or False,
-        logprobs=1 if request.logprobs else None,
+        logprobs=1 if request.return_logprob else None,
     )
 
 

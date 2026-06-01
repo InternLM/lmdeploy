@@ -128,7 +128,7 @@ class MessagesRequest(BaseModel):
         default=False,
         description=('Whether to include output token IDs in the response.'),
     )
-    logprobs: bool | None = Field(
+    return_logprob: bool | None = Field(
         default=False,
         description=('Whether to return log probabilities for output tokens.'),
     )
