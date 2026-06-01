@@ -91,8 +91,6 @@ def _warn_ignored_request_fields(request: ResponsesRequest) -> None:
     ):
         if getattr(request, field_name) is not None:
             ignored_fields.append(field_name)
-    if request.parallel_tool_calls is not None and request.parallel_tool_calls is not True:
-        ignored_fields.append('parallel_tool_calls')
     if request.service_tier not in (None, 'auto'):
         ignored_fields.append('service_tier')
     if request.truncation not in (None, 'disabled'):
@@ -346,6 +344,12 @@ def _response_metadata_kwargs(request: ResponsesRequest) -> dict[str, Any]:
     )
 
 
+def _filter_parallel_tool_calls(request: ResponsesRequest, tool_calls: list[Any] | None) -> list[Any] | None:
+    if request.parallel_tool_calls is not False or not tool_calls:
+        return tool_calls
+    return tool_calls[:1]
+
+
 def _make_response(*,
                    request: ResponsesRequest,
                    model_name: str,
@@ -357,6 +361,7 @@ def _make_response(*,
                    finish_reason: str | None,
                    message_id: str | None = None) -> ResponsesResponse:
     text = text or ''
+    tool_calls = _filter_parallel_tool_calls(request, tool_calls)
     status = 'incomplete' if finish_reason == 'length' else 'completed'
     message_status = 'incomplete' if status == 'incomplete' else 'completed'
     incomplete_details = None
@@ -567,6 +572,8 @@ async def _stream_response(result_generator,
             sequence_number += 1
         if tool_deltas:
             for tool_delta in tool_deltas:
+                if request.parallel_tool_calls is False and tool_delta.index != 0:
+                    continue
                 for event in _start_tool_item(tool_delta):
                     yield event
                 function_delta = getattr(tool_delta, 'function', None)

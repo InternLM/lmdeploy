@@ -20,6 +20,7 @@ For `POST /v1/responses`, include:
 - `input` may be a string or a list of Responses input items.
 - `instructions`, `developer`, and `system` messages are merged into a single leading system message for chat-template compatibility.
 - Function tools are converted to LMDeploy's OpenAI-compatible tool format. Tool calling requires launching API server with a configured tool parser (`--tool-call-parser ...`).
+- `parallel_tool_calls` defaults to `true`. When it is `false`, LMDeploy follows vLLM-style compatibility and returns only the first parsed function call.
 - Non-function hosted tools, such as `web_search`, are accepted but ignored by LMDeploy.
 - `background` mode and `previous_response_id` are not supported.
 

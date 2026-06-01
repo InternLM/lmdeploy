@@ -665,6 +665,34 @@ def test_responses_tool_call_response_shape():
     }
 
 
+def test_responses_parallel_tool_calls_false_keeps_first_tool_call():
+    request = ResponsesRequest(model='fake-model', input='Hi', parallel_tool_calls=False)
+
+    response = _make_response(
+        request=request,
+        model_name='fake-model',
+        created_time=123,
+        text='',
+        tool_calls=[
+            ToolCall(
+                id='call_123',
+                function=FunctionCall(name='search', arguments='{"query":"lmdeploy"}'),
+            ),
+            ToolCall(
+                id='call_456',
+                function=FunctionCall(name='lookup', arguments='{"query":"vllm"}'),
+            ),
+        ],
+        input_tokens=8,
+        output_tokens=2,
+        finish_reason='tool_calls',
+    ).model_dump(exclude_none=True)
+
+    assert response['parallel_tool_calls'] is False
+    assert len(response['output']) == 1
+    assert response['output'][0]['call_id'] == 'call_123'
+
+
 def test_responses_tool_call_response_accepts_no_visible_text():
     request = ResponsesRequest(model='fake-model', input='Hi')
 
@@ -716,6 +744,14 @@ def test_responses_rejects_unsupported_prompt_before_missing_input():
     assert response is not None
     assert response.status_code == 400
     assert json.loads(response.body)['error']['param'] == 'prompt'
+
+
+def test_responses_accepts_serial_tool_call_request_for_text_v1():
+    request = ResponsesRequest(model='fake-model', input='Hi', parallel_tool_calls=False)
+
+    response = _validate_text_v1_request(request)
+
+    assert response is None
 
 
 def test_responses_rejects_missing_input_for_text_v1():
@@ -925,6 +961,63 @@ def test_responses_streaming_tool_call_events():
     assert done['item']['status'] == 'completed'
     assert payloads[-1]['response']['output'][0]['type'] == 'function_call'
     assert payloads[-1]['response']['output'][0]['status'] == 'completed'
+
+
+def test_responses_streaming_parallel_tool_calls_false_keeps_index_zero():
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True, parallel_tool_calls=False)
+
+    class _ParallelToolParser:
+
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            return DeltaMessage(
+                role='assistant',
+                tool_calls=[
+                    DeltaToolCall(
+                        index=0,
+                        id='call_123',
+                        function=DeltaFunctionCall(name='search', arguments='{}'),
+                    ),
+                    DeltaToolCall(
+                        index=1,
+                        id='call_456',
+                        function=DeltaFunctionCall(name='lookup', arguments='{}'),
+                    ),
+                ],
+            ), True
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='tools',
+            token_ids=[101],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason='stop',
+        )
+
+    async def _collect_events():
+        return [
+            event async for event in _stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+                response_parser=_ParallelToolParser(),
+            )
+        ]
+
+    import asyncio
+
+    payloads = _sse_payloads(asyncio.run(_collect_events()))
+    added_items = [
+        payload['item'] for payload in payloads
+        if payload['type'] == 'response.output_item.added'
+    ]
+    completed_output = payloads[-1]['response']['output']
+
+    assert [item['call_id'] for item in added_items] == ['call_123']
+    assert len(completed_output) == 1
+    assert completed_output[0]['call_id'] == 'call_123'
+    assert completed_output[0]['name'] == 'search'
 
 
 def test_responses_streaming_text_indices_follow_text_item_order():
