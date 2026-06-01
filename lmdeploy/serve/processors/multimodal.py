@@ -102,12 +102,12 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
-    def _parse_multimodal_item(i: int, in_messages: list[dict], out_messages: list[dict], media_io_kwargs: dict[str,
-                                                                                                                Any],
-                               mm_stats: MultimodalStats | None = None):
+    def _parse_multimodal_item(i: int,
+                               in_messages: list[dict],
+                               out_messages: list[dict],
+                               media_io_kwargs: dict[str, Any],
+                               mm_stats: MultimodalStats):
         """Synchronous helper to parse a single multimodal message item."""
-        media_io_kwargs = media_io_kwargs or {}
-        mm_stats = mm_stats or MultimodalStats(enabled=False)
         role = in_messages[i]['role']
         content = in_messages[i]['content']
 
@@ -198,6 +198,7 @@ class MultimodalProcessor:
 
         out_messages = [None] * len(messages)
         media_io_kwargs = media_io_kwargs or {}
+        mm_stats = mm_stats or MultimodalStats(enabled=False)
         loop = asyncio.get_event_loop()
 
         await asyncio.gather(*[
