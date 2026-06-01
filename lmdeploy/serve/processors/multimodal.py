@@ -1,9 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from contextlib import contextmanager
 from typing import Any, Literal
 
 import PIL
 
+from lmdeploy.metrics.stats import MultimodalStats
 from lmdeploy.model import MODELS, BaseChatTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
@@ -14,6 +16,16 @@ from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
 from lmdeploy.vl.media.video import VideoMediaIO
 
 logger = get_logger('lmdeploy')
+
+
+@contextmanager
+def _mm_stage(mm_stats: MultimodalStats, stage: str, modality='all'):
+    try:
+        with mm_stats.span(stage, modality):
+            yield
+    except Exception:
+        mm_stats.record_failure(stage, modality)
+        raise
 
 
 class MultimodalProcessor:
@@ -91,8 +103,11 @@ class MultimodalProcessor:
 
     @staticmethod
     def _parse_multimodal_item(i: int, in_messages: list[dict], out_messages: list[dict], media_io_kwargs: dict[str,
-                                                                                                                Any]):
+                                                                                                                Any],
+                               mm_stats: MultimodalStats | None = None):
         """Synchronous helper to parse a single multimodal message item."""
+        media_io_kwargs = media_io_kwargs or {}
+        mm_stats = mm_stats or MultimodalStats(enabled=False)
         role = in_messages[i]['role']
         content = in_messages[i]['content']
 
@@ -130,28 +145,39 @@ class MultimodalProcessor:
                 raise ValueError(f'Invalid multimodal item at index {i}: {item}. '
                                  f'Expected "{item_type}" to be a direct value or a dict containing "url" or "data".')
 
+            modality = None
             if item_type == 'image_data':
                 modality = Modality.IMAGE
+                mm_stats.add_item(modality.value)
                 data = _require_data_src()
             elif item_type in ('image_url', 'image'):
                 modality = Modality.IMAGE
+                mm_stats.add_item(modality.value)
                 data_src = _require_data_src()
                 if isinstance(data_src, PIL.Image.Image):
                     data = data_src
                 elif isinstance(data_src, str):
-                    data = load_from_url(data_src, ImageMediaIO(**media_io_kwargs.get('image', {})))
+                    with _mm_stage(mm_stats, 'media_io', modality.value):
+                        data = load_from_url(data_src, ImageMediaIO(**media_io_kwargs.get('image', {})))
                 else:
                     raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
-                                     'Expected a str URL/path/data URL or PIL.Image.Image.')
+                                        'Expected a str URL/path/data URL or PIL.Image.Image.')
             elif item_type in ('video_url', 'video'):
                 modality = Modality.VIDEO
-                data, metadata = load_from_url(
-                    _require_data_src(), VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})))
+                mm_stats.add_item(modality.value)
+                with _mm_stage(mm_stats, 'media_io', modality.value):
+                    data, metadata = load_from_url(
+                        _require_data_src(),
+                        VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})))
                 item_params['video_metadata'] = metadata
             elif item_type in ('time_series_url', 'time_series'):
                 modality = Modality.TIME_SERIES
-                data = load_from_url(_require_data_src(), TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
+                mm_stats.add_item(modality.value)
+                with _mm_stage(mm_stats, 'media_io', modality.value):
+                    data = load_from_url(_require_data_src(),
+                                            TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
             else:
+                mm_stats.record_failure('media_io', 'unknown')
                 raise NotImplementedError(f'unknown type: {item_type}')
 
             out_message['content'].append({'type': modality.value, 'data': data, **item_params})
@@ -160,7 +186,8 @@ class MultimodalProcessor:
 
     @staticmethod
     async def async_parse_multimodal_item(messages: list[dict],
-                                          media_io_kwargs: dict[str, Any] | None = None) -> list[dict]:
+                                          media_io_kwargs: dict[str, Any] | None = None,
+                                          mm_stats: MultimodalStats | None = None) -> list[dict]:
         """Convert user-input multimodal data into GPT4V message format."""
         if isinstance(messages, dict):
             messages = [messages]
@@ -172,7 +199,7 @@ class MultimodalProcessor:
 
         await asyncio.gather(*[
             loop.run_in_executor(None, MultimodalProcessor._parse_multimodal_item, i, messages, out_messages,
-                                 media_io_kwargs) for i in range(len(messages))
+                                 media_io_kwargs, mm_stats) for i in range(len(messages))
         ])
         return out_messages
 
@@ -186,6 +213,7 @@ class MultimodalProcessor:
                                chat_template_kwargs: dict | None = None,
                                media_io_kwargs: dict[str, Any] | None = None,
                                mm_processor_kwargs: dict[str, Any] | None = None,
+                               mm_stats: MultimodalStats | None = None,
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
 
@@ -244,6 +272,7 @@ class MultimodalProcessor:
                                                            chat_template_kwargs=chat_template_kwargs,
                                                            media_io_kwargs=media_io_kwargs,
                                                            mm_processor_kwargs=mm_processor_kwargs,
+                                                           mm_stats=mm_stats,
                                                            **kwargs)
         else:
             raise RuntimeError(f'unsupported prompt type: {type(prompt)}')
@@ -375,39 +404,48 @@ class MultimodalProcessor:
                                            chat_template_kwargs: dict | None = None,
                                            media_io_kwargs: dict[str, Any] | None = None,
                                            mm_processor_kwargs: dict[str, Any] | None = None,
+                                           mm_stats: MultimodalStats | None = None,
                                            **kwargs):
         """Process multimodal prompt and return processed data for inference
         engines."""
+        mm_stats = mm_stats or MultimodalStats(enabled=False)
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
+        messages = await self.async_parse_multimodal_item(messages, media_io_kwargs, mm_stats=mm_stats)
 
         if self.backend == 'turbomind':
-            results = await self.vl_encoder.preprocess(messages,
-                                                       mm_processor_kwargs=mm_processor_kwargs)
-            results = await self.vl_encoder.async_infer(results)
-            results = await self.vl_encoder.wrap_for_turbomind(messages=results,
-                                                               chat_template=chat_template,
-                                                               tokenizer=self.tokenizer,
-                                                               sequence_start=sequence_start,
-                                                               tools=tools,
-                                                               chat_template_kwargs=chat_template_kwargs)
+            with _mm_stage(mm_stats, 'hf_processor'):
+                results = await self.vl_encoder.preprocess(messages,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
+            with _mm_stage(mm_stats, 'vision_encoder'):
+                results = await self.vl_encoder.async_infer(results)
+            with _mm_stage(mm_stats, 'embedding_merge'):
+                results = await self.vl_encoder.wrap_for_turbomind(messages=results,
+                                                                   chat_template=chat_template,
+                                                                   tokenizer=self.tokenizer,
+                                                                   sequence_start=sequence_start,
+                                                                   tools=tools,
+                                                                   chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             if self.vl_encoder._uses_new_preprocess:
-                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
-                                                                      chat_template=chat_template,
-                                                                      sequence_start=sequence_start,
-                                                                      chat_template_kwargs=chat_template_kwargs)
-                results = await self.vl_encoder.preprocess(messages,
-                                                           input_prompt=input_prompt,
-                                                           mm_processor_kwargs=mm_processor_kwargs)
+                with _mm_stage(mm_stats, 'prompt_template'):
+                    input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                          chat_template=chat_template,
+                                                                          sequence_start=sequence_start,
+                                                                          chat_template_kwargs=chat_template_kwargs)
+                with _mm_stage(mm_stats, 'hf_processor'):
+                    results = await self.vl_encoder.preprocess(messages,
+                                                               input_prompt=input_prompt,
+                                                               mm_processor_kwargs=mm_processor_kwargs)
             else:
-                results = await self.vl_encoder.preprocess(messages,
-                                                           mm_processor_kwargs=mm_processor_kwargs)
-                results = await self.vl_encoder.wrap_for_pytorch(messages=results,
-                                                                 chat_template=chat_template,
-                                                                 tokenizer=self.tokenizer,
-                                                                 sequence_start=sequence_start,
-                                                                 tools=tools,
-                                                                 chat_template_kwargs=chat_template_kwargs)
+                with _mm_stage(mm_stats, 'hf_processor'):
+                    results = await self.vl_encoder.preprocess(messages,
+                                                               mm_processor_kwargs=mm_processor_kwargs)
+                with _mm_stage(mm_stats, 'embedding_merge'):
+                    results = await self.vl_encoder.wrap_for_pytorch(messages=results,
+                                                                     chat_template=chat_template,
+                                                                     tokenizer=self.tokenizer,
+                                                                     sequence_start=sequence_start,
+                                                                     tools=tools,
+                                                                     chat_template_kwargs=chat_template_kwargs)
 
         return results

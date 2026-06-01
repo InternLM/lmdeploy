@@ -5,7 +5,7 @@ from lmdeploy.messages import ResponseType, ScheduleMetrics
 from lmdeploy.pytorch.utils import singleton
 from lmdeploy.utils import get_logger
 
-from .stats import SchedulerStats
+from .stats import MultimodalStats, SchedulerStats
 
 logger = get_logger('lmdeploy')
 
@@ -17,14 +17,16 @@ class MetricsProcessor:
     def __init__(self):
         """Init metrics processor."""
         self.enable_metrics: bool = False
+        self.enable_mm_metrics: bool = False
         self.scheduler_stats = SchedulerStats()
         self.stat_loggers = []
         self.metrics_queue: asyncio.Queue = None
         self.metrics_handler: asyncio.Task = None
 
-    def start_metrics_handler(self, enable_metrics: bool):
+    def start_metrics_handler(self, enable_metrics: bool, enable_mm_metrics: bool = False):
         """Start metrics handler."""
         self.enable_metrics = enable_metrics
+        self.enable_mm_metrics = enable_mm_metrics
         if enable_metrics and self.metrics_handler is None:
             self.metrics_queue = asyncio.Queue()
             self.metrics_handler = asyncio.create_task(self._run_metrics_handler())
@@ -92,6 +94,17 @@ class MetricsProcessor:
         if not self.enable_metrics or self.metrics_queue is None:
             return
         self.metrics_queue.put_nowait(update_data)
+
+    def record_multimodal(self, stats: MultimodalStats | None):
+        """Record multimodal preprocessing stats."""
+        if not self.enable_metrics or stats is None:
+            return
+        stats.finish()
+        if not stats.mark_emitted():
+            return
+
+        for stat_logger in self.stat_loggers:
+            stat_logger.record_multimodal(stats)
 
     def increase_total_requests(self):
         """Increase total requests."""

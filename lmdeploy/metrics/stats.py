@@ -2,7 +2,11 @@
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/v1/metrics/stats.py
 
 import time
+from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Lock
+from typing import Iterator
 
 import numpy as np
 
@@ -92,6 +96,98 @@ class SchedulerStats:
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
         self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
+
+
+class MultimodalStats:
+    """Stats associated with multimodal prompt preprocessing."""
+
+    def __init__(self, enabled: bool = True, detailed: bool = False):
+        """Initialize multimodal preprocessing stats.
+
+        Args:
+            enabled (bool): Whether to record multimodal metrics.
+            detailed (bool): Whether to collect per-stage timing and failure
+                metrics in addition to total request-level metrics.
+        """
+        self.enabled = enabled
+        self.detailed = detailed
+        self.start_time = time.perf_counter()
+        self.total_time: float = 0.0
+        self.stage_times: dict[tuple[str, str], float] = defaultdict(float)
+        self.item_counts: dict[str, int] = defaultdict(int)
+        self.failures: dict[tuple[str, str], int] = defaultdict(int)
+        self.finished = False
+        # Avoid duplicate emission if success/error paths both try to record.
+        self._emitted = False
+        # Multimodal item parsing can update this object from executor threads.
+        self._lock = Lock()
+
+    def add_stage(self, stage: str, seconds: float, modality='all') -> None:
+        """Add elapsed time for a multimodal preprocessing stage."""
+        if not self.enabled:
+            return
+        seconds = max(float(seconds), 0.0)
+        with self._lock:
+            self.stage_times[(stage, modality)] += seconds
+
+    def add_item(self, modality, count: int = 1) -> None:
+        """Record multimodal input item count by modality."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self.item_counts[modality] += count
+
+    def record_failure(self, stage: str = 'total', modality='all') -> None:
+        """Record a multimodal preprocessing failure."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self.failures[(stage, modality)] += 1
+
+    @contextmanager
+    def span(self, stage: str, modality='all') -> Iterator[None]:
+        """Measure a multimodal stage when detailed metrics are enabled."""
+        if not self.enabled or not self.detailed:
+            yield
+            return
+
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.add_stage(stage, time.perf_counter() - start, modality)
+
+    def finish(self) -> None:
+        """Mark total multimodal preprocessing time."""
+        if not self.enabled:
+            return
+        with self._lock:
+            if not self.finished:
+                self.total_time = time.perf_counter() - self.start_time
+                self.finished = True
+
+    @property
+    def has_data(self) -> bool:
+        """Whether this object contains any multimodal metric data."""
+        with self._lock:
+            return bool(self.item_counts or self.stage_times or self.failures)
+
+    def mark_emitted(self) -> bool:
+        """Mark this stats object as emitted.
+
+        Returns:
+            bool: True if this call marked it for the first time.
+        """
+        with self._lock:
+            if self._emitted or not (self.item_counts or self.stage_times or self.failures):
+                return False
+            self._emitted = True
+            return True
+
+    def snapshot(self) -> tuple[float, dict[tuple[str, str], float], dict[str, int], dict[tuple[str, str], int]]:
+        """Return a thread-safe copy of the collected stats."""
+        with self._lock:
+            return self.total_time, dict(self.stage_times), dict(self.item_counts), dict(self.failures)
 
 
 class RequestStats:

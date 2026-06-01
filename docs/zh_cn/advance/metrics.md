@@ -22,6 +22,21 @@ lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct --enable-metrics
 
 请根据需求替换模型路径。默认 metrics endpoint 位于 `http://<lmdeploy_server_host>:23333/metrics`。
 
+VLM 服务在启用指标系统后会默认导出多模态预处理总耗时指标。使用 `--enable-mm-metrics` 可额外导出分阶段指标：
+
+```
+lmdeploy serve api_server OpenGVLab/InternVL3-8B --enable-mm-metrics
+```
+
+多模态指标包括：
+
+- `lmdeploy:multimodal_requests_total`：多模态请求数量
+- `lmdeploy:multimodal_items_total`：按模态统计的多模态输入数量
+- `lmdeploy:multimodal_preprocess_time_seconds`：多模态预处理总耗时
+- `lmdeploy:multimodal_stage_time_seconds`：按阶段和模态统计的耗时，使用 `--enable-mm-metrics` 导出
+- `lmdeploy:multimodal_item_count`：按模态统计的单请求输入数量，使用 `--enable-mm-metrics` 导出
+- `lmdeploy:multimodal_processing_failures_total`：按阶段和模态统计的处理失败次数，使用 `--enable-mm-metrics` 导出
+
 2. **进入监控目录**
 
 ```

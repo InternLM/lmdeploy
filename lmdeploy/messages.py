@@ -269,6 +269,7 @@ class TurbomindEngineConfig:
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
+        enable_mm_metrics: enable detailed multimodal metrics
     """
 
     dtype: str = 'auto'
@@ -307,6 +308,7 @@ class TurbomindEngineConfig:
     communicator: str = 'nccl'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
+    enable_mm_metrics: bool = False
 
     def __post_init__(self):
         """Check input validation."""
@@ -382,6 +384,7 @@ class PytorchEngineConfig:
         enable_microbatch: enable microbatch for specified model
         enable_eplb: enable eplb for specified model
         enable_metrics: enable metrics system
+        enable_mm_metrics: enable detailed multimodal metrics
         role: role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
@@ -436,6 +439,7 @@ class PytorchEngineConfig:
     mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = True
+    enable_mm_metrics: bool = False
     hf_overrides: dict[str, Any] | None = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
