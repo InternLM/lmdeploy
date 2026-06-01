@@ -11,6 +11,7 @@ from ..backends.rotary_embedding import (
     FopeParameters,
     Llama3Parameters,
     LongRoPEScalingParameters,
+    MropeParameters,
     RopeType,
     YarnParameters,
 )
@@ -127,6 +128,19 @@ def _get_fope_parameters(config: PretrainedConfig):
     return dict(fope_params=params)
 
 
+def _get_mrope_parameters(config: PretrainedConfig):
+    """Get mrope parameters."""
+    rope_scaling = get_rope_parameters(config=config)
+    if rope_scaling is None or 'mrope_section' not in rope_scaling:
+        return dict()
+
+    params = MropeParameters(
+        mrope_section=rope_scaling['mrope_section'],
+        mrope_interleaved=rope_scaling.get('mrope_interleaved', False),
+    )
+    return dict(mrope_params=params)
+
+
 def build_rotary_params(config: PretrainedConfig):
     """Get scaling_factor rotary params, and emb_type."""
     params = dict(emb_type=RopeType.Default)
@@ -135,6 +149,8 @@ def build_rotary_params(config: PretrainedConfig):
     if rope_scaling is not None:
         # BC: "rope_type" was originally "type"
         rope_type_str = rope_scaling.get('rope_type', rope_scaling.get('type', 'default'))
+        if rope_type_str == 'mrope':
+            rope_type_str = 'default'
         if rope_type_str == 'fope':
             rope_type_str = 'default'
         build_funcs = dict(default=_get_default_rope_parameters,
@@ -146,9 +162,12 @@ def build_rotary_params(config: PretrainedConfig):
                            llama3=_get_llama3_parameters)
         params.update(build_funcs[rope_type_str](config))
         params.update(_get_fope_parameters(config))
+        params.update(_get_mrope_parameters(config))
 
     # update partial_rotary_factor
-    partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
+    partial_rotary_factor = getattr(config, 'partial_rotary_factor', None)
+    if partial_rotary_factor is None and rope_scaling is not None:
+        partial_rotary_factor = rope_scaling.get('partial_rotary_factor', None)
     if partial_rotary_factor is not None:
         params['partial_rotary_factor'] = partial_rotary_factor
 
@@ -163,6 +182,7 @@ def build_rotary_embedding(dim: int,
                            longrope_params: LongRoPEScalingParameters = None,
                            llama3_params: Llama3Parameters = None,
                            fope_params: FopeParameters = None,
+                           mrope_params: MropeParameters = None,
                            emb_type: RopeType = RopeType.Default,
                            partial_rotary_factor: float = None,
                            device: torch.device = None) -> nn.Module:
@@ -187,7 +207,9 @@ def build_rotary_embedding(dim: int,
         inv_freq = impl.inv_freq
         fope_params.inv_freq = inv_freq
         fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params, device)
-        return fope
+        impl = fope
+    elif mrope_params is not None:
+        impl = MRotaryEmbedding(impl, mrope_params)
 
     return impl
 
@@ -250,6 +272,73 @@ class ApplyRotaryEmb(nn.Module):
             query = query.view(query_shape)
             key = key.view(key_shape)
         return query, key
+
+
+class MRotaryEmbedding(nn.Module):
+    """Rotary embedding wrapper with multimodal axis selection."""
+
+    def __init__(self, impl: nn.Module, params: MropeParameters):
+        super().__init__()
+        self.impl = impl
+        self.mrope_section = list(params.mrope_section)
+        self.mrope_interleaved = params.mrope_interleaved
+        rotary_dim = getattr(impl, 'dim', None)
+        if rotary_dim is not None:
+            assert sum(self.mrope_section) == rotary_dim // 2
+
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
+        """forward."""
+        if position_ids.size(0) != 3:
+            cos, sin = self.impl(x, position_ids)
+            return cos, sin
+
+        position_ids = self._pad_position_ids(position_ids, x.shape[-2])
+        leading_shape = position_ids.shape[:-1]
+        flat_position_ids = position_ids.flatten(0, -2)
+        cos, sin = self.impl(x, flat_position_ids)
+        cos = cos.reshape(*leading_shape, *cos.shape[1:])
+        sin = sin.reshape(*leading_shape, *sin.shape[1:])
+        return self.apply_mrope(cos), self.apply_mrope(sin)
+
+    def _pad_position_ids(self, position_ids: torch.Tensor, target_len: int):
+        """Pad mrope ids to the hidden-state length when graph buffers are larger."""
+        if position_ids.shape[-1] == target_len:
+            return position_ids
+        assert position_ids.shape[-1] < target_len
+        out_shape = (*position_ids.shape[:-1], target_len)
+        out = position_ids.new_zeros(out_shape)
+        out[..., :position_ids.shape[-1]] = position_ids
+        return out
+
+    def apply_mrope(self, freqs: torch.Tensor):
+        """Select temporal, height, and width rotary bands."""
+        if self.mrope_interleaved:
+            return self.apply_interleaved_mrope(freqs)
+        return self.apply_chunked_mrope(freqs)
+
+    def apply_chunked_mrope(self, freqs: torch.Tensor):
+        """Apply Qwen2-VL style chunked MRoPE."""
+        # Layout is contiguous bands: T..., H..., W..., then repeated for the
+        # duplicated RoPE half.
+        mrope_section = self.mrope_section * 2
+        selected_chunks = []
+        for index, chunk in enumerate(freqs.split(mrope_section, dim=-1)):
+            axis = index % 3
+            selected_chunks.append(chunk[axis])
+        return torch.cat(selected_chunks, dim=-1)
+
+    def apply_interleaved_mrope(self, freqs: torch.Tensor):
+        """Apply Qwen3-VL style interleaved MRoPE."""
+        # Layout is lane-interleaved: T, H, W, T, H, W...; start from T and
+        # overwrite the H/W lanes from their corresponding axes.
+        half_dim = freqs.size(-1) // 2
+        freqs_t = freqs[0].clone()
+        for dim, offset in enumerate((1, 2), start=1):
+            length = min(self.mrope_section[dim] * 3, half_dim)
+            freqs_t[..., offset:length:3] = freqs[dim, ..., offset:length:3]
+            freqs_t[..., half_dim + offset:half_dim + length:3] = \
+                freqs[dim, ..., half_dim + offset:half_dim + length:3]
+        return freqs_t
 
 
 class FopeRotaryEmbedding(nn.Module):

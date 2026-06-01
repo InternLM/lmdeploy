@@ -55,6 +55,13 @@ class FopeParameters:
     inv_freq: torch.Tensor = None
 
 
+@dataclass
+class MropeParameters:
+    """MRoPE parameters."""
+    mrope_section: list[int]
+    mrope_interleaved: bool = False
+
+
 class RotaryEmbeddingImpl(ABC):
     """Rotary embedding implementation api."""
 

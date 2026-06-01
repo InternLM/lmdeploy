@@ -8,12 +8,12 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContextManager
+from lmdeploy.pytorch.nn import build_rotary_embedding_from_config
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLForConditionalGeneration
-from .qwen3_vl import Qwen3VLTextRotaryEmbedding as Qwen3VLMoeTextRotaryEmbedding
 
 
 class Qwen3VLMoeTextModel(Qwen3MoeModel):
@@ -30,8 +30,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         super().__init__(config=config, dtype=dtype, device=device, prefix=prefix)
 
         # build rotary embedding
-        # TODO: zhouxinyu, add triton kernel for interleaved mrope
-        self.rotary_emb = Qwen3VLMoeTextRotaryEmbedding(config, device=device)
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
     def forward(
         self,
