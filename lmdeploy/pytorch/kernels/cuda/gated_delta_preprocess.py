@@ -6,7 +6,7 @@ import triton.language as tl
 from triton.language.extra import libdevice
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['NUM_TOKENS'])
 def _gated_delta_preprocess_kernel(
     q,
     k,
@@ -49,7 +49,8 @@ def _gated_delta_preprocess_kernel(
     g_out_stride_b,
     g_out_stride_t,
     g_out_stride_h,
-    NUM_TOKENS: tl.constexpr,
+    NUM_TOKENS,
+    BATCH_SIZE: tl.constexpr,
     HEAD_DIM: tl.constexpr,
     KV_RATIO: tl.constexpr,
     BLOCK_T: tl.constexpr,
@@ -66,9 +67,28 @@ def _gated_delta_preprocess_kernel(
     mask_t = offs_t < NUM_TOKENS
     mask_d = offs_d < HEAD_DIM
 
-    q_ptrs = q + batch_id * q_stride_b + offs_t[:, None] * q_stride_t + src_head_id * q_stride_h \
+    if BATCH_SIZE == 1:
+        q_batch_offset = 0
+        k_batch_offset = 0
+        b_batch_offset = 0
+        a_batch_offset = 0
+        q_out_batch_offset = 0
+        k_out_batch_offset = 0
+        beta_out_batch_offset = 0
+        g_out_batch_offset = 0
+    else:
+        q_batch_offset = batch_id * q_stride_b
+        k_batch_offset = batch_id * k_stride_b
+        b_batch_offset = batch_id * b_stride_b
+        a_batch_offset = batch_id * a_stride_b
+        q_out_batch_offset = batch_id * q_out_stride_b
+        k_out_batch_offset = batch_id * k_out_stride_b
+        beta_out_batch_offset = batch_id * beta_out_stride_b
+        g_out_batch_offset = batch_id * g_out_stride_b
+
+    q_ptrs = q + q_batch_offset + offs_t[:, None] * q_stride_t + src_head_id * q_stride_h \
         + offs_d[None, :] * q_stride_d
-    k_ptrs = k + batch_id * k_stride_b + offs_t[:, None] * k_stride_t + src_head_id * k_stride_h \
+    k_ptrs = k + k_batch_offset + offs_t[:, None] * k_stride_t + src_head_id * k_stride_h \
         + offs_d[None, :] * k_stride_d
     q_vals = tl.load(q_ptrs, mask=mask_t[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
     k_vals = tl.load(k_ptrs, mask=mask_t[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
@@ -83,14 +103,14 @@ def _gated_delta_preprocess_kernel(
     dst_heads = src_head_id * KV_RATIO + reps
     mask_t_rep = mask_t[:, None] & (reps[None, :] < KV_RATIO)
     beta = tl.load(
-        b + batch_id * b_stride_b + offs_t[:, None] * b_stride_t + src_head_id * b_stride_src_h
+        b + b_batch_offset + offs_t[:, None] * b_stride_t + src_head_id * b_stride_src_h
         + reps[None, :] * b_stride_rep,
         mask=mask_t_rep,
         other=0.0,
     ).to(tl.float32)
     beta = tl.sigmoid(beta)
     a_val = tl.load(
-        a + batch_id * a_stride_b + offs_t[:, None] * a_stride_t + src_head_id * a_stride_src_h
+        a + a_batch_offset + offs_t[:, None] * a_stride_t + src_head_id * a_stride_src_h
         + reps[None, :] * a_stride_rep,
         mask=mask_t_rep,
         other=0.0,
@@ -106,13 +126,13 @@ def _gated_delta_preprocess_kernel(
         g_val = tl.where(is_init_token[:, None], -1.0e6, g_val)
 
     tl.store(
-        beta_out + batch_id * beta_out_stride_b + offs_t[:, None] * beta_out_stride_t
+        beta_out + beta_out_batch_offset + offs_t[:, None] * beta_out_stride_t
         + dst_heads[None, :] * beta_out_stride_h,
         beta,
         mask=mask_t_rep,
     )
     tl.store(
-        g_out + batch_id * g_out_stride_b + offs_t[:, None] * g_out_stride_t
+        g_out + g_out_batch_offset + offs_t[:, None] * g_out_stride_t
         + dst_heads[None, :] * g_out_stride_h,
         g_val,
         mask=mask_t_rep,
@@ -121,9 +141,9 @@ def _gated_delta_preprocess_kernel(
     for rep in tl.static_range(0, KV_RATIO):
         dst_head_id = src_head_id * KV_RATIO + rep
 
-        q_out_ptrs = q_out + batch_id * q_out_stride_b + offs_t[:, None] * q_out_stride_t \
+        q_out_ptrs = q_out + q_out_batch_offset + offs_t[:, None] * q_out_stride_t \
             + dst_head_id * q_out_stride_h + offs_d[None, :] * q_out_stride_d
-        k_out_ptrs = k_out + batch_id * k_out_stride_b + offs_t[:, None] * k_out_stride_t \
+        k_out_ptrs = k_out + k_out_batch_offset + offs_t[:, None] * k_out_stride_t \
             + dst_head_id * k_out_stride_h + offs_d[None, :] * k_out_stride_d
         tl.store(q_out_ptrs, q_vals, mask=mask_t[:, None] & mask_d[None, :])
         tl.store(k_out_ptrs, k_vals, mask=mask_t[:, None] & mask_d[None, :])
@@ -226,6 +246,7 @@ def gated_delta_preprocess(
         *beta_out.stride(),
         *g_out.stride(),
         NUM_TOKENS=num_tokens,
+        BATCH_SIZE=batch_size,
         HEAD_DIM=head_dim,
         KV_RATIO=kv_ratio,
         BLOCK_T=block_t,
