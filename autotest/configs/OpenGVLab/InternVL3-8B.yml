@@ -16,16 +16,13 @@ a100:
   test_coverage:
   - func
   - mllm_evaluate
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
   gen_config:
     repetition-penalty: 1.0
     top-p: 0.8
     top-k: 20
     temperature: 0.7
+  deps:
+    transformers: 5.6.0
 - model_type:
   - chat
   - vl
@@ -40,13 +37,8 @@ a100:
     - nccl
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
-    transformers: 4.57.6
+    transformers: 5.6.0
 h:
 - model_type:
   - chat
@@ -66,9 +58,8 @@ h:
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
+  deps:
+    transformers: 5.6.0
 '3090':
 - model_type:
   - chat
@@ -86,11 +77,8 @@ h:
     - nccl
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
+  deps:
+    transformers: 5.6.0
 - model_type:
   - chat
   - vl
@@ -107,10 +95,5 @@ h:
     - nccl
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
-    transformers: 4.57.6
+    transformers: 5.6.0

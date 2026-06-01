@@ -16,10 +16,6 @@ h:
   test_coverage:
   - evaluate
   - func
-  quantization:
-    pytorch:
-    - kvint4
-    - kvint8
   gen_config:
     temperature: 1.0
     top-p: 1.0

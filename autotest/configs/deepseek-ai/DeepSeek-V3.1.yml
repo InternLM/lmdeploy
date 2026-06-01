@@ -15,3 +15,18 @@ h:
   - func
   gen_config:
     temperature: 0.6
+- model_type: chat
+  engine_config:
+    dp: 8
+    ep: 8
+    extra:
+      session-len: 65536
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 0.6

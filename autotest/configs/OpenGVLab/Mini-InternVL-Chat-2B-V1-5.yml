@@ -16,7 +16,5 @@ a100:
   quantization:
     turbomind:
     - awq
-    - kvint4
-    - kvint8
   deps:
     transformers: 4.57.6

@@ -20,13 +20,9 @@ a100:
   quantization:
     pytorch:
     - awq
-    - kvint4
-    - kvint8
     - w8a8
     turbomind:
     - awq
-    - kvint4
-    - kvint8
   gen_config:
     temperature: 0.6
   deps:
@@ -50,10 +46,8 @@ a100:
   quantization:
     turbomind:
     - awq
-    - kvint8
     pytorch:
     - awq
-    - kvint8
 - model_type: chat
   engine_config:
     tp: 1
@@ -72,9 +66,7 @@ a100:
   quantization:
     turbomind:
     - awq
-    - kvint8
     pytorch:
     - awq
-    - kvint8
   deps:
     transformers: 4.57.6

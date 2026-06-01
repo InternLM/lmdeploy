@@ -1,7 +1,9 @@
-# HF model id: THUDM/cogvlm-chat-hf
+# HF model id: zai-org/cogvlm2-llama3-chinese-chat-19B
 
 a100:
-- model_type: vl
+- model_type:
+  - chat
+  - vl
   engine_config:
     tp: 1
   backends:

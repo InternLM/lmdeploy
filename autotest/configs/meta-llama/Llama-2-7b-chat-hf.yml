@@ -19,12 +19,8 @@ a100:
   quantization:
     turbomind:
     - awq
-    - kvint4
-    - kvint8
     pytorch:
     - awq
-    - kvint4
-    - kvint8
     - w8a8
   deps:
     transformers: 4.57.6

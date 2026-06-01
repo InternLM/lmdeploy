@@ -13,9 +13,5 @@ a100:
     - cuda-ipc
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint4
-    - kvint8
   deps:
     transformers: 4.57.6

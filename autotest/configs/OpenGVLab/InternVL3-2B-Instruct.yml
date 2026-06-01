@@ -17,11 +17,8 @@
     - nccl
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
+  deps:
+    transformers: 5.6.0
 - model_type:
   - chat
   - vl
@@ -38,13 +35,8 @@
     - nccl
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
-    transformers: 4.57.6
+    transformers: 5.6.0
 '5080':
 - model_type:
   - chat
@@ -62,11 +54,8 @@
     - nccl
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
+  deps:
+    transformers: 5.6.0
 - model_type:
   - chat
   - vl
@@ -83,10 +72,5 @@
     - nccl
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
-    transformers: 4.57.6
+    transformers: 5.6.0

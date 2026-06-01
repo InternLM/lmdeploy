@@ -10,3 +10,5 @@ ascend:
     - nccl
   test_coverage:
   - func
+  deps:
+    transformers: 5.6.0

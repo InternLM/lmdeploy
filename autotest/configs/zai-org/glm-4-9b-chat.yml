@@ -1,4 +1,4 @@
-# HF model id: internlm/internlm3-8b-instruct-awq
+# HF model id: zai-org/glm-4-9b-chat
 
 a100:
 - model_type: chat
@@ -8,10 +8,20 @@ a100:
   - name: turbomind
     communicators:
     - nccl
+  - name: pytorch
+    communicators:
+    - nccl
   test_coverage:
+  - benchmark
   - func
+  - prefix_cache
+  - quantization
   quantization:
     turbomind:
+    - awq
+    - kvint4
+    - kvint8
+    pytorch:
     - kvint4
     - kvint8
 h:
@@ -22,9 +32,15 @@ h:
   - name: turbomind
     communicators:
     - nccl
+  - name: pytorch
+    communicators:
+    - nccl
   test_coverage:
   - func
   quantization:
     turbomind:
+    - kvint4
+    - kvint8
+    pytorch:
     - kvint4
     - kvint8

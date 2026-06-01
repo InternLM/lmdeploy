@@ -21,9 +21,8 @@
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
+  deps:
+    transformers: 5.6.0
 - model_type:
   - chat
   - vl
@@ -44,9 +43,6 @@
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
     transformers: 4.57.6
 '5080':
@@ -70,9 +66,8 @@
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
+  deps:
+    transformers: 5.6.0
 - model_type:
   - chat
   - vl
@@ -93,8 +88,5 @@
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
     transformers: 4.57.6

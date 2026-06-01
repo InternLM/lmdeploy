@@ -17,9 +17,7 @@ a100:
   quantization:
     turbomind:
     - awq
-    - kvint8
     pytorch:
-    - kvint8
     - w8a8
 h:
 - model_type: chat
@@ -38,9 +36,7 @@ h:
   quantization:
     turbomind:
     - awq
-    - kvint8
     pytorch:
-    - kvint8
     - w8a8
 '3090':
 - model_type: chat
@@ -61,9 +57,6 @@ h:
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
 - model_type: chat
   engine_config:
     tp: 1
@@ -82,9 +75,6 @@ h:
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
     transformers: 4.57.6
 '5080':
@@ -106,9 +96,6 @@ h:
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
 - model_type: chat
   engine_config:
     tp: 1
@@ -127,8 +114,5 @@ h:
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
-    - kvint8
   deps:
     transformers: 4.57.6

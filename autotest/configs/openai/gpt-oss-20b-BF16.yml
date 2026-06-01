@@ -1,4 +1,4 @@
-# HF model id: unsloth/gpt-oss-20b-BF16
+# HF model id: openai/gpt-oss-20b-BF16
 
 a100:
 - model_type: chat
@@ -12,10 +12,6 @@ a100:
   - benchmark
   - func
   - prefix_cache
-  quantization:
-    pytorch:
-    - kvint4
-    - kvint8
   deps:
     transformers: 4.57.6
 h:
@@ -30,7 +26,3 @@ h:
   - benchmark
   - func
   - prefix_cache
-  quantization:
-    pytorch:
-    - kvint4
-    - kvint8

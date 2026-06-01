@@ -9,9 +9,6 @@ test:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - mllm_evaluate
@@ -20,5 +17,3 @@ test:
     turbomind:
     - awq
     - kvint4
-    pytorch:
-    - kvint8

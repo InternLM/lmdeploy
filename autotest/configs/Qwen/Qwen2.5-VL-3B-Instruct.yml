@@ -14,10 +14,6 @@
     - nccl
   test_coverage:
   - func
-  quantization:
-    pytorch:
-    - kvint4
-    - kvint8
   deps:
     transformers: 4.57.6
 '5080':
@@ -32,9 +28,5 @@
     - nccl
   test_coverage:
   - func
-  quantization:
-    pytorch:
-    - kvint4
-    - kvint8
   deps:
     transformers: 4.57.6
