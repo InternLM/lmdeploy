@@ -84,6 +84,10 @@ class EngineWorkerBase:
         """Get schedule metrics."""
         return self.engine.get_schedule_metrics()
 
+    async def get_health_status(self):
+        """Get engine health status."""
+        return await self.engine.get_health_status()
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self.engine.p2p_initialize(conn_request)

@@ -7,25 +7,13 @@ from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import Glm47ToolParser, ToolParserManager
 
+from .helpers import first_stream_delta
+
 MODEL_ID = 'zai-org/GLM-4.7'
 
 
-class _ReasoningTokenizerStub:
-
-    def get_vocab(self):
-        return {
-            '<think>': 1,
-            '</think>': 2,
-        }
-
-
-@pytest.fixture(scope='module')
-def tokenizer():
-    return _ReasoningTokenizerStub()
-
-
 @pytest.fixture()
-def response_parser(tokenizer):
+def response_parser():
     cls = ResponseParserManager.get('default')
     cls.reasoning_parser_cls = None
     cls.tool_parser_cls = ToolParserManager.get('glm47')
@@ -35,11 +23,11 @@ def response_parser(tokenizer):
         stream=True,
         tool_choice='auto',
     )
-    return cls(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=object())
 
 
 @pytest.fixture()
-def response_parser_with_reasoning(tokenizer):
+def response_parser_with_reasoning():
     cls = ResponseParserManager.get('default')
     cls.reasoning_parser_cls = ReasoningParserManager.get('default')
     cls.tool_parser_cls = ToolParserManager.get('glm47')
@@ -50,7 +38,7 @@ def response_parser_with_reasoning(tokenizer):
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=object())
 
 
 REFERENCE_CHUNKS = [
@@ -72,7 +60,8 @@ class TestGlm47ResponseParserStreaming:
     def test_stream_chunk_matches_reference(self, response_parser):
         for (delta_text, exp_delta_msg, exp_content, exp_tool_emitted,
              exp_function_name, exp_function_arguments, exp_type) in REFERENCE_CHUNKS:
-            delta_msg, tool_emitted = response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])
+            delta_msg, tool_emitted = first_stream_delta(response_parser.stream_chunk(
+                delta_text=delta_text, delta_token_ids=[]))
             if not exp_delta_msg:
                 assert delta_msg is None
                 continue
@@ -102,7 +91,7 @@ class TestGlm47ResponseParserStreaming:
         emitted_name = None
         emitted_args = ''
         for chunk in chunks:
-            delta, tool_emitted = response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
             if not tool_emitted or delta is None or not delta.tool_calls:
                 continue
             for call in delta.tool_calls:
@@ -128,7 +117,8 @@ class TestGlm47ResponseParserStreaming:
         emitted_args = ''
 
         for chunk in chunks:
-            delta, tool_emitted = response_parser_with_reasoning.stream_chunk(delta_text=chunk, delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser_with_reasoning.stream_chunk(
+                delta_text=chunk, delta_token_ids=[]))
             if delta is not None:
                 if delta.reasoning_content:
                     reasoning_seen.append(delta.reasoning_content)
@@ -142,7 +132,8 @@ class TestGlm47ResponseParserStreaming:
                         emitted_args += call.function.arguments
 
         for _ in range(3):
-            delta, tool_emitted = response_parser_with_reasoning.stream_chunk(delta_text='', delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser_with_reasoning.stream_chunk(
+                delta_text='', delta_token_ids=[]))
             if delta is not None:
                 if delta.reasoning_content:
                     reasoning_seen.append(delta.reasoning_content)
@@ -171,7 +162,7 @@ class TestGlm47ResponseParserStreaming:
         emitted_name = None
         emitted_args = ''
         for chunk in chunks:
-            delta, tool_emitted = response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
+            delta, tool_emitted = first_stream_delta(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
             if not tool_emitted or delta is None or not delta.tool_calls:
                 continue
             for call in delta.tool_calls:
@@ -187,7 +178,7 @@ class TestGlm47ToolParserComplete:
     """Complete-parse tests for glm47 tool payloads."""
 
     def test_parse_tool_call_complete_with_arguments(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         payload = (
             'get_weather'
             '<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
@@ -202,14 +193,14 @@ class TestGlm47ToolParserComplete:
         }
 
     def test_parse_tool_call_complete_without_arguments(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         tool_call = parser.parse_tool_call_complete('get_time')
         assert tool_call is not None
         assert tool_call.function.name == 'get_time'
         assert json.loads(tool_call.function.arguments) == {}
 
     def test_parse_tool_call_complete_coerces_types_by_schema(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         request = ChatCompletionRequest(
             model=MODEL_ID,
             messages=[],
@@ -274,7 +265,7 @@ class TestGlm47ToolParserComplete:
         }
 
     def test_parse_tool_call_complete_keeps_string_without_schema(self):
-        parser = Glm47ToolParser(tokenizer=object())
+        parser = Glm47ToolParser()
         payload = (
             'no_schema_tool'
             '<arg_key>zip</arg_key><arg_value>77004</arg_value>'
