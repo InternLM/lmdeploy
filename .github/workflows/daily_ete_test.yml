@@ -492,6 +492,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install transformers==5.6.0
       - name: Check env
         run: |
           python3 -m pip list

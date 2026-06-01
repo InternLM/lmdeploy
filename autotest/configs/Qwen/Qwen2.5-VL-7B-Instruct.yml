@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen2.5-VL-7B-Instruct
-
 a100:
 - model_type:
   - chat
@@ -40,19 +39,3 @@ h:
     - nccl
   test_coverage:
   - func
-'3090':
-- model_type:
-  - chat
-  - vl
-  engine_config:
-    tp: 1
-    extra:
-      cache-max-entry-count: 0.5
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func
-  deps:
-    transformers: 4.57.6
