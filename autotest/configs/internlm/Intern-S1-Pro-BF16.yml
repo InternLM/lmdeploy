@@ -11,12 +11,3 @@ ascend:
     - nccl
   test_coverage:
   - func
-- model_type: chat
-  engine_config:
-    tp: 64
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func

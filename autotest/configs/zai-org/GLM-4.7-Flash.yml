@@ -19,6 +19,10 @@ h:
   engine_config:
     tp: 2
   backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
   - name: pytorch
     communicators:
     - nccl

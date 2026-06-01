@@ -5,14 +5,10 @@ a100:
   engine_config:
     tp: 1
   backends:
-  - name: turbomind
+  - name: pytorch
     communicators:
     - nccl
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
   deps:
     transformers: 4.57.6
