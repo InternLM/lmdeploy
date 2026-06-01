@@ -87,7 +87,7 @@ def _normalize_row(
     row_index: int,
     tokenizer,
 ) -> GenerateBenchmarkRequest:
-    request_id = str(row.get('id', f"{dataset}-{row_index}"))
+    request_id = str(row.get('id', f'{dataset}-{row_index}'))
     messages = _extract_messages(row)
     prompt_str = tokenizer.apply_chat_template(
         messages,
@@ -242,7 +242,7 @@ async def request_generate(
         async with session.post(url, json=payload, headers=headers) as response:
             trace.http_status = response.status
             if response.status != 200:
-                trace.error = f"{response.status} {response.reason}: {await response.text()}"
+                trace.error = f'{response.status} {response.reason}: {await response.text()}'
                 trace.end_time = time.perf_counter()
                 return trace
 
@@ -287,12 +287,12 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
     url = _generate_url(args.base_url)
     headers = {}
     if args.api_key:
-        headers['Authorization'] = f"Bearer {args.api_key}"
+        headers['Authorization'] = f'Bearer {args.api_key}'
     extra_body = json.loads(args.extra_request_body) if args.extra_request_body else {}
 
-    print(f"POST {url}")
+    print(f'POST {url}')
     if args.max_tokens is not None:
-        print(f"max_tokens={args.max_tokens}")
+        print(f'max_tokens={args.max_tokens}')
     if args.ignore_eos:
         print('ignore_eos=True')
     if args.return_logprob:
@@ -317,7 +317,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
     )
     pool_limit, pool_limit_per_host = _client_connector_limits(args.mode, args.levels, len(requests))
     connector = aiohttp.TCPConnector(limit=pool_limit, limit_per_host=pool_limit_per_host)
-    print(f"aiohttp connection pool: limit={pool_limit}, limit_per_host={pool_limit_per_host}")
+    print(f'aiohttp connection pool: limit={pool_limit}, limit_per_host={pool_limit_per_host}')
 
     async with aiohttp.ClientSession(
         connector=connector,
@@ -355,14 +355,14 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         for repeat in range(args.repeats):
             if args.mode == 'concurrency':
                 for concurrency in args.levels:
-                    print(f"benchmark {len(requests)} requests, concurrency={concurrency}...")
+                    print(f'benchmark {len(requests)} requests, concurrency={concurrency}...')
                     completed_count = 0
                     failed_count = 0
                     pbar = None
                     if tqdm is not None:
                         pbar = tqdm(
                             total=len(requests),
-                            desc=f"repeat-{repeat} concurrency-{int(concurrency)}",
+                            desc=f'repeat-{repeat} concurrency-{int(concurrency)}',
                             unit='req',
                             dynamic_ncols=True,
                         )
@@ -388,7 +388,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                     )
                     if pbar is not None:
                         pbar.close()
-                    print(f"write report for concurrency-{concurrency}...")
+                    print(f'write report for concurrency-{concurrency}...')
                     summaries = aggregate_traces(all_traces)
                     write_report_artifacts(
                         args.output_dir,
@@ -400,14 +400,14 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
 
             elif args.mode == 'request-rate':
                 for request_rate in args.levels:
-                    print(f"benchmark {len(requests)} requests, request_rate={request_rate}...")
+                    print(f'benchmark {len(requests)} requests, request_rate={request_rate}...')
                     completed_count = 0
                     failed_count = 0
                     pbar = None
                     if tqdm is not None:
                         pbar = tqdm(
                             total=len(requests),
-                            desc=f"repeat-{repeat} request-rate-{request_rate}",
+                            desc=f'repeat-{repeat} request-rate-{request_rate}',
                             unit='req',
                             dynamic_ncols=True,
                         )
@@ -560,7 +560,7 @@ def main() -> None:
     traces, summaries = asyncio.run(run_benchmark(args))
     completed = sum(summary['completed'] for summary in summaries)
     failed = sum(summary['failed'] for summary in summaries)
-    print(f"Recorded {len(traces)} requests: {completed} completed, {failed} failed.")
+    print(f'Recorded {len(traces)} requests: {completed} completed, {failed} failed.')
 
 
 if __name__ == '__main__':
