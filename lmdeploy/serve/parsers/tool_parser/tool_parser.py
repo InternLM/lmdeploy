@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import TYPE_CHECKING
 
 import partial_json_parser
@@ -28,8 +27,6 @@ ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.t
 
 class ToolParser:
     """Base class for model-specific tool parsers."""
-
-    _json_tool_call_pattern = re.compile(r'^\s*\{(?=.*"name"\s*:\s*"[^"]+").*\}\s*$', re.DOTALL)
 
     def __init__(self):
         self._tool_payload: str = ''
@@ -107,8 +104,6 @@ class ToolParser:
     def _validate_tool_payload(self, payload: str) -> bool:
         """Return whether one complete JSON tool payload is structurally
         valid."""
-        if not self._json_tool_call_pattern.fullmatch(payload):
-            return False
         try:
             obj = json.loads(payload)
         except json.JSONDecodeError:
