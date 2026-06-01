@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 class DPMeta:
     tp_sizes: list[int] = None
     moe_tp_sizes: list[int] = None
+    # added extra info for spec decoding
+    is_decoding: bool = False
+    dp_is_decoding: bool = False
+    dp_batches: list[int] = None
+    dp_draft_num_tokens: list[int] = None
 
     @staticmethod
     def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):

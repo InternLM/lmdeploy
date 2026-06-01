@@ -100,11 +100,25 @@ class ConfigBuilder:
         return misc_config
 
     @staticmethod
-    def build_specdecode_config(target_model, speculative_config: SpeculativeConfig, engine_config: PytorchEngineConfig,
-                                cache_config: CacheConfig, trust_remote_code: bool = False):
+    def build_specdecode_config(target_model,
+                                speculative_config: SpeculativeConfig,
+                                engine_config: PytorchEngineConfig,
+                                cache_config: CacheConfig,
+                                dist_config: DistConfig,
+                                trust_remote_code: bool = False,
+                                ):
         """Build spec decode config."""
+        def _build_draft_dist_ctx(dist_config):
+            # TODO support tp > 1, ep > 1 for other methods
+            if speculative_config.method == 'qwen3_5_mtp':
+                draft_dist_config = copy.deepcopy(dist_config)
+            else:
+                draft_dist_config = DistConfig()
+            return draft_dist_config
+
         specdecode_config = None
         if speculative_config is not None:
+            draft_dist_config = _build_draft_dist_ctx(dist_config)
             draft_model = speculative_config.model
             if draft_model and not os.path.exists(speculative_config.model):
                 draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)
@@ -119,5 +133,6 @@ class ConfigBuilder:
                 trust_remote_code=trust_remote_code,
                 model_format=engine_config.model_format,
                 hf_overrides=engine_config.hf_overrides,
+                dist_config=draft_dist_config,
             )
         return specdecode_config

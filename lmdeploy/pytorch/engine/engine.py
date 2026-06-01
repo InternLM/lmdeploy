@@ -137,8 +137,13 @@ class Engine(EngineBase):
         dist_config = ConfigBuilder.build_dist_config(engine_config)
         misc_config = ConfigBuilder.build_misc_config(engine_config)
         # spec decode
-        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path, speculative_config, engine_config,
-                                                                       cache_config, trust_remote_code)
+        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path,
+                                                                       speculative_config,
+                                                                       engine_config,
+                                                                       cache_config,
+                                                                       dist_config,
+                                                                       trust_remote_code=trust_remote_code,
+                                                                       )
 
         # build model agent
         self.executor = build_executor(
