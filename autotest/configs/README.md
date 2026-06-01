@@ -62,7 +62,7 @@ Each top-level environment key contains a list of matrix rows.
 | Field                 | Required | Description                                       |
 | --------------------- | -------- | ------------------------------------------------- |
 | `model_type`          | Yes      | `chat`, `vl`, `base`, or a list                   |
-| `engine_config`       | Yes      | Parallel layout                                   |
+| `engine_config`       | Yes      | Parallel layout (`tp` / `dp` / `ep` / `cp`)       |
 | `backends`            | Yes      | Backend list (explicit communicators recommended) |
 | `test_coverage`       | Yes      | Enabled test groups                               |
 | `quantization`        | No       | Backend-specific quant flags                      |
@@ -120,6 +120,10 @@ For pre-quantized checkpoints (`AWQ`, `GPTQ`, `Int4` in model id):
 - Do not include `quantization` in `test_coverage`.
 - Do not include runtime weight flags (`awq`, `gptq`, `w8a8`, `fp8`) in `quantization`.
 - KV flags can still exist.
+
+## Context parallel (`cp`)
+
+When `engine_config` includes `cp`, use **TurboMind only** — do not list `pytorch` under `backends` or `quantization`. Export/normalize tooling strips pytorch automatically if present.
 
 ## `engine_config.extra` vs `gen_config`
 

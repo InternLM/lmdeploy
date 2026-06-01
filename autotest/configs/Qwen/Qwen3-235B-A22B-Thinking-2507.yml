@@ -69,9 +69,6 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - benchmark
   - evaluate
@@ -81,7 +78,22 @@ h:
   quantization:
     turbomind:
     - kvint8
-    pytorch:
-    - kvint8
+  gen_config:
+    temperature: 0.6
+ascend:
+- model_type: chat
+  engine_config:
+    tp: 16
+    extra:
+      session-len: 65536
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - prefix_cache
   gen_config:
     temperature: 0.6

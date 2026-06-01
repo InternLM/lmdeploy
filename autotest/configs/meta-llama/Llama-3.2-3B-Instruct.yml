@@ -59,48 +59,7 @@ h:
     - awq
     pytorch:
     - w8a8
-- model_type: chat
-  engine_config:
-    tp: 1
-    extra:
-      cache-max-entry-count: 0.5
-  backends:
-  - name: turbomind
-    communicators:
-    - nccl
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
-    pytorch:
-    - w8a8
 '5080':
-- model_type: chat
-  engine_config:
-    tp: 1
-    extra:
-      cache-max-entry-count: 0.5
-  backends:
-  - name: turbomind
-    communicators:
-    - nccl
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
-    pytorch:
-    - awq
-    - w8a8
 - model_type: chat
   engine_config:
     tp: 1
