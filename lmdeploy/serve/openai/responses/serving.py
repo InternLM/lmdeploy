@@ -88,7 +88,6 @@ def _warn_ignored_request_fields(request: ResponsesRequest) -> None:
             'user',
             'presence_penalty',
             'frequency_penalty',
-            'repetition_penalty',
     ):
         if getattr(request, field_name) is not None:
             ignored_fields.append(field_name)
@@ -315,6 +314,7 @@ def _to_generation_config(request: ResponsesRequest) -> GenerationConfig:
         response_format=_response_format_from_text(request.text),
         min_p=request.min_p,
         random_seed=request.seed,
+        repetition_penalty=1.0 if request.repetition_penalty is None else request.repetition_penalty,
     )
 
 

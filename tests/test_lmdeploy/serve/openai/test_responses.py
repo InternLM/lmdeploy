@@ -515,6 +515,7 @@ def test_responses_generation_config_mapping():
         top_p=0.9,
         top_k=20,
         stop=['!'],
+        repetition_penalty=1.1,
         text={
             'format': {
                 'type': 'json_schema',
@@ -534,6 +535,7 @@ def test_responses_generation_config_mapping():
     assert gen_config.top_p == 0.9
     assert gen_config.top_k == 20
     assert gen_config.stop_words == ['!']
+    assert gen_config.repetition_penalty == 1.1
     assert gen_config.response_format == {
         'type': 'json_schema',
         'json_schema': {
@@ -764,7 +766,7 @@ def test_responses_rejects_reasoning_input_items():
         raise AssertionError('reasoning input items should be rejected by Text V1')
 
 
-def test_responses_penalty_fields_are_warned_and_ignored(monkeypatch):
+def test_responses_penalty_fields_warn_only_for_unsupported_penalties(monkeypatch):
     import asyncio
 
     assert 'presence_penalty' in ResponsesRequest.model_fields
@@ -775,7 +777,7 @@ def test_responses_penalty_fields_are_warned_and_ignored(monkeypatch):
     monkeypatch.setattr(responses_serving.logger, 'warning',
                         lambda message, *args: warnings.append(message % args))
 
-    endpoint, _ = _responses_endpoint()
+    endpoint, context = _responses_endpoint()
     request = ResponsesRequest(
         model='fake-model',
         input='Hi',
@@ -787,9 +789,10 @@ def test_responses_penalty_fields_are_warned_and_ignored(monkeypatch):
     response = asyncio.run(endpoint(request, _FakeRawRequest()))
 
     assert response['output_text'] == 'ok'
+    assert context.async_engine.generate_kwargs['gen_config'].repetition_penalty == 1.1
     assert any('presence_penalty' in warning for warning in warnings)
     assert any('frequency_penalty' in warning for warning in warnings)
-    assert any('repetition_penalty' in warning for warning in warnings)
+    assert not any('repetition_penalty' in warning for warning in warnings)
 
 
 def test_responses_streaming_sse_shape():
