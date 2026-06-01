@@ -139,13 +139,15 @@ class MultimodalProcessor:
                 item_params = {k: v for k, v in item.items() if k not in ('type', item_type)}
                 data_src = item_val
 
+            modality = None
+
             def _require_data_src():
                 if data_src is not None:
                     return data_src
+                mm_stats.record_failure('parse', modality.value)
                 raise ValueError(f'Invalid multimodal item at index {i}: {item}. '
                                  f'Expected "{item_type}" to be a direct value or a dict containing "url" or "data".')
 
-            modality = None
             if item_type == 'image_data':
                 modality = Modality.IMAGE
                 mm_stats.add_item(modality.value)
@@ -160,22 +162,23 @@ class MultimodalProcessor:
                     with _mm_stage(mm_stats, 'media_io', modality.value):
                         data = load_from_url(data_src, ImageMediaIO(**media_io_kwargs.get('image', {})))
                 else:
+                    mm_stats.record_failure('parse', modality.value)
                     raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
                                         'Expected a str URL/path/data URL or PIL.Image.Image.')
             elif item_type in ('video_url', 'video'):
                 modality = Modality.VIDEO
                 mm_stats.add_item(modality.value)
+                data_src = _require_data_src()
                 with _mm_stage(mm_stats, 'media_io', modality.value):
                     data, metadata = load_from_url(
-                        _require_data_src(),
-                        VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})))
+                        data_src, VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})))
                 item_params['video_metadata'] = metadata
             elif item_type in ('time_series_url', 'time_series'):
                 modality = Modality.TIME_SERIES
                 mm_stats.add_item(modality.value)
+                data_src = _require_data_src()
                 with _mm_stage(mm_stats, 'media_io', modality.value):
-                    data = load_from_url(_require_data_src(),
-                                            TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
+                    data = load_from_url(data_src, TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
             else:
                 mm_stats.record_failure('media_io', 'unknown')
                 raise NotImplementedError(f'unknown type: {item_type}')
