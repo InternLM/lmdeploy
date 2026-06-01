@@ -270,7 +270,7 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     logprobs: ChoiceLogprobs | None = None
-    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     output_ids: list[int] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
 
@@ -312,7 +312,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     delta: DeltaMessage
     logprobs: ChoiceLogprobs | None = None
     output_ids: list[int] | None = None
-    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
 
 
