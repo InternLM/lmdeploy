@@ -3,7 +3,6 @@
 a100:
   env_tag: a100
   device: cuda
-  legacy: false
   paths:
     model_path: /nvme/qa_test_models
     resource_path: /nvme/qa_test_models/resource
@@ -17,7 +16,6 @@ a100:
 h:
   env_tag: h
   device: cuda
-  legacy: false
   paths:
     model_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/model
     resource_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/resource
@@ -31,7 +29,6 @@ h:
 '3090':
   env_tag: 3090
   device: cuda
-  legacy: false
   paths:
     model_path: /nvme/qa_test_models
     resource_path: /nvme/qa_test_models/resource
@@ -44,7 +41,6 @@ h:
 '5080':
   env_tag: 5080
   device: cuda
-  legacy: false
   paths:
     model_path: /nvme/qa_test_models
     resource_path: /nvme/qa_test_models/resource
@@ -57,7 +53,6 @@ h:
 ascend:
   env_tag: ascend
   device: ascend
-  legacy: false
   paths:
     model_path: /mnt/vc-intern-delivery/qa-llm-cicd/qa_test_models
     resource_path: /mnt/vc-intern-delivery/qa-llm-cicd/resource
