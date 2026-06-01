@@ -172,7 +172,7 @@ class MessagesResponse(BaseModel):
     role: Literal['assistant'] = 'assistant'
     content: list[MessageTextBlock | MessageThinkingBlock | MessageToolUseBlock]
     model: str
-    stop_reason: Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use'] | None = None
+    stop_reason: Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error'] | None = None
     stop_sequence: str | None = None
     usage: MessageUsage
     output_ids: list[int] | None = None

@@ -105,7 +105,7 @@ async def stream_messages_response(result_generator,
             if closing:
                 events.append(closing)
         if block is None:
-            function_delta = getattr(tool_delta, 'function', None)
+            function_delta = tool_delta.function
             tool_name = '' if function_delta is None else function_delta.name or ''
             block_index = next_block_index
             next_block_index += 1
@@ -158,9 +158,9 @@ async def stream_messages_response(result_generator,
         final_res = res
         input_tokens = res.input_token_len
         text = res.response or ''
-        delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+        delta_token_ids = res.token_ids if res.token_ids is not None else []
         delta_logprobs = None
-        if logprobs and getattr(res, 'logprobs', None) and delta_token_ids:
+        if logprobs and res.logprobs and delta_token_ids:
             delta_logprobs = [
                 (tok_logprobs[tok], tok)
                 for tok, tok_logprobs in zip(delta_token_ids, res.logprobs)
@@ -172,18 +172,37 @@ async def stream_messages_response(result_generator,
         elif text:
             stream_deltas = [(DeltaMessage(role='assistant', content=text), False)]
 
-        for delta_message, tool_emitted in stream_deltas:
+        should_validate_complete = (
+            response_parser is not None
+            and res.finish_reason in ('stop', 'length')
+            and (return_token_ids or return_routed_experts)
+        )
+        if should_validate_complete and not response_parser.validate_complete():
+            res.finish_reason = 'parse_error'
+
+        for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
             if tool_emitted:
                 streaming_tools = True
 
             if delta_message is None:
                 continue
 
+            is_last_delta = delta_index == len(stream_deltas) - 1
+            delta_output_ids = delta_token_ids if return_token_ids and is_last_delta else None
+            delta_output_logprobs = delta_logprobs if is_last_delta else None
+            has_content = bool(delta_message.content)
+            has_tools = bool(delta_message.tool_calls)
+
             if delta_message.reasoning_content:
                 for event in _start_text_or_thinking('thinking'):
                     yield event
                 if current_block is not None:
-                    yield _emit_text_delta(delta_message.reasoning_content, thinking=True)
+                    yield _emit_text_delta(
+                        delta_message.reasoning_content,
+                        thinking=True,
+                        output_ids=None if has_content or has_tools else delta_output_ids,
+                        output_token_logprobs=None if has_content or has_tools else delta_output_logprobs,
+                    )
 
             if delta_message.content:
                 for event in _start_text_or_thinking('text'):
@@ -192,29 +211,35 @@ async def stream_messages_response(result_generator,
                     yield _emit_text_delta(
                         delta_message.content,
                         thinking=False,
-                        output_ids=delta_token_ids if return_token_ids else None,
-                        output_token_logprobs=delta_logprobs,
+                        output_ids=None if has_tools else delta_output_ids,
+                        output_token_logprobs=None if has_tools else delta_output_logprobs,
                     )
 
             if delta_message.tool_calls:
-                for tool_delta in delta_message.tool_calls:
+                for tool_index, tool_delta in enumerate(delta_message.tool_calls):
                     for event in _start_tool_block(tool_delta):
                         yield event
-                    function_delta = getattr(tool_delta, 'function', None)
+                    function_delta = tool_delta.function
                     if function_delta is None:
                         continue
                     partial_json = function_delta.arguments or ''
                     if partial_json:
+                        data = {
+                            'type': 'content_block_delta',
+                            'index': current_block['block_index'],
+                            'delta': {
+                                'type': 'input_json_delta',
+                                'partial_json': partial_json,
+                            },
+                        }
+                        if tool_index == len(delta_message.tool_calls) - 1:
+                            if delta_output_ids is not None:
+                                data['output_ids'] = delta_output_ids
+                            if delta_output_logprobs is not None:
+                                data['output_token_logprobs'] = delta_output_logprobs
                         yield _format_sse(
                             'content_block_delta',
-                            {
-                                'type': 'content_block_delta',
-                                'index': current_block['block_index'],
-                                'delta': {
-                                    'type': 'input_json_delta',
-                                    'partial_json': partial_json,
-                                },
-                            },
+                            data,
                         )
 
         if response_parser is not None and res.finish_reason == 'stop' and streaming_tools:
@@ -237,7 +262,7 @@ async def stream_messages_response(result_generator,
             'output_tokens': output_tokens,
         },
     }
-    if return_routed_experts and final_res is not None and hasattr(final_res, 'routed_experts'):
+    if return_routed_experts and final_res is not None:
         message_delta_data['routed_experts'] = final_res.routed_experts
     yield _format_sse('message_delta', message_delta_data)
     yield _format_sse('message_stop', {'type': 'message_stop'})

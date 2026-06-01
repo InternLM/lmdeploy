@@ -374,6 +374,7 @@ def map_finish_reason(reason: str | None) -> str:
         'stop': 'end_turn',
         'length': 'max_tokens',
         'tool_calls': 'tool_use',
+        'parse_error': 'parse_error',
         'abort': 'stop_sequence',
         'error': 'stop_sequence',
     }

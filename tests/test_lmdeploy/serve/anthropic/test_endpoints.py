@@ -57,7 +57,7 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=1,
                 finish_reason=None,
-                routed_experts=[1, 2, 3],
+                routed_experts=[[[1, 2, 3]]],
                 logprobs=[{101: -0.5, 102: -1.2}],
             )
             yield SimpleNamespace(
@@ -66,19 +66,35 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=2,
                 finish_reason='stop',
-                routed_experts=[1, 2, 3],
+                routed_experts=[[[1, 2, 3]]],
                 logprobs=[{102: -0.3, 103: -2.1}],
             )
 
         return _gen()
 
 
+class _BasicParser:
+    tool_parser_cls = None
+
+    def __init__(self, request):
+        self.request = request
+
+    def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+        return [(DeltaMessage(role='assistant', content=delta_text), False)]
+
+    def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
+        return text, None, None
+
+    def validate_complete(self, text: str | None = None):
+        return True
+
+
 class _FakeServerContext:
-    def __init__(self, *, response_parser_cls=None, logprobs_mode='raw_logprobs'):
+    def __init__(self, *, response_parser_cls=_BasicParser, logprobs_mode='raw_logprobs'):
         self.async_engine = _FakeEngine(logprobs_mode=logprobs_mode)
         self.response_parser_cls = response_parser_cls
 
-    def create_session(self, _session_id: int):
+    def create_session(self, _session_id: int | None = None):
         return _FakeSession()
 
     def get_engine_config(self):
@@ -88,7 +104,7 @@ class _FakeServerContext:
 class _ToolAndReasoningParser:
     tool_parser_cls = object
 
-    def __init__(self, request, tokenizer):
+    def __init__(self, request):
         self.request = request
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
@@ -130,8 +146,21 @@ class _ToolAndReasoningParser:
             'internal reasoning',
         )
 
+    def validate_complete(self, text: str | None = None):
+        return True
 
-def _make_client(response_parser_cls=None, *, server_context=None, logprobs_mode='raw_logprobs') -> TestClient:
+
+class _IncompleteToolParser(_ToolAndReasoningParser):
+    validate_calls = 0
+    last_text = None
+
+    def validate_complete(self, text: str | None = None):
+        type(self).validate_calls += 1
+        type(self).last_text = text
+        return False
+
+
+def _make_client(response_parser_cls=_BasicParser, *, server_context=None, logprobs_mode='raw_logprobs') -> TestClient:
     app = FastAPI()
     context = server_context or _FakeServerContext(response_parser_cls=response_parser_cls,
                                                   logprobs_mode=logprobs_mode)
@@ -315,6 +344,43 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     assert data['content'][2]['input'] == {'query': 'lmdeploy'}
 
 
+def test_messages_non_stream_validate_complete_marks_parse_error():
+    _IncompleteToolParser.validate_calls = 0
+    _IncompleteToolParser.last_text = None
+    client = _make_client(response_parser_cls=_IncompleteToolParser)
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{
+                'role': 'user',
+                'content': 'Hi there',
+            }],
+            'tools': [{
+                'name': 'search',
+                'description': 'demo',
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {
+                            'type': 'string'
+                        }
+                    },
+                    'required': ['query'],
+                },
+            }],
+            'return_token_ids': True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()['stop_reason'] == 'parse_error'
+    assert _IncompleteToolParser.validate_calls == 1
+    assert _IncompleteToolParser.last_text == 'Hello world!'
+
+
 def test_messages_streaming_includes_output_ids():
     client = _make_client()
     with client.stream(
@@ -410,6 +476,7 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
                         'required': ['query'],
                     },
                 }],
+                'return_token_ids': True,
             },
     ) as response:
         body = '\n'.join(response.iter_lines())
@@ -418,6 +485,53 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
     assert '"type": "thinking_delta"' in body
     assert '"type": "input_json_delta"' in body
     assert '"type": "tool_use"' in body
+    assert '"output_ids": [102]' in body
+
+
+def test_messages_streaming_validate_complete_marks_parse_error():
+    _IncompleteToolParser.validate_calls = 0
+    _IncompleteToolParser.last_text = None
+    client = _make_client(response_parser_cls=_IncompleteToolParser)
+    with client.stream(
+            'POST',
+            '/v1/messages',
+            headers={'anthropic-version': '2023-06-01'},
+            json={
+                'model': 'fake-model',
+                'max_tokens': 16,
+                'stream': True,
+                'messages': [{
+                    'role': 'user',
+                    'content': 'Hi there',
+                }],
+                'tools': [{
+                    'name': 'search',
+                    'description': 'demo',
+                    'input_schema': {
+                        'type': 'object',
+                        'properties': {
+                            'query': {
+                                'type': 'string'
+                            }
+                        },
+                        'required': ['query'],
+                    },
+                }],
+                'return_token_ids': True,
+            },
+    ) as response:
+        body = '\n'.join(response.iter_lines())
+
+    payloads = [
+        json.loads(line.removeprefix('data: ')) for line in body.splitlines()
+        if line.startswith('data: ')
+    ]
+    message_delta = next(item for item in payloads if item['type'] == 'message_delta')
+
+    assert response.status_code == 200
+    assert message_delta['delta']['stop_reason'] == 'parse_error'
+    assert _IncompleteToolParser.validate_calls == 1
+    assert _IncompleteToolParser.last_text is None
 
 
 def test_stream_messages_response_closes_text_before_resuming_tool_delta():
@@ -565,84 +679,6 @@ def test_messages_return_routed_experts_in_generation_config():
     assert cfg.return_routed_experts is True
 
 
-def test_messages_accepts_input_ids_and_image_data():
-    """Extended fields input_ids, image_data, return_routed_experts, and
-    return_token_ids must be accepted by the protocol model."""
-    from lmdeploy.serve.anthropic.protocol import MessagesRequest
-
-    req = MessagesRequest(
-        model='fake-model',
-        messages=[],
-        max_tokens=16,
-        input_ids=[1, 2, 3],
-        image_data='https://example.com/img.png',
-        return_routed_experts=True,
-        return_token_ids=True,
-    )
-    assert req.input_ids == [1, 2, 3]
-    assert req.image_data == 'https://example.com/img.png'
-    assert req.return_routed_experts is True
-    assert req.return_token_ids is True
-
-    # Defaults
-    req2 = MessagesRequest(model='m', messages=[], max_tokens=16)
-    assert req2.input_ids is None
-    assert req2.image_data is None
-    assert req2.return_routed_experts is False
-    assert req2.return_token_ids is False
-
-    # Also verify the endpoint doesn't reject the extended fields via HTTP
-    client = _make_client()
-    response = client.post(
-        '/v1/messages',
-        headers={'anthropic-version': '2023-06-01'},
-        json={
-            'model': 'fake-model',
-            'max_tokens': 16,
-            'messages': [],
-            'input_ids': [1, 2, 3],
-        },
-    )
-    assert response.status_code != 422
-
-
-def test_messages_non_stream_includes_output_ids_when_return_token_ids():
-    """The response should include output_ids in the response-level field."""
-    client = _make_client()
-    response = client.post(
-        '/v1/messages',
-        headers={'anthropic-version': '2023-06-01'},
-        json={
-            'model': 'fake-model',
-            'max_tokens': 16,
-            'messages': [{'role': 'user', 'content': 'Hi'}],
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    # output_ids is a new optional field; it should be present (possibly None)
-    assert 'output_ids' in data
-
-
-def test_messages_non_stream_includes_routed_experts():
-    """The response should include routed_experts in the response-level
-    field."""
-    client = _make_client()
-    response = client.post(
-        '/v1/messages',
-        headers={'anthropic-version': '2023-06-01'},
-        json={
-            'model': 'fake-model',
-            'max_tokens': 16,
-            'messages': [{'role': 'user', 'content': 'Hi'}],
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    # routed_experts is a new optional field; it should be present (possibly None)
-    assert 'routed_experts' in data
-
-
 def test_messages_non_stream_with_output_ids_and_routed_experts():
     """When return_token_ids is True, output_ids must be populated with the
     generated token IDs.
@@ -659,14 +695,16 @@ def test_messages_non_stream_with_output_ids_and_routed_experts():
             'max_tokens': 16,
             'messages': [{'role': 'user', 'content': 'Hi'}],
             'return_token_ids': True,
+            'return_routed_experts': True,
         },
     )
     assert response.status_code == 200
     data = response.json()
     # output_ids should be populated from token IDs generated by the fake engine
     assert data.get('output_ids') == [101, 102]
+    assert data.get('routed_experts') == [[[1, 2, 3]]]
 
-    # Test that output_ids is None when return_token_ids is False (default)
+    # Test that optional metadata is None when not requested.
     response2 = client.post(
         '/v1/messages',
         headers={'anthropic-version': '2023-06-01'},
@@ -679,6 +717,7 @@ def test_messages_non_stream_with_output_ids_and_routed_experts():
     assert response2.status_code == 200
     data2 = response2.json()
     assert data2.get('output_ids') is None
+    assert data2.get('routed_experts') is None
 
 
 def test_messages_rejects_input_ids_with_non_empty_messages():
@@ -824,8 +863,9 @@ def test_messages_rejects_system_with_input_ids():
     assert 'system' in response.json()['error']['message']
 
 
-def test_messages_rejects_tools_with_input_ids():
-    client = _make_client(response_parser_cls=_ToolAndReasoningParser)
+def test_messages_accepts_tools_with_input_ids():
+    context = _FakeServerContext(response_parser_cls=_ToolAndReasoningParser)
+    client = _make_client(server_context=context)
     response = client.post(
         '/v1/messages',
         headers={'anthropic-version': '2023-06-01'},
@@ -847,8 +887,11 @@ def test_messages_rejects_tools_with_input_ids():
             },
         },
     )
-    assert response.status_code == 400
-    assert 'tools' in response.json()['error']['message']
+    assert response.status_code == 200
+    args, kwargs = context.async_engine.generate_calls[-1]
+    assert args[0] is None
+    assert kwargs['input_ids'] == [1, 2, 3]
+    assert kwargs['tools'][0].function.name == 'search'
 
 
 def test_count_tokens():

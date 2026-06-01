@@ -36,13 +36,7 @@ def _validate_headers(raw_request: Request):
 def _validate_return_logprob(request: MessagesRequest, server_context):
     if not request.return_logprob:
         return None
-    get_engine_config = getattr(server_context, 'get_engine_config', None)
-    if get_engine_config is None:
-        return None
-    try:
-        logprobs_mode = get_engine_config().logprobs_mode
-    except AttributeError:
-        return None
+    logprobs_mode = server_context.get_engine_config().logprobs_mode
     if logprobs_mode is None:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
@@ -98,11 +92,6 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'system cannot be used when input_ids is set because raw input_ids bypass message rendering.')
-            if request.input_ids is not None and (request.tools is not None or request.tool_choice is not None):
-                return create_error_response(
-                    HTTPStatus.BAD_REQUEST,
-                    'tools and tool_choice cannot be used when input_ids is set because '
-                    'raw input_ids bypass tool parsing.')
 
         # Resolve fallback input when messages is empty.
         parser_messages = None
@@ -128,20 +117,18 @@ def register(router: APIRouter, server_context) -> None:
             except ValueError as err:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
-        parser_cls = getattr(server_context, 'response_parser_cls', None)
-        if request.tools and (parser_cls is None or parser_cls.tool_parser_cls is None):
+        parser_cls = server_context.response_parser_cls
+        if request.tools and parser_cls.tool_parser_cls is None:
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool calling.')
 
         response_parser = None
         parsed_request = None
-        if parser_cls is not None and parser_messages is not None:
-            tokenizer_holder = server_context.async_engine.tokenizer
-            tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
+        if parser_messages is not None or resolved_input_ids is not None:
             openai_request = ChatCompletionRequest(
                 model=request.model,
-                messages=parser_messages,
+                messages=parser_messages or [],
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 top_p=request.top_p,
@@ -151,15 +138,17 @@ def register(router: APIRouter, server_context) -> None:
                 tool_choice=normalize_tool_choice(request.tool_choice),
             )
             try:
-                response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
+                response_parser = parser_cls(openai_request)
             except ValueError as err:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
             parsed_request = response_parser.request
 
-        session = server_context.create_session(-1)
+        session = server_context.create_session()
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
+        engine_messages = None if resolved_input_ids is not None else (
+            parser_messages if parsed_request is None else parsed_request.messages)
         result_generator = server_context.async_engine.generate(
-            parser_messages if parsed_request is None else parsed_request.messages,
+            engine_messages,
             session,
             gen_config=to_generation_config(request),
             tools=None if parsed_request is None else parsed_request.tools,
@@ -197,9 +186,9 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response or ''
-            if getattr(res, 'token_ids', None):
+            if res.token_ids:
                 final_token_ids.extend(res.token_ids)
-            if getattr(res, 'logprobs', None):
+            if res.logprobs:
                 final_logprobs.extend(res.logprobs)
 
         if final_res is None:
@@ -209,9 +198,16 @@ def register(router: APIRouter, server_context) -> None:
         reasoning_content = None
         if response_parser is not None:
             try:
+                raw_text = text
                 text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
             except Exception as err:
                 return create_error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
+            should_validate_complete = (
+                final_res.finish_reason in ('stop', 'length')
+                and (request.return_token_ids or request.return_routed_experts)
+            )
+            if should_validate_complete and not response_parser.validate_complete(raw_text):
+                final_res.finish_reason = 'parse_error'
             if tool_calls and final_res.finish_reason == 'stop':
                 final_res.finish_reason = 'tool_calls'
 
