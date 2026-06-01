@@ -17,16 +17,14 @@ class MetricsProcessor:
     def __init__(self):
         """Init metrics processor."""
         self.enable_metrics: bool = False
-        self.enable_mm_metrics: bool = False
         self.scheduler_stats = SchedulerStats()
         self.stat_loggers = []
         self.metrics_queue: asyncio.Queue = None
         self.metrics_handler: asyncio.Task = None
 
-    def start_metrics_handler(self, enable_metrics: bool, enable_mm_metrics: bool = False):
+    def start_metrics_handler(self, enable_metrics: bool):
         """Start metrics handler."""
         self.enable_metrics = enable_metrics
-        self.enable_mm_metrics = enable_mm_metrics
         if enable_metrics and self.metrics_handler is None:
             self.metrics_queue = asyncio.Queue()
             self.metrics_handler = asyncio.create_task(self._run_metrics_handler())

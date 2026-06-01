@@ -214,15 +214,13 @@ class AsyncEngine:
 
             # currently, metrics in TM engine doesn't support dp
             dp_rank = self.backend_config.dp_rank if self.backend == 'pytorch' else 0
-            metrics_processor.enable_mm_metrics = self.backend_config.enable_mm_metrics
 
             logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
             self.stat_loggers = [
                 LoggingStatLogger(dp_rank=dp_rank),
                 PrometheusStatLogger(model_name=self.model_name,
                                      max_model_len=self.session_len,
-                                     dp_rank=dp_rank,
-                                     enable_mm_metrics=metrics_processor.enable_mm_metrics)
+                                     dp_rank=dp_rank)
             ]
 
             # set stats loggers of metrics processor
@@ -514,8 +512,7 @@ class AsyncEngine:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
         if messages:
-            mm_stats = MultimodalStats(enabled=metrics_processor.enable_metrics,
-                                       detailed=metrics_processor.enable_mm_metrics)
+            mm_stats = MultimodalStats(enabled=metrics_processor.enable_metrics)
             try:
                 prompt = messages
                 self.request_logger.log_prompt(session, prompt=prompt)

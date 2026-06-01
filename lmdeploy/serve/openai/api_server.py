@@ -1358,9 +1358,7 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
         try:
             health_monitor.start()
             if getattr(backend_config, 'enable_metrics', False):
-                metrics_processor.start_metrics_handler(
-                    enable_metrics=True,
-                    enable_mm_metrics=backend_config.enable_mm_metrics)
+                metrics_processor.start_metrics_handler(enable_metrics=True)
                 log_interval = 10.
 
                 async def _force_log():

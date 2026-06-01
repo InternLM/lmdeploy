@@ -11,7 +11,7 @@ multimodal_module = sys.modules[MultimodalProcessor.__module__]
 
 
 def test_multimodal_stats_snapshot_and_emit_guard():
-    stats = MultimodalStats(detailed=True)
+    stats = MultimodalStats()
 
     stats.add_item(Modality.IMAGE.value, count=2)
     stats.add_stage('media_io', 0.1, Modality.IMAGE.value)
@@ -32,8 +32,8 @@ def test_prometheus_logger_records_multimodal_metrics():
     pytest.importorskip('prometheus_client')
     from prometheus_client import REGISTRY, generate_latest
 
-    logger = PrometheusStatLogger('test-model', 128, dp_rank=0, enable_mm_metrics=True)
-    stats = MultimodalStats(detailed=True)
+    logger = PrometheusStatLogger('test-model', 128, dp_rank=0)
+    stats = MultimodalStats()
     stats.add_item(Modality.IMAGE.value, count=2)
     stats.add_stage('media_io', 0.1, Modality.IMAGE.value)
     stats.record_failure('media_io', Modality.IMAGE.value)
@@ -68,7 +68,7 @@ def test_parse_multimodal_item_records_multimodal_stats(monkeypatch):
             'image': 'file:///tmp/a.png',
         }]
     }]
-    stats = MultimodalStats(detailed=True)
+    stats = MultimodalStats()
     parsed = [None]
 
     MultimodalProcessor._parse_multimodal_item(0, messages, parsed, {}, stats)

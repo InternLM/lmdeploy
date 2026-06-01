@@ -157,7 +157,7 @@ class LoggingStatLogger(StatLoggerBase):
 
 class PrometheusStatLogger(StatLoggerBase):
 
-    def __init__(self, model_name: str, max_model_len: int, dp_rank: int = 0, enable_mm_metrics: bool = False):
+    def __init__(self, model_name: str, max_model_len: int, dp_rank: int = 0):
         try:
             import prometheus_client
             prometheus_client.disable_created_metrics()  # disable noisy creation timestamp gauge in prometheus
@@ -166,7 +166,6 @@ class PrometheusStatLogger(StatLoggerBase):
                 'To use metrics system , please install prometheus_client by `pip install prometheus_client`')
 
         self.dp_rank = dp_rank
-        self.enable_mm_metrics = enable_mm_metrics
 
         # unregister any existing lmdeploy collectors
         for collector in list(prometheus_client.REGISTRY._collector_to_names):
@@ -395,22 +394,20 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation='Histogram of multimodal preprocessing time in seconds.',
             buckets=request_latency_buckets,
             labelnames=labelnames).labels(*labelvalues)
-
-        if self.enable_mm_metrics:
-            self.histogram_multimodal_stage_time = prometheus_client.Histogram(
-                name='lmdeploy:multimodal_stage_time_seconds',
-                documentation='Histogram of multimodal preprocessing stage time in seconds.',
-                buckets=request_latency_buckets,
-                labelnames=labelnames + ['stage', 'modality'])
-            self.histogram_multimodal_item_count = prometheus_client.Histogram(
-                name='lmdeploy:multimodal_item_count',
-                documentation='Histogram of multimodal item counts per request.',
-                buckets=[1, 2, 4, 8, 16, 32, 64, 128, 256],
-                labelnames=labelnames + ['modality'])
-            self.counter_multimodal_failures = prometheus_client.Counter(
-                name='lmdeploy:multimodal_processing_failures_total',
-                documentation='Count of multimodal preprocessing failures.',
-                labelnames=labelnames + ['stage', 'modality'])
+        self.histogram_multimodal_stage_time = prometheus_client.Histogram(
+            name='lmdeploy:multimodal_stage_time_seconds',
+            documentation='Histogram of multimodal preprocessing stage time in seconds.',
+            buckets=request_latency_buckets,
+            labelnames=labelnames + ['stage', 'modality'])
+        self.histogram_multimodal_item_count = prometheus_client.Histogram(
+            name='lmdeploy:multimodal_item_count',
+            documentation='Histogram of multimodal item counts per request.',
+            buckets=[1, 2, 4, 8, 16, 32, 64, 128, 256],
+            labelnames=labelnames + ['modality'])
+        self.counter_multimodal_failures = prometheus_client.Counter(
+            name='lmdeploy:multimodal_processing_failures_total',
+            documentation='Count of multimodal preprocessing failures.',
+            labelnames=labelnames + ['stage', 'modality'])
 
     def record_schedule(self, stats: SchedulerStats) -> None:
         """Report schedule metrics to prometheus."""
@@ -465,9 +462,6 @@ class PrometheusStatLogger(StatLoggerBase):
 
         for modality, count in item_counts.items():
             self.counter_multimodal_items.labels(*(labelvalues + [modality])).inc(count)
-
-        if not self.enable_mm_metrics:
-            return
 
         for (stage, modality), seconds in stage_times.items():
             self.histogram_multimodal_stage_time.labels(*(labelvalues + [stage, modality])).observe(seconds)

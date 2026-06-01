@@ -122,7 +122,6 @@ class SubCliServe:
         model_format = ArgumentHelper.model_format(pt_group)
         hf_overrides = ArgumentHelper.hf_overrides(pt_group)
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
-        enable_mm_metrics = ArgumentHelper.enable_mm_metrics(pt_group)
         dp = ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
@@ -150,7 +149,6 @@ class SubCliServe:
         tb_group._group_actions.append(node_rank_act)
         tb_group._group_actions.append(hf_overrides)
         tb_group._group_actions.append(disable_metrics)
-        tb_group._group_actions.append(enable_mm_metrics)
         tb_group._group_actions.append(dp)
         ArgumentHelper.cp(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -241,7 +239,6 @@ class SubCliServe:
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,
                 enable_metrics=not args.disable_metrics,
-                enable_mm_metrics=args.enable_mm_metrics,
                 role=EngineRole[args.role],
                 migration_backend=MigrationBackend[args.migration_backend],
                 model_format=args.model_format,
@@ -278,7 +275,6 @@ class SubCliServe:
                                                    async_=args.async_,
                                                    communicator=args.communicator,
                                                    enable_metrics=not args.disable_metrics,
-                                                   enable_mm_metrics=args.enable_mm_metrics,
                                                    hf_overrides=args.hf_overrides)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
         speculative_config = get_speculative_config(args)

@@ -677,14 +677,6 @@ class ArgumentHelper:
                                    default=False,
                                    help='disable metrics system')
 
-    @staticmethod
-    def enable_mm_metrics(parser):
-        """Add argument enable_mm_metrics to parser."""
-        return parser.add_argument('--enable-mm-metrics',
-                                   action='store_true',
-                                   default=False,
-                                   help='enable detailed multimodal metrics')
-
     # For Disaggregation
     @staticmethod
     def role(parser):

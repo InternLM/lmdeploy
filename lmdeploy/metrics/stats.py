@@ -101,16 +101,13 @@ class SchedulerStats:
 class MultimodalStats:
     """Stats associated with multimodal prompt preprocessing."""
 
-    def __init__(self, enabled: bool = True, detailed: bool = False):
+    def __init__(self, enabled: bool = True):
         """Initialize multimodal preprocessing stats.
 
         Args:
             enabled (bool): Whether to record multimodal metrics.
-            detailed (bool): Whether to collect per-stage timing and failure
-                metrics in addition to total request-level metrics.
         """
         self.enabled = enabled
-        self.detailed = detailed
         self.start_time = time.perf_counter()
         self.total_time: float = 0.0
         self.stage_times: dict[tuple[str, str], float] = defaultdict(float)
@@ -146,8 +143,8 @@ class MultimodalStats:
 
     @contextmanager
     def span(self, stage: str, modality='all') -> Iterator[None]:
-        """Measure a multimodal stage when detailed metrics are enabled."""
-        if not self.enabled or not self.detailed:
+        """Measure a multimodal preprocessing stage."""
+        if not self.enabled:
             yield
             return
 
