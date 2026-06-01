@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from lmdeploy.serve.openai.protocol import (
@@ -21,6 +22,10 @@ class Qwen3CoderToolParser(XmlToolParser):
     func_end_token = '</function>'
     param_prefix = '<parameter='
     param_end_token = '</parameter>'
+    _complete_payload_pattern = re.compile(
+        r'^\s*<function=[^\s>\n]+>\s*(?:<parameter=[^\s>\n]+>.*?</parameter>\s*)*</function>\s*$',
+        re.DOTALL,
+    )
 
     # Qwen3Coder closes tool argument JSON only when the model emits the
     # explicit function end marker (</function>). We intentionally avoid
@@ -51,6 +56,9 @@ class Qwen3CoderToolParser(XmlToolParser):
         args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
         args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
         return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
+
+    def _validate_tool_payload(self, payload: str) -> bool:
+        return bool(self._complete_payload_pattern.fullmatch(payload))
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""
