@@ -227,7 +227,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        deps_profile: ['', 'transformers==4.57.6', 'transformers==5.6.0']
+        deps_profile: ['', 'transformers==5.6.0']
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:

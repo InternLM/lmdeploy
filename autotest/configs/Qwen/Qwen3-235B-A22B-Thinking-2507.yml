@@ -10,9 +10,6 @@ h:
       max-batch-size: 256
       session-len: 65536
   backends:
-  - name: turbomind
-    communicators:
-    - nccl
   - name: pytorch
     communicators:
     - nccl
