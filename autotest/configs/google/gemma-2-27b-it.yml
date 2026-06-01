@@ -3,7 +3,7 @@
 a100:
 - model_type: chat
   engine_config:
-    tp: 1
+    tp: 2
     extra:
       session-len: 65536
   backends:
@@ -15,14 +15,3 @@ a100:
   - func
   gen_config:
     temperature: 0.6
-- model_type: chat
-  engine_config:
-    tp: 2
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func
-  deps:
-    transformers: 4.57.6
