@@ -20,8 +20,6 @@ h:
   - longtext_benchmark
   - prefix_cache
   quantization:
-    turbomind:
-    - kvint8
     pytorch:
     - kvint8
   gen_config:
