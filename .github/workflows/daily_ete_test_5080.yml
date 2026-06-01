@@ -153,15 +153,11 @@ jobs:
     if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
     runs-on: [self-hosted, 5080-r1]
     timeout-minutes: 150
-    strategy:
-      matrix:
-        deps_profile: ['', 'transformers==4.57.6']
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 5080
-      DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -248,7 +244,6 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 5080
-      DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -270,9 +265,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install pinned deps (DEPS_PROFILE)
-        if: matrix.deps_profile != ''
-        run: pip install ${{ matrix.deps_profile }}
       - name: Check env
         run: |
           for i in $(seq 1 10); do
@@ -354,7 +346,6 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 5080
-      DEPS_PROFILE: ${{ matrix.deps_profile }}
     steps:
       - name: Copy repository and Artifacts
         run: |
@@ -368,9 +359,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install pinned deps (DEPS_PROFILE)
-        if: matrix.deps_profile != ''
-        run: pip install ${{ matrix.deps_profile }}
       - name: Check env
         run: |
           for i in $(seq 1 10); do
