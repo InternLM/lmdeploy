@@ -46,9 +46,23 @@ class _FakeAsyncEngine:
         return _generator()
 
 
+class _PassthroughResponseParser:
+
+    tool_parser_cls = None
+
+    def __init__(self, request, tokenizer=None):
+        self.request = request
+
+    def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+        return [(dict(content=delta_text), False)] if delta_text else []
+
+    def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
+        return text, None, None
+
+
 class _FakeServerContext:
 
-    response_parser_cls = None
+    response_parser_cls = _PassthroughResponseParser
 
     def __init__(self):
         self.async_engine = _FakeAsyncEngine()
@@ -1087,3 +1101,55 @@ def test_responses_streaming_text_indices_follow_text_item_order():
     assert text_item_done['output_index'] == 1
     assert completed_output[0]['type'] == 'function_call'
     assert completed_output[1]['type'] == 'message'
+
+
+def test_responses_streaming_accepts_parser_delta_list():
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
+
+    class _MultiDeltaParser:
+
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            return [
+                (
+                    DeltaMessage(
+                        role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(
+                                index=0,
+                                id='call_123',
+                                function=DeltaFunctionCall(name='search', arguments='{}'),
+                            )
+                        ],
+                    ),
+                    True,
+                ),
+                (DeltaMessage(role='assistant', content='visible text'), False),
+            ]
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='mixed',
+            token_ids=[101],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason='stop',
+        )
+
+    async def _collect_events():
+        return [
+            event async for event in _stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+                response_parser=_MultiDeltaParser(),
+            )
+        ]
+
+    import asyncio
+
+    completed_output = _sse_payloads(asyncio.run(_collect_events()))[-1]['response']['output']
+
+    assert completed_output[0]['type'] == 'function_call'
+    assert completed_output[1]['type'] == 'message'
+    assert completed_output[1]['content'][0]['text'] == 'visible text'

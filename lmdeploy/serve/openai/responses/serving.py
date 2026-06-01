@@ -412,6 +412,15 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
 
 
+def _stream_deltas_from_parser(response_parser, delta: str, delta_token_ids: list[int]) -> list[tuple[Any, bool]]:
+    """Normalize parser stream output across parser API revisions."""
+    stream_deltas = response_parser.stream_chunk(delta, delta_token_ids)
+    if isinstance(stream_deltas, tuple):
+        delta_message, tool_emitted = stream_deltas
+        return [] if delta_message is None else [(delta_message, tool_emitted)]
+    return [(delta_message, tool_emitted) for delta_message, tool_emitted in stream_deltas if delta_message is not None]
+
+
 async def _stream_response(result_generator,
                            *,
                            request: ResponsesRequest,
@@ -532,71 +541,73 @@ async def _stream_response(result_generator,
     async for res in result_generator:
         final_res = res
         delta = res.response or ''
-        delta_message = None
-        tool_emitted = False
         if response_parser is not None:
             delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
-            delta_message, tool_emitted = response_parser.stream_chunk(delta, delta_token_ids)
+            stream_deltas = _stream_deltas_from_parser(response_parser, delta, delta_token_ids)
         elif delta:
-            delta_message = dict(content=delta)
+            stream_deltas = [(dict(content=delta), False)]
+        else:
+            stream_deltas = []
 
-        if tool_emitted:
-            streaming_tools = True
+        for delta_message, tool_emitted in stream_deltas:
+            content_delta = ''
+            tool_deltas = None
+            if isinstance(delta_message, dict):
+                content_delta = delta_message.get('content', '')
+            elif delta_message is not None:
+                content_delta = getattr(delta_message, 'content', None) or ''
+                tool_deltas = getattr(delta_message, 'tool_calls', None)
+
+            if content_delta:
+                for event in _start_text_item():
+                    yield event
+                text += content_delta
+                yield _sse(
+                    'response.output_text.delta',
+                    {
+                        'type': 'response.output_text.delta',
+                        'sequence_number': sequence_number,
+                        'response_id': request.request_id,
+                        'item_id': message_id,
+                        'output_index': text_output_index,
+                        'content_index': content_index,
+                        'delta': content_delta,
+                    },
+                )
+                sequence_number += 1
+            if tool_deltas:
+                for tool_delta in tool_deltas:
+                    if request.parallel_tool_calls is False and tool_delta.index != 0:
+                        continue
+                    if tool_emitted:
+                        streaming_tools = True
+                    for event in _start_tool_item(tool_delta):
+                        yield event
+                    function_delta = getattr(tool_delta, 'function', None)
+                    if function_delta is None:
+                        continue
+                    state = tool_states[tool_delta.index]
+                    if function_delta.name:
+                        state['name'] = function_delta.name
+                    arguments_delta = function_delta.arguments or ''
+                    if arguments_delta:
+                        state['arguments'] += arguments_delta
+                        yield _sse(
+                            'response.function_call_arguments.delta',
+                            {
+                                'type': 'response.function_call_arguments.delta',
+                                'sequence_number': sequence_number,
+                                'response_id': request.request_id,
+                                'item_id': state['item_id'],
+                                'output_index': state['output_index'],
+                                'delta': arguments_delta,
+                            },
+                        )
+                        sequence_number += 1
+            elif tool_emitted:
+                streaming_tools = True
         if response_parser is not None and res.finish_reason == 'stop' and streaming_tools:
             res.finish_reason = 'tool_calls'
-
-        content_delta = ''
-        tool_deltas = None
-        if isinstance(delta_message, dict):
-            content_delta = delta_message.get('content', '')
-        elif delta_message is not None:
-            content_delta = getattr(delta_message, 'content', None) or ''
-            tool_deltas = getattr(delta_message, 'tool_calls', None)
-
-        if content_delta:
-            for event in _start_text_item():
-                yield event
-            text += content_delta
-            yield _sse(
-                'response.output_text.delta',
-                {
-                    'type': 'response.output_text.delta',
-                    'sequence_number': sequence_number,
-                    'response_id': request.request_id,
-                    'item_id': message_id,
-                    'output_index': text_output_index,
-                    'content_index': content_index,
-                    'delta': content_delta,
-                },
-            )
-            sequence_number += 1
-        if tool_deltas:
-            for tool_delta in tool_deltas:
-                if request.parallel_tool_calls is False and tool_delta.index != 0:
-                    continue
-                for event in _start_tool_item(tool_delta):
-                    yield event
-                function_delta = getattr(tool_delta, 'function', None)
-                if function_delta is None:
-                    continue
-                state = tool_states[tool_delta.index]
-                if function_delta.name:
-                    state['name'] = function_delta.name
-                arguments_delta = function_delta.arguments or ''
-                if arguments_delta:
-                    state['arguments'] += arguments_delta
-                    yield _sse(
-                        'response.function_call_arguments.delta',
-                        {
-                            'type': 'response.function_call_arguments.delta',
-                            'sequence_number': sequence_number,
-                            'response_id': request.request_id,
-                            'item_id': state['item_id'],
-                            'output_index': state['output_index'],
-                            'delta': arguments_delta,
-                        },
-                    )
-                    sequence_number += 1
 
     input_tokens = 0 if final_res is None else final_res.input_token_len
     output_tokens = 0 if final_res is None else final_res.generate_token_len
@@ -756,9 +767,9 @@ def create_responses_router(server_context) -> APIRouter:
         except ValueError as err:
             return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='tool_choice')
 
-        parser_cls = getattr(server_context, 'response_parser_cls', None)
-        tools_enabled = tools and tool_choice != 'none'
-        if tools_enabled and (parser_cls is None or parser_cls.tool_parser_cls is None):
+        parser_cls = server_context.response_parser_cls
+        tools_enabled = bool(tools and tool_choice != 'none')
+        if tools_enabled and parser_cls.tool_parser_cls is None:
             return _error_response(
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool calling.',
@@ -766,24 +777,24 @@ def create_responses_router(server_context) -> APIRouter:
             )
         parser_tools = tools if tools_enabled else None
 
-        response_parser = None
-        parsed_request = None
-        if parser_cls is not None:
-            tokenizer_holder = server_context.async_engine.tokenizer
-            tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
-            openai_request = ChatCompletionRequest(
-                model=model_name,
-                messages=messages,
-                max_tokens=request.max_output_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                top_k=request.top_k,
-                stop=request.stop,
-                tools=parser_tools,
-                tool_choice=tool_choice,
-            )
+        tokenizer_holder = server_context.async_engine.tokenizer
+        tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
+        openai_request = ChatCompletionRequest(
+            model=model_name,
+            messages=messages,
+            max_tokens=request.max_output_tokens,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            stop=request.stop,
+            tools=parser_tools,
+            tool_choice=tool_choice,
+        )
+        try:
             response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
-            parsed_request = response_parser.request
+        except ValueError as err:
+            return _error_response(HTTPStatus.BAD_REQUEST, str(err))
+        parsed_request = response_parser.request
 
         session = server_context.create_session(-1)
         adapter_name = None if model_name == server_context.async_engine.model_name else model_name
@@ -791,7 +802,7 @@ def create_responses_router(server_context) -> APIRouter:
             _generation_messages_from_parser(messages, parsed_request),
             session,
             gen_config=gen_config,
-            tools=None if parsed_request is None else parsed_request.tools,
+            tools=parsed_request.tools,
             stream_response=True,
             sequence_start=True,
             sequence_end=True,
