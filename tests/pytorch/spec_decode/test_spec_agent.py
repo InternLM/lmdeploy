@@ -2,7 +2,7 @@ import asyncio
 
 import torch
 
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
 from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent, _expand_sampling_inputs
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
@@ -316,7 +316,13 @@ def test_slice_sampling_inputs_prefill():
     assert result is sampling_inputs
 
 
-def _model_inputs(input_ids, *, is_decoding=False, is_chunk=False, is_first_chunk=False, is_last_chunk=False):
+def _model_inputs(input_ids,
+                  *,
+                  is_decoding=False,
+                  is_chunk=False,
+                  is_first_chunk=False,
+                  is_last_chunk=False,
+                  dp_meta=None):
     input_ids = torch.tensor([input_ids])
     seq_length = torch.tensor([input_ids.size(1)])
     history_lengths = torch.tensor([0])
@@ -334,6 +340,7 @@ def _model_inputs(input_ids, *, is_decoding=False, is_chunk=False, is_first_chun
         is_chunk=is_chunk,
         is_first_chunk=is_first_chunk,
         is_last_chunk=is_last_chunk,
+        dp_meta=dp_meta,
     )
 
 
@@ -374,3 +381,16 @@ def test_prepare_inputs_from_main_clears_chunk_carry_on_non_chunk_prefill():
     agent._prepare_inputs_from_main(prefill, _extra([[1, 10], [2, 20], [3, 30]]))
 
     assert agent._prev_chunk_last == {}
+
+
+def test_prepare_inputs_from_main_keeps_chunk_carry_for_dp_local_decode_global_prefill():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    saved = torch.ones(1, 1, 2)
+    agent._prev_chunk_last = {'hidden_states': saved.clone()}
+    agent.proposer = _DummyProposer()
+
+    dp_meta = DPMeta(dp_batches=[1, 1], dp_is_decoding=False)
+    inputs = _model_inputs([90, 91, 92], is_decoding=True, dp_meta=dp_meta)
+    agent._prepare_inputs_from_main(inputs, _extra([[9, 90], [8, 80], [7, 70]]))
+
+    assert torch.equal(agent._prev_chunk_last['hidden_states'], saved)

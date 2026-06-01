@@ -204,7 +204,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
-            if not model_inputs.is_dummy and not model_inputs.is_decoding:
+            local_is_decoding = model_inputs.is_decoding
+            if not model_inputs.is_dummy and not local_is_decoding:
                 # Non-chunk prefill starts an independent stream. Dummy DP
                 # placeholders and interleaved decode must not clear a pending
                 # long-chunk carry.
