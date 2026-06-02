@@ -655,7 +655,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
-    async def async_sampling_logits(self, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs,
+    async def async_sampling_logits(self, model_inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                     sampling_inputs: SamplingInputs):
         """Sample target logits and run rejection sampling."""
         with record_function('spec_rejection_sampling'):
