@@ -499,7 +499,6 @@ class SpecModelAgent(BaseSpecModelAgent):
                 bonus_sampling_inputs,
                 logprobs_mode=self.misc_config.logprobs_mode,
             )
-            logits_processor.sampling_inputs = bonus_sampling_inputs
 
             next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
 
@@ -561,7 +560,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                         _accept_spec_rejection_tokens,
                         guided_manager,
                         guided_processors,
-                        torch.zeros_like(next_token_ids),  # 0 rejected
+                        torch.zeros(next_token_ids.shape,
+                                    dtype=next_token_ids.dtype),  # 0 rejected, CPU
                         output_token_ids.cpu(),
                         cpu_next_token_ids,
                         0,  # num_spec_tokens=0, only bonus accepted
