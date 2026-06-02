@@ -3,11 +3,7 @@ import os
 import re
 
 from openai import OpenAI
-from utils.constant import DEFAULT_PORT
-
-BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
-PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
-BASE_URL = f'{BASE_HTTP_URL}:{PORT}'
+from utils.constant import BASE_URL
 
 #: Think-tag delimiters used by DeepSeek-R1 and QwenQwQ parsers
 THINK_START_TOKEN = '<think>'
@@ -58,6 +54,22 @@ SEARCH_TOOL = {
             },
             'required': ['query'],
         },
+    },
+}
+
+# Anthropic ``tools[]`` entry: single ``location`` argument (Messages API style).
+WEATHER_TOOL_SINGLE_LOCATION_ANTHROPIC = {
+    'name': 'get_current_weather',
+    'description': 'Useful for querying the weather in a specified city.',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'location': {
+                'type': 'string',
+                'description': 'City or region, for example: New York, London, Tokyo, etc.',
+            },
+        },
+        'required': ['location'],
     },
 }
 
@@ -188,6 +200,64 @@ def get_client_and_model(base_url=None):
     url = base_url or BASE_URL
     client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
     model_name = client.models.list().data[0].id
+    return client, model_name
+
+
+def openai_function_tool_to_anthropic(openai_style_tool: dict) -> dict:
+    """Convert OpenAI ``{'type':'function','function':{...}}`` to Anthropic
+    ``tools[]`` item."""
+
+    fn = openai_style_tool['function']
+    return {
+        'name': fn['name'],
+        'description': fn.get('description') or '',
+        'input_schema': fn['parameters'],
+    }
+
+
+def openai_chat_messages_to_anthropic_kwargs(messages: list[dict]) -> dict:
+    """Split OpenAI-style *messages* into Anthropic ``system`` plus
+    ``messages`` kwargs."""
+
+    system_chunks: list[str] = []
+    out: list[dict] = []
+    for m in messages:
+        role = m['role']
+        content = m['content']
+        if role == 'system':
+            if not isinstance(content, str):
+                raise TypeError('Anthropic path expects string system message content.')
+            system_chunks.append(content)
+        elif role in ('user', 'assistant'):
+            out.append({'role': role, 'content': content})
+        else:
+            raise ValueError(f'Unsupported message role for Anthropic: {role!r}')
+    kwargs: dict = {'messages': out}
+    if system_chunks:
+        kwargs['system'] = '\n\n'.join(system_chunks)
+    return kwargs
+
+
+def get_async_anthropic_client_and_model(base_url: str | None = None):
+    """Return ``(AsyncAnthropic, model_name)`` for LMDeploy (Anthropic routes
+    on server root)."""
+
+    import anthropic
+
+    from lmdeploy.serve.openai.api_client import get_model_list
+
+    url = base_url or BASE_URL
+    model_names = get_model_list(f'{url}/v1/models')
+    if not model_names:
+        raise RuntimeError(f'No models returned from {url}/v1/models')
+    model_name = model_names[0]
+    client = anthropic.AsyncAnthropic(
+        api_key=os.getenv('ANTHROPIC_API_KEY', 'YOUR_API_KEY'),
+        base_url=url,
+        max_retries=0,
+        timeout=600.0,
+        default_headers={'anthropic-version': '2023-06-01'},
+    )
     return client, model_name
 
 
@@ -388,7 +458,9 @@ def collect_stream_reasoning(stream):
         finish_reason       – last non-None finish_reason
         finish_reason_count – how many chunks carried a non-None finish_reason
         role                – first non-None role value
-        role_count          – how many chunks carried a non-None role
+        role_count          – number of *distinct* role values in stream order;
+                              consecutive chunks repeating the same ``delta.role``
+                              count once (some LMDeploy backends resend ``role`` every chunk)
         chunk_count         – total number of chunks received
         reasoning_chunks    – number of chunks containing reasoning
         content_chunks      – number of chunks containing content
@@ -406,6 +478,7 @@ def collect_stream_reasoning(stream):
         'content_chunks': 0,
     }
 
+    last_distinct_role = None
     for chunk in stream:
         result['chunk_count'] += 1
         if not chunk.choices:
@@ -418,8 +491,11 @@ def collect_stream_reasoning(stream):
 
         delta = choice.delta
         if delta.role:
-            result['role'] = delta.role
-            result['role_count'] += 1
+            if result['role'] is None:
+                result['role'] = delta.role
+            if last_distinct_role != delta.role:
+                result['role_count'] += 1
+                last_distinct_role = delta.role
 
         # -- reasoning_content (lmdeploy extension field) -------------------
         rc = getattr(delta, 'reasoning_content', None)

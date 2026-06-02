@@ -2,7 +2,7 @@ from typing import Literal
 
 import pytest
 from openai import OpenAI
-from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
     assert_chat_completions_stream_return,
@@ -11,10 +11,7 @@ from utils.restful_return_check import (
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
-BASE_HTTP_URL = 'http://localhost'
-DEFAULT_PORT = 23333
 MODEL = 'internlm/Intern-S1'
-BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
 @pytest.mark.order(8)

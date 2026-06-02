@@ -1,13 +1,10 @@
 import pytest
-from utils.constant import BACKEND_LIST, RESTFUL_BASE_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_BASE_MODEL_LIST
 from utils.restful_return_check import assert_completions_batch_return, assert_completions_stream_return
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-BASE_HTTP_URL = 'http://localhost'
-DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2_5-20b'
-BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
 @pytest.mark.parametrize('backend', BACKEND_LIST)
