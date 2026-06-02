@@ -23,6 +23,7 @@ from lmdeploy.serve.openai.responses.protocol import (
     ResponsesRequest,
     ResponsesResponse,
 )
+from lmdeploy.serve.openai.utils import filter_parallel_tool_calls
 
 
 def _response_metadata_kwargs(request: ResponsesRequest) -> dict[str, Any]:
@@ -51,12 +52,6 @@ def _response_metadata_kwargs(request: ResponsesRequest) -> dict[str, Any]:
         truncation=request.truncation,
         user=request.user,
     )
-
-
-def _filter_parallel_tool_calls(request: ResponsesRequest, tool_calls: list[Any] | None) -> list[Any] | None:
-    if request.parallel_tool_calls is not False or not tool_calls:
-        return tool_calls
-    return tool_calls[:1]
 
 
 def _response_status_from_finish_reason(
@@ -89,7 +84,7 @@ def _make_response(*,
                    finish_reason: str | None,
                    message_id: str | None = None) -> ResponsesResponse:
     text = text or ''
-    tool_calls = _filter_parallel_tool_calls(request, tool_calls)
+    tool_calls = filter_parallel_tool_calls(tool_calls, request.parallel_tool_calls)
     status = _response_status_from_finish_reason(finish_reason)
     message_status = 'incomplete' if status == 'incomplete' else 'completed'
     incomplete_details = None

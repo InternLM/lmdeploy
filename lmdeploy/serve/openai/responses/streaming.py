@@ -20,6 +20,7 @@ from lmdeploy.serve.openai.responses.protocol import (
     ResponsesResponse,
 )
 from lmdeploy.serve.openai.responses.response import _make_response, _response_metadata_kwargs
+from lmdeploy.serve.openai.utils import filter_parallel_tool_call_deltas
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -190,9 +191,7 @@ async def _stream_response(result_generator,
                 )
                 sequence_number += 1
             if tool_deltas:
-                for tool_delta in tool_deltas:
-                    if request.parallel_tool_calls is False and tool_delta.index != 0:
-                        continue
+                for tool_delta in filter_parallel_tool_call_deltas(tool_deltas, request.parallel_tool_calls):
                     if tool_emitted:
                         streaming_tools = True
                     for event in _start_tool_item(tool_delta):
