@@ -148,8 +148,11 @@ gen_config = GenerationConfig(
     response_format=dict(type='json_schema', json_schema=dict(name='person', schema=schema)),
     max_new_tokens=256,
 )
-response = pipe(['请用 JSON 格式做自我介绍。'], gen_config=gen_config)
-print(response)
+
+if __name__ == '__main__':
+
+  response = pipe(['请用 JSON 格式做自我介绍。'], gen_config=gen_config)
+  print(response)
 ```
 
 ### api_server
@@ -180,12 +183,14 @@ schema = {
 }
 response_format = dict(type='json_schema', json_schema=dict(name='person', schema=schema))
 
-client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:24545/v1')
-model_name = client.models.list().data[0].id
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{'role': 'user', 'content': '请用 JSON 格式做自我介绍。'}],
-    response_format=response_format,
-)
-print(response)
+if __name__ == '__main__':
+
+  client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:24545/v1')
+  model_name = client.models.list().data[0].id
+  response = client.chat.completions.create(
+      model=model_name,
+      messages=[{'role': 'user', 'content': '请用 JSON 格式做自我介绍。'}],
+      response_format=response_format,
+  )
+  print(response)
 ```
