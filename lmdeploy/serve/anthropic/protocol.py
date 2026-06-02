@@ -9,6 +9,9 @@ from typing import Any, Literal
 import shortuuid
 from pydantic import BaseModel, ConfigDict, Field
 
+RoutedExperts = list[list[list[int]]] | str | None
+MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
+
 
 class AnthropicError(BaseModel):
     """Anthropic-style error body."""
@@ -164,6 +167,12 @@ class MessageUsage(BaseModel):
     output_tokens: int = 0
 
 
+class MessageDeltaUsage(BaseModel):
+    """Cumulative token usage carried by ``message_delta`` stream events."""
+
+    output_tokens: int = 0
+
+
 class MessagesResponse(BaseModel):
     """Response body for ``POST /v1/messages``."""
 
@@ -172,12 +181,161 @@ class MessagesResponse(BaseModel):
     role: Literal['assistant'] = 'assistant'
     content: list[MessageTextBlock | MessageThinkingBlock | MessageToolUseBlock]
     model: str
-    stop_reason: Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error'] | None = None
+    stop_reason: MessageStopReason | None = None
     stop_sequence: str | None = None
     usage: MessageUsage
     output_ids: list[int] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
-    routed_experts: list[list[list[int]]] | str | None = None
+    routed_experts: RoutedExperts = None
+
+
+class StreamTextBlock(BaseModel):
+    """Streaming text content block."""
+
+    type: Literal['text'] = 'text'
+    text: str
+
+
+class StreamThinkingBlock(BaseModel):
+    """Streaming thinking content block."""
+
+    type: Literal['thinking'] = 'thinking'
+    thinking: str
+
+
+class StreamToolUseBlock(BaseModel):
+    """Streaming tool-use content block."""
+
+    type: Literal['tool_use'] = 'tool_use'
+    id: str | None = None
+    name: str
+    input: dict[str, Any]
+
+
+StreamContentBlock = StreamTextBlock | StreamThinkingBlock | StreamToolUseBlock
+
+
+class MessageStartMessage(BaseModel):
+    """Message object carried by a ``message_start`` stream event."""
+
+    id: str
+    type: Literal['message'] = 'message'
+    role: Literal['assistant'] = 'assistant'
+    content: list[StreamContentBlock] = Field(default_factory=list)
+    model: str
+    stop_reason: MessageStopReason | None = None
+    stop_sequence: str | None = None
+    usage: MessageUsage
+
+
+class MessageStartEvent(BaseModel):
+    """Anthropic ``message_start`` stream event."""
+
+    type: Literal['message_start'] = 'message_start'
+    message: MessageStartMessage
+
+
+class ContentBlockStartEvent(BaseModel):
+    """Anthropic ``content_block_start`` stream event."""
+
+    type: Literal['content_block_start'] = 'content_block_start'
+    index: int
+    content_block: StreamContentBlock
+
+
+class TextDelta(BaseModel):
+    """Anthropic text content delta."""
+
+    type: Literal['text_delta'] = 'text_delta'
+    text: str
+
+
+class ThinkingDelta(BaseModel):
+    """Anthropic thinking content delta."""
+
+    type: Literal['thinking_delta'] = 'thinking_delta'
+    thinking: str
+
+
+class InputJsonDelta(BaseModel):
+    """Anthropic tool input JSON delta."""
+
+    type: Literal['input_json_delta'] = 'input_json_delta'
+    partial_json: str
+
+
+class SignatureDelta(BaseModel):
+    """Anthropic thinking signature delta."""
+
+    type: Literal['signature_delta'] = 'signature_delta'
+    signature: str
+
+
+StreamDelta = TextDelta | ThinkingDelta | InputJsonDelta | SignatureDelta
+
+
+class ContentBlockDeltaEvent(BaseModel):
+    """Anthropic ``content_block_delta`` stream event."""
+
+    type: Literal['content_block_delta'] = 'content_block_delta'
+    index: int
+    delta: StreamDelta
+    output_ids: list[int] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
+
+
+class ContentBlockStopEvent(BaseModel):
+    """Anthropic ``content_block_stop`` stream event."""
+
+    type: Literal['content_block_stop'] = 'content_block_stop'
+    index: int
+
+
+class MessageDelta(BaseModel):
+    """Top-level message delta carried by ``message_delta``."""
+
+    stop_reason: MessageStopReason | None = None
+    stop_sequence: str | None = None
+
+
+class MessageDeltaEvent(BaseModel):
+    """Anthropic ``message_delta`` stream event."""
+
+    type: Literal['message_delta'] = 'message_delta'
+    delta: MessageDelta
+    usage: MessageDeltaUsage
+    routed_experts: RoutedExperts = None
+
+
+class MessageStopEvent(BaseModel):
+    """Anthropic ``message_stop`` stream event."""
+
+    type: Literal['message_stop'] = 'message_stop'
+
+
+class PingEvent(BaseModel):
+    """Anthropic ``ping`` stream event."""
+
+    type: Literal['ping'] = 'ping'
+
+
+class ErrorEvent(BaseModel):
+    """Anthropic ``error`` stream event."""
+
+    type: Literal['error'] = 'error'
+    error: AnthropicError
+
+
+AnthropicStreamEvent = (
+    MessageStartEvent
+    | ContentBlockStartEvent
+    | ContentBlockDeltaEvent
+    | ContentBlockStopEvent
+    | MessageDeltaEvent
+    | MessageStopEvent
+    | PingEvent
+    | ErrorEvent
+)
 
 
 class CountTokensRequest(BaseModel):
@@ -211,32 +369,3 @@ class AnthropicModelList(BaseModel):
     has_more: bool = False
     first_id: str | None = None
     last_id: str | None = None
-
-
-class TextDelta(BaseModel):
-    """Delta payload for text content blocks."""
-
-    type: Literal['text_delta'] = 'text_delta'
-    text: str
-
-
-class ThinkingDelta(BaseModel):
-    """Delta payload for thinking content blocks."""
-
-    type: Literal['thinking_delta'] = 'thinking_delta'
-    thinking: str
-
-
-class InputJsonDelta(BaseModel):
-    """Delta payload for tool_use input JSON fragments."""
-
-    type: Literal['input_json_delta'] = 'input_json_delta'
-    partial_json: str
-
-
-class ContentBlockDeltaEvent(BaseModel):
-    """SSE content block delta event payload."""
-
-    type: Literal['content_block_delta'] = 'content_block_delta'
-    index: int
-    delta: TextDelta | ThinkingDelta | InputJsonDelta

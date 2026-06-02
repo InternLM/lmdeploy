@@ -80,15 +80,19 @@ def register(router: APIRouter, server_context) -> None:
                     HTTPStatus.BAD_REQUEST,
                     'image_data cannot be used when messages is non-empty. messages takes priority.')
         else:
-            if request.input_ids is not None and len(request.input_ids) == 0:
+            if request.input_ids is None:
+                if request.image_data is not None:
+                    return create_error_response(
+                        HTTPStatus.BAD_REQUEST,
+                        'image_data requires input_ids to be set when messages is empty.')
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'messages must not be empty unless input_ids is set.')
+            if len(request.input_ids) == 0:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'input_ids must not be an empty list.')
-            if request.image_data is not None and request.input_ids is None:
-                return create_error_response(
-                    HTTPStatus.BAD_REQUEST,
-                    'image_data requires input_ids to be set when messages is empty.')
-            if request.input_ids is not None and request.system is not None:
+            if request.system is not None:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'system cannot be used when input_ids is set because raw input_ids bypass message rendering.')
@@ -123,35 +127,31 @@ def register(router: APIRouter, server_context) -> None:
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool calling.')
 
-        response_parser = None
-        parsed_request = None
-        if parser_messages is not None or resolved_input_ids is not None:
-            openai_request = ChatCompletionRequest(
-                model=request.model,
-                messages=parser_messages or [],
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                top_k=request.top_k,
-                stop=request.stop_sequences,
-                tools=to_openai_tools(request.tools),
-                tool_choice=normalize_tool_choice(request.tool_choice),
-            )
-            try:
-                response_parser = parser_cls(openai_request)
-            except ValueError as err:
-                return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
-            parsed_request = response_parser.request
+        openai_request = ChatCompletionRequest(
+            model=request.model,
+            messages=parser_messages or [],
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            stop=request.stop_sequences,
+            tools=to_openai_tools(request.tools),
+            tool_choice=normalize_tool_choice(request.tool_choice),
+        )
+        try:
+            response_parser = parser_cls(openai_request)
+        except ValueError as err:
+            return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
+        parsed_request = response_parser.request
 
         session = server_context.create_session()
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
-        engine_messages = None if resolved_input_ids is not None else (
-            parser_messages if parsed_request is None else parsed_request.messages)
+        engine_messages = None if resolved_input_ids is not None else parsed_request.messages
         result_generator = server_context.async_engine.generate(
             engine_messages,
             session,
             gen_config=to_generation_config(request),
-            tools=None if parsed_request is None else parsed_request.tools,
+            tools=parsed_request.tools,
             stream_response=True,
             sequence_start=True,
             sequence_end=True,
@@ -196,20 +196,19 @@ def register(router: APIRouter, server_context) -> None:
 
         tool_calls = None
         reasoning_content = None
-        if response_parser is not None:
-            try:
-                raw_text = text
-                text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
-            except Exception as err:
-                return create_error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
-            should_validate_complete = (
-                final_res.finish_reason in ('stop', 'length')
-                and (request.return_token_ids or request.return_routed_experts)
-            )
-            if should_validate_complete and not response_parser.validate_complete(raw_text):
-                final_res.finish_reason = 'parse_error'
-            if tool_calls and final_res.finish_reason == 'stop':
-                final_res.finish_reason = 'tool_calls'
+        try:
+            raw_text = text
+            text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
+        except Exception as err:
+            return create_error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
+        should_validate_complete = (
+            final_res.finish_reason in ('stop', 'length')
+            and (request.return_token_ids or request.return_routed_experts)
+        )
+        if should_validate_complete and not response_parser.validate_complete(raw_text):
+            final_res.finish_reason = 'parse_error'
+        if tool_calls and final_res.finish_reason == 'stop':
+            final_res.finish_reason = 'tool_calls'
 
         content_blocks = build_message_content_blocks(text, tool_calls, reasoning_content)
         if not content_blocks:
