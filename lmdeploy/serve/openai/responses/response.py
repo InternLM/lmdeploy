@@ -6,15 +6,22 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import shortuuid
-
-from lmdeploy.serve.openai.responses.protocol import (
-    ResponseIncompleteDetails,
-    ResponseOutputFunctionCall,
+from openai.types.responses import (
+    ResponseError,
     ResponseOutputMessage,
     ResponseOutputText,
+    ResponseUsage,
+)
+from openai.types.responses import (
+    ResponseFunctionToolCall as ResponseOutputFunctionCall,
+)
+from openai.types.responses.response import IncompleteDetails as ResponseIncompleteDetails
+from openai.types.responses.response_usage import InputTokensDetails as ResponseInputTokensDetails
+from openai.types.responses.response_usage import OutputTokensDetails as ResponseOutputTokensDetails
+
+from lmdeploy.serve.openai.responses.protocol import (
     ResponsesRequest,
     ResponsesResponse,
-    ResponseUsage,
 )
 
 
@@ -63,11 +70,11 @@ def _response_status_from_finish_reason(
     return 'completed'
 
 
-def _response_error_from_finish_reason(finish_reason: str | None) -> dict[str, Any] | None:
+def _response_error_from_finish_reason(finish_reason: str | None) -> ResponseError | None:
     if finish_reason == 'error':
-        return dict(code='server_error', message='Response generation failed.')
+        return ResponseError(code='server_error', message='Response generation failed.')
     if finish_reason == 'abort':
-        return dict(code='server_error', message='Response generation was cancelled.')
+        return ResponseError(code='server_error', message='Response generation was cancelled.')
     return None
 
 
@@ -93,8 +100,10 @@ def _make_response(*,
         output.append(
             ResponseOutputMessage(
                 id=message_id or f'msg_{shortuuid.random()}',
+                type='message',
+                role='assistant',
                 status=message_status,
-                content=[ResponseOutputText(text=text)],
+                content=[ResponseOutputText(type='output_text', text=text, annotations=[])],
             ))
     if tool_calls:
         for tool_call in tool_calls:
@@ -108,9 +117,11 @@ def _make_response(*,
             output.append(
                 ResponseOutputFunctionCall(
                     id=call_id,
+                    type='function_call',
                     call_id=call_id,
                     name=function.name,
                     arguments=function.arguments or '',
+                    status='completed',
                 ))
     return ResponsesResponse(
         id=request.request_id,
@@ -121,7 +132,18 @@ def _make_response(*,
         output_text=text,
         usage=ResponseUsage(
             input_tokens=input_tokens,
+            input_tokens_details=ResponseInputTokensDetails(
+                cached_tokens=0,
+                input_tokens_per_turn=[],
+                cached_tokens_per_turn=[],
+            ),
             output_tokens=output_tokens,
+            output_tokens_details=ResponseOutputTokensDetails(
+                reasoning_tokens=0,
+                tool_output_tokens=0,
+                output_tokens_per_turn=[],
+                tool_output_tokens_per_turn=[],
+            ),
             total_tokens=input_tokens + output_tokens,
         ),
         error=_response_error_from_finish_reason(finish_reason),

@@ -7,11 +7,15 @@ from typing import Any, Literal, TypeAlias
 
 import shortuuid
 from openai.types.responses import (
+    ResponseError,
     ResponseInputItemParam,
     ResponseOutputItem,
     ResponsePrompt,
+    ResponseStatus,
     ResponseTextConfig,
+    ResponseUsage,
 )
+from openai.types.responses.response import IncompleteDetails as ResponseIncompleteDetails
 from openai.types.responses.response import ToolChoice as ResponseToolChoice
 from openai.types.responses.response_create_params import StreamOptions as ResponseStreamOptions
 from openai.types.responses.tool import Tool as ResponseTool
@@ -19,29 +23,6 @@ from openai.types.shared import Metadata, Reasoning
 from pydantic import BaseModel, ConfigDict, Field
 
 ResponseInputOutputItem: TypeAlias = ResponseInputItemParam | ResponseOutputItem
-
-
-class ResponseInputTokensDetails(BaseModel):
-    """Input token details in Responses API shape."""
-
-    cached_tokens: int = 0
-    input_tokens_per_turn: list[int] = Field(default_factory=list)
-    cached_tokens_per_turn: list[int] = Field(default_factory=list)
-
-
-class ResponseOutputTokensDetails(BaseModel):
-    """Output token details in Responses API shape."""
-
-    reasoning_tokens: int = 0
-    tool_output_tokens: int = 0
-    output_tokens_per_turn: list[int] = Field(default_factory=list)
-    tool_output_tokens_per_turn: list[int] = Field(default_factory=list)
-
-
-class ResponseIncompleteDetails(BaseModel):
-    """Details about why a response is incomplete."""
-
-    reason: Literal['max_output_tokens', 'content_filter'] | None = None
 
 
 class ResponsesRequest(BaseModel):
@@ -57,7 +38,19 @@ class ResponsesRequest(BaseModel):
     background: bool | None = False
     context_management: list[dict[str, Any]] | None = None
     conversation: str | dict[str, Any] | None = None
-    include: list[str] | None = None
+    include: (
+        list[
+            Literal[
+                'code_interpreter_call.outputs',
+                'computer_call_output.output.image_url',
+                'file_search_call.results',
+                'message.input_image.image_url',
+                'message.output_text.logprobs',
+                'reasoning.encrypted_content',
+            ],
+        ]
+        | None
+    ) = None
     input: str | list[ResponseInputOutputItem | dict[str, Any]] | None = None
     instructions: str | None = None
     max_output_tokens: int | None = Field(default=None, gt=0)
@@ -76,12 +69,12 @@ class ResponsesRequest(BaseModel):
     store: bool | None = True
     stream: bool | None = False
     stream_options: ResponseStreamOptions | None = None
-    temperature: float | None = 1.0
+    temperature: float | None = None
     text: ResponseTextConfig | dict[str, Any] | None = None
     tool_choice: ResponseToolChoice = 'auto'
     tools: list[ResponseTool | dict[str, Any]] = Field(default_factory=list)
     top_logprobs: int | None = None
-    top_p: float | None = 1.0
+    top_p: float | None = None
     truncation: Literal['auto', 'disabled'] | None = 'disabled'
     user: str | None = None
 
@@ -99,45 +92,6 @@ class ResponsesRequest(BaseModel):
     request_id: str = Field(default_factory=lambda: f'resp_{shortuuid.random()}')
 
 
-class ResponseUsage(BaseModel):
-    """Token usage in Responses API shape."""
-
-    input_tokens: int = 0
-    input_tokens_details: ResponseInputTokensDetails = Field(default_factory=ResponseInputTokensDetails)
-    output_tokens: int = 0
-    output_tokens_details: ResponseOutputTokensDetails = Field(default_factory=ResponseOutputTokensDetails)
-    total_tokens: int = 0
-
-
-class ResponseOutputText(BaseModel):
-    """Text content part in a Responses output message."""
-
-    type: Literal['output_text'] = 'output_text'
-    text: str
-    annotations: list[Any] = Field(default_factory=list)
-
-
-class ResponseOutputMessage(BaseModel):
-    """Assistant output item."""
-
-    id: str = Field(default_factory=lambda: f'msg_{shortuuid.random()}')
-    type: Literal['message'] = 'message'
-    role: Literal['assistant'] = 'assistant'
-    status: Literal['in_progress', 'completed', 'incomplete'] = 'completed'
-    content: list[ResponseOutputText]
-
-
-class ResponseOutputFunctionCall(BaseModel):
-    """Function call output item in Responses API shape."""
-
-    id: str
-    type: Literal['function_call'] = 'function_call'
-    call_id: str
-    name: str
-    arguments: str
-    status: Literal['in_progress', 'completed', 'incomplete'] = 'completed'
-
-
 class ResponsesResponse(BaseModel):
     """Response body for Text V1 ``POST /v1/responses``.
 
@@ -147,13 +101,13 @@ class ResponsesResponse(BaseModel):
 
     id: str
     created_at: int
-    error: dict[str, Any] | None = None
+    error: ResponseError | None = None
     incomplete_details: ResponseIncompleteDetails | None = None
     instructions: str | None = None
     metadata: Metadata | None = None
     model: str
     object: Literal['response'] = 'response'
-    output: list[ResponseOutputMessage | ResponseOutputFunctionCall] = Field(default_factory=list)
+    output: list[ResponseOutputItem] = Field(default_factory=list)
     parallel_tool_calls: bool | None = True
     temperature: float | None = None
     tool_choice: ResponseToolChoice | None = None
@@ -172,7 +126,7 @@ class ResponsesResponse(BaseModel):
     reasoning: Reasoning | None = None
     safety_identifier: str | None = None
     service_tier: Literal['auto', 'default', 'flex', 'scale', 'priority'] | None = 'auto'
-    status: Literal['in_progress', 'completed', 'incomplete', 'failed', 'cancelled', 'queued'] = 'completed'
+    status: ResponseStatus = 'completed'
     text: ResponseTextConfig | dict[str, Any] | None = None
     top_logprobs: int | None = None
     truncation: Literal['auto', 'disabled'] | None = 'disabled'

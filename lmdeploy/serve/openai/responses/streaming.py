@@ -8,10 +8,14 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import shortuuid
+from openai.types.responses import (
+    ResponseFunctionToolCall as ResponseOutputFunctionCall,
+)
+from openai.types.responses import (
+    ResponseOutputMessage,
+)
 
 from lmdeploy.serve.openai.responses.protocol import (
-    ResponseOutputFunctionCall,
-    ResponseOutputMessage,
     ResponsesRequest,
     ResponsesResponse,
 )
@@ -228,9 +232,11 @@ async def _stream_response(result_generator,
     tool_calls = [
         ResponseOutputFunctionCall(
             id=state['item_id'],
+            type='function_call',
             call_id=state['call_id'],
             name=state['name'],
             arguments=state['arguments'],
+            status='completed',
         ) for _, state in sorted(tool_states.items(), key=lambda item: item[1]['output_index'])
     ]
     final_response = _make_response(

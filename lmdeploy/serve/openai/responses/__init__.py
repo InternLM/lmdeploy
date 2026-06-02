@@ -1,17 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """OpenAI Responses-compatible endpoint."""
 
-from .protocol import (
-    ResponseIncompleteDetails,
-    ResponseInputOutputItem,
-    ResponseInputTokensDetails,
-    ResponseOutputFunctionCall,
+from openai.types.responses import (
+    ResponseFunctionToolCall as ResponseOutputFunctionCall,
+)
+from openai.types.responses import (
     ResponseOutputMessage,
     ResponseOutputText,
-    ResponseOutputTokensDetails,
+    ResponseUsage,
+)
+from openai.types.responses.response import IncompleteDetails as ResponseIncompleteDetails
+from openai.types.responses.response_usage import InputTokensDetails as ResponseInputTokensDetails
+from openai.types.responses.response_usage import OutputTokensDetails as ResponseOutputTokensDetails
+
+from .protocol import (
+    ResponseInputOutputItem,
     ResponsesRequest,
     ResponsesResponse,
-    ResponseUsage,
 )
 from .request import (
     _messages_from_input,
