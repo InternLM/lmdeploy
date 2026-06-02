@@ -40,8 +40,8 @@ def _validate_return_logprob(request: MessagesRequest, server_context):
     if logprobs_mode is None:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f'return_logprob({request.return_logprob}) requested but not enabled '
-            'logprobs_mode in engine configuration.')
+            f'return_logprob={request.return_logprob} was requested, but '
+            'logprobs_mode is not enabled in the engine configuration.')
     return None
 
 
@@ -74,11 +74,11 @@ def register(router: APIRouter, server_context) -> None:
             if request.input_ids is not None:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
-                    'input_ids cannot be used when messages is non-empty. messages takes priority.')
+                    'input_ids cannot be used when messages is non-empty.')
             if request.image_data is not None:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
-                    'image_data cannot be used when messages is non-empty. messages takes priority.')
+                    'image_data cannot be used when messages is non-empty.')
         else:
             if request.input_ids is None:
                 if request.image_data is not None:
