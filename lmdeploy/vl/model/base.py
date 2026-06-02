@@ -213,7 +213,7 @@ class VisionModel(ABC):
                     collected_mm_items[current_modality] = {}
 
                 if attr_name in self.FEATURE_NAMES:
-                    value = self._postprocess_mm_output(value, self.mm_feature_dtype)
+                    value = self._postprocess_mm_output(value, getattr(self, 'mm_feature_dtype', None))
                     processor_outputs[attr_name] = value
                     attr_name = 'feature'
 
