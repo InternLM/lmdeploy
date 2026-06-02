@@ -63,8 +63,11 @@ struct LlamaLinear::Impl {
         return {B, desc_B, V, desc_V};
     }
 
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>
-    GetOperandA(const LinearWeight& weight, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandA(const LinearWeight& weight,
+                                                                       const Tensor&       input,
+                                                                       const Tensor&       input_scales,
+                                                                       Buffer_<int>        indices,
+                                                                       const Buffer_<int>& offsets)
     {
         auto st = core::Context::stream().handle();
 
@@ -74,7 +77,12 @@ struct LlamaLinear::Impl {
         const int m = indices ? indices.size() : input.shape(0);
 
         // Currently, FP8 only; INT8 may be added later
-        if (input.dtype() != weight.input_dtype()) {
+        if (input.dtype() == kFloat8_e4m3 && input.dtype() == weight.input_dtype()) {
+            // Already quantized by EP dispatch — reuse the external scales.
+            A = input;
+            U = input_scales;
+        }
+        else if (input.dtype() != weight.input_dtype()) {
             TM_SCOPE_CALL(QuantizeSymm(A, U, input, st));
         }
         else {
@@ -84,13 +92,15 @@ struct LlamaLinear::Impl {
         // SM100+ grouped bf16/fp16: use chunk() weights so Activation() runs separately.
         const bool is_cublas_grouped = offsets && getSMVersion() == 100 && weight.weight_format.dtype == kBfloat16;
         if (indices && (A.dtype() == kFloat8_e4m3 || is_cublas_grouped)) {
-            const auto [bsz, k] = A.shapes(0, 1);
-            const int e         = indices.size() / bsz;
-            Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), e, st));
+            const int k   = A.shape(1);
+            Tensor    A_e = {{m, k}, A.dtype(), kDEVICE};
+            // EP can route a token to a variable number of local experts, so
+            // the gathered rows are driven by the exact mapping size `m`
+            // (matches invokeMoeDispatch's `num_expert_tokens` contract).
+            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), m, st));
             if (U) {
                 Tensor U_e;
-                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
+                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), m, st));
                 U = U_e;
             }
             A       = A_e;
@@ -115,6 +125,7 @@ struct LlamaLinear::Impl {
 
     void Forward(Tensor&             output,
                  const Tensor&       input,  //
+                 const Tensor&       input_scales,
                  const LinearWeight& weight,
                  const Buffer_<int>& indices,
                  const Buffer_<int>& offsets)
@@ -129,7 +140,7 @@ struct LlamaLinear::Impl {
         op.quant_b   = MakeQuantDesc(weight.weight_format);
         op.batch_dim = 0;
 
-        auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, indices, offsets);
+        auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, input_scales, indices, offsets);
         auto&& [B, desc_B, V, desc_V] = GetOperandB(weight);
 
         Tensor& D = output;
@@ -188,7 +199,7 @@ void LlamaLinear::Forward(const Tensor&       input,  //
                           const LinearWeight& weight,
                           Ref<Tensor>         output)
 {
-    Forward(input, weight, {}, {}, output);
+    Forward(input, std::nullopt, weight, {}, {}, output);
 }
 
 void LlamaLinear::Forward(const Tensor&       input,  //
@@ -197,13 +208,28 @@ void LlamaLinear::Forward(const Tensor&       input,  //
                           const Buffer_<int>& offsets,
                           Ref<Tensor>         output)
 {
+    Forward(input, std::nullopt, weight, indices, offsets, output);
+}
+
+void LlamaLinear::Forward(const Tensor&                input,
+                          const std::optional<Tensor>& scales,
+                          const LinearWeight&          weight,
+                          const Buffer_<int>&          indices,
+                          const Buffer_<int>&          offsets,
+                          Ref<Tensor>                  output)
+{
     Tensor in = input.view({-1, input.shape(-1)});
 
     if (output.get()) {
         output.get() = output.get().view({-1, output.get().shape(-1)});
     }
 
-    impl_->Forward(output.get(), in, weight, indices, offsets);
+    Tensor in_scales;
+    if (scales) {
+        in_scales = scales.value();
+    }
+
+    impl_->Forward(output.get(), in, in_scales, weight, indices, offsets);
 }
 
 void LlamaLinear::set_measure(bool measure)

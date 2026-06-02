@@ -3,6 +3,7 @@
 #pragma once
 
 #include <istream>
+#include <optional>
 #include <ostream>
 
 #include "src/turbomind/core/core.h"
@@ -23,6 +24,15 @@ public:
                  const Buffer_<int>& indices,
                  const Buffer_<int>& offsets,
                  Ref<Tensor>         output);
+
+    // Expert-parallel variant: `scales` carries externally-computed FP8 input
+    // scales (from EP dispatch) so the input is not re-quantized here.
+    void Forward(const Tensor&                input,
+                 const std::optional<Tensor>& scales,
+                 const LinearWeight&          weight,
+                 const Buffer_<int>&          indices,
+                 const Buffer_<int>&          offsets,
+                 Ref<Tensor>                  output);
 
     void set_measure(bool measure);
 

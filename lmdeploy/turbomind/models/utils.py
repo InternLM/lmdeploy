@@ -233,7 +233,9 @@ def make_moe_config(cfg, *,
                     routed_scale=1.0,
                     topk_group=1,
                     n_group=1,
-                    router_n_groups=0):
+                    router_n_groups=0,
+                    ep_size=1,
+                    ep_rank=0):
     """Build a MoeConfig populated from HF config and per-model overrides."""
     if act_type is None:
         act_type = _act_type_id('silu')
@@ -249,6 +251,10 @@ def make_moe_config(cfg, *,
     moe_cfg.router_n_groups = router_n_groups
     moe_cfg.act_type = act_type
     moe_cfg.fuse_silu = True
+    # Expert-parallel knobs. Defaults keep the tensor-parallel path
+    # unchanged (ep_size<=1 collapses to plain TP in MoeWeight).
+    moe_cfg.ep_size = ep_size
+    moe_cfg.ep_rank = ep_rank
     return moe_cfg
 
 

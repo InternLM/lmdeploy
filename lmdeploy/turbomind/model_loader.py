@@ -36,6 +36,8 @@ class ModelLoader:
                                 [mc.attn_tp_rank(g) for g in range(self.gpu_count)])
         mlp_tp = ParallelGroup(ec.mlp_tp_size,
                                [mc.mlp_tp_rank(g) for g in range(self.gpu_count)])
+        ep = ParallelGroup(ec.ep,
+                            [mc.ep_rank(g) for g in range(self.gpu_count)])
         model_tp = ParallelGroup(ec.attn_tp_size * ec.attn_cp_size,
                                  [mc.model_tp_rank(g) for g in range(self.gpu_count)])
 
@@ -44,6 +46,7 @@ class ModelLoader:
             root_handles=[mc.root(g) for g in range(self.gpu_count)],
             attn_tp=attn_tp,
             mlp_tp=mlp_tp,
+            ep=ep,
             model_tp=model_tp,
         )
 

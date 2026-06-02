@@ -176,16 +176,14 @@ class Qwen3_5TextModel(TextModel):
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts_pfx = pfx + 'experts'
-        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(self._n_experts):
-            experts[e] = self._moe_expert_ffn(
-                experts_pfx, e, self.cfg.moe_intermediate_size)
-        m.experts = experts.build()
+        m.add_experts(
+            lambda e: self._moe_expert_ffn(
+                experts_pfx, e, self.cfg.moe_intermediate_size))
 
         m.add_gate('shared_gate', self._linear(pfx + 'shared_expert_gate'))
         shared = self.ffn(pfx + 'shared_expert', self.cfg.shared_expert_intermediate_size)
@@ -244,12 +242,13 @@ class Qwen3_5Model:
         self.vision_model = None
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp):
         self.text_model.bind_runtime(
             ctx=ctx,
             root_handles=root_handles,
             attn_tp=attn_tp,
             mlp_tp=mlp_tp,
+            ep=ep,
             model_tp=model_tp,
         )
 

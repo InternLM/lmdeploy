@@ -66,7 +66,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
     // Otherwise (separate w1/w3 or non-fused), apply activation explicitly.
     if (!use_fused || !mlp.is_fused_silu) {
         // gate' = silu(gate) * up
-        Activation(gating, inter, mlp.act_type, stream);
+        Activation(gating, inter, mlp.act_type, nullptr, stream);
         TM_CUDA_CHECK(cudaGetLastError());
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }

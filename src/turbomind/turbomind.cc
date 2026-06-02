@@ -5,6 +5,7 @@
 
 #include "src/turbomind/turbomind.h"
 
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
@@ -16,11 +17,13 @@
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/model_request.h"
 
+#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/moe_weight.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 
@@ -57,6 +60,7 @@ struct TurboMind::Impl {
     vector<shared_ptr<ModelRoot>> weights_;
     vector<shared_ptr<Context>>   contexts_;
     vector<Engine>                engines_;
+    vector<int>                   ep_comm_initialized_;
 
     string model_dir_;
 
@@ -94,6 +98,40 @@ struct TurboMind::Impl {
 
         auto ctx_guard = weights_[index]->context();
         weights_[index]->prepare();
+        TM_CUDA_CHECK(cudaGetLastError());
+    }
+
+    void InitializeEpCommunicator(int index)
+    {
+        const auto& p = engine_params_.at(index);
+        TM_CHECK(p.ep_size > 1);
+        TM_CHECK(!ep_comm_initialized_.at(index));
+        TM_CHECK(weights_[index] != nullptr);
+
+        auto* tm = weights_[index]->text_model_ptr();
+        TM_CHECK_NOTNULL(tm);
+
+        int max_expert_num    = 0;
+        int experts_per_token = 0;
+        for (int i = 0; i < tm->num_layer; ++i) {
+            if (auto* moe = tm->layer(i)->moe_ffn.get()) {
+                max_expert_num    = std::max(max_expert_num, moe->num_experts());
+                experts_per_token = moe->experts_per_token;
+            }
+        }
+        TM_CHECK(max_expert_num) << "ep_size > 1 but the model has no MoE layers";
+
+        const int      tp_cp_size = p.attn_tp_size * p.attn_cp_size;
+        comm::EpConfig cfg{p.nnodes,  //
+                           max_expert_num,
+                           experts_per_token,
+                           tm->hidden_units,
+                           p.max_forward_token_num / tp_cp_size,
+                           p.ll_max_tokens_per_rank};
+
+        auto& ctx = *TM_CHECK_NOTNULL(contexts_[index]);
+        TM_CHECK(ctx.comm.d_comm);
+        ctx.comm.d_comm->InitializeEp(cfg);
         TM_CUDA_CHECK(cudaGetLastError());
     }
 
@@ -165,7 +203,7 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
     }
 
     comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
-    TM_CHECK(engine_param_.mlp_tp_size == comm_size_);
+    TM_CHECK(engine_param_.mlp_tp_size * engine_param_.ep_size == comm_size_);
 
     communicator_type_ = std::move(config.communicator);
 
@@ -174,6 +212,7 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
     contexts_.resize(engine_param_.devices.size());
+    ep_comm_initialized_.resize(engine_param_.devices.size());
 
     // NOTE: This runs on Python main thread
     group_id_ = comm::CreateHostGroupId((engine_param_.nnodes == 1) ? "" : "hybrid");
@@ -199,6 +238,8 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& ctx = contexts_[index] = std::make_shared<Context>(p.devices[index]);
 
+    core::ContextGuard guard{ctx->core_stream, ctx->allocator};
+
     // Layout: (outer, dp, tp, cp)
 
     const int global_rank = global_rank_[index];
@@ -216,7 +257,7 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& c = ctx->comm;
 
-    c.h_global = group_id_->CreateCommunicator(comm_size_, global_rank, p.node_rank);
+    c.h_global = group_id_->CreateCommunicator(comm_size_ * p.outer_dp_size, global_rank, p.node_rank);
 
     c.h_comm = c.h_global->Split(outer_rank, 0);
 
@@ -241,7 +282,13 @@ void TurboMind::Impl::CreateContext(int index)
 
         p.model_tp_rank = c.d_comm->rank(c.d_tp_group);
         p.attn_tp_rank  = p.model_tp_rank / p.attn_cp_size;
-        p.mlp_tp_rank   = c.d_comm->rank(0);
+        p.mlp_tp_rank   = inner_rank % p.mlp_tp_size;
+
+        // Expert-parallel rank. The EP communicator itself is initialized in
+        // CreateEngine() after the Python-built ModelWeight has been prepared.
+        if (p.ep_size > 1) {
+            p.ep_rank = inner_rank % p.ep_size;
+        }
     }
 
     if (c.h_tp_group->rank() == 0) {
@@ -272,6 +319,11 @@ void TurboMind::Impl::CreateEngine(int index)
     const auto& param = engine_params_.at(index);
 
     ctx.comm.h_comm->Sync();
+
+    if (param.ep_size > 1 && !ep_comm_initialized_.at(index)) {
+        InitializeEpCommunicator(index);
+        ep_comm_initialized_.at(index) = 1;
+    }
 
     // create model
     LanguageModel model{param, ctx, *weights_[index]->text_model_ptr(), phases_};
@@ -505,6 +557,11 @@ int TurboMind::GetAttnTpRank(int index)
 int TurboMind::GetMlpTpRank(int index)
 {
     return impl_->engine_params_.at(index).mlp_tp_rank;
+}
+
+int TurboMind::GetEpRank(int index)
+{
+    return impl_->engine_params_.at(index).ep_rank;
 }
 
 int TurboMind::GetModelTpRank(int index)

@@ -66,5 +66,5 @@ if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     # As described in https://github.com/InternLM/lmdeploy/pull/4313,
     # window registration may cause memory leaks in NCCL 2.27, NCCL 2.28+ resolves the issue,
     # but turbomind engine will use nccl GIN for EP in future, which is brought in since 2.29
-    pip install "nvidia-nccl-cu12>2.29"
+    pip install "nvidia-nccl-cu12==2.30.3"
 fi
