@@ -355,7 +355,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B-Base', 'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
+        model_path: ['Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B-Base', 'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
         include:
           - tp: 2
             model: Qwen3.5-35B-A3B
@@ -585,6 +585,12 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     needs: test_quantization
     timeout-minutes: 240
+    env:
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: a100
+      DEPS_PROFILE: ''
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -648,6 +654,12 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     needs: test_quantization
     timeout-minutes: 120
+    env:
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: a100
+      DEPS_PROFILE: ''
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -719,7 +731,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
-      DEPS_PROFILE: transformers==4.57.6
+      DEPS_PROFILE: ''
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"

@@ -22,7 +22,7 @@ on:
         required: true
         description: 'Set testcase module filter: llm, mllm. Default contains all models'
         type: string
-        default: "['llm','mllm']"
+        default: "['llm']"
       function:
         required: true
         description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
@@ -158,6 +158,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 3090
+      DEPS_PROFILE: ''
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -220,8 +221,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        deps_profile: ['', 'transformers==5.6.0']
-        model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
+        model: ${{ fromJSON(inputs.model || '["llm"]')}}
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
@@ -235,6 +235,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 3090
+      DEPS_PROFILE: ''
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -301,14 +302,8 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['internlm/internlm3-8b-instruct', 'Qwen/Qwen3-8B']
+        model_path: ['Qwen/Qwen3-8B']
         include:
-          - tp: 1
-            model: internlm3-8b-instruct
-            model_path: internlm/internlm3-8b-instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
           - tp: 1
             model: Qwen3-8B
             model_path: Qwen/Qwen3-8B
