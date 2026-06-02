@@ -1,0 +1,22 @@
+# HF model id: openai/gpt-oss-120b
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 2
+    extra:
+      session-len: 65536
+      model-format: mxfp4
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - prefix_cache
+  gen_config:
+    temperature: 0.6
+    reasoning-effort: high

@@ -376,10 +376,6 @@ basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               batch_size=1000,
                               run_cfg=dict(num_gpus=1))
 
-# ===== Configs for Qwen/Qwen1.5-MoE-A2.7B-Chat =====
-pytorch_qwen1_5_moe_2_7b_chat = deepcopy(basic_pytorch_chat_tp1)
-pytorch_qwen1_5_moe_2_7b_chat['abbr'] = 'pytorch_qwen1_5_moe_2_7b_chat'
-pytorch_qwen1_5_moe_2_7b_chat['path'] = 'Qwen/Qwen1.5-MoE-A2.7B-Chat'
 
 # ===== Configs for google/gemma2-7b-it =====
 pytorch_gemma_2_9b_it = deepcopy(basic_pytorch_chat_tp1)

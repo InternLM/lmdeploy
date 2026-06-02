@@ -1,0 +1,14 @@
+# HF model id: OpenGVLab/InternVL3_5-2B
+
+ascend:
+- model_type: vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  deps:
+    transformers: 5.6.0
