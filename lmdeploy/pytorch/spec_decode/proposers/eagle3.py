@@ -34,6 +34,8 @@ class Eagle3(DeepseekMTP):
         self._draft_words = draft_indices // 32
         self._draft_bits = draft_indices % 32
         self._n_draft_words = (draft_vocab_size + 31) // 32
+        # Precompute max word index (avoids GPU→CPU sync in _translate_bitmask)
+        self._max_d2t_word = self._d2t_words.max().item()
         # Cache device-specific constants; keyed by device.
         self._bitmask_cache: dict[torch.device, dict] = {}
 
@@ -66,7 +68,7 @@ class Eagle3(DeepseekMTP):
         draft_words = c['draft_words']
         draft_bits = c['draft_bits']
 
-        max_word_idx = d2t_words.max().item()
+        max_word_idx = self._max_d2t_word
         if max_word_idx >= target_bitmask.size(1):
             raise ValueError(
                 f'd2t mapping references word index {max_word_idx} but target_bitmask '
