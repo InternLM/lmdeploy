@@ -8,7 +8,6 @@ from openai.types.responses import ResponseFunctionToolCall
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
 from lmdeploy.serve.openai.responses import (
     ResponsesRequest,
-    _generation_messages_from_parser,
     _make_response,
     _messages_from_input,
     _openai_tools_from_responses,
@@ -30,8 +29,10 @@ class _FakeAsyncEngine:
 
     def __init__(self):
         self.generate_kwargs = None
+        self.prompt = None
 
     def generate(self, prompt, session, **kwargs):
+        self.prompt = prompt
         self.generate_kwargs = kwargs
 
         async def _generator():
@@ -49,9 +50,11 @@ class _FakeAsyncEngine:
 class _PassthroughResponseParser:
 
     tool_parser_cls = None
+    last_request = None
 
     def __init__(self, request, tokenizer=None):
         self.request = request
+        type(self).last_request = request
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         return [(dict(content=delta_text), False)] if delta_text else []
@@ -371,6 +374,47 @@ def test_responses_maps_function_call_history_to_chat_messages():
     ]
 
 
+def test_responses_rejects_non_string_function_call_arguments():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[{
+            'type': 'function_call',
+            'call_id': 'call_123',
+            'name': 'search',
+            'arguments': {
+                'query': 'lmdeploy',
+            },
+        }],
+    )
+
+    try:
+        _messages_from_input(request)
+    except ValueError as err:
+        assert 'Unsupported `arguments` in function_call item' in str(err)
+    else:
+        raise AssertionError('non-string function_call arguments should be rejected')
+
+
+def test_responses_maps_function_call_output_text_parts():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[{
+            'type': 'function_call_output',
+            'call_id': 'call_123',
+            'output': [{
+                'type': 'input_text',
+                'text': '{"result":"ok"}',
+            }],
+        }],
+    )
+
+    assert _messages_from_input(request) == [{
+        'role': 'tool',
+        'tool_call_id': 'call_123',
+        'content': '{"result":"ok"}',
+    }]
+
+
 def test_responses_maps_function_tools_to_openai_tools():
     request = ResponsesRequest(
         model='fake-model',
@@ -512,12 +556,23 @@ def test_responses_tool_choice_none_does_not_require_tool_parser():
 
 
 def test_responses_uses_parser_adjusted_messages_for_generation():
-    original_messages = [{'role': 'user', 'content': 'original'}]
-    adjusted_messages = [{'role': 'user', 'content': 'adjusted'}]
-    parsed_request = SimpleNamespace(messages=adjusted_messages)
+    import asyncio
 
-    assert _generation_messages_from_parser(original_messages, parsed_request) is adjusted_messages
-    assert _generation_messages_from_parser(original_messages, None) is original_messages
+    class _AdjustingResponseParser(_PassthroughResponseParser):
+
+        adjusted_messages = [{'role': 'user', 'content': 'adjusted'}]
+
+        def __init__(self, request, tokenizer=None):
+            super().__init__(request, tokenizer)
+            self.request.messages = self.adjusted_messages
+
+    endpoint, context = _responses_endpoint()
+    context.response_parser_cls = _AdjustingResponseParser
+
+    response = asyncio.run(endpoint(ResponsesRequest(model='fake-model', input='original'), _FakeRawRequest()))
+
+    assert response['output_text'] == 'ok'
+    assert context.async_engine.prompt is _AdjustingResponseParser.adjusted_messages
 
 
 def test_responses_generation_config_mapping():
@@ -644,6 +699,34 @@ def test_responses_length_finish_reason_sets_incomplete_details():
     assert response['status'] == 'incomplete'
     assert response['incomplete_details'] == {'reason': 'max_output_tokens'}
     assert response['output'][0]['status'] == 'incomplete'
+
+
+def test_responses_error_finish_reasons_do_not_complete_successfully():
+    request = ResponsesRequest(model='fake-model', input='Hi there')
+
+    error_response = _make_response(
+        request=request,
+        model_name='fake-model',
+        created_time=123,
+        text='',
+        input_tokens=8,
+        output_tokens=0,
+        finish_reason='error',
+    ).model_dump(exclude_none=True)
+    abort_response = _make_response(
+        request=request,
+        model_name='fake-model',
+        created_time=123,
+        text='',
+        input_tokens=8,
+        output_tokens=0,
+        finish_reason='abort',
+    ).model_dump(exclude_none=True)
+
+    assert error_response['status'] == 'failed'
+    assert error_response['error']['code'] == 'server_error'
+    assert abort_response['status'] == 'cancelled'
+    assert abort_response['error']['code'] == 'server_error'
 
 
 def test_responses_tool_call_response_shape():
@@ -840,9 +923,23 @@ def test_responses_penalty_fields_warn_only_for_unsupported_penalties(monkeypatc
 
     assert response['output_text'] == 'ok'
     assert context.async_engine.generate_kwargs['gen_config'].repetition_penalty == 1.1
+    assert _PassthroughResponseParser.last_request.max_completion_tokens is None
+    assert 'max_tokens' not in _PassthroughResponseParser.last_request.model_fields_set
     assert any('presence_penalty' in warning for warning in warnings)
     assert any('frequency_penalty' in warning for warning in warnings)
     assert not any('repetition_penalty' in warning for warning in warnings)
+
+
+def test_responses_parser_request_uses_max_completion_tokens():
+    import asyncio
+
+    endpoint, _ = _responses_endpoint()
+    request = ResponsesRequest(model='fake-model', input='Hi', max_output_tokens=17)
+
+    asyncio.run(endpoint(request, _FakeRawRequest()))
+
+    assert _PassthroughResponseParser.last_request.max_completion_tokens == 17
+    assert 'max_tokens' not in _PassthroughResponseParser.last_request.model_fields_set
 
 
 def test_responses_streaming_sse_shape():
@@ -898,6 +995,102 @@ def test_responses_streaming_sse_shape():
     assert payloads[-1]['type'] == 'response.completed'
     assert completed_response['output_text'] == 'Hello world!'
     assert completed_response['parallel_tool_calls'] is True
+
+
+def test_responses_streaming_length_finish_reason_emits_incomplete_event():
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='partial',
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason='length',
+        )
+
+    async def _collect_events():
+        return [
+            event async for event in _stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+            )
+        ]
+
+    import asyncio
+
+    payloads = _sse_payloads(asyncio.run(_collect_events()))
+
+    assert payloads[-1]['type'] == 'response.incomplete'
+    assert payloads[-1]['response']['status'] == 'incomplete'
+    assert payloads[-1]['response']['incomplete_details'] == {'reason': 'max_output_tokens'}
+
+
+def test_responses_streaming_error_finish_reason_emits_failed_event():
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='',
+            input_token_len=8,
+            generate_token_len=0,
+            finish_reason='error',
+        )
+
+    async def _collect_events():
+        return [
+            event async for event in _stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+            )
+        ]
+
+    import asyncio
+
+    payloads = _sse_payloads(asyncio.run(_collect_events()))
+
+    assert payloads[-1]['type'] == 'response.failed'
+    assert payloads[-1]['response']['status'] == 'failed'
+    assert payloads[-1]['response']['error']['code'] == 'server_error'
+
+
+def test_responses_streaming_empty_output_announces_message_item():
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='',
+            input_token_len=8,
+            generate_token_len=0,
+            finish_reason='stop',
+        )
+
+    async def _collect_events():
+        return [
+            event async for event in _stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+            )
+        ]
+
+    import asyncio
+
+    payloads = _sse_payloads(asyncio.run(_collect_events()))
+
+    assert any(payload['type'] == 'response.output_item.added'
+               and payload['item']['type'] == 'message'
+               for payload in payloads)
+    assert any(payload['type'] == 'response.output_item.done'
+               and payload['item']['type'] == 'message'
+               for payload in payloads)
+    assert payloads[-1]['type'] == 'response.completed'
+    assert payloads[-1]['response']['output'][0]['type'] == 'message'
+    assert payloads[-1]['response']['output'][0]['content'][0]['text'] == ''
 
 
 def test_responses_streaming_tool_call_events():
@@ -1153,3 +1346,15 @@ def test_responses_streaming_accepts_parser_delta_list():
     assert completed_output[0]['type'] == 'function_call'
     assert completed_output[1]['type'] == 'message'
     assert completed_output[1]['content'][0]['text'] == 'visible text'
+
+
+def test_responses_openapi_router_is_included_with_openai_router():
+    from fastapi import FastAPI
+
+    from lmdeploy.serve.openai.api_server import router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.include_router(create_responses_router(None))
+
+    assert '/v1/responses' in app.openapi()['paths']
