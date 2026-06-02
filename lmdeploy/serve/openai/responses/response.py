@@ -105,9 +105,7 @@ def _make_response(*,
             if isinstance(tool_call, ResponseOutputFunctionCall):
                 output.append(tool_call)
                 continue
-            function = getattr(tool_call, 'function', None)
-            if function is None:
-                continue
+            function = tool_call.function
             call_id = getattr(tool_call, 'id', None) or f'call_{shortuuid.random()}'
             output.append(
                 ResponseOutputFunctionCall(

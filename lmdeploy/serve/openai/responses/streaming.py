@@ -27,21 +27,12 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
 
 
-def _stream_deltas_from_parser(response_parser, delta: str, delta_token_ids: list[int]) -> list[tuple[Any, bool]]:
-    """Normalize parser stream output across parser API revisions."""
-    stream_deltas = response_parser.stream_chunk(delta, delta_token_ids)
-    if isinstance(stream_deltas, tuple):
-        delta_message, tool_emitted = stream_deltas
-        return [] if delta_message is None else [(delta_message, tool_emitted)]
-    return [(delta_message, tool_emitted) for delta_message, tool_emitted in stream_deltas if delta_message is not None]
-
-
 async def _stream_response(result_generator,
                            *,
                            request: ResponsesRequest,
                            model_name: str,
                            created_time: int,
-                           response_parser=None) -> AsyncGenerator[str, None]:
+                           response_parser) -> AsyncGenerator[str, None]:
     initial_response = ResponsesResponse(
         id=request.request_id,
         created_at=created_time,
@@ -156,22 +147,12 @@ async def _stream_response(result_generator,
     async for res in result_generator:
         final_res = res
         delta = res.response or ''
-        if response_parser is not None:
-            delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
-            stream_deltas = _stream_deltas_from_parser(response_parser, delta, delta_token_ids)
-        elif delta:
-            stream_deltas = [(dict(content=delta), False)]
-        else:
-            stream_deltas = []
+        delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+        stream_deltas = response_parser.stream_chunk(delta, delta_token_ids)
 
         for delta_message, tool_emitted in stream_deltas:
-            content_delta = ''
-            tool_deltas = None
-            if isinstance(delta_message, dict):
-                content_delta = delta_message.get('content', '')
-            elif delta_message is not None:
-                content_delta = getattr(delta_message, 'content', None) or ''
-                tool_deltas = getattr(delta_message, 'tool_calls', None)
+            content_delta = getattr(delta_message, 'content', None) or ''
+            tool_deltas = getattr(delta_message, 'tool_calls', None)
 
             if content_delta:
                 for event in _start_text_item():
@@ -219,7 +200,7 @@ async def _stream_response(result_generator,
                         sequence_number += 1
             elif tool_emitted:
                 streaming_tools = True
-        if response_parser is not None and res.finish_reason == 'stop' and streaming_tools:
+        if res.finish_reason == 'stop' and streaming_tools:
             res.finish_reason = 'tool_calls'
 
     input_tokens = 0 if final_res is None else final_res.input_token_len

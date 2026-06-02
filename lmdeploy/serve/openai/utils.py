@@ -17,7 +17,7 @@ def filter_parallel_tool_calls(tool_calls: list[_ToolCallT] | None,
                                parallel_tool_calls: bool | None) -> list[_ToolCallT] | None:
     """Filter to the first tool call only when parallel_tool_calls is false."""
 
-    if parallel_tool_calls or not tool_calls:
+    if parallel_tool_calls is not False or not tool_calls:
         return tool_calls
     return tool_calls[:1]
 
@@ -27,7 +27,7 @@ def filter_parallel_tool_call_deltas(tool_calls: list[Any] | None,
     """Filter to index zero tool deltas only when parallel_tool_calls is
     false."""
 
-    if parallel_tool_calls or not tool_calls:
+    if parallel_tool_calls is not False or not tool_calls:
         return tool_calls
     return [tool_call for tool_call in tool_calls if tool_call.index == 0]
 
@@ -38,7 +38,7 @@ def maybe_filter_parallel_tool_calls(
 ) -> _ChatCompletionResponseChoiceT:
     """Filter to the first tool call only when parallel_tool_calls is false."""
 
-    if request.parallel_tool_calls:
+    if request.parallel_tool_calls is not False:
         return choice
 
     if isinstance(choice, ChatCompletionResponseChoice) and choice.message.tool_calls:

@@ -74,6 +74,14 @@ def test_parallel_tool_calls_default_keeps_all_non_streaming_tool_calls():
     assert [tool_call.id for tool_call in choice.message.tool_calls] == ['call_1', 'call_2']
 
 
+def test_parallel_tool_calls_none_keeps_all_non_streaming_tool_calls():
+    choice = _non_streaming_choice()
+
+    maybe_filter_parallel_tool_calls(choice, _request(None))
+
+    assert [tool_call.id for tool_call in choice.message.tool_calls] == ['call_1', 'call_2']
+
+
 def test_parallel_tool_calls_false_keeps_index_zero_streaming_tool_call():
     choice = _streaming_choice()
 
@@ -86,5 +94,13 @@ def test_parallel_tool_calls_default_keeps_all_streaming_tool_calls():
     choice = _streaming_choice()
 
     maybe_filter_parallel_tool_calls(choice, _request())
+
+    assert [tool_call.index for tool_call in choice.delta.tool_calls] == [0, 1]
+
+
+def test_parallel_tool_calls_none_keeps_all_streaming_tool_calls():
+    choice = _streaming_choice()
+
+    maybe_filter_parallel_tool_calls(choice, _request(None))
 
     assert [tool_call.index for tool_call in choice.delta.tool_calls] == [0, 1]

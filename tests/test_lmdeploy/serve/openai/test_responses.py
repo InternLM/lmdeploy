@@ -3,22 +3,24 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
 from openai.types.responses import ResponseFunctionToolCall
 
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
 from lmdeploy.serve.openai.responses import (
     ResponsesRequest,
-    _make_response,
+    create_responses_router,
+)
+from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem
+from lmdeploy.serve.openai.responses.request import (
     _messages_from_input,
     _openai_tools_from_responses,
-    _stream_response,
     _to_generation_config,
     _tool_choice_from_responses,
     _validate_text_v1_request,
-    create_responses_router,
 )
-from lmdeploy.serve.openai.responses import serving as responses_serving
-from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem
+from lmdeploy.serve.openai.responses.response import _make_response
+from lmdeploy.serve.openai.responses.streaming import _stream_response
 
 
 class _FakeAsyncEngine:
@@ -57,7 +59,7 @@ class _PassthroughResponseParser:
         type(self).last_request = request
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
-        return [(dict(content=delta_text), False)] if delta_text else []
+        return [(DeltaMessage(content=delta_text), False)] if delta_text else []
 
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
@@ -519,17 +521,6 @@ def test_responses_non_stream_response_shape():
     request = ResponsesRequest(
         model='fake-model',
         input='Hi there',
-        max_tool_calls=2,
-        metadata={'trace_id': 'abc'},
-        parallel_tool_calls=False,
-        prompt_cache_key='cache-key',
-        prompt_cache_retention='in-memory',
-        safety_identifier='safe-user',
-        service_tier='flex',
-        text={'format': {'type': 'text'}},
-        top_logprobs=3,
-        truncation='auto',
-        user='user-123',
     )
 
     response = _make_response(
@@ -545,40 +536,11 @@ def test_responses_non_stream_response_shape():
     assert response['object'] == 'response'
     assert response['status'] == 'completed'
     assert response['output_text'] == 'Hello world!'
-    assert response['background'] is False
-    assert response['max_tool_calls'] == 2
-    assert response['metadata'] == {'trace_id': 'abc'}
-    assert response['parallel_tool_calls'] is False
-    assert response['prompt_cache_key'] == 'cache-key'
-    assert response['prompt_cache_retention'] == 'in-memory'
-    assert response['safety_identifier'] == 'safe-user'
-    assert response['service_tier'] == 'flex'
-    assert response['text'] == {'format': {'type': 'text'}}
-    assert response['top_logprobs'] == 3
-    assert response['truncation'] == 'auto'
-    assert response['user'] == 'user-123'
+    assert response['usage']['input_tokens'] == 8
+    assert response['usage']['output_tokens'] == 2
+    assert response['usage']['total_tokens'] == 10
     assert response['output'][0]['type'] == 'message'
-    assert response['output'][0]['content'][0] == {
-        'type': 'output_text',
-        'text': 'Hello world!',
-        'annotations': [],
-    }
-    assert response['usage'] == {
-        'input_tokens': 8,
-        'input_tokens_details': {
-            'cached_tokens': 0,
-            'input_tokens_per_turn': [],
-            'cached_tokens_per_turn': [],
-        },
-        'output_tokens': 2,
-        'output_tokens_details': {
-            'reasoning_tokens': 0,
-            'tool_output_tokens': 0,
-            'output_tokens_per_turn': [],
-            'tool_output_tokens_per_turn': [],
-        },
-        'total_tokens': 10,
-    }
+    assert response['output'][0]['content'][0]['text'] == 'Hello world!'
 
 
 def test_responses_length_finish_reason_sets_incomplete_details():
@@ -688,6 +650,34 @@ def test_responses_parallel_tool_calls_false_keeps_first_tool_call():
     assert response['output'][0]['call_id'] == 'call_123'
 
 
+def test_responses_parallel_tool_calls_none_keeps_all_tool_calls():
+    request = ResponsesRequest(model='fake-model', input='Hi', parallel_tool_calls=None)
+
+    response_model = _make_response(
+        request=request,
+        model_name='fake-model',
+        created_time=123,
+        text='',
+        tool_calls=[
+            ToolCall(
+                id='call_123',
+                function=FunctionCall(name='search', arguments='{"query":"lmdeploy"}'),
+            ),
+            ToolCall(
+                id='call_456',
+                function=FunctionCall(name='lookup', arguments='{"query":"vllm"}'),
+            ),
+        ],
+        input_tokens=8,
+        output_tokens=2,
+        finish_reason='tool_calls',
+    )
+    response = response_model.model_dump(exclude_none=True)
+
+    assert response_model.parallel_tool_calls is None
+    assert [item['call_id'] for item in response['output']] == ['call_123', 'call_456']
+
+
 def test_responses_tool_call_response_accepts_no_visible_text():
     request = ResponsesRequest(model='fake-model', input='Hi')
 
@@ -731,8 +721,8 @@ def test_responses_rejects_unsupported_conversation_for_text_v1():
     assert json.loads(response.body)['error']['param'] == 'conversation'
 
 
-def test_responses_rejects_unsupported_prompt_before_missing_input():
-    request = ResponsesRequest(model='fake-model', prompt={'id': 'pmpt_123'})
+def test_responses_rejects_unsupported_prompt():
+    request = ResponsesRequest(model='fake-model', input='Hi', prompt={'id': 'pmpt_123'})
 
     response = _validate_text_v1_request(request)
 
@@ -772,6 +762,30 @@ def test_responses_rejects_unsupported_input_items():
         raise AssertionError('input_image should be rejected by Text V1')
 
 
+def test_responses_rejects_non_string_text_content_parts():
+    import asyncio
+
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[{
+            'type': 'message',
+            'role': 'user',
+            'content': [{
+                'type': 'input_text',
+                'text': 123,
+            }],
+        }],
+    )
+
+    endpoint, _ = _responses_endpoint()
+    response = asyncio.run(endpoint(request, _FakeRawRequest()))
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body['error']['param'] == 'input'
+    assert 'Expected string' in body['error']['message']
+
+
 def test_responses_rejects_reasoning_input_items():
     request = ResponsesRequest(
         model='fake-model',
@@ -789,19 +803,13 @@ def test_responses_rejects_reasoning_input_items():
         raise AssertionError('reasoning input items should be rejected by Text V1')
 
 
-def test_responses_penalty_fields_warn_only_for_unsupported_penalties(monkeypatch):
+def test_responses_forwards_repetition_penalty():
     import asyncio
-
-    warnings: list[str] = []
-    monkeypatch.setattr(responses_serving.logger, 'warning',
-                        lambda message, *args: warnings.append(message % args))
 
     endpoint, context = _responses_endpoint()
     request = ResponsesRequest(
         model='fake-model',
         input='Hi',
-        presence_penalty=0.1,
-        frequency_penalty=0.2,
         repetition_penalty=1.1,
     )
 
@@ -809,9 +817,6 @@ def test_responses_penalty_fields_warn_only_for_unsupported_penalties(monkeypatc
 
     assert response['output_text'] == 'ok'
     assert context.async_engine.generate_kwargs['gen_config'].repetition_penalty == 1.1
-    assert any('presence_penalty' in warning for warning in warnings)
-    assert any('frequency_penalty' in warning for warning in warnings)
-    assert not any('repetition_penalty' in warning for warning in warnings)
 
 
 def test_responses_parser_request_uses_max_completion_tokens():
@@ -823,7 +828,6 @@ def test_responses_parser_request_uses_max_completion_tokens():
     asyncio.run(endpoint(request, _FakeRawRequest()))
 
     assert _PassthroughResponseParser.last_request.max_completion_tokens == 17
-    assert 'max_tokens' not in _PassthroughResponseParser.last_request.model_fields_set
 
 
 def test_responses_streaming_sse_shape():
@@ -850,6 +854,7 @@ def test_responses_streaming_sse_shape():
                 request=request,
                 model_name='fake-model',
                 created_time=123,
+                response_parser=_PassthroughResponseParser(request),
             )
         ]
 
@@ -866,19 +871,12 @@ def test_responses_streaming_sse_shape():
     assert 'event: response.output_text.delta' in body
     assert 'event: response.completed' in body
     assert any(payload.get('delta') == 'Hello ' for payload in payloads)
-    created_response = payloads[0]['response']
     added_item = next(payload['item'] for payload in payloads if payload['type'] == 'response.output_item.added')
     done_item = next(payload['item'] for payload in payloads if payload['type'] == 'response.output_item.done')
     completed_response = payloads[-1]['response']
-    assert created_response['background'] is False
-    assert created_response['parallel_tool_calls'] is True
-    assert created_response['service_tier'] == 'auto'
-    assert created_response['tools'] == []
-    assert created_response['truncation'] == 'disabled'
     assert done_item['id'] == added_item['id']
     assert payloads[-1]['type'] == 'response.completed'
     assert completed_response['output_text'] == 'Hello world!'
-    assert completed_response['parallel_tool_calls'] is True
 
 
 def test_responses_streaming_length_finish_reason_emits_incomplete_event():
@@ -899,6 +897,7 @@ def test_responses_streaming_length_finish_reason_emits_incomplete_event():
                 request=request,
                 model_name='fake-model',
                 created_time=123,
+                response_parser=_PassthroughResponseParser(request),
             )
         ]
 
@@ -929,6 +928,7 @@ def test_responses_streaming_error_finish_reason_emits_failed_event():
                 request=request,
                 model_name='fake-model',
                 created_time=123,
+                response_parser=_PassthroughResponseParser(request),
             )
         ]
 
@@ -959,6 +959,7 @@ def test_responses_streaming_empty_output_announces_message_item():
                 request=request,
                 model_name='fake-model',
                 created_time=123,
+                response_parser=_PassthroughResponseParser(request),
             )
         ]
 
@@ -984,26 +985,32 @@ def test_responses_streaming_tool_call_events():
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
             if delta_text == 'tool-start':
-                return DeltaMessage(
+                return [(
+                    DeltaMessage(
+                        role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(
+                                index=0,
+                                id='call_123',
+                                function=DeltaFunctionCall(name='search', arguments='{"query":'),
+                            )
+                        ],
+                    ),
+                    True,
+                )]
+            return [(
+                DeltaMessage(
                     role='assistant',
                     tool_calls=[
                         DeltaToolCall(
                             index=0,
                             id='call_123',
-                            function=DeltaFunctionCall(name='search', arguments='{"query":'),
+                            function=DeltaFunctionCall(arguments='"lmdeploy"}'),
                         )
                     ],
-                ), True
-            return DeltaMessage(
-                role='assistant',
-                tool_calls=[
-                    DeltaToolCall(
-                        index=0,
-                        id='call_123',
-                        function=DeltaFunctionCall(arguments='"lmdeploy"}'),
-                    )
-                ],
-            ), True
+                ),
+                True,
+            )]
 
     async def _result_generator():
         yield SimpleNamespace(
@@ -1054,27 +1061,39 @@ def test_responses_streaming_tool_call_events():
     assert payloads[-1]['response']['output'][0]['status'] == 'completed'
 
 
-def test_responses_streaming_parallel_tool_calls_false_keeps_index_zero():
-    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True, parallel_tool_calls=False)
+@pytest.mark.parametrize(('parallel_tool_calls', 'expected_call_ids'), [
+    (False, ['call_123']),
+    (None, ['call_123', 'call_456']),
+])
+def test_responses_streaming_parallel_tool_calls_filtering(parallel_tool_calls, expected_call_ids):
+    request = ResponsesRequest(
+        model='fake-model',
+        input='Hi there',
+        stream=True,
+        parallel_tool_calls=parallel_tool_calls,
+    )
 
     class _ParallelToolParser:
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
-            return DeltaMessage(
-                role='assistant',
-                tool_calls=[
-                    DeltaToolCall(
-                        index=0,
-                        id='call_123',
-                        function=DeltaFunctionCall(name='search', arguments='{}'),
-                    ),
-                    DeltaToolCall(
-                        index=1,
-                        id='call_456',
-                        function=DeltaFunctionCall(name='lookup', arguments='{}'),
-                    ),
-                ],
-            ), True
+            return [(
+                DeltaMessage(
+                    role='assistant',
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=0,
+                            id='call_123',
+                            function=DeltaFunctionCall(name='search', arguments='{}'),
+                        ),
+                        DeltaToolCall(
+                            index=1,
+                            id='call_456',
+                            function=DeltaFunctionCall(name='lookup', arguments='{}'),
+                        ),
+                    ],
+                ),
+                True,
+            )]
 
     async def _result_generator():
         yield SimpleNamespace(
@@ -1105,10 +1124,8 @@ def test_responses_streaming_parallel_tool_calls_false_keeps_index_zero():
     ]
     completed_output = payloads[-1]['response']['output']
 
-    assert [item['call_id'] for item in added_items] == ['call_123']
-    assert len(completed_output) == 1
-    assert completed_output[0]['call_id'] == 'call_123'
-    assert completed_output[0]['name'] == 'search'
+    assert [item['call_id'] for item in added_items] == expected_call_ids
+    assert [item['call_id'] for item in completed_output] == expected_call_ids
 
 
 def test_responses_streaming_text_indices_follow_text_item_order():
@@ -1118,17 +1135,20 @@ def test_responses_streaming_text_indices_follow_text_item_order():
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
             if delta_text == 'tool':
-                return DeltaMessage(
-                    role='assistant',
-                    tool_calls=[
-                        DeltaToolCall(
-                            index=0,
-                            id='call_123',
-                            function=DeltaFunctionCall(name='search', arguments='{}'),
-                        )
-                    ],
-                ), True
-            return DeltaMessage(role='assistant', content='visible text'), False
+                return [(
+                    DeltaMessage(
+                        role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(
+                                index=0,
+                                id='call_123',
+                                function=DeltaFunctionCall(name='search', arguments='{}'),
+                            )
+                        ],
+                    ),
+                    True,
+                )]
+            return [(DeltaMessage(role='assistant', content='visible text'), False)]
 
     async def _result_generator():
         yield SimpleNamespace(

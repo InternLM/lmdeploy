@@ -109,6 +109,8 @@ def _text_from_content(content: Any, field_name: str) -> str:
             text = part.get('text')
             if text is None:
                 raise ValueError(f'Missing `text` in `{field_name}` content part at index {idx}.')
+            if not isinstance(text, str):
+                raise ValueError(f'Unsupported `text` in `{field_name}` content part at index {idx}. Expected string.')
             text_parts.append(text)
             continue
         raise ValueError(f'Unsupported Responses input content part type: {part_type!r}.')
