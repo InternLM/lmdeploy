@@ -326,6 +326,54 @@ def test_messages_beta_accepts_tool_history_blocks():
     assert data['type'] == 'message'
 
 
+def test_messages_beta_accepts_system_role_message():
+    context = _FakeServerContext()
+    client = _make_client(server_context=context)
+    response = client.post(
+        '/v1/messages?beta=true',
+        headers=ANTHROPIC_HEADERS,
+        json=_messages_payload(
+            messages=[
+                {
+                    'role': 'user',
+                    'content': [{
+                        'type': 'text',
+                        'text': '<system-reminder>Use the repo instructions.</system-reminder>',
+                    }],
+                },
+                {
+                    'role': 'system',
+                    'content': [{
+                        'type': 'text',
+                        'text': 'Project instructions from Claude Code.',
+                    }],
+                },
+                {
+                    'role': 'user',
+                    'content': 'hi',
+                },
+            ],
+        ),
+    )
+
+    assert response.status_code == 200
+    args, _kwargs = context.async_engine.generate_calls[-1]
+    assert args[0] == [
+        {
+            'role': 'user',
+            'content': '<system-reminder>Use the repo instructions.</system-reminder>',
+        },
+        {
+            'role': 'system',
+            'content': 'Project instructions from Claude Code.',
+        },
+        {
+            'role': 'user',
+            'content': 'hi',
+        },
+    ]
+
+
 def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     client = _make_client(response_parser_cls=_ToolAndReasoningParser)
     response = _post_messages(

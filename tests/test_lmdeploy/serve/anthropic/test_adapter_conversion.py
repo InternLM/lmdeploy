@@ -19,6 +19,38 @@ def test_to_openai_messages_keeps_plain_text_messages():
     assert to_openai_messages(request) == [{'role': 'user', 'content': 'hello'}]
 
 
+def test_to_openai_messages_preserves_system_role_message_order():
+    request = _make_request(
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'mid-conversation instruction',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ])
+    assert to_openai_messages(request) == [
+        {
+            'role': 'user',
+            'content': 'first',
+        },
+        {
+            'role': 'system',
+            'content': 'mid-conversation instruction',
+        },
+        {
+            'role': 'user',
+            'content': 'second',
+        },
+    ]
+
+
 def test_to_openai_messages_converts_system_text_blocks():
     request = _make_request(
         system=[

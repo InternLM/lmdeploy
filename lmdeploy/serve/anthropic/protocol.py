@@ -58,7 +58,7 @@ class ContentBlockParam(BaseModel):
 class MessageParam(BaseModel):
     """Anthropic input message."""
 
-    role: Literal['user', 'assistant']
+    role: Literal['user', 'assistant', 'system']
     content: str | list[ContentBlockParam]
 
 
