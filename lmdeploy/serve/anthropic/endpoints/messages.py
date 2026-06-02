@@ -96,6 +96,14 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'system cannot be used when input_ids is set because raw input_ids bypass message rendering.')
+            if request.tools is not None:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'tools cannot be used when input_ids is set because raw input_ids bypass message rendering.')
+            if request.tool_choice is not None:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'tool_choice cannot be used when input_ids is set because raw input_ids bypass message rendering.')
 
         # Resolve fallback input when messages is empty.
         parser_messages = None

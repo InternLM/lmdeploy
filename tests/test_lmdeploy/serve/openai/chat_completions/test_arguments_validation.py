@@ -169,7 +169,7 @@ def test_validate_complete_reports_invalid_tool_arguments_after_parse_complete()
             messages=[],
             tool_choice='auto',
         )
-        parser = cls(request=request, tokenizer=object())
+        parser = cls(request=request)
         open_tag = parser.profile.tool_open_tag
         close_tag = parser.profile.tool_close_tag
         text = open_tag + '{"name": "get_weather", "arguments": {"city":' + close_tag
@@ -202,7 +202,7 @@ def test_validate_complete_checks_each_tool_call_block():
             messages=[],
             tool_choice='auto',
         )
-        parser = cls(request=request, tokenizer=object())
+        parser = cls(request=request)
         open_tag = parser.profile.tool_open_tag
         close_tag = parser.profile.tool_close_tag
         first_payload = '{"name": "get_weather", "arguments": {"city": "NYC"}}'
@@ -243,7 +243,7 @@ def test_validate_complete_reports_invalid_tool_arguments_after_stream_chunk():
             messages=[],
             tool_choice='auto',
         )
-        parser = cls(request=request, tokenizer=object())
+        parser = cls(request=request)
         open_tag = parser.profile.tool_open_tag
         close_tag = parser.profile.tool_close_tag
 
@@ -273,7 +273,7 @@ def test_validate_complete_allows_tool_pair_when_tool_parser_disabled():
             messages=[],
             tool_choice='auto',
         )
-        parser = cls(request=request, tokenizer=object())
+        parser = cls(request=request)
         parser.tool_parser = None
 
         text = '<tool_call>{"name": "get_weather"}</tool_call>'

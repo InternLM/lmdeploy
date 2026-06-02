@@ -733,7 +733,7 @@ def test_messages_image_data_preserves_input_ids_in_multimodal_content():
     assert kwargs['input_ids'] is None
 
 
-def test_messages_accepts_tools_with_input_ids():
+def test_messages_rejects_tools_with_input_ids():
     context = _FakeServerContext(response_parser_cls=_ToolAndReasoningParser)
     client = _make_client(server_context=context)
     response = _post_messages(
@@ -752,11 +752,8 @@ def test_messages_accepts_tools_with_input_ids():
             'type': 'auto',
         },
     )
-    assert response.status_code == 200
-    args, kwargs = context.async_engine.generate_calls[-1]
-    assert args[0] is None
-    assert kwargs['input_ids'] == [1, 2, 3]
-    assert kwargs['tools'][0].function.name == 'search'
+    assert response.status_code == 400
+    assert 'tools cannot be used when input_ids is set' in response.json()['error']['message']
 
 
 def test_count_tokens():
