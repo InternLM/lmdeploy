@@ -54,7 +54,8 @@ def encode_video_base64(video: str | npt.NDArray, format: str = 'JPEG', **kwargs
 
 
 def encode_audio_base64(audio: str | tuple[npt.NDArray, int], format: str = 'WAV', **kwargs) -> str:
-    """Encode audio (path or audio array with sample rate) to a base64 string."""
+    """Encode audio (path or audio array with sample rate) to a base64
+    string."""
     if isinstance(audio, str):
         audio = load_audio(audio, **kwargs)
     audio_io = AudioMediaIO(**kwargs)

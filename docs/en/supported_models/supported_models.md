@@ -46,7 +46,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |       MiniCPM-Llama3-V-2_5       |        -         | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |          MiniCPM-V-2_6           |        -         | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |               GLM4               |        9B        | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|         GLM-4.7-Flash            |       30B        | LLM  |    Yes    |   No    |   No    |  No   |
+|          GLM-4.7-Flash           |       30B        | LLM  |    Yes    |   No    |   No    |  No   |
 |            CodeGeeX4             |        9B        | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |              Molmo               |     7B-D,72B     | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 |             gpt-oss              |     20B,120B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -94,7 +94,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |           QWen2.5-VL           |    3B - 72B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            QWen3-VL            |    2B - 235B    | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            QWen3.5             |    0.8B-397B    | MLLM |    Yes    |   No    |   No    |  No  |  No   |
-|          Qwen3-Omni            |     30B-A3B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|           Qwen3-Omni           |     30B-A3B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-MoE          |       16B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V2           |    16B, 236B    | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V2.5          |      236B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
