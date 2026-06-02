@@ -647,6 +647,15 @@ class ArgumentHelper:
                                    'If True, cuda graph would be disabled')
 
     @staticmethod
+    def enable_batch_invariant(parser):
+        """Add argument enable_batch_invariant to parser."""
+
+        return parser.add_argument('--enable-batch-invariant',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable batch-invariant greedy inference for supported PyTorch backends.')
+
+    @staticmethod
     def communicator(parser):
         return parser.add_argument('--communicator',
                                    type=str,

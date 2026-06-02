@@ -108,3 +108,9 @@ class OpsBackend(ABC):
     def support_ray():
         """Support ray."""
         return False
+
+    @staticmethod
+    def apply_backend_policy(backend_config: BackendConfig, validate_device: bool = False):
+        """Apply backend-specific runtime policy."""
+        if backend_config.enable_batch_invariant:
+            raise RuntimeError('Selected backend does not support enable_batch_invariant.')

@@ -3,6 +3,7 @@ import copy
 import os
 
 from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
+from lmdeploy.pytorch.backends.selector import apply_backend_policy
 from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
@@ -27,6 +28,9 @@ class ConfigBuilder:
         else:
             engine_config = copy.deepcopy(engine_config)
 
+        if engine_config.enable_batch_invariant:
+            backend_config = ConfigBuilder.build_backend_config(engine_config)
+            apply_backend_policy(engine_config.device_type, backend_config)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
@@ -82,6 +86,7 @@ class ConfigBuilder:
         backend_config = BackendConfig(
             eager_mode=engine_config.eager_mode,
             device_type=engine_config.device_type,
+            enable_batch_invariant=engine_config.enable_batch_invariant,
         )
         return backend_config
 

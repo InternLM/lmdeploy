@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from lmdeploy.pytorch.config import BackendConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 
 
@@ -40,3 +41,9 @@ def init_backend(backend_type: str):
     """Init device backend."""
     backend = get_backend(backend_type)
     backend.init()
+
+
+def apply_backend_policy(backend_type: str, backend_config: BackendConfig, validate_device: bool = False):
+    """Apply backend-specific runtime policy."""
+    backend = get_backend(backend_type)
+    backend.apply_backend_policy(backend_config, validate_device=validate_device)

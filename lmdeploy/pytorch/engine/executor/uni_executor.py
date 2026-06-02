@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 
+from lmdeploy.pytorch.backends.selector import apply_backend_policy
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
@@ -40,6 +41,8 @@ class UniExecutor(ExecutorBase):
                          specdecode_config=specdecode_config,
                          trust_remote_code=trust_remote_code)
 
+        if backend_config.enable_batch_invariant:
+            apply_backend_policy(device_type, backend_config, validate_device=True)
         self.device_ctx = DeviceContext(device_type=device_type)
         self.model_agent = build_model_agent(
             model_path=model_path,

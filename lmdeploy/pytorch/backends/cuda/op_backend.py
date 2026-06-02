@@ -282,3 +282,9 @@ class CudaOpsBackend(DefaultOpsBackend):
     def support_ray():
         """Support ray."""
         return True
+
+    @staticmethod
+    def apply_backend_policy(backend_config: BackendConfig, validate_device: bool = False):
+        """Apply CUDA backend-specific runtime policy."""
+        from .batch_invariant import apply_batch_invariant_policy
+        apply_batch_invariant_policy(backend_config, validate_device=validate_device)
