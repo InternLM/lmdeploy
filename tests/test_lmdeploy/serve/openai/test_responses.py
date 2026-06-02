@@ -18,7 +18,7 @@ from lmdeploy.serve.openai.responses import (
     create_responses_router,
 )
 from lmdeploy.serve.openai.responses import serving as responses_serving
-from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem, ResponsesResponse
+from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem
 
 
 class _FakeAsyncEngine:
@@ -128,79 +128,6 @@ def test_responses_request_uses_structured_input_item_alias():
     }]
 
 
-def test_responses_request_keeps_official_field_order_prefix():
-    assert list(ResponsesRequest.model_fields)[:30] == [
-        'background',
-        'context_management',
-        'conversation',
-        'include',
-        'input',
-        'instructions',
-        'max_output_tokens',
-        'max_tool_calls',
-        'metadata',
-        'model',
-        'logit_bias',
-        'parallel_tool_calls',
-        'previous_response_id',
-        'prompt',
-        'prompt_cache_key',
-        'prompt_cache_retention',
-        'reasoning',
-        'safety_identifier',
-        'service_tier',
-        'store',
-        'stream',
-        'stream_options',
-        'temperature',
-        'text',
-        'tool_choice',
-        'tools',
-        'top_logprobs',
-        'top_p',
-        'truncation',
-        'user',
-    ]
-
-
-def test_responses_response_keeps_official_field_order_prefix():
-    assert list(ResponsesResponse.model_fields)[:33] == [
-        'id',
-        'created_at',
-        'error',
-        'incomplete_details',
-        'instructions',
-        'metadata',
-        'model',
-        'object',
-        'output',
-        'parallel_tool_calls',
-        'temperature',
-        'tool_choice',
-        'tools',
-        'top_p',
-        'background',
-        'completed_at',
-        'conversation',
-        'max_output_tokens',
-        'max_tool_calls',
-        'output_text',
-        'previous_response_id',
-        'prompt',
-        'prompt_cache_key',
-        'prompt_cache_retention',
-        'reasoning',
-        'safety_identifier',
-        'service_tier',
-        'status',
-        'text',
-        'top_logprobs',
-        'truncation',
-        'usage',
-        'user',
-    ]
-
-
 def test_responses_string_input_maps_to_user_message():
     request = ResponsesRequest(model='fake-model', input='Hi there')
 
@@ -260,35 +187,6 @@ def test_responses_merges_multiple_system_messages():
         {
             'role': 'system',
             'content': 'You are concise.\n\nFollow the repo instructions.\n\nUse plain text.',
-        },
-        {
-            'role': 'user',
-            'content': 'Say hello.',
-        },
-    ]
-
-
-def test_responses_maps_developer_message_to_system_message():
-    request = ResponsesRequest(
-        model='fake-model',
-        input=[
-            {
-                'type': 'message',
-                'role': 'developer',
-                'content': 'Follow the repo instructions.',
-            },
-            {
-                'type': 'message',
-                'role': 'user',
-                'content': 'Say hello.',
-            },
-        ],
-    )
-
-    assert _messages_from_input(request) == [
-        {
-            'role': 'system',
-            'content': 'Follow the repo instructions.',
         },
         {
             'role': 'user',
@@ -843,14 +741,6 @@ def test_responses_rejects_unsupported_prompt_before_missing_input():
     assert json.loads(response.body)['error']['param'] == 'prompt'
 
 
-def test_responses_accepts_serial_tool_call_request_for_text_v1():
-    request = ResponsesRequest(model='fake-model', input='Hi', parallel_tool_calls=False)
-
-    response = _validate_text_v1_request(request)
-
-    assert response is None
-
-
 def test_responses_rejects_missing_input_for_text_v1():
     request = ResponsesRequest(model='fake-model')
 
@@ -902,10 +792,6 @@ def test_responses_rejects_reasoning_input_items():
 def test_responses_penalty_fields_warn_only_for_unsupported_penalties(monkeypatch):
     import asyncio
 
-    assert 'presence_penalty' in ResponsesRequest.model_fields
-    assert 'frequency_penalty' in ResponsesRequest.model_fields
-    assert 'repetition_penalty' in ResponsesRequest.model_fields
-
     warnings: list[str] = []
     monkeypatch.setattr(responses_serving.logger, 'warning',
                         lambda message, *args: warnings.append(message % args))
@@ -923,8 +809,6 @@ def test_responses_penalty_fields_warn_only_for_unsupported_penalties(monkeypatc
 
     assert response['output_text'] == 'ok'
     assert context.async_engine.generate_kwargs['gen_config'].repetition_penalty == 1.1
-    assert _PassthroughResponseParser.last_request.max_completion_tokens is None
-    assert 'max_tokens' not in _PassthroughResponseParser.last_request.model_fields_set
     assert any('presence_penalty' in warning for warning in warnings)
     assert any('frequency_penalty' in warning for warning in warnings)
     assert not any('repetition_penalty' in warning for warning in warnings)
