@@ -60,7 +60,7 @@ class _DummyProposer:
         self.update_inputs_decoding_calls = 0
         self.model = _DummyDraftModel()
 
-    def get_outputs(self, outputs, inputs, extra_inputs=None):
+    async def get_outputs(self, outputs, inputs, extra_inputs=None, guided_processors=None):
         batch_size = inputs.seq_length.size(0)
         draft_token_ids = inputs.input_ids.new_full((batch_size, 1), self.get_outputs_calls)
         self.get_outputs_calls += 1
@@ -208,6 +208,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
+    agent.guided_decoding_manager = None
     forward_calls = 0
 
     def _forward_impl(_inputs):
@@ -239,6 +240,7 @@ def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatc
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
+    agent.guided_decoding_manager = None
     forward_calls = 0
 
     def _forward_impl(_inputs):
