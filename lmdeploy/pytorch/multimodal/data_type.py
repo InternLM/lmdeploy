@@ -59,11 +59,11 @@ class MultiModalData:
     start: int
     end: int | None = None
     meta: dict[str, Any] | None = None
+    modality: Modality = Modality.IMAGE
 
     # for qwen-vl
     mrope_pos_ids: np.ndarray | None = None
 
-    modality: Modality = Modality.IMAGE
     content_hash: str | None = None
 
     def __post_init__(self):

@@ -239,6 +239,18 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
     return ChoiceLogprobs(content=content)
 
 
+def _create_output_token_logprobs(token_ids: list[int] | None = None,
+                                  logprobs: list[dict[int, float]] | None = None):
+    """Create raw (logprob, token_id) pairs for output tokens."""
+    if token_ids is None or logprobs is None:
+        return None
+
+    output_token_logprobs = []
+    for tok, tok_logprobs in zip(token_ids, logprobs):
+        output_token_logprobs.append((tok_logprobs[tok], tok))
+    return output_token_logprobs or None
+
+
 @router.get('/health')
 async def health() -> JSONResponse:
     """Health check."""
@@ -431,6 +443,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     gen_logprobs, logits_processors = None, None
     if request.logprobs:
         gen_logprobs = request.top_logprobs or 1
+    elif request.return_logprob:
+        gen_logprobs = 1
     if request.logit_bias is not None:
         try:
             logits_processors = [
@@ -515,13 +529,15 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,
                                     finish_reason: str | None = None,
-                                    logprobs: LogProbs | None = None,
+                                    logprobs: ChoiceLogprobs | None = None,
+                                    output_token_logprobs: list[tuple[float, int]] | None = None,
                                     routed_experts=None,
                                     output_ids=None) -> dict:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
                                                          logprobs=logprobs,
+                                                         output_token_logprobs=output_token_logprobs,
                                                          output_ids=output_ids,
                                                          routed_experts=routed_experts)
         response = ChatCompletionStreamResponse(
@@ -551,8 +567,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         final_usage = None
         async for res in result_generator:
             logprobs = None
-            if gen_logprobs and res.logprobs:
+            output_token_logprobs = None
+            if request.logprobs and res.logprobs:
                 logprobs = _create_chat_completion_logprobs(tokenizer, res.token_ids, res.logprobs)
+            if request.return_logprob:
+                output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
                 total_tokens = sum([res.input_token_len, res.generate_token_len])
                 final_usage = UsageInfo(
@@ -569,7 +588,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 # Parser may buffer partial protocol tags and emit no visible delta
                 # while the engine still produced new tokens (e.g. MTP batch). Do not
                 # drop those token ids; emit them once on a placeholder delta.
-                if res.finish_reason is None and logprobs is None and not delta_token_ids:
+                if res.finish_reason is None and not delta_token_ids:
                     continue
                 stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
             should_validate_complete = (
@@ -584,9 +603,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     streaming_tools = True
 
                 is_last_delta = delta_index == len(stream_deltas) - 1
-
+                # The chat parser may split one engine yield into multiple protocol deltas,
+                # so attach the engine-level metadata to the last parsed delta.
                 finish_reason = res.finish_reason if is_last_delta else None
                 chunk_logprobs = logprobs if is_last_delta else None
+                chunk_output_token_logprobs = output_token_logprobs if is_last_delta else None
 
                 if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
                     if finish_reason == 'stop' and streaming_tools is True:
@@ -602,6 +623,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                             delta_message=delta_message,
                                                             finish_reason=finish_reason,
                                                             logprobs=chunk_logprobs,
+                                                            output_token_logprobs=chunk_output_token_logprobs,
                                                             routed_experts=routed_experts,
                                                             output_ids=stream_output_ids)
                 if res.cache_block_ids is not None and is_last_delta:
@@ -663,8 +685,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                             reasoning_content=reasoning_content)
 
     logprobs = None
-    if gen_logprobs and len(final_logprobs):
+    if request.logprobs and len(final_logprobs):
         logprobs = _create_chat_completion_logprobs(tokenizer, final_token_ids, final_logprobs)
+    output_token_logprobs = None
+    if request.return_logprob and len(final_logprobs):
+        output_token_logprobs = _create_output_token_logprobs(final_token_ids, final_logprobs)
 
     assert final_res is not None
     choices = []
@@ -672,6 +697,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         index=0,
         message=message,
         logprobs=logprobs,
+        output_token_logprobs=output_token_logprobs,
         finish_reason=final_res.finish_reason,
         output_ids=final_token_ids if request.return_token_ids else None,
         routed_experts=final_res.routed_experts if request.return_routed_experts else None,
