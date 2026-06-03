@@ -410,33 +410,3 @@ class Builder:
                 shard = _shard(tensor, split_dim, tp, rank)
                 _copy_shard_to_param(handle, name, shard,
                                      alloc_dtype=None)
-
-
-# ---------------------------------------------------------------------------
-# VisualModelBuilder -- generic root for the VLM sub-graph
-# ---------------------------------------------------------------------------
-
-
-class VisualModelBuilder(Builder):
-    """Generic root builder for a VLM visual sub-graph.
-
-    Counterpart to ``TextModelBuilder``. Attaches the constructed visual
-    root weight as the ``visual_model`` sibling of ``text_model`` on each
-    per-GPU ``ModelRoot``. Visual sub-graphs are replicated across TP
-    ranks in v0 — the inherited default ``tp = ParallelGroup(1, None)``
-    is correct.
-
-    Family-specific builders subclass this and add their own commit
-    helpers.
-    """
-
-    def __init__(self, config, ctx, *, root_handles):
-        super().__init__(config, ctx)
-        self._root_handles = root_handles
-
-    def build(self) -> BuiltModule:
-        built = super().build()
-        for i, (root, vis) in enumerate(zip(self._root_handles, built.handles)):
-            with self._ctx.devices[i]:
-                root.add_child_raw('visual_model', vis)
-        return built

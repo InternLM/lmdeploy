@@ -21,12 +21,10 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import _turbomind as _tm
 import torch
-from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config, Qwen3_5TextConfig
-from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5MoeConfig, Qwen3_5MoeTextConfig
 
 from lmdeploy.vl.constants import Modality
 
@@ -43,7 +41,7 @@ from ..builders import (
     MoeBuilder,
     SplitSide,
     TextModelBuilder,
-    VisualModelBuilder,
+    VisionModelBuilder,
     _act_type_id,
     make_layer_norm_config,
 )
@@ -60,6 +58,10 @@ from .utils import (
     read_packed_moe_expert,
     reorder_rotary_emb,
 )
+
+if TYPE_CHECKING:
+    from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config, Qwen3_5TextConfig
+    from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5MoeConfig, Qwen3_5MoeTextConfig
 
 
 def map_packed_qwen35_experts(name: str) -> str:
@@ -164,8 +166,7 @@ class Qwen3_5TextModel(TextModel):
 
     def linear_attn(self, pfx):
         cfg = self._dn_cfg.clone()
-        builder = DeltaNetBuilder(cfg, self._ctx,
-                                  tp=self._attn_tp)
+        builder = DeltaNetBuilder(cfg, self._ctx, tp=self._attn_tp)
 
         builder.add_input_projections(
             in_proj_qkv=self._linear(pfx + 'in_proj_qkv'),
@@ -430,9 +431,10 @@ class Qwen3_5VisionModel(TextModel):
 
     def _build_visual_model(self, pfx):
         cfg = self._make_visual_root_cfg()
-        root = self._restore_dtype(VisualModelBuilder(
-            cfg, self._ctx, root_handles=self._root_handles))
-        root.tp = self._model_tp
+        root = self._restore_dtype(VisionModelBuilder(
+            cfg, self._ctx,
+            root_handles=self._root_handles,
+            tp=self._model_tp))
 
         root._add_tensor('pos_embed', (pfx + 'pos_embed').pop('weight'))
         root._add_linear('patch_embed', self._patch_embed(pfx + 'patch_embed.proj'))
@@ -464,8 +466,7 @@ class Qwen3_5VisionModel(TextModel):
 
     def _patch_embed(self, pfx):
         weight = pfx.pop('weight')
-        if weight.dim() >= 2:
-            weight = weight.reshape(weight.shape[0], -1).t().contiguous()
+        weight = weight.reshape(weight.shape[0], -1).t().contiguous()
         tensors = {'weight': weight}
         if pfx.has('bias'):
             tensors['bias'] = pfx.pop('bias')

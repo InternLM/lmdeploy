@@ -77,7 +77,7 @@ def load_vl_model(model_path: str,
                 # build the Python vision part for legacy TurboMind models,
                 # or load the whole VLM model when `with_llm==True`. Native
                 # TurboMind vision models run the visual encoder in C++.
-                native_tm_vision = backend == 'turbomind' and getattr(model, '_turbomind_native_vision', False)
+                native_tm_vision = backend == 'turbomind' and model._turbomind_native_vision
                 if (backend == 'turbomind' and not native_tm_vision) or with_llm:
                     model.build_model(trust_remote_code=trust_remote_code)
                 return model

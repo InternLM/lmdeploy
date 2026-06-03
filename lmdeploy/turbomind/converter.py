@@ -231,13 +231,12 @@ def get_tm_config(model_path,
     engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
     # 6. Build text model.
-    registered_name = get_registered_name(model_path, arch=arch)
-    model_cls = INPUT_MODELS.get(registered_name)
-
     cfg = source_model_config(hf_model_cfg)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
         _apply_hf_overrides(cfg, engine_config.hf_overrides)
+    registered_name = get_registered_name(model_path, arch=arch)
+    model_cls = INPUT_MODELS.get(registered_name)
 
     # VL aggregate classes declare `_vision = True` to opt into the vision-
     # branch contract: receive `disable_vision_encoder` and a dedicated

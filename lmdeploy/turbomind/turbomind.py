@@ -275,7 +275,7 @@ class TurboMind:
 
         return model_comm, model_loader
 
-    def prepare_multimodal_inputs(self, multimodal: list[dict[str, Any]] | None):
+    def mm_input_converter(self, multimodal: list[dict[str, Any]] | None):
         """Convert frontend multimodal data into model-specific TurboMind
         input."""
         if not multimodal:
@@ -725,7 +725,7 @@ class TurboMindInstance:
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
         inputs = _np_dict_to_tm_dict(inputs)
-        mm_inputs = self.tm_model.prepare_multimodal_inputs(multimodal)
+        mm_inputs = self.tm_model.mm_input_converter(multimodal)
 
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
