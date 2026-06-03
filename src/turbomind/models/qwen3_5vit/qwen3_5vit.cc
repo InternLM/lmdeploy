@@ -49,7 +49,7 @@ struct Qwen3_5Vit::Impl {
     Buffer_<int> attn_cu_seqlens_buf_;
 
     struct Data {
-        Tensor_<float>                   batch_input;
+        Tensor                           batch_input;
         int                              batch_size;
         std::vector<std::array<int, 3>>  grid_thws_host;
         std::vector<std::pair<int, int>> image_embeds_coords;  // (size, pos) for image embeddings
@@ -108,7 +108,7 @@ struct Qwen3_5Vit::Impl {
         auto& cfg = weights.config();
         for (int i = 0; i < phases; ++i) {
             auto& d             = data_.emplace_back();
-            d.batch_input       = {{engine.max_forward_token_num, cfg.patch_in_dim}, kCPUpinned};
+            d.batch_input       = {{engine.max_forward_token_num, cfg.patch_in_dim}, cfg.data_type, kCPUpinned};
             d.mrope_length_host = {engine.max_batch_size, kCPUpinned};
             d.mrope_delta_host  = {engine.max_batch_size, kCPUpinned};
             // Generous initial capacity: typical batches emit << bsz * 8 segments. Lazily grown below.
@@ -193,15 +193,10 @@ struct Qwen3_5Vit::Impl {
 
     Tensor PatchEmbedding(Data& d)
     {
-        auto& cfg = weights_.config();
-
         Tensor host_input = d.batch_input.slice(0, d.batch_size);
         Tensor input      = empty_like(host_input, kDEVICE);
 
         Copy(host_input, input);
-        TM_CUDA_CHECK(cudaGetLastError());
-
-        EnsureFloatDtype(input, cfg.data_type);
         TM_CUDA_CHECK(cudaGetLastError());
 
         Tensor output;
@@ -425,12 +420,16 @@ struct Qwen3_5Vit::Impl {
         if (d.batch_size > 0) {
             if (d.batch_size > d.batch_input.shape(0)) {
                 core::ContextGuard ctx{Allocator{kCPUpinned}};
-                d.batch_input = {{d.batch_size, cfg.patch_in_dim}, kCPUpinned};
+                d.batch_input = {{d.batch_size, cfg.patch_in_dim}, cfg.data_type, kCPUpinned};
             }
-            auto embed_ptr = d.batch_input.data();
+            ssize_t batch_offset = 0;
             for (const auto& pixel_value : pixel_values) {
-                embed_ptr = std::copy_n(pixel_value.data<float>(), pixel_value.size(), embed_ptr);
+                TM_CHECK_EQ(pixel_value.size(), pixel_value.shape(0) * cfg.patch_in_dim);
+                TM_CHECK_EQ(pixel_value.dtype(), d.batch_input.dtype());
+                Copy(pixel_value, d.batch_input.slice(batch_offset, pixel_value.shape(0)));
+                batch_offset += pixel_value.shape(0);
             }
+            TM_CHECK_EQ(batch_offset, d.batch_size);
         }
 
         // setup fast_pos_embed

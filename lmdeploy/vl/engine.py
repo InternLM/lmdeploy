@@ -9,6 +9,7 @@ import torch
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.vl.model.builder import load_vl_model
+from lmdeploy.utils import is_bf16_supported
 
 
 def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
@@ -32,6 +33,25 @@ def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
             if isinstance(dtype, torch.dtype) and dtype.is_floating_point:
                 return dtype
     return None
+
+
+def _resolve_mm_feature_dtype(hf_config, backend_config) -> torch.dtype | None:
+    """Resolve multimodal feature dtype.
+
+    HF config provides the default. An explicit backend dtype overrides it,
+    while ``auto`` keeps the HF-derived dtype.
+    """
+    dtype = _get_hf_config_mm_feature_dtype(hf_config)
+    backend_dtype = getattr(backend_config, 'dtype', 'auto')
+    device_type = getattr(backend_config, 'device_type', 'cuda')
+    if backend_dtype != 'auto':
+        dtype = {
+            'float16': torch.float16,
+            'bfloat16': torch.bfloat16,
+        }[backend_dtype]
+    if dtype == torch.bfloat16 and not is_bf16_supported(device_type):
+        dtype = torch.float16
+    return dtype
 
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
@@ -59,7 +79,8 @@ class ImageEncoder:
                                    backend,
                                    backend_config=backend_config,
                                    trust_remote_code=trust_remote_code)
-        self.mm_feature_dtype = _get_hf_config_mm_feature_dtype(getattr(self.model, 'hf_config', None))
+        self.mm_feature_dtype = _resolve_mm_feature_dtype(
+            getattr(self.model, 'hf_config', None), backend_config)
         if self.model is not None and hasattr(self.model, 'set_mm_feature_dtype'):
             self.model.set_mm_feature_dtype(self.mm_feature_dtype)
         if vision_config is None:
