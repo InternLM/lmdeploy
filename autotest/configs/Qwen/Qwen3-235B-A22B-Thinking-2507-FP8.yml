@@ -1,0 +1,23 @@
+# HF model id: Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 4
+    extra:
+      cache-max-entry-count: 0.9
+      max-batch-size: 1024
+      session-len: 65536
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 0.6

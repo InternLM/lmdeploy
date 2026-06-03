@@ -22,6 +22,8 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
+    FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -242,8 +244,8 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        quant_policy: default to 0. For TurboMind, when k/v is quantized
+            into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
             default to 0. TurboMind follows the implementation of transformer
             LlamaAttention
@@ -313,8 +315,14 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
-        assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
-               'invalid quant_policy'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
+        assert self.quant_policy not in (
+            QuantPolicy.FP8,
+            QuantPolicy.FP8_E5M2,
+        ), 'invalid quant_policy for TurboMind, FP8 quantization is not supported'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
@@ -366,8 +374,9 @@ class PytorchEngineConfig:
         revision: The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        quant_policy: default to 0. When k/v is quantized into int4,
+            int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
+            respectively
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
@@ -459,8 +468,10 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
-        assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
-               'invalid quant_policy'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.kernel_block_size >= 16 and \
                (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
@@ -626,6 +637,7 @@ class ScheduleMetrics:
     cached_blocks: int = 0
     free_blocks: int = 0
     prefix_cache_hit_rate: float = 0
+    scheduler_tick: int = 0
 
 
 @dataclass

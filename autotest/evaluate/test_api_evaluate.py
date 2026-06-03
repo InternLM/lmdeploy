@@ -3,7 +3,13 @@ import time
 
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_eval_preset_config,
+    get_func_config_list,
+    get_workerid,
+    resolve_eval_config_name,
+)
 from utils.evaluate_utils import eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
@@ -19,16 +25,9 @@ def _run_ray_distributed_test(
         eval_config_name='default'):
     """Universal distributed test executor (using shared Ray cluster)"""
     assert manager is not None, 'Manager instance must be provided'
-    if 'gpt' in run_config.get('model', '').lower():
-        eval_config_name = 'gpt'
-    elif 'intern-s1-pro' in run_config.get('model', '').lower():
-        eval_config_name = 'intern-s1-pro'
-    elif 'qwen3.5' in run_config.get('model', '').lower():
-        eval_config_name = 'qwen3.5'
-    if str(config.get('env_tag')) == 'ascend':
-        eval_config_name = f'{eval_config_name}-2batch'
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
 
     if manager.is_master:
         model_path = os.path.join(config['model_path'], run_config['model'])
@@ -63,20 +62,14 @@ def _run_proxy_distributed_test(config,
                                 worker_id,
                                 test_type='infer',
                                 manager=None,
-                                eval_config_name='default'):
+                                eval_config_name='default',
+                                eval_subpath=None):
     assert manager is not None, 'Manager instance must be provided'
 
-    if 'gpt' in run_config.get('model', '').lower():
-        eval_config_name = 'gpt'
-    elif 'intern-s1-pro' in run_config.get('model', '').lower():
-        eval_config_name = 'intern-s1-pro'
-    elif 'qwen3.5' in run_config.get('model', '').lower():
-        eval_config_name = 'qwen3.5'
+    if eval_subpath is None:
+        eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    if str(config.get('env_tag')) == 'ascend':
-        eval_config_name = f'{eval_config_name}-2batch'
-
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
     model_name = run_config['model']
     model_path = os.path.join(config['model_path'], model_name)
 
@@ -88,6 +81,9 @@ def _run_proxy_distributed_test(config,
             api_server.wait_until_ready()
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
             eval_path = config.get('eval_path')
+            if eval_subpath:
+                eval_path = os.path.join(eval_path, eval_subpath)
+                os.makedirs(eval_path, exist_ok=True)
             case_name = get_case_str_by_config(run_config)
 
             extra_config = {'max-num-workers': 16}
@@ -98,6 +94,7 @@ def _run_proxy_distributed_test(config,
                                     port=constant.PROXY_PORT,
                                     test_type=test_type,
                                     extra_config=extra_config,
+                                    eval_config_name=eval_config_name,
                                     **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
@@ -114,20 +111,8 @@ def _run_proxy_distributed_test(config,
 
 def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
     """Run test with specified evaluation configuration."""
-    if eval_config_name == 'default':
-        if 'gpt' in run_config.get('model', '').lower():
-            eval_config_name = 'gpt'
-        elif 'sdar' in run_config.get('model', '').lower():
-            eval_config_name = 'sdar'
-        elif 'intern-s1-pro' in run_config.get('model', '').lower():
-            eval_config_name = 'intern-s1-pro'
-        elif 'qwen3.5' in run_config.get('model', '').lower():
-            eval_config_name = 'qwen3.5'
-        if str(config.get('env_tag')) == 'a100':
-            eval_config_name = f'{eval_config_name}-32k'
-        elif str(config.get('env_tag')) == 'ascend':
-            eval_config_name = f'{eval_config_name}-2batch'
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
     eval_path = config.get('eval_path')
     if eval_subpath:
         eval_path = os.path.join(eval_path, eval_subpath)
@@ -282,7 +267,53 @@ def test_pytorch_restful_tp2(config, run_config, worker_id):
     ),
 )
 def test_pytorch_restful_tp2_longtext(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_config_name='longtext-256k')
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='longtext', eval_config_name='longtext-256k')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 400000},
+    ),
+)
+def test_pytorch_restful_distributed_dp4ep8_longtext(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager,
+                                eval_config_name='longtext-256k',
+                                eval_subpath='longtext')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 700000},
+    ),
+)
+def test_pytorch_restful_distributed_dp4ep8_longtext_512k(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager,
+                                eval_config_name='longtext-512k',
+                                eval_subpath='longtext-512k')
 
 
 @pytest.mark.infer
@@ -299,7 +330,12 @@ def test_pytorch_restful_tp2_longtext(config, run_config, worker_id):
     ),
 )
 def test_pytorch_restful_tp2_longtext_512k(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_config_name='longtext-512k')
+    run_eval_test(config,
+                  run_config,
+                  worker_id,
+                  'infer',
+                  eval_subpath='longtext-512k',
+                  eval_config_name='longtext-512k')
 
 
 @pytest.mark.infer
@@ -391,6 +427,19 @@ def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_config
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 8, 'ep': 8}, func_type='evaluate'))
 def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager)
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 4, 'ep': 8}, func_type='evaluate'))
+def test_pytorch_restful_distributed_dp4ep8(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
                                 run_config=run_config,
                                 worker_id=worker_id,
@@ -517,6 +566,15 @@ def test_pytorch_eval_distributed_dpep8(config, run_config, worker_id):
 
 @pytest.mark.eval
 @pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 4, 'ep': 8}, func_type='evaluate'))
+def test_pytorch_eval_distributed_dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 16, 'ep': 16}, func_type='evaluate'))
@@ -538,7 +596,41 @@ def test_pytorch_eval_distributed_dpep16(config, run_config, worker_id):
     ),
 )
 def test_pytorch_eval_tp2_longtext(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_config_name='longtext-256k')
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext', eval_config_name='longtext-256k')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 400000},
+    ),
+)
+def test_pytorch_eval_distributed_dp4ep8_longtext(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext', eval_config_name='longtext-256k')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 700000},
+    ),
+)
+def test_pytorch_eval_distributed_dp4ep8_longtext_512k(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext-512k', eval_config_name='longtext-512k')
 
 
 @pytest.mark.eval
@@ -555,7 +647,7 @@ def test_pytorch_eval_tp2_longtext(config, run_config, worker_id):
     ),
 )
 def test_pytorch_eval_tp2_longtext_512k(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_config_name='longtext-512k')
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext-512k', eval_config_name='longtext-512k')
 
 
 @pytest.mark.eval

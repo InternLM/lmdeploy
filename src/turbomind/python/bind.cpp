@@ -386,7 +386,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("total_blocks", &ft::ScheduleMetrics::total_blocks)
         .def_readonly("active_blocks", &ft::ScheduleMetrics::active_blocks)
         .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
-        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks);
+        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks)
+        .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
 
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {

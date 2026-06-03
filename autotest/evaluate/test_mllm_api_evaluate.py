@@ -1,15 +1,27 @@
 import os
+import time
 
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_eval_preset_config,
+    get_func_config_list,
+    get_workerid,
+    resolve_eval_config_name,
+)
 from utils.evaluate_utils import mllm_eval_test
+from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
 
 
-def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default'):
-    extra_config = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
+def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
+    extra_config = get_eval_preset_config(config, run_config, eval_config_name, mllm=True)
     eval_path = config.get('mllm_eval_path')
+    if eval_subpath:
+        eval_path = os.path.join(eval_path, eval_subpath)
+        os.makedirs(eval_path, exist_ok=True)
     case_name = get_case_str_by_config(run_config)
     if test_type == 'infer':
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
@@ -64,6 +76,52 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
             if pid > 0:
                 terminate_restful_api(worker_id)
             stop_restful_api(proxy_pid, proxy_process)
+
+
+def _run_proxy_distributed_mllm_test(
+        config,
+        run_config,
+        worker_id,
+        test_type='infer',
+        manager=None,
+        eval_config_name='default'):
+    assert manager is not None, 'Manager instance must be provided'
+
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
+
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name, mllm=True)
+    model_name = run_config['model']
+    model_path = os.path.join(config['model_path'], model_name)
+
+    api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
+    api_server.start()
+
+    try:
+        if manager.is_master:
+            api_server.wait_until_ready()
+            print(f'🧪 Master node executing mllm {test_type} test ({eval_config_name})...')
+            eval_path = config.get('mllm_eval_path')
+            case_name = get_case_str_by_config(run_config)
+            extra_config = {'api-nproc': 16}
+            extra_config.update(preset_config)
+
+            result, msg = mllm_eval_test(model_path,
+                                         eval_path,
+                                         case_name,
+                                         port=constant.PROXY_PORT,
+                                         test_type=test_type,
+                                         extra_config=extra_config)
+            assert result, f'❌ mllm {test_type} test failed: {msg}'
+            print(f'✅ mllm {test_type} test passed')
+
+        else:
+            print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete mllm test...')
+            proxy_worker_node_wait(manager, timeout_minutes=4880)
+
+    finally:
+        api_server.cleanup()
+        if manager.is_master:
+            time.sleep(1)
 
 
 def get_models(backend, parallel_config):
@@ -246,4 +304,26 @@ def test_pytorch_eval_tp8(config, run_config, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 16}))
 def test_pytorch_eval_tp16(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'dp': 4, 'ep': 8}))
+def test_pytorch_vl_restful_distributed_dp4ep8(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_mllm_test(config=config,
+                                       run_config=run_config,
+                                       worker_id=worker_id,
+                                       test_type='infer',
+                                       manager=shared_proxy_manager)
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'dp': 4, 'ep': 8}))
+def test_pytorch_vl_eval_distributed_dp4ep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')

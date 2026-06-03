@@ -167,3 +167,8 @@ class ModelAgentStrategy(ABC):
     @contextmanager
     def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, dist_ctx: 'DistContext'):
         """Broadcast next token ids and extra inputs."""
+
+    @contextmanager
+    def post_broadcast(self, extra_inputs: ExtraInputs, dist_ctx: 'DistContext'):
+        """Post broadcast extra inputs."""
+        pass

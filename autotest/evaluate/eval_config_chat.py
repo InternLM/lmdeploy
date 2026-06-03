@@ -73,7 +73,7 @@ judge_cfg = dict(
         dict(role='BOT', api_role='BOT', generate=True),
     ]),
     query_per_second=16,
-    batch_size=1024,
+    batch_size=256,
     temperature=0.001,
     tokenizer_path=JUDGE_MODEL_PATH,
     verbose=True,
