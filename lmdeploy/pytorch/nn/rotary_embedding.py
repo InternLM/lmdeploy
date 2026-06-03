@@ -281,17 +281,12 @@ class MRotaryEmbedding(nn.Module):
         self.impl = impl
         self.mrope_section = list(params.mrope_section)
         self.mrope_interleaved = params.mrope_interleaved
-        rotary_dim = getattr(impl, 'dim', None)
-        if rotary_dim is not None:
-            assert sum(self.mrope_section) == rotary_dim // 2
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
         """forward."""
         if position_ids.size(0) != 3:
             cos, sin = self.impl(x, position_ids)
             return cos, sin
-
-        position_ids = self._pad_position_ids(position_ids, x.shape[-2])
 
         if self._uses_static_inv_freq_rope():
             return self.build_mrope_tables_from_selected_freqs(x, position_ids)
@@ -302,16 +297,6 @@ class MRotaryEmbedding(nn.Module):
         cos = cos.reshape(*leading_shape, *cos.shape[1:])
         sin = sin.reshape(*leading_shape, *sin.shape[1:])
         return self.apply_mrope(cos), self.apply_mrope(sin)
-
-    def _pad_position_ids(self, position_ids: torch.Tensor, target_len: int):
-        """Pad mrope ids to the hidden-state length when graph buffers are larger."""
-        if position_ids.shape[-1] == target_len:
-            return position_ids
-        assert position_ids.shape[-1] < target_len
-        out_shape = (*position_ids.shape[:-1], target_len)
-        out = position_ids.new_zeros(out_shape)
-        out[..., :position_ids.shape[-1]] = position_ids
-        return out
 
     def apply_mrope(self, freqs: torch.Tensor):
         """Select temporal, height, and width rotary bands."""

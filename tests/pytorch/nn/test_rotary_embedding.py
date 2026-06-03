@@ -148,9 +148,8 @@ def test_interleaved_mrope_yarn_long_context_override_uses_backend_path():
     hidden_states = torch.empty(1, position_ids.shape[-1], config.head_dim)
 
     cos, sin = rotary_emb(hidden_states, position_ids)
-    padded_position_ids = rotary_emb._pad_position_ids(position_ids, hidden_states.shape[-2])
-    leading_shape = padded_position_ids.shape[:-1]
-    base_cos, base_sin = rotary_emb.impl(hidden_states, padded_position_ids.flatten(0, -2))
+    leading_shape = position_ids.shape[:-1]
+    base_cos, base_sin = rotary_emb.impl(hidden_states, position_ids.flatten(0, -2))
     base_cos = base_cos.reshape(*leading_shape, *base_cos.shape[1:])
     base_sin = base_sin.reshape(*leading_shape, *base_sin.shape[1:])
 
@@ -179,25 +178,5 @@ def test_mrope_config_keeps_text_positions_as_regular_rope():
     cos, sin = rotary_emb(hidden_states, position_ids)
     expected_cos, expected_sin = rotary_emb.impl(hidden_states, position_ids)
 
-    torch.testing.assert_close(cos, expected_cos)
-    torch.testing.assert_close(sin, expected_sin)
-
-
-def test_mrope_position_ids_pad_to_hidden_state_length():
-    rotary_emb = build_rotary_embedding_from_config(_make_config())
-    hidden_states = torch.empty(8, 16)
-    position_ids = torch.stack([
-        torch.arange(5),
-        torch.arange(10, 15),
-        torch.arange(20, 25),
-    ])
-
-    cos, sin = rotary_emb(hidden_states, position_ids)
-    padded_position_ids = torch.zeros(3, 8, dtype=position_ids.dtype)
-    padded_position_ids[:, :5] = position_ids
-    expected_cos, expected_sin = rotary_emb(hidden_states, padded_position_ids)
-
-    assert cos.shape == (8, 16)
-    assert sin.shape == (8, 16)
     torch.testing.assert_close(cos, expected_cos)
     torch.testing.assert_close(sin, expected_sin)
