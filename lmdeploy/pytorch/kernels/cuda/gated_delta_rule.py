@@ -112,11 +112,11 @@ def normalize_qk(k_local: T.Buffer, q_local: T.Buffer, k_per_thr: int) -> None:
         q_sum += q_local[i] * q_local[i]
     k_sum = T.warp_reduce_sum(k_sum)
     q_sum = T.warp_reduce_sum(q_sum)
-    k_norm = T.rsqrt(k_sum + 1e-6)
-    q_norm = T.rsqrt(q_sum + 1e-6)
+    k_norm = T.sqrt(k_sum + 1e-6)
+    q_norm = T.sqrt(q_sum + 1e-6)
     for i in T.Unroll(k_per_thr):
-        k_local[i] = k_local[i] * k_norm
-        q_local[i] = q_local[i] * q_norm
+        k_local[i] = k_local[i] / k_norm
+        q_local[i] = q_local[i] / q_norm
 
 
 @T.macro
