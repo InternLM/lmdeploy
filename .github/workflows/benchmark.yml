@@ -163,7 +163,7 @@ jobs:
       TEST_ENV: ${{ matrix.transformers }}
     timeout-minutes: 480
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip

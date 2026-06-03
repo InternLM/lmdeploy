@@ -26,6 +26,8 @@ SUPPORTED_ARCHS = dict(
     Glm4MoeLiteForCausalLM='glm4-moe-lite',
     # gpt-oss
     GptOssForCausalLM='gpt-oss',
+    # Mixtral
+    MixtralForCausalLM='mixtral',
 )
 
 

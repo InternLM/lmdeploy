@@ -1,0 +1,64 @@
+# HF model id: internlm/Intern-S1-mini
+
+a100:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - func
+  - longtext_benchmark
+  - mllm_evaluate
+  - prefix_cache
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+    - kvint4
+    - kvint8
+    pytorch:
+    - kvint4
+    - kvint8
+h:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - func
+  - mllm_evaluate
+  - prefix_cache
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+ascend:
+- model_type: vl
+  engine_config:
+    tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - func

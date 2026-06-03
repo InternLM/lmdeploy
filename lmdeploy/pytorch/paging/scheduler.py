@@ -64,6 +64,11 @@ class Scheduler:
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
+        self.scheduler_tick = 0
+
+    def tick(self):
+        """Mark one scheduler progress step."""
+        self.scheduler_tick += 1
 
     @staticmethod
     def create_status_list_property(status: MessageStatus):
@@ -410,4 +415,5 @@ class Scheduler:
             total_blocks=self.block_manager.num_gpu_blocks,
             free_blocks=self.block_manager.get_num_free_gpu_blocks(),
             prefix_cache_hit_rate=self.block_trie.hit_rate(),
+            scheduler_tick=self.scheduler_tick,
         )

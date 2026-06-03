@@ -143,7 +143,7 @@ with set_envs():
     # dlblas
     # we don't need to read this, it would be passed to ray workers
     # If Ray is launched from outside, it may fail to access the environment variables.
-    os.getenv('DEEPEP_MAX_TOKENS_PER_RANK', None)
+    deep_ep_max_tokens_per_rank = env_to_int('DEEPEP_MAX_TOKENS_PER_RANK', 128)
     os.getenv('DEEPEP_ENABLE_MNNVL', None)
     os.getenv('DEEPEP_MODE', 'auto')
 
@@ -156,6 +156,9 @@ with set_envs():
 
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
+
+    # memory trim
+    multimodal_session_trim_count = env_to_int('LMDEPLOY_MULTIMODAL_SESSION_TRIM_COUNT', 128)
 
     # model format
     scale_fmt = os.getenv('LMDEPLOY_SCALE_FMT', None)

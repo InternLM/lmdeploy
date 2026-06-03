@@ -1,0 +1,18 @@
+# HF model id: codellama/CodeLlama-7b-Instruct-hf
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+  deps:
+    transformers: 4.57.6

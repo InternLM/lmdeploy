@@ -71,6 +71,10 @@ class MPEngine(EngineBase):
         """Get schedule metrics."""
         return await self._collective_rpc_async('get_schedule_metrics')
 
+    async def get_health_status(self):
+        """Get backend health status."""
+        return await self._collective_rpc_async('get_health_status')
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self._collective_rpc('p2p_initialize', conn_request)
