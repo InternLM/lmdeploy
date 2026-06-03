@@ -201,6 +201,79 @@ class TestRecurrentGatedDeltaRule:
                                    atol=1e-2,
                                    rtol=1e-3)
 
+    @pytest.mark.parametrize('transpose_state_layout', [False, True])
+    def test_fused_gated_delta_rule_initial_state_required(self, transpose_state_layout):
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
+
+        batch, seqlen, num_heads, head_dim, value_dim = 3, 2, 1, 32, 17
+        q = torch.rand(batch, seqlen, num_heads, head_dim) - 0.5
+        k = torch.rand(batch, seqlen, num_heads, head_dim) - 0.5
+        v = torch.rand(batch, seqlen, num_heads, value_dim) - 0.5
+
+        with pytest.raises(AssertionError, match='initial_state is required'):
+            fused_recurrent_gated_delta_rule(
+                q=q,
+                k=k,
+                v=v,
+                initial_state=None,
+                transpose_state_layout=transpose_state_layout,
+            )
+
+    @pytest.mark.parametrize('transpose_state_layout', [False, True])
+    @pytest.mark.parametrize('is_circular_buffer', [False, True])
+    def test_fused_gated_delta_rule_invalid_state_indices(self, transpose_state_layout, is_circular_buffer):
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
+
+        batch, seqlen, num_heads, head_dim, value_dim = 4, 2, 1, 32, 37
+        num_cache_states = 3
+        num_slots = 3
+        q = torch.rand(batch, seqlen, num_heads, head_dim) - 0.5
+        k = torch.rand(batch, seqlen, num_heads, head_dim) - 0.5
+        v = torch.rand(batch, seqlen, num_heads, value_dim) - 0.5
+        g = -2 * torch.rand(batch, seqlen, num_heads)
+        beta = torch.rand(batch, seqlen, num_heads)
+        state_indices = torch.tensor([-1, num_cache_states, num_cache_states + 1, -7], dtype=torch.int64)
+
+        if is_circular_buffer:
+            state_shape = (num_cache_states, num_slots, num_heads, value_dim, head_dim) \
+                if transpose_state_layout else (num_cache_states, num_slots, num_heads, head_dim, value_dim)
+            cache_seqlens = torch.tensor([0, 1, 2, 3], dtype=torch.int32)
+        else:
+            state_shape = (num_cache_states, num_heads, value_dim, head_dim) \
+                if transpose_state_layout else (num_cache_states, num_heads, head_dim, value_dim)
+            cache_seqlens = None
+        initial_state = torch.rand(*state_shape) - 0.5
+        initial_state_before = initial_state.clone()
+
+        original_empty_like = torch.empty_like
+
+        def poisoned_empty_like(*args, **kwargs):
+            output = original_empty_like(*args, **kwargs)
+            output.fill_(123)
+            return output
+
+        torch.empty_like = poisoned_empty_like
+        try:
+            out, _ = fused_recurrent_gated_delta_rule(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=initial_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+                state_indices=state_indices,
+                cache_seqlens=cache_seqlens,
+                transpose_state_layout=transpose_state_layout,
+            )
+        finally:
+            torch.empty_like = original_empty_like
+
+        torch.cuda.synchronize()
+        assert (out == 123).all()
+        torch.testing.assert_close(initial_state, initial_state_before, atol=0, rtol=0)
+
     def test_circular_buffer(self, q, k, v, g, beta, seqlen, batch, num_heads, head_dim):
         """Test cache_seqlens circular buffer support."""
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
