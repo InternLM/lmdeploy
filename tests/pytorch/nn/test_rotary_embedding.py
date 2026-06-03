@@ -62,8 +62,9 @@ def test_chunked_mrope_matches_legacy_selection():
     expected_cos = torch.cat([m[i % 3] for i, m in enumerate(base_cos.split(mrope_section, dim=-1))], dim=-1)
     expected_sin = torch.cat([m[i % 3] for i, m in enumerate(base_sin.split(mrope_section, dim=-1))], dim=-1)
 
-    torch.testing.assert_close(cos, expected_cos)
-    torch.testing.assert_close(sin, expected_sin)
+    assert rotary_emb._uses_static_inv_freq_rope()
+    torch.testing.assert_close(cos, expected_cos, rtol=0, atol=1e-7)
+    torch.testing.assert_close(sin, expected_sin, rtol=0, atol=1e-7)
 
 
 def test_interleaved_mrope_matches_qwen3_selection():
@@ -119,6 +120,55 @@ def test_interleaved_mrope_matches_legacy_qwen3_formula_tightly():
 
     assert (cos - expected_cos).abs().max().item() <= 2e-7
     assert (sin - expected_sin).abs().max().item() <= 2e-7
+
+
+def test_interleaved_mrope_yarn_long_context_override_uses_backend_path():
+    config = PretrainedConfig(
+        hidden_size=2048,
+        num_attention_heads=8,
+        head_dim=256,
+        max_position_embeddings=512000,
+        rope_theta=10000000,
+        rope_parameters=dict(
+            mrope_interleaved=True,
+            mrope_section=[11, 11, 10],
+            rope_type='yarn',
+            rope_theta=10000000,
+            partial_rotary_factor=0.25,
+            factor=4.0,
+            original_max_position_embeddings=262144,
+        ),
+    )
+    rotary_emb = build_rotary_embedding_from_config(config)
+    position_ids = torch.tensor([
+        [0, 1, 1024, 262143, 262144, 400000, 511998, 511999],
+        [3, 5, 2048, 262140, 262150, 399900, 510000, 511999],
+        [7, 11, 4096, 262130, 262160, 399800, 509000, 511999],
+    ]).unsqueeze(1)
+    hidden_states = torch.empty(1, position_ids.shape[-1], config.head_dim)
+
+    cos, sin = rotary_emb(hidden_states, position_ids)
+    padded_position_ids = rotary_emb._pad_position_ids(position_ids, hidden_states.shape[-2])
+    leading_shape = padded_position_ids.shape[:-1]
+    base_cos, base_sin = rotary_emb.impl(hidden_states, padded_position_ids.flatten(0, -2))
+    base_cos = base_cos.reshape(*leading_shape, *base_cos.shape[1:])
+    base_sin = base_sin.reshape(*leading_shape, *base_sin.shape[1:])
+
+    def apply_interleaved_reference(freqs):
+        half_dim = freqs.size(-1) // 2
+        out = freqs[0].clone()
+        for dim, offset in enumerate((1, 2), start=1):
+            length = min(config.rope_parameters['mrope_section'][dim] * 3, half_dim)
+            out[..., offset:length:3] = freqs[dim, ..., offset:length:3]
+            out[..., half_dim + offset:half_dim + length:3] = \
+                freqs[dim, ..., half_dim + offset:half_dim + length:3]
+        return out
+
+    assert not rotary_emb._uses_static_inv_freq_rope()
+    assert cos.shape == (1, position_ids.shape[-1], 64)
+    assert sin.shape == (1, position_ids.shape[-1], 64)
+    torch.testing.assert_close(cos, apply_interleaved_reference(base_cos), rtol=0, atol=0)
+    torch.testing.assert_close(sin, apply_interleaved_reference(base_sin), rtol=0, atol=0)
 
 
 def test_mrope_config_keeps_text_positions_as_regular_rope():
