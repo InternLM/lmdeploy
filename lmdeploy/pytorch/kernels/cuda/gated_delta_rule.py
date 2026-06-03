@@ -84,6 +84,23 @@ def vec_store_output(Out: T.Buffer, o_local: T.Buffer, b_id, seq_id, hv_id, v_of
 
 
 @T.macro
+def zero_output_tile(Out: T.Buffer, b_id, hv_id, v_start, lane_id, warp_id, V: int, SEQLEN: int, num_waves: int,
+                     num_warps: int, v_per_warp: int, v_per_cta: int, data_vw: int) -> None:
+    """Zero output for requests that do not own a valid recurrent state."""
+    if lane_id == 0:
+        for wave_id in range(num_waves):
+            v_warp_off = wave_id * num_warps * v_per_warp + warp_id * v_per_warp
+            v_off = v_start * v_per_cta + v_warp_off
+            for seq_id in range(SEQLEN):
+                for vg in T.Unroll(v_per_warp // data_vw):
+                    for i in T.Vectorized(data_vw):
+                        idx = vg * data_vw + i
+                        v_idx = v_off + idx
+                        if v_idx < V:
+                            Out[b_id, seq_id, hv_id, v_idx] = 0.0
+
+
+@T.macro
 def normalize_qk(k_local: T.Buffer, q_local: T.Buffer, k_per_thr: int) -> None:
     """In-kernel L2 normalization of q and k vectors across the warp."""
     k_sum = T.alloc_var(T.float32)
@@ -396,6 +413,9 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                             v_idx = v_start * v_per_cta + j
                             if v_idx < V:
                                 State[state_id, state_update_id, hv_id, i, v_idx] = h_smem[i, j]
+            else:
+                zero_output_tile(Out, b_id, hv_id, v_start, lane_id, warp_id, V, SEQLEN, num_waves, num_warps,
+                                 v_per_warp, v_per_cta, data_vw)
 
     @T.prim_func
     def fused_recurrent_gated_delta_rule_transposed_main(
@@ -505,6 +525,9 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                     if write_final_state:
                         store_transposed_state_tile(State, h_local, state_id, state_update_id, hv_id, k_off, v_off, K,
                                                     V, k_per_thr, v_per_warp)
+            else:
+                zero_output_tile(Out, b_id, hv_id, v_start, lane_id, warp_id, V, SEQLEN, num_waves, num_warps,
+                                 v_per_warp, v_per_cta, data_vw)
 
     if transpose_state_layout:
         return fused_recurrent_gated_delta_rule_transposed_main

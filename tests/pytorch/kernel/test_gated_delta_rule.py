@@ -271,7 +271,7 @@ class TestRecurrentGatedDeltaRule:
             torch.empty_like = original_empty_like
 
         torch.cuda.synchronize()
-        assert (out == 123).all()
+        assert (out == 0).all()
         torch.testing.assert_close(initial_state, initial_state_before, atol=0, rtol=0)
 
     def test_circular_buffer(self, q, k, v, g, beta, seqlen, batch, num_heads, head_dim):
