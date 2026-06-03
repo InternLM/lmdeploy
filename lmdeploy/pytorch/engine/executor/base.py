@@ -167,13 +167,25 @@ class ExecutorBase:
         ]
         return min(num_gpu_blocks)
 
+    def _get_spec_attn_tp(self) -> int:
+        """Get draft/spec attention TP."""
+        specdecode_config = getattr(self, 'specdecode_config', None)
+        spec_dist_config = getattr(specdecode_config, 'dist_config', None)
+        return getattr(spec_dist_config, 'attn_tp', 1)
+
     def _get_rank_cache_block_sizes(self, num_ranks: int, cache_block_size: _CacheBlockSize) -> list[int]:
         """Get per-rank KV cache block sizes."""
         if cache_block_size.spec == 0:
             return [cache_block_size.target] * num_ranks
 
         attn_tp = self.dist_config.attn_tp
-        # Spec decoding only builds the draft/spec cache on one rank in each
+        draft_tp = self._get_spec_attn_tp()
+        if draft_tp > 1:
+            # Draft/spec cache is sharded across the same TP ranks as the
+            # target, so every participating rank carries the sharded footprint.
+            return [cache_block_size.total] * num_ranks
+
+        # Draft TP=1 only builds the draft/spec cache on one rank in each
         # attention-TP group. Other ranks can use the memory that would have
         # gone to spec cache for additional target KV blocks.
         return [
@@ -279,9 +291,8 @@ class ExecutorBase:
 
         spec_cache_block_size = 0
         if spec_cache_config is not None:
-            # Draft/spec cache is not tensor-parallelized with the target
-            # attention group here, so its block size is measured at world_size=1.
-            spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, 1)
+            draft_tp = self._get_spec_attn_tp()
+            spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, draft_tp)
 
         return _CacheBlockSize(target=cache_block_size, spec=spec_cache_block_size)
 
@@ -351,6 +362,9 @@ class ExecutorBase:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
         self.build_cache_engine()
+        if self.misc_config.empty_init:
+            logger.info('Skip warming up model during empty init.')
+            return
         logger.info('Warming up model.')
         self.warmup()
 

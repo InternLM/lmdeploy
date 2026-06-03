@@ -1,0 +1,20 @@
+# HF model id: OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+
+a100:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+  deps:
+    transformers: 4.57.6

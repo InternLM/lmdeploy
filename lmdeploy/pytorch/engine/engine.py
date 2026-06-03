@@ -136,8 +136,13 @@ class Engine(EngineBase):
         dist_config = ConfigBuilder.build_dist_config(engine_config)
         misc_config = ConfigBuilder.build_misc_config(engine_config)
         # spec decode
-        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path, speculative_config, engine_config,
-                                                                       cache_config, trust_remote_code)
+        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path,
+                                                                       speculative_config,
+                                                                       engine_config,
+                                                                       cache_config,
+                                                                       dist_config,
+                                                                       trust_remote_code=trust_remote_code,
+                                                                       )
 
         # build model agent
         self.executor = build_executor(
@@ -534,6 +539,8 @@ class Engine(EngineBase):
         logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
                     wakeup_tags, sorted(self._sleeping_tags))
         self.executor.wakeup(wakeup_tags)
+        if wakeup_tags is None or 'kv_cache' in wakeup_tags:
+            self.executor.warmup()
         if wakeup_tags is None:
             self._sleeping_tags.clear()
         else:

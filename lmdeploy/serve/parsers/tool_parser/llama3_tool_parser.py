@@ -30,3 +30,6 @@ class Llama3JsonToolParser(ToolParser):
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         return self._parse_tool_call_complete_json(payload)
+
+    def validate_complete(self, text: str) -> bool:
+        return True

@@ -3,7 +3,13 @@ import time
 
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid, resolve_eval_config_name
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_eval_preset_config,
+    get_func_config_list,
+    get_workerid,
+    resolve_eval_config_name,
+)
 from utils.evaluate_utils import eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
@@ -21,7 +27,7 @@ def _run_ray_distributed_test(
     assert manager is not None, 'Manager instance must be provided'
     eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
 
     if manager.is_master:
         model_path = os.path.join(config['model_path'], run_config['model'])
@@ -63,7 +69,7 @@ def _run_proxy_distributed_test(config,
     if eval_subpath is None:
         eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
     model_name = run_config['model']
     model_path = os.path.join(config['model_path'], model_name)
 
@@ -106,7 +112,7 @@ def _run_proxy_distributed_test(config,
 def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
     """Run test with specified evaluation configuration."""
     eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
     eval_path = config.get('eval_path')
     if eval_subpath:
         eval_path = os.path.join(eval_path, eval_subpath)
