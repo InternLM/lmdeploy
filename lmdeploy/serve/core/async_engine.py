@@ -291,7 +291,7 @@ class AsyncEngine:
         if self._health_probe_task is not None:
             if not self._health_probe_task.done():
                 return self._make_health_result(
-                    status='unhealthy',
+                    status='pending',
                     message='Previous backend health probe is still pending.',
                 )
             try:
@@ -379,7 +379,7 @@ class AsyncEngine:
         await self.stop_all_session()
         await self.engine.sleep(level)
 
-    def wakeup(self, tags: list[str] | None = None):
+    async def wakeup(self, tags: list[str] | None = None):
         """Wake up the model.
 
         Args:
@@ -393,7 +393,7 @@ class AsyncEngine:
         if any(tag not in self.sleeping_tags for tag in tags):
             logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
             return
-        self.engine.wakeup(tags)
+        await asyncio.to_thread(self.engine.wakeup, tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instances
         if self.backend == 'turbomind' and 'kv_cache' in tags:
             self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)

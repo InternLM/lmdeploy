@@ -1223,7 +1223,7 @@ async def sleep(raw_request: Request = None):
 async def wakeup(raw_request: Request = None):
     tags = raw_request.query_params.getlist('tags')
     tags = tags or None
-    VariableInterface.async_engine.wakeup(tags)
+    await VariableInterface.async_engine.wakeup(tags)
     return Response(status_code=200)
 
 

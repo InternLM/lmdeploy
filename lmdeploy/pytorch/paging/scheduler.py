@@ -67,7 +67,7 @@ class Scheduler:
         self.scheduler_tick = 0
 
     def tick(self):
-        """Mark one scheduler progress step."""
+        """Mark one scheduler progress step (once per forward dispatch)."""
         self.scheduler_tick += 1
 
     @staticmethod
