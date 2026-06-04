@@ -60,7 +60,7 @@ struct Engine::Impl {
 
     Impl(EngineParam                  param,
          LanguageModel                model,
-         std::unique_ptr<VisualModel> visual_model,
+         std::unique_ptr<VisionModel> vision_model,
          const ModelWeight&           weights,
          Context&                     ctx,
          Gateway&                     gateway,
@@ -95,8 +95,8 @@ struct Engine::Impl {
 
     void Run(BatchOp op, int phase, Ref<TensorMap> env)
     {
-        if (visual_model_) {
-            visual_model_->Run(op, phase, env);
+        if (vision_model_) {
+            vision_model_->Run(op, phase, env);
         }
         model_.Run(op, phase, env);
     }
@@ -135,7 +135,7 @@ struct Engine::Impl {
     Queue<unique_ptr<BatchData>> outbound_;
 
     LanguageModel                model_;
-    std::unique_ptr<VisualModel> visual_model_;  // null for text-only models
+    std::unique_ptr<VisionModel> vision_model_;  // null for text-only models
     const ModelWeight&           weights_;
     ModelExecutor                executor_;
 
@@ -186,7 +186,7 @@ Engine::Impl::~Impl()
 
 Engine::Impl::Impl(EngineParam                  param,
                    LanguageModel                model,
-                   std::unique_ptr<VisualModel> visual_model,
+                   std::unique_ptr<VisionModel> vision_model,
                    const ModelWeight&           weights,
                    Context&                     ctx,
                    Gateway&                     gateway,
@@ -205,7 +205,7 @@ Engine::Impl::Impl(EngineParam                  param,
     async_{phases > 1},
     is_warm_up_{*ctx.is_warm_up},
     model_{std::move(model)},
-    visual_model_{std::move(visual_model)},
+    vision_model_{std::move(vision_model)},
     weights_{weights}
 {
     states_.emplace_back();
@@ -214,7 +214,7 @@ Engine::Impl::Impl(EngineParam                  param,
         data_.emplace_back();
     }
 
-    executor_ = ModelExecutor{model_, visual_model_.get(), ctx, device_id_, outbound_, inbound_};
+    executor_ = ModelExecutor{model_, vision_model_.get(), ctx, device_id_, outbound_, inbound_};
 
     CreateSequenceManager();  // initializes `session_len_trunc_`
 
@@ -928,7 +928,7 @@ Engine& Engine::operator=(Engine&&) noexcept = default;
 
 Engine::Engine(EngineParam                  param,
                LanguageModel                model,
-               std::unique_ptr<VisualModel> visual_model,
+               std::unique_ptr<VisionModel> vision_model,
                const ModelWeight&           weights,
                Context&                     ctx,
                Gateway&                     gateway,
@@ -936,7 +936,7 @@ Engine::Engine(EngineParam                  param,
                int                          dp_rank,
                int                          phases):
     impl_{std::make_unique<Impl>(
-        param, std::move(model), std::move(visual_model), weights, ctx, gateway, device_id, dp_rank, phases)}
+        param, std::move(model), std::move(vision_model), weights, ctx, gateway, device_id, dp_rank, phases)}
 {
 }
 

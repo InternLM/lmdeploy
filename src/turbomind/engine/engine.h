@@ -8,7 +8,7 @@
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/models/visual_model.h"
+#include "src/turbomind/models/vision_model.h"
 
 namespace turbomind {
 
@@ -29,7 +29,7 @@ public:
 
     Engine(EngineParam                  param,
            LanguageModel                model,
-           std::unique_ptr<VisualModel> visual_model,  // null for text-only
+           std::unique_ptr<VisionModel> vision_model,  // null for text-only
            const ModelWeight&           weights,
            Context&                     ctx,
            Gateway&                     gateway,

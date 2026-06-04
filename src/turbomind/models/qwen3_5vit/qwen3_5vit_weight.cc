@@ -51,7 +51,7 @@ Qwen3_5VitBlockWeight* Qwen3_5VitWeight::block(int i) const
     return static_cast<Qwen3_5VitBlockWeight*>(blocks->child(std::to_string(i)));
 }
 
-std::unique_ptr<VisualModel>
+std::unique_ptr<VisionModel>
 Qwen3_5VitWeight::make_model(const EngineParam& engine, const Context& ctx, int phases) const
 {
     return std::make_unique<Qwen3_5Vit>(engine, ctx, *this, phases);

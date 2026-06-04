@@ -21,8 +21,8 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
-#include "src/turbomind/models/visual_model.h"
-#include "src/turbomind/models/visual_model_weight.h"
+#include "src/turbomind/models/vision_model.h"
+#include "src/turbomind/models/vision_model_weight.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 
@@ -278,18 +278,18 @@ void TurboMind::Impl::CreateEngine(int index)
     // create model
     LanguageModel model{param, ctx, *weights_[index]->text_model_ptr(), phases_};
 
-    // create optional visual model — the weight tree itself constructs
-    // its runtime peer (Factory Method); ``ModelRoot::visual_model`` is
+    // create optional vision model — the weight tree itself constructs
+    // its runtime peer (Factory Method); ``ModelRoot::vision_model`` is
     // null for text-only checkpoints.
-    std::unique_ptr<VisualModel> visual_model;
-    if (auto* vw = weights_[index]->visual_model_ptr()) {
-        visual_model = vw->make_model(param, ctx, phases_);
+    std::unique_ptr<VisionModel> vision_model;
+    if (auto* vw = weights_[index]->vision_model_ptr()) {
+        vision_model = vw->make_model(param, ctx, phases_);
     }
 
     // create engine
     engines_[index] = Engine{param,
                              std::move(model),
-                             std::move(visual_model),
+                             std::move(vision_model),
                              *weights_[index]->text_model_ptr(),
                              ctx,
                              *gateway_,

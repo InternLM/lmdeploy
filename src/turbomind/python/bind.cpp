@@ -34,7 +34,7 @@
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_input.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
-#include "src/turbomind/models/visual_model_weight.h"
+#include "src/turbomind/models/vision_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
 #include "src/turbomind/utils/cuda_utils.h"

@@ -3,7 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/visual_model_weight.h"
+#include "src/turbomind/models/vision_model_weight.h"
 
 #include <vector>
 
@@ -72,7 +72,7 @@ class Qwen3_5VitBlockWeight;
 ///
 /// We expose ``merger_*`` as direct children rather than a sub-module to
 /// keep the weight tree shallow — the merger has only three pieces.
-class Qwen3_5VitWeight: public VisualModelWeight {
+class Qwen3_5VitWeight: public VisionModelWeight {
 public:
     const char* type() const override
     {
@@ -85,7 +85,7 @@ public:
     void prepare() override;
     bool verify(std::vector<std::string>& missing) override;
 
-    std::unique_ptr<VisualModel> make_model(const EngineParam& engine, const Context& ctx, int phases) const override;
+    std::unique_ptr<VisionModel> make_model(const EngineParam& engine, const Context& ctx, int phases) const override;
 
     // --- X-macro field lists ---
 #define QWEN3_5VIT_WEIGHT_CHILDREN(X)                                                                                  \

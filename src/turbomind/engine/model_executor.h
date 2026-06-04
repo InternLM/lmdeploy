@@ -7,7 +7,7 @@
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/queue.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/visual_model.h"
+#include "src/turbomind/models/vision_model.h"
 
 #include "src/turbomind/models/llama/context.h"
 
@@ -29,7 +29,7 @@ public:
     }
 
     ModelExecutor(LanguageModel&                     model,
-                  VisualModel*                       visual_model,  // nullable
+                  VisionModel*                       vision_model,  // nullable
                   Context&                           context,
                   int                                device_id,
                   Queue<std::unique_ptr<BatchData>>& inbound,

@@ -7,7 +7,7 @@ class VisionModelBuilder(Builder):
     """Generic root builder for a VLM vision sub-graph.
 
     Counterpart to ``TextModelBuilder``. Attaches the constructed vision
-    root weight as the ``visual_model`` sibling of ``text_model`` on each
+    root weight as the ``vision_model`` sibling of ``text_model`` on each
     per-GPU ``ModelRoot``.
     """
 
@@ -21,5 +21,5 @@ class VisionModelBuilder(Builder):
         for i, (root, vision) in enumerate(
                 zip(self._root_handles, built.handles)):
             with self._ctx.devices[i]:
-                root.add_child_raw('visual_model', vision)
+                root.add_child_raw('vision_model', vision)
         return built

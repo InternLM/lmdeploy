@@ -208,7 +208,7 @@ def get_tm_config(model_path,
     dtype = getattr(torch, dtype)
 
     # Capture the user/file dtype before _build_resolver may force fp16 for
-    # AWQ/GPTQ/CT. VL checkpoints list 'visual' in modules_to_not_convert, so
+    # AWQ/GPTQ/CT. VL checkpoints list 'vision' in modules_to_not_convert, so
     # the ViT sub-tree is unquantized and should keep this dtype rather than
     # inherit the text path's forced fp16.
     vision_dtype = dtype

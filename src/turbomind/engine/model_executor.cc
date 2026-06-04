@@ -9,7 +9,7 @@
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include "src/turbomind/models/visual_model.h"
+#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 // #include "dbg.h"
@@ -22,7 +22,7 @@ using std::unique_ptr;
 struct ModelExecutor::Impl {
 
     LanguageModel& model_;
-    VisualModel*   visual_model_;  // nullable
+    VisionModel*   vision_model_;  // nullable
     LlamaLinear&   linear_;
 
     const int device_id_;
@@ -64,15 +64,15 @@ struct ModelExecutor::Impl {
         BatchCopy copy;
         TensorMap env{{"batch", d.buf()}, {"copy", copy.buf()}};
 
-        if (visual_model_) {
-            visual_model_->Run(BatchOp::kPrepare, d.phase, env);
+        if (vision_model_) {
+            vision_model_->Run(BatchOp::kPrepare, d.phase, env);
         }
         model_.Run(BatchOp::kPrepare, d.phase, env);
         // dbg(copy);
         copy.Run();
 
-        if (visual_model_) {
-            visual_model_->Run(BatchOp::kForward, d.phase, env);
+        if (vision_model_) {
+            vision_model_->Run(BatchOp::kForward, d.phase, env);
         }
         model_.Run(BatchOp::kForward, d.phase, env);
 
@@ -86,13 +86,13 @@ struct ModelExecutor::Impl {
     }
 
     Impl(LanguageModel&                model,
-         VisualModel*                  visual_model,
+         VisionModel*                  vision_model,
          Context&                      context,
          int                           device_id,
          Queue<unique_ptr<BatchData>>& inbound,
          Queue<unique_ptr<BatchData>>& outbound):
         model_{model},
-        visual_model_{visual_model},
+        vision_model_{vision_model},
         linear_{*context.linear},
         device_id_{device_id},
         inbound_{inbound},
@@ -120,13 +120,13 @@ ModelExecutor::ModelExecutor(ModelExecutor&&) noexcept = default;
 ModelExecutor& ModelExecutor::operator=(ModelExecutor&&) noexcept = default;
 
 ModelExecutor::ModelExecutor(LanguageModel&                model,
-                             VisualModel*                  visual_model,
+                             VisionModel*                  vision_model,
                              Context&                      context,
                              int                           device_id,
                              Queue<unique_ptr<BatchData>>& inbound,
                              Queue<unique_ptr<BatchData>>& outbound):
     impl_{std::make_unique<Impl>(model,  //
-                                 visual_model,
+                                 vision_model,
                                  context,
                                  device_id,
                                  inbound,

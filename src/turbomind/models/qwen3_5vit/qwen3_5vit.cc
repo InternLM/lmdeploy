@@ -175,7 +175,7 @@ struct Qwen3_5Vit::Impl {
 
         const int head_dim = cfg.hidden_dim / cfg.head_num;
         // produce rotary_pos_emb: [total_hw, head_dim] with interleaved (c,s,c,s,...) pairs,
-        // keyed by the same natural flat index that `mapped_idx` already carries. Visual q/k
+        // keyed by the same natural flat index that `mapped_idx` already carries. Vision q/k
         // are reordered into this adjacent-pair layout at export time.
         Tensor rotary_pos_emb = {{d.total_hw, head_dim}, cfg.data_type, kDEVICE};
         invokeQwen3VitRotaryPosEmb(rotary_pos_emb.raw_data(),

@@ -6,15 +6,15 @@ instead of inheritance (mirrors ``InternVLModel``):
 
 * ``Qwen3_5TextModel`` -- text-only weight model (dense + linear-attn +
   optional MoE). Not registered on its own; used directly by the aggregate.
-* ``Qwen3_5VisionModel`` -- the visual sub-tree rooted at
-  ``ModelRoot.visual_model``.
+* ``Qwen3_5VisionModel`` -- the vision sub-tree rooted at
+  ``ModelRoot.vision_model``.
 * ``Qwen3_5Model`` -- a thin aggregate holding a ``text_model`` and an
   optional ``vision_model``, registered as ``qwen3_5`` / ``qwen3_5-moe``. It
   delegates the two-phase ``__init__`` / ``bind_runtime`` / ``model(pfx)``
   lifecycle to its children, and skips the vision encoder when
   ``disable_vision_encoder`` is set.
 
-The patcher and position embedding are replicated across TP ranks. Visual
+The patcher and position embedding are replicated across TP ranks. Vision
 transformer blocks and merger linears shard with the model TP group.
 """
 from __future__ import annotations
@@ -323,13 +323,13 @@ def _pad_head_dim_in(t: torch.Tensor, *, num_heads: int, src_hd: int,
 
 
 @transform_output_dim
-def _split_packed_visual_qkv(qkv):
-    """Split HF visual QKV layout [Q | K | V] along output dim."""
+def _split_packed_vision_qkv(qkv):
+    """Split HF vision QKV layout [Q | K | V] along output dim."""
     return tuple(x.contiguous() for x in qkv.chunk(3, dim=-1))
 
 
 class Qwen3_5VisionModel(TextModel):
-    """Visual sub-tree for Qwen3.5 VLM, rooted at ModelRoot.visual_model.
+    """Vision sub-tree for Qwen3.5 VLM, rooted at ModelRoot.vision_model.
 
     Subclasses ``TextModel`` purely to reuse the two-phase lifecycle
     (``__init__`` / ``bind_runtime``) and the ``_linear`` resolver helper;
@@ -413,24 +413,24 @@ class Qwen3_5VisionModel(TextModel):
         return _tm.multimodal.Qwen3_5VitInput(items)
 
     # ------------------------------------------------------------------
-    # model() — build the visual sub-tree
+    # model() — build the vision sub-tree
     # ------------------------------------------------------------------
 
     def model(self, pfx):
-        self._build_visual_model(pfx + 'model.visual')
+        self._build_vision_model(pfx + 'model.visual')
 
     def _restore_dtype(self, builder):
         """Builder.__init__ unconditionally overwrites cfg.data_type with the
         context's (text-engine) dtype.
 
         The cfg is held by reference, so re-pinning it here propagates to every downstream _add_linear call on this
-        builder, keeping the visual sub-tree on its native dtype.
+        builder, keeping the vision sub-tree on its native dtype.
         """
         builder.config.data_type = self._resolver.data_type
         return builder
 
-    def _build_visual_model(self, pfx):
-        cfg = self._make_visual_root_cfg()
+    def _build_vision_model(self, pfx):
+        cfg = self._make_vision_root_cfg()
         root = self._restore_dtype(VisionModelBuilder(
             cfg, self._ctx,
             root_handles=self._root_handles,
@@ -447,7 +447,7 @@ class Qwen3_5VisionModel(TextModel):
 
         root.build()
 
-    def _make_visual_root_cfg(self):
+    def _make_vision_root_cfg(self):
         cfg = _tm.Qwen3_5VitConfig()
         cfg.data_type = self._resolver.data_type
         cfg.hidden_dim = self._vis_hidden
@@ -499,7 +499,7 @@ class Qwen3_5VisionModel(TextModel):
         b._add_linear('mlp_fc2', self._linear(pfx + 'mlp.linear_fc2'), SplitSide.INPUT)
         return b.build()
 
-    def _make_visual_attn_cfg(self):
+    def _make_vision_attn_cfg(self):
         real_hd = self._vis_hidden // self._vis_heads
         padded_hd = _padded_vit_head_dim(real_hd)
         cfg = _tm.AttentionConfig()
@@ -519,12 +519,12 @@ class Qwen3_5VisionModel(TextModel):
         return cfg
 
     def vit_attn(self, pfx):
-        cfg = self._make_visual_attn_cfg()
+        cfg = self._make_vision_attn_cfg()
         real_hd = self._vis_hidden // self._vis_heads
         padded_hd = cfg.head_dim
         H = cfg.head_num
 
-        q, k, v = _split_packed_visual_qkv(self._linear(pfx + 'qkv'))
+        q, k, v = _split_packed_vision_qkv(self._linear(pfx + 'qkv'))
 
         # Qwen3.5 ViT applies RoPE before invoking the attention kernel.
         # Reorder Q/K once at export time so the runtime can use the same
@@ -617,7 +617,7 @@ class Qwen3_5Model:
         return self.vision_model.to_turbomind_multimodal(multimodal)
 
     def model(self, pfx):
-        # Text root child must be attached before the visual one, since both
+        # Text root child must be attached before the vision one, since both
         # use the shared root_handles.
         self.text_model.model(pfx)
         if self.vision_model is not None:

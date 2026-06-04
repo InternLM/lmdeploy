@@ -7,7 +7,7 @@
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/models/llama/SequenceManager.h"
-#include "src/turbomind/models/visual_model.h"
+#include "src/turbomind/models/vision_model.h"
 
 namespace turbomind {
 
