@@ -74,6 +74,10 @@ class CUDASingleGraphRunner:
         self.model = model
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
+        from .attention import use_fa3
+        from .batch_invariant import get_fa3_decode_num_splits
+        use_fa3_decoding = bool(
+            use_fa3 and not getattr(model_config, 'use_flash_mla', False) and model_config.head_dim <= 256)
 
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
@@ -87,8 +91,8 @@ class CUDASingleGraphRunner:
             use_mla_fp8_cache=getattr(self.model_config, 'use_mla_fp8_cache', False),
             use_flash_mla=getattr(self.model_config, 'use_flash_mla', False),
             mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
-            use_fa3_decoding=(model_config.model_paradigm == 'ar_spec'
-                              and not getattr(model_config, 'use_flash_mla', False)),
+            use_fa3_decoding=use_fa3_decoding,
+            fa3_num_splits=get_fa3_decode_num_splits(),
             is_ssm=len(model_config.states_shapes) > 0,
             use_mrope=model_config.use_mrope,
             block_size=model_config.block_size,

@@ -20,6 +20,11 @@ def is_batch_invariant_policy_enabled() -> bool:
     return _BATCH_INVARIANT_POLICY_ENABLED
 
 
+def get_fa3_decode_num_splits() -> int:
+    """Get FA3 decode split policy."""
+    return 1 if is_batch_invariant_policy_enabled() else 0
+
+
 def _cuda_initialized() -> bool:
     """Return whether CUDA is already initialized without initializing it."""
     try:
