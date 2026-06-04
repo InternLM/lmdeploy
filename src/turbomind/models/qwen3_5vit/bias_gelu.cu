@@ -1,6 +1,7 @@
 #include "src/turbomind/models/qwen3_5vit/bias_gelu.h"
 
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/kernels/activation_ops.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 
@@ -10,26 +11,8 @@ namespace turbomind {
 
 namespace {
 
-struct GeluPytorchTanh {
-    __device__ __forceinline__ float operator()(float x) const
-    {
-        constexpr float kAlpha = 0.7978845608028654f;
-        constexpr float kBeta  = 0.044715f;
-        return 0.5f * x * (1.f + tanhf(kAlpha * (x + kBeta * x * x * x)));
-    }
-};
-
-struct Gelu {
-    __device__ __forceinline__ float operator()(float x) const
-    {
-        constexpr float kInvSqrt2 = 0.70710678118654752440f;
-        return 0.5f * x * (1.f + erff(x * kInvSqrt2));
-    }
-};
-
-template<int vec_size, typename T, class Activation>
-__global__ void
-biasActivationKernel(T* data, const T* __restrict__ bias, int64_t stride, Activation activation, int num, int dim)
+template<int vec_size, typename T, template<typename> class Activation>
+__global__ void biasActivationKernel(T* data, const T* __restrict__ bias, int64_t stride, int num, int dim)
 {
     const int ti = blockIdx.x;
     const int di = (threadIdx.x + blockIdx.y * blockDim.x) * vec_size;
@@ -52,7 +35,7 @@ biasActivationKernel(T* data, const T* __restrict__ bias, int64_t stride, Activa
 
     PRAGMA_UNROLL
     for (int i = 0; i < vec_size; ++i) {
-        x[i] = activation(x[i]);
+        x[i] = Activation<float>::apply(x[i]);
     }
 
     Store(data + ti * stride + di, cast<T>(x));
@@ -93,12 +76,12 @@ void invokeQwen3_5VitBiasActivation(Tensor& x, const Tensor& bias, ActivationTyp
             constexpr int vec_size = decltype(vec_size_)::value;
             const dim3    grid(num, cdiv(dim, threads * vec_size));
             if (type == ActivationType::kGeluPytorchTanh) {
-                biasActivationKernel<vec_size, T><<<grid, threads, 0, stream>>>(
-                    x.data<T>(), bias.data_or((T*)nullptr), stride, GeluPytorchTanh{}, num, dim);
+                biasActivationKernel<vec_size, T, GeluActivation>
+                    <<<grid, threads, 0, stream>>>(x.data<T>(), bias.data_or((T*)nullptr), stride, num, dim);
             }
             else if (type == ActivationType::kGelu) {
-                biasActivationKernel<vec_size, T>
-                    <<<grid, threads, 0, stream>>>(x.data<T>(), bias.data_or((T*)nullptr), stride, Gelu{}, num, dim);
+                biasActivationKernel<vec_size, T, GeluErfActivation>
+                    <<<grid, threads, 0, stream>>>(x.data<T>(), bias.data_or((T*)nullptr), stride, num, dim);
             }
             else {
                 TM_LOG_FATAL("unsupported Qwen3.5 ViT bias activation type: {}", (int)type);
