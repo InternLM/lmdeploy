@@ -135,6 +135,10 @@ class MessagesRequest(BaseModel):
         default=False,
         description=('Whether to return log probabilities for output tokens.'),
     )
+    include_stop_str_in_output: bool | None = Field(
+        default=False,
+        description=('Whether to include matched stop sequences in the output text.'),
+    )
 
 
 class MessageTextBlock(BaseModel):
