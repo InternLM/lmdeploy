@@ -1251,7 +1251,26 @@ class TSForecasterConfig:
         force_flip_invariance: bool = True,
         infer_is_positive: bool = True,
         fix_quantile_crossing: bool = True,
+        model_type: str | None = None,
+        qformer_dropout: float | None = 0.0,
+        use_horizon_head: bool = True,
+        use_cross_attn_gate: bool = True,
+        use_continuous_quantile_head: bool = True,
+        return_backcast: bool = False,
+        default_pred_len: int | None = None,
+        **kwargs,
     ):
+        if not use_horizon_head:
+            raise ValueError('LMDeploy TSForecaster expects use_horizon_head=True.')
+        if not use_cross_attn_gate:
+            raise ValueError('LMDeploy TSForecaster expects use_cross_attn_gate=True.')
+        if qformer_dropout not in (None, 0, 0.0):
+            raise ValueError('LMDeploy TSForecaster does not support dropout.')
+        if not use_continuous_quantile_head:
+            raise ValueError('LMDeploy TSForecaster expects use_continuous_quantile_head=True.')
+        if return_backcast:
+            raise ValueError('LMDeploy TSForecaster does not support return_backcast.')
+
         self.d_llm = int(d_llm)
         self.d_ts_encoder = int(d_ts_encoder)
 
@@ -1266,6 +1285,7 @@ class TSForecasterConfig:
 
         self.max_context = int(max_context)
         self.max_horizon = int(max_horizon)
+        self.default_pred_len = None if default_pred_len is None else int(default_pred_len)
         self.normalize_inputs = bool(normalize_inputs)
         self.force_flip_invariance = bool(force_flip_invariance)
         self.infer_is_positive = bool(infer_is_positive)

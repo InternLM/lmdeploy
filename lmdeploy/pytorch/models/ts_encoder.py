@@ -8,6 +8,7 @@ from torch import nn
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn.utils.rnn import pad_sequence
 from transformers import WhisperConfig, WhisperPreTrainedModel
+from transformers.activations import ACT2FN
 
 from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
@@ -366,9 +367,9 @@ class SingleResChunkQformerSubsampling(nn.Module):
 
     def forward(self,
                 inputs: torch.Tensor,
-                input_lens: torch.Tensor,
-                sr,
-                force_strides,
+                input_lens: torch.Tensor | None = None,
+                sr=None,
+                force_strides=None,
                 mask: torch.Tensor | None = None):
         if mask is None:
             mask = torch.ones(inputs.shape).to(inputs.device)
@@ -514,6 +515,35 @@ class SingleResChunkQformerSubsampling(nn.Module):
         return x
 
 
+class InternS2PreviewTimeSeriesProjector(nn.Module):
+
+    def __init__(self, config, dtype: torch.dtype | None = None, device: torch.device | None = None):
+        super().__init__()
+        self.layer_norm = LayerNorm(config.ts_hidden_dim, eps=1e-5, dtype=dtype, device=device)
+        self.linear_1 = build_colwise_linear(
+            in_features=config.ts_hidden_dim,
+            out_features=config.out_hidden_size,
+            bias=True,
+            dtype=dtype,
+            device=device,
+        )
+        self.act = ACT2FN[config.activation_function]
+        self.linear_2 = build_rowwise_linear(
+            in_features=config.out_hidden_size,
+            out_features=config.out_hidden_size,
+            bias=True,
+            dtype=dtype,
+            device=device,
+        )
+
+    def forward(self, ts_features: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.layer_norm(ts_features)
+        hidden_states = self.linear_1(hidden_states)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.linear_2(hidden_states)
+        return hidden_states
+
+
 class ChunkModel(nn.Module):
 
     def __init__(self, encoder_embed: nn.Module, encoder: nn.Module, chunk_size: int = 6400, step: int = 6400):
@@ -642,3 +672,84 @@ class ChunkModel(nn.Module):
         encoder_out_lens = torch.tensor(feature_lens).to(encoder_out.device)
 
         return encoder_out, encoder_out_lens
+
+
+class InternS2PreviewTimeSeriesModel(ChunkModel):
+
+    def __init__(self, config, dtype: torch.dtype | None = None, device: torch.device | None = None):
+        encoder_embed = SingleResChunkQformerSubsampling(
+            hidden_dim=config.subsampling_hidden_dim,
+            patch=config.subsampling_patch,
+            num_query=config.subsampling_num_query,
+            num_conv_layers=config.subsampling_num_conv_layers,
+            dtype=dtype,
+            device=device,
+        )
+        encoder = CustomWhisperEncoder(config, dtype=dtype, device=device)
+        chunk_size = getattr(config, 'chunk_size', 12800)
+        step = getattr(config, 'chunk_step', chunk_size)
+        super().__init__(encoder_embed=encoder_embed, encoder=encoder, chunk_size=chunk_size, step=step)
+        self.config = config
+        self.projector = InternS2PreviewTimeSeriesProjector(config, dtype=dtype, device=device)
+
+    @staticmethod
+    def make_pad_mask(lengths: torch.Tensor) -> torch.Tensor:
+        assert lengths.ndim == 1, lengths.ndim
+        max_len = int(lengths.max().item())
+        seq_range = torch.arange(0, max_len, device=lengths.device)
+        expanded_lengths = seq_range.unsqueeze(0).expand(lengths.size(0), max_len)
+        return expanded_lengths >= lengths.unsqueeze(-1)
+
+    def forward(
+        self,
+        time_series_signals: torch.Tensor,
+        ts_lens: torch.Tensor,
+        sr: torch.Tensor | None = None,
+        channels: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if channels is None:
+            raise ValueError('channels must be specified')
+        if time_series_signals.ndim != 3:
+            raise ValueError(f'wrong time_series_signals size: {time_series_signals.shape}')
+
+        outputs = []
+        output_lens = []
+        output_chunks = []
+        for b in range(time_series_signals.shape[0]):
+            seq = time_series_signals[b, :ts_lens[b], :channels[b]]
+            chunks, mask = self.chunk_tensor(seq)
+
+            chunk_output, chunk_lens, _, _, _ = self.encoder_embed(chunks, mask=mask)
+            outputs.append(chunk_output)
+            output_lens.append(chunk_lens.long())
+            output_chunks.append(chunk_output.shape[0])
+
+        x_lens = torch.cat(output_lens, dim=0).long()
+        max_len = int(x_lens.max().item())
+
+        padded_list = []
+        for tensor in outputs:
+            pad_len = int(max_len - tensor.shape[1])
+            padded_list.append(F.pad(tensor, (0, 0, 0, pad_len, 0, 0), mode='constant', value=0))
+
+        x = torch.cat(padded_list, dim=0).permute(1, 0, 2)
+        encoder_out, encoder_out_lens = self.encoder(x, x_lens, causal=True)
+        encoder_out = encoder_out.permute(1, 0, 2)
+        encoder_out_lens = (x_lens + 1) // 2
+
+        features = []
+        feature_lens = []
+        start = 0
+        for count in output_chunks:
+            end = start + count
+            feature, feature_len = self.concat_chunks_simple(encoder_out[start:end], encoder_out_lens[start:end])
+            features.append(feature)
+            feature_lens.append(feature_len)
+            start = end
+
+        encoder_out = pad_sequence(features, batch_first=True)
+        encoder_out_lens = torch.tensor(feature_lens, device=encoder_out.device)
+
+        ts_pad_mask = self.make_pad_mask(encoder_out_lens)
+        ts_embeds = self.projector(encoder_out)
+        return ts_embeds, ts_pad_mask

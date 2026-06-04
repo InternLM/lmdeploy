@@ -786,12 +786,16 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         ts_token_id = input_mm['ts_token_id']
         ts_lens = input_mm['ts_lens']
         ts_sr = input_mm['ts_sr']
+        ts_channels = input_mm.get('ts_channels')
 
+        meta = dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id)
+        if ts_channels is not None:
+            meta['ts_channels'] = ts_channels
         mm_data = MultiModalData(modality=Modality.TIME_SERIES,
                                  data=ts_values,
                                  start=offset[0],
                                  end=offset[1],
-                                 meta=dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id))
+                                 meta=meta)
         return mm_data
 
     def preprocess_input(self,

@@ -36,6 +36,7 @@ class VisionModel(ABC):
         'ts_values': Modality.TIME_SERIES,
         'ts_sr': Modality.TIME_SERIES,
         'ts_lens': Modality.TIME_SERIES,
+        'ts_channels': Modality.TIME_SERIES,
     }
 
     # processor output attributes that carry the main feature tensor

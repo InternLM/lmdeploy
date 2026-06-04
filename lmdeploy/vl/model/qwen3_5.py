@@ -76,16 +76,29 @@ class Qwen3_5Model(Qwen3VLModel):
             ts_input = ts_input[:, None]  # [T,C]
 
         ts_len = ts_input.shape[0]
+        ts_channel = ts_input.shape[1]
 
         # set the default value to ts_len / 4 if sr is not provided or invalid
         if sampling_rate is None or sampling_rate <= 0:
             sampling_rate = max(ts_len / 4, 1.0)
 
         # compute num ts tokens
-        stride = np.floor(160 / ((1 + np.exp(-sampling_rate / 100))**6))
-        patch_size = stride * 2
-        embed_length = (np.ceil((ts_len - patch_size) / stride) + 1)
-        ts_tokens = int((embed_length // 2 + 1) // 2)
+        if getattr(self.hf_config, 'model_type', None) == 'intern_s2_preview':
+            chunk_size = getattr(self.processor, 'chunk_size', 12800)
+            patch = getattr(self.processor, 'patch', 50)
+            num_query = getattr(self.processor, 'num_query', 2)
+            ts_tokens = 0
+            start = 0
+            while start < ts_len:
+                chunk_len = min(chunk_size, ts_len - start)
+                subsampling_len = int(np.ceil(chunk_len / patch)) * num_query
+                ts_tokens += (subsampling_len + 1) // 2
+                start += chunk_size
+        else:
+            stride = np.floor(160 / ((1 + np.exp(-sampling_rate / 100))**6))
+            patch_size = stride * 2
+            embed_length = (np.ceil((ts_len - patch_size) / stride) + 1)
+            ts_tokens = int((embed_length // 2 + 1) // 2)
 
         # generate text with ts tokens
         for i in range(len(text)):
@@ -102,10 +115,12 @@ class Qwen3_5Model(Qwen3VLModel):
         ts_input = torch.from_numpy(np.array([ts_input])).to(dtype=torch.bfloat16)
         ts_sr = torch.tensor([sampling_rate])
         ts_lens = torch.tensor([ts_len])
+        ts_channels = torch.tensor([ts_channel])
         return dict(input_ids=input_ids,
                     ts_values=ts_input,
                     ts_sr=ts_sr,
                     ts_lens=ts_lens,
+                    ts_channels=ts_channels,
                     ts_token_id=self.ts_token_id)
 
     def build_model(self, trust_remote_code: bool = False):

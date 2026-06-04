@@ -189,11 +189,11 @@ MODULE_MAP.update({
 # interns2preview
 MODULE_MAP.update({
     'InternS2PreviewForConditionalGeneration':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_preview.InternS2PreviewForConditionalGeneration',
 })
 MODULE_MAP.update({
     'InternS2PreviewForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_preview.InternS2PreviewForCausalLM',
 })
 
 MODULE_MAP.update({
