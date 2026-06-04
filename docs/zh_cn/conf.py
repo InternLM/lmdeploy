@@ -22,7 +22,10 @@ from yaml import safe_dump
 sys.path.insert(0, os.path.abspath('../..'))
 
 from lmdeploy.serve.openai.api_server import router  # noqa: E402
-from lmdeploy.serve.proxy.proxy import app as proxy_server  # noqa: E402
+from lmdeploy.serve.proxy.app import create_app  # noqa: E402
+from lmdeploy.serve.proxy.core.config import ProxyConfig  # noqa: E402
+
+proxy_server = create_app(ProxyConfig())  # noqa: E402
 
 version_file = '../../lmdeploy/version.py'
 with open(version_file) as f:
