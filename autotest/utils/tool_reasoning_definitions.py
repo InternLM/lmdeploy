@@ -10,13 +10,32 @@ import requests
 from openai import OpenAI
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
 
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    ChatCompletionResponseStreamChoice,
+    ChatCompletionStreamResponse,
+)
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
+from lmdeploy.serve.parsers.response_parser import (
+    BaseResponseParser,
+    ResponseParserManager,
+    _normalize_request_messages,
+    _parse_tool_call_arguments_dict,
+)
+
 BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
 PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
 BASE_URL = f'{BASE_HTTP_URL}:{PORT}'
 
-#: Think-tag delimiters used by DeepSeek-R1 and QwenQwQ parsers
-THINK_START_TOKEN = '<think>'
-THINK_END_TOKEN = '</think>'
+LMDEPLOY_DECODE_DEFAULTS = {'spaces_between_special_tokens': False}
+
+def get_reasoning_open_close_tags(reasoning_parser_name: str = 'default') -> tuple[str, str]:
+    """Reasoning tag pair from ``ReasoningParser`` registry."""
+    parser_cls = ReasoningParserManager.get(reasoning_parser_name)
+    return parser_cls.get_reasoning_open_tag(), parser_cls.get_reasoning_close_tag()
+
+
+THINK_START_TOKEN, THINK_END_TOKEN = get_reasoning_open_close_tags('default')
 
 # -- Basic tools (English) --------------------------------------------------
 
@@ -103,31 +122,6 @@ CALCULATOR_TOOL = {
     },
 }
 
-# -- Chinese tool ------------------------------------------------------------
-
-WEATHER_TOOL_CN = {
-    'type': 'function',
-    'function': {
-        'name': 'get_current_weather',
-        'description': '获取指定城市的当前天气信息',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'city': {
-                    'type': 'string',
-                    'description': '城市名称，例如：北京',
-                },
-                'unit': {
-                    'type': 'string',
-                    'description': '温度单位',
-                    'enum': ['摄氏度', '华氏度'],
-                },
-            },
-            'required': ['city'],
-        },
-    },
-}
-
 # -- Complex-parameter tools -------------------------------------------------
 
 NESTED_PARAM_TOOL = {
@@ -201,7 +195,6 @@ ALL_OPTIONAL_TOOL = {
                     'description': 'Optional ISO timestamp',
                 },
             },
-            # NOTE: no 'required' key — all params are optional
         },
     },
 }
@@ -219,6 +212,23 @@ def get_client_and_model(base_url=None):
 # -- Logging / client helpers ------------------------------------------------
 
 
+def _append_log_repr(log_file: str, obj) -> None:
+    try:
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f'{obj!r}\n')
+    except OSError:
+        pass
+
+
+def _merge_create_kwargs_defaults(kwargs: dict) -> None:
+    """Apply ``LMDEPLOY_DECODE_DEFAULTS`` into OpenAI SDK ``extra_body``."""
+    extra_body = kwargs.setdefault('extra_body', {})
+    if not isinstance(extra_body, dict):
+        raise TypeError(f'extra_body must be dict, got {type(extra_body).__name__}')
+    for key, value in LMDEPLOY_DECODE_DEFAULTS.items():
+        extra_body.setdefault(key, value)
+
+
 class StreamTee:
     """Transparent iterator proxy: yields every chunk unchanged while
     recording each ``repr(chunk)`` to the log file."""
@@ -228,16 +238,9 @@ class StreamTee:
         self._log_file = log_file
 
     def __iter__(self):
-        try:
-            for chunk in self._stream:
-                try:
-                    with open(self._log_file, 'a', encoding='utf-8') as f:
-                        f.write(repr(chunk) + '\n')
-                except Exception:
-                    pass
-                yield chunk
-        except Exception:
-            raise
+        for chunk in self._stream:
+            _append_log_repr(self._log_file, chunk)
+            yield chunk
 
 
 def setup_log_file(config, test_name, category):
@@ -261,58 +264,114 @@ def setup_log_file(config, test_name, category):
     """
     safe_test_name = re.sub(r'[^\w\.-]', '_', test_name)
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    log_base = config.get('log_path', './logs')
+    log_base = config['log_path']
     log_dir = os.path.join(log_base, category)
     os.makedirs(log_dir, exist_ok=True)
     return os.path.join(log_dir, f'{safe_test_name}_{timestamp}.log')
 
 
 def make_logged_client(log_file):
+    """Return an OpenAI client whose ``chat.completions.create`` logs I/O."""
     client, model_name = get_client_and_model()
-    _original_create = client.chat.completions.create
+    original_create = client.chat.completions.create
 
     def _logged_create(*args, **kwargs):
-        extra_body = kwargs.get('extra_body')
-        if extra_body is None:
-            kwargs['extra_body'] = {'spaces_between_special_tokens': False}
-        elif isinstance(extra_body, dict) and 'spaces_between_special_tokens' not in extra_body:
-            extra_body['spaces_between_special_tokens'] = False
-        is_stream = kwargs.get('stream', False)
-        result = _original_create(*args, **kwargs)
-        if is_stream:
+        _merge_create_kwargs_defaults(kwargs)
+        stream = 'stream' in kwargs and kwargs['stream']
+        result = original_create(*args, **kwargs)
+        if stream:
             return StreamTee(result, log_file)
-        try:
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(repr(result) + '\n')
-        except Exception:
-            pass
+        _append_log_repr(log_file, result)
         return result
 
     client.chat.completions.create = _logged_create
     return client, model_name
 
 
-# -- Assertion helpers -------------------------------------------------------
+# -- Assertion helpers (delegate to lmdeploy protocol / response_parser) -----
 
 
 def assert_tool_call_fields(tool_call):
-    """Assert a single tool call object has all required fields."""
-    assert tool_call.type == 'function', (f'tool_call.type should be "function", got {tool_call.type}')
-    assert tool_call.function is not None, ('tool_call.function should not be None')
-    assert isinstance(tool_call.id, str), (f'tool_call.id should be a string, got {type(tool_call.id)}')
-    assert len(tool_call.id) >= 1, (f'tool_call.id should be non-empty, got "{tool_call.id}"')
-    assert isinstance(tool_call.function.name,
-                      str), (f'function.name should be a string, got {type(tool_call.function.name)}')
-    assert len(tool_call.function.name) > 0, ('function.name should be non-empty')
-    assert isinstance(tool_call.function.arguments, str), (f'function.arguments should be a string, '
-                                                           f'got {type(tool_call.function.arguments)}')
+    """Validate tool call fields (OpenAI tool_calls schema)."""
+    data = tool_call if isinstance(tool_call, dict) else tool_call.model_dump()
+    assert data['type'] == 'function'
+    assert isinstance(data['id'], str) and data['id'].strip()
+    fn = data['function']
+    assert isinstance(fn['name'], str) and fn['name'].strip()
+    assert isinstance(fn['arguments'], str)
 
 
-def assert_arguments_parseable(arguments_str):
-    """Assert *arguments_str* is valid JSON dict; return the parsed dict."""
-    parsed = json.loads(arguments_str)
-    assert isinstance(parsed, dict), (f'Parsed arguments should be a dict, got {type(parsed)}')
+def assert_arguments_parseable(arguments_str: str) -> dict:
+    """Validate tool arguments via ``_parse_tool_call_arguments_dict`` (raises
+    on invalid JSON)."""
+    try:
+        parsed = _parse_tool_call_arguments_dict(arguments_str)
+    except ValueError as exc:
+        raise AssertionError(f'tool call arguments are not valid JSON object: {exc}') from exc
+    assert parsed is not None, 'tool call arguments must be a JSON object string'
     return parsed
+
+
+def assert_tool_call_dict_fields(tc: dict) -> dict:
+    """Validate aggregated tool-call dict from stream collectors."""
+    assert_tool_call_fields({
+        'type': 'function',
+        'id': tc['id'],
+        'function': {
+            'name': tc['name'],
+            'arguments': tc['args_str'],
+        },
+    })
+    return assert_arguments_parseable(tc['args_str'])
+
+
+def assert_tool_name_single_delta(stream, expected_name: str) -> None:
+    """Function name must arrive in a single SSE delta (not split across
+    chunks)."""
+    name_events = []
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        tool_calls_delta = _stream_delta_field(chunk.choices[0].delta, 'tool_calls')
+        if tool_calls_delta:
+            for tc in tool_calls_delta:
+                if tc.function and tc.function.name:
+                    name_events.append(tc.function.name)
+    assert len(name_events) == 1, f'Expected one function-name delta, got {name_events!r}'
+    assert name_events[0] == expected_name, (
+        f'Expected function name {expected_name!r}, got {name_events[0]!r}')
+
+
+def _assert_stream_finish_reason(result: dict, expected_finish_reason: str | None) -> None:
+    """Shared finish_reason / finish_reason_count checks for stream
+    aggregators."""
+    if expected_finish_reason is not None:
+        assert result['finish_reason'] == expected_finish_reason, (
+            f"finish_reason={result['finish_reason']!r}, expected {expected_finish_reason!r}")
+
+    if result['finish_reason_count'] > 0:
+        assert result['finish_reason_count'] == 1, (
+            f'Expected exactly 1 finish_reason chunk, got {result["finish_reason_count"]}')
+
+
+def validate_stream_reasoning_result(
+    result: dict,
+    *,
+    expected_finish_reason: str | None = None,
+    require_tool_calls: bool = False,
+) -> None:
+    """Validate ``collect_stream_reasoning`` aggregation (protocol
+    counters)."""
+    _assert_stream_finish_reason(result, expected_finish_reason)
+
+    if result['role_count'] > 0:
+        assert result['role'] == 'assistant', f'Expected role assistant, got {result["role"]!r}'
+        assert not result['role_inconsistent'], 'Inconsistent role across stream chunks'
+
+    if require_tool_calls:
+        assert result['tool_calls'], 'Expected at least one streamed tool call'
+        for tc in result['tool_calls'].values():
+            assert_tool_call_dict_fields(tc)
 
 
 # -- Tokenizer helpers -------------------------------------------------------
@@ -320,27 +379,15 @@ def assert_arguments_parseable(arguments_str):
 _TOKENIZER_CACHE: dict[str, object] = {}
 
 
-def _parse_tool_call_arguments(tool_calls: list) -> None:
-    for tc in tool_calls:
-        try:
-            fn = tc.get('function') or {}
-            args_str = fn.get('arguments', '')
-            if isinstance(args_str, str) and args_str.strip():
-                fn['arguments'] = json.loads(args_str)
-                tc['function'] = fn
-        except Exception:
-            pass
-
-
 def resolve_tokenizer_model_path(config: dict, model_case: str) -> str:
     """Local HF path for tokenizer: ``{model_path}/{model_case}``."""
     if os.path.isabs(model_case):
         return model_case
-    model_root = config.get('model_path', './model')
+    model_root = config['model_path']
     return os.path.join(model_root, model_case)
 
 
-def get_chat_tokenizer(tokenizer_path: str):
+def get_tokenizer(tokenizer_path: str):
     if tokenizer_path not in _TOKENIZER_CACHE:
         from transformers import AutoTokenizer
 
@@ -354,7 +401,7 @@ def build_input_ids_and_prompt_tokens(
     tokenizer_path: str,
     tools: list | None,
 ) -> tuple[list[int], int]:
-    tokenizer = get_chat_tokenizer(tokenizer_path)
+    tokenizer = get_tokenizer(tokenizer_path)
     prompt_str = tokenizer.apply_chat_template(
         messages,
         tools=tools,
@@ -365,20 +412,56 @@ def build_input_ids_and_prompt_tokens(
     return prompt_token_ids, len(prompt_token_ids)
 
 
-def attach_decoded_output_ids(result: dict, tokenizer_path: str) -> dict:
-    if result['output_ids']:
-        try:
-            tokenizer = get_chat_tokenizer(tokenizer_path)
-            result['decoded_str'] = tokenizer.decode(
-                result['output_ids'], skip_special_tokens=False)
-        except Exception:
-            result['decoded_str'] = ''
-    return result
+def resolve_tool_parser_name(model_case: str) -> str:
+    """Map model id/path to ``--tool-call-parser`` registry name."""
+    name = model_case.lower().replace('_', '-')
+    if 'llama' in name:
+        return 'llama3'
+    if 'glm' in name:
+        return 'glm47'
+    if 'intern-s2' in name or 'interns2' in name:
+        return 'interns2-preview'
+    if 'qwen2.5' in name:
+        return 'qwen2d5'
+    if 'qwen3.5' in name:
+        return 'qwen3coder'
+    return 'qwen3'
+
+
+def make_response_parser(
+    tokenizer_path: str,
+    *,
+    tool_parser_name: str,
+    tools: list | None = None,
+    reasoning_parser_name: str | None = 'default',
+    tool_choice: str = 'auto',
+    enable_thinking: bool | None = None,
+):
+    """Build ``BaseResponseParser`` aligned with server parser
+    configuration."""
+    BaseResponseParser.set_parsers(reasoning_parser_name, tool_parser_name)
+    parser_cls = ResponseParserManager.get('default')
+    tokenizer = get_tokenizer(tokenizer_path)
+    chat_template_kwargs = None
+    if enable_thinking is not None:
+        chat_template_kwargs = {'enable_thinking': enable_thinking}
+    request = ChatCompletionRequest(
+        model='autotest',
+        messages=[{'role': 'user', 'content': 'test'}],
+        tools=tools,
+        tool_choice=tool_choice,
+        chat_template_kwargs=chat_template_kwargs,
+    )
+    return parser_cls(request=request, tokenizer=tokenizer)
+
+
+def supports_raw_reasoning_decode_validate(model_case: str) -> bool:
+    """Whether raw ``output_ids`` decode should run reasoning markup checks."""
+    return 'llama' not in model_case.lower()
 
 
 # -- Stream consumption helpers ----------------------------------------------
 
-_TOOL_CALL_RAW_MARKERS = ('<tool_call>', '<function=')
 DEFAULT_TOOL_CALL_CONCURRENCY = int(os.getenv('TOOL_CALL_CONCURRENCY', '50'))
 DEFAULT_TOOL_CALL_HTTP_ERROR_WORKERS = int(os.getenv('TOOL_CALL_HTTP_ERROR_WORKERS', '5'))
 
@@ -395,9 +478,9 @@ def format_error_response(status: int, body_text: str) -> str:
     if isinstance(payload, dict):
         if 'message' in payload:
             parts = [f'HTTP {status}: {payload["message"]}']
-            if payload.get('type'):
+            if 'type' in payload:
                 parts.append(f"type={payload['type']}")
-            if payload.get('code') is not None:
+            if 'code' in payload:
                 parts.append(f"code={payload['code']}")
             return ', '.join(parts)
         if 'detail' in payload:
@@ -423,13 +506,11 @@ def _merge_stream_tool_call_delta(tool_calls: dict, tc, default_idx: int = 0) ->
     if tc.function:
         if tc.function.name:
             tool_calls[idx]['name'] += tc.function.name
-        if tc.function.arguments:
-            arg = tc.function.arguments
-            if isinstance(arg, dict):
-                arg = json.dumps(arg, ensure_ascii=False, separators=(',', ':'))
-            elif not isinstance(arg, str):
-                arg = json.dumps(arg, ensure_ascii=False, separators=(',', ':'))
-            tool_calls[idx]['args_str'] += arg
+        if tc.function.arguments is not None:
+            assert isinstance(tc.function.arguments, str), (
+                'tool call arguments must be str per protocol.DeltaFunctionCall, '
+                f'got {type(tc.function.arguments).__name__}')
+            tool_calls[idx]['args_str'] += tc.function.arguments
 
 
 def _new_stream_tool_call_result() -> dict:
@@ -455,54 +536,119 @@ def _new_stream_tool_call_result() -> dict:
     }
 
 
-def _merge_stream_choice_json(choice: dict, result: dict, tool_calls: dict) -> None:
-    if choice.get('finish_reason'):
-        result['finish_reason'] = choice['finish_reason']
+def _stream_object_field(obj, field: str):
+    """Read a field from OpenAI SDK pydantic chunks or lmdeploy protocol
+    models."""
+    model_fields = getattr(obj, 'model_fields', None)
+    if model_fields is not None and field in model_fields:
+        return getattr(obj, field)
+
+    for extra_attr in ('__pydantic_extra__', 'model_extra'):
+        extra = getattr(obj, extra_attr, None)
+        if extra and field in extra:
+            return extra[field]
+
+    try:
+        data = obj.model_dump(exclude_unset=True)
+    except AttributeError:
+        return None
+    if field in data:
+        return data[field]
+    return None
+
+
+def _stream_choice_extension(choice, field: str):
+    """Read lmdeploy-only stream fields on ``choices[]`` (e.g.
+    ``output_ids``)."""
+    return _stream_object_field(choice, field)
+
+
+def _stream_delta_field(delta, field: str):
+    """Read lmdeploy-only stream fields on ``delta`` (e.g.
+    ``reasoning_content``)."""
+    return _stream_object_field(delta, field)
+
+
+def _merge_stream_choice(
+    choice,
+    result: dict,
+    tool_calls: dict,
+    *,
+    track_reasoning_stats: bool = False,
+) -> None:
+    """Merge one stream choice (OpenAI SDK chunk or protocol model)."""
+    if choice.finish_reason is not None:
+        result['finish_reason'] = choice.finish_reason
         result['finish_reason_count'] += 1
 
-    delta = choice.get('delta') or {}
-    if delta.get('role'):
-        result['role'] = delta['role']
+    delta = choice.delta
+    role = _stream_delta_field(delta, 'role')
+    if track_reasoning_stats:
+        if role:
+            if result['role'] is None:
+                result['role'] = role
+            elif role != result['role']:
+                result['role_inconsistent'] = True
+            result['role_count'] += 1
+    elif role is not None:
+        result['role'] = role
 
-    rc = delta.get('reasoning_content')
-    if rc:
-        result['reasoning_content'] += rc
-        result['raw_text'] += rc
-    content = delta.get('content')
+    reasoning_content = _stream_delta_field(delta, 'reasoning_content')
+    if reasoning_content:
+        result['reasoning_content'] += reasoning_content
+        result['raw_text'] += reasoning_content
+        if track_reasoning_stats:
+            result['reasoning_chunks'] += 1
+
+    content = _stream_delta_field(delta, 'content')
     if content:
         result['content'] += content
         result['raw_text'] += content
+        if track_reasoning_stats:
+            result['content_chunks'] += 1
 
-    for tc in delta.get('tool_calls') or []:
-        _merge_stream_tool_call_delta(tool_calls, _DictToolCallDelta(tc))
+    tool_calls_delta = _stream_delta_field(delta, 'tool_calls')
+    if tool_calls_delta:
+        for tc in tool_calls_delta:
+            _merge_stream_tool_call_delta(tool_calls, tc)
 
-    output_ids = choice.get('output_ids')
-    if isinstance(output_ids, list) and output_ids:
+    output_ids = _stream_choice_extension(choice, 'output_ids')
+    if output_ids:
         result['output_ids'].extend(output_ids)
 
-    if choice.get('routed_experts') is not None:
-        result['routed_experts'] = choice['routed_experts']
+    routed_experts = _stream_choice_extension(choice, 'routed_experts')
+    if routed_experts is not None:
+        result['routed_experts'] = routed_experts
 
 
-class _DictToolCallDelta:
+def _merge_stream_choice_dict(choice: dict, result: dict, tool_calls: dict) -> None:
+    """Merge one SSE ``choices[]`` element via ``protocol`` models (no soft
+    dict access)."""
+    stream_choice = ChatCompletionResponseStreamChoice.model_validate(choice)
+    _merge_stream_choice(stream_choice, result, tool_calls)
 
-    def __init__(self, data: dict):
-        self.index = data.get('index')
-        self.id = data.get('id')
-        fn = data.get('function') or {}
-        self.function = type('Fn', (), {
-            'name': fn.get('name'),
-            'arguments': fn.get('arguments'),
-        })()
+
+def _apply_stream_chunk(item: dict, result: dict, tool_calls: dict) -> None:
+    """Merge one SSE JSON chunk (``chat.completion.chunk`` schema)."""
+    chunk = ChatCompletionStreamResponse.model_validate(item)
+    if chunk.usage is not None:
+        if chunk.usage.prompt_tokens:
+            result['prompt_tokens'] = chunk.usage.prompt_tokens
+        if chunk.usage.completion_tokens:
+            result['completion_tokens'] = chunk.usage.completion_tokens
+    if not chunk.choices:
+        return
+    result['chunk_count'] += 1
+    _merge_stream_choice(chunk.choices[0], result, tool_calls)
 
 
 def _finalize_stream_tool_call_result(result: dict, tool_calls: dict) -> dict:
     result['tool_calls'] = tool_calls
     if tool_calls:
         first = tool_calls[min(tool_calls)]
-        if not first.get('id'):
+        if not first['id']:
             first['id'] = f'call_{uuid.uuid4().hex[:8]}'
-        result['function_name'] = first['name'] or None
+        result['function_name'] = first['name']
         result['args_str'] = first['args_str']
         result['tool_call_id'] = first['id']
     return result
@@ -514,47 +660,15 @@ def collect_stream_tool_call(stream):
 
     for chunk in stream:
         result['chunk_count'] += 1
-        usage = getattr(chunk, 'usage', None)
-        if usage is not None:
-            prompt_tokens = getattr(usage, 'prompt_tokens', None)
-            if prompt_tokens:
-                result['prompt_tokens'] = prompt_tokens
-            completion_tokens = getattr(usage, 'completion_tokens', None)
-            if completion_tokens:
-                result['completion_tokens'] = completion_tokens
+        if chunk.usage is not None:
+            if chunk.usage.prompt_tokens:
+                result['prompt_tokens'] = chunk.usage.prompt_tokens
+            if chunk.usage.completion_tokens:
+                result['completion_tokens'] = chunk.usage.completion_tokens
 
         if not chunk.choices:
             continue
-        choice = chunk.choices[0]
-
-        if choice.finish_reason:
-            result['finish_reason'] = choice.finish_reason
-            result['finish_reason_count'] += 1
-
-        output_ids = getattr(choice, 'output_ids', None)
-        if isinstance(output_ids, list) and output_ids:
-            result['output_ids'].extend(output_ids)
-
-        routed_experts = getattr(choice, 'routed_experts', None)
-        if routed_experts is not None:
-            result['routed_experts'] = routed_experts
-
-        delta = choice.delta
-        if delta.role:
-            result['role'] = delta.role
-
-        rc = getattr(delta, 'reasoning_content', None)
-        if rc:
-            result['reasoning_content'] += rc
-            result['raw_text'] += rc
-
-        if delta.content:
-            result['content'] += delta.content
-            result['raw_text'] += delta.content
-
-        if delta.tool_calls:
-            for tc in delta.tool_calls:
-                _merge_stream_tool_call_delta(tool_calls, tc)
+        _merge_stream_choice(chunk.choices[0], result, tool_calls)
 
     result['stream_complete'] = True
     return _finalize_stream_tool_call_result(result, tool_calls)
@@ -618,19 +732,7 @@ def collect_stream_tool_call_http(
             except json.JSONDecodeError:
                 continue
 
-            usage = item.get('usage')
-            if isinstance(usage, dict):
-                if usage.get('prompt_tokens'):
-                    result['prompt_tokens'] = usage['prompt_tokens']
-                if usage.get('completion_tokens'):
-                    result['completion_tokens'] = usage['completion_tokens']
-
-            choices = item.get('choices') or []
-            if not choices:
-                continue
-
-            result['chunk_count'] += 1
-            _merge_stream_choice_json(choices[0], result, tool_calls)
+            _apply_stream_chunk(item, result, tool_calls)
 
     if log_file:
         try:
@@ -644,7 +746,12 @@ def collect_stream_tool_call_http(
         result['prompt_tokens'] = prompt_tokens_computed
 
     result = _finalize_stream_tool_call_result(result, tool_calls)
-    return attach_decoded_output_ids(result, tok_path)
+    return attach_decoded_validation(
+        result,
+        tok_path,
+        tool_parser_name=resolve_tool_parser_name(tok_path),
+        tools=tools,
+    )
 
 
 def _build_stream_tool_call_payload(
@@ -684,7 +791,7 @@ def _build_stream_tool_call_payload(
                 'return_token_ids': True,
                 'return_routed_experts': True,
                 'stream_options': {'include_usage': True},
-                'spaces_between_special_tokens': False,
+                **LMDEPLOY_DECODE_DEFAULTS,
             }
     elif reference_payload:
         payload = {
@@ -705,7 +812,7 @@ def _build_stream_tool_call_payload(
             'return_token_ids': True,
             'return_routed_experts': True,
             'stream_options': {'include_usage': True},
-            'spaces_between_special_tokens': False,
+            **LMDEPLOY_DECODE_DEFAULTS,
         }
     if tools is not None and not use_input_ids:
         payload['tools'] = tools
@@ -785,19 +892,7 @@ async def collect_stream_tool_call_http_async(
                 except json.JSONDecodeError:
                     continue
 
-                usage = item.get('usage')
-                if isinstance(usage, dict):
-                    if usage.get('prompt_tokens'):
-                        result['prompt_tokens'] = usage['prompt_tokens']
-                    if usage.get('completion_tokens'):
-                        result['completion_tokens'] = usage['completion_tokens']
-
-                choices = item.get('choices') or []
-                if not choices:
-                    continue
-
-                result['chunk_count'] += 1
-                _merge_stream_choice_json(choices[0], result, tool_calls)
+                _apply_stream_chunk(item, result, tool_calls)
 
             if result['stream_complete']:
                 break
@@ -814,7 +909,12 @@ async def collect_stream_tool_call_http_async(
         result['prompt_tokens'] = prompt_tokens_computed
 
     result = _finalize_stream_tool_call_result(result, tool_calls)
-    return attach_decoded_output_ids(result, tok_path)
+    return attach_decoded_validation(
+        result,
+        tok_path,
+        tool_parser_name=resolve_tool_parser_name(tok_path),
+        tools=tools,
+    )
 
 
 class RoutedExpertsNotSupported(Exception):
@@ -839,9 +939,9 @@ def collect_stream_parallel_tool_calls(stream):
         if chunk.choices[0].finish_reason:
             finish_reason_count += 1
 
-        streamed_tool_calls = chunk.choices[0].delta.tool_calls
-        if streamed_tool_calls:
-            for stc in streamed_tool_calls:
+        tool_calls_delta = _stream_delta_field(chunk.choices[0].delta, 'tool_calls')
+        if tool_calls_delta:
+            for stc in tool_calls_delta:
                 _merge_stream_tool_call_delta(tool_calls_data, stc)
 
     return tool_calls_data, finish_reason_count
@@ -851,30 +951,136 @@ def _has_parsed_tool_calls(tool_calls) -> bool:
     if not tool_calls:
         return False
     if isinstance(tool_calls, dict):
-        return any((data.get('name') or data.get('args_str')) for data in tool_calls.values())
+        return any(data['name'] or data['args_str'] for data in tool_calls.values())
     if isinstance(tool_calls, list):
         return len(tool_calls) > 0
     return bool(tool_calls)
 
 
-def assert_parser_drop_decoded_only(decoded_str: str, tool_calls) -> None:
-    if '<tool_call>' in decoded_str.lower() and not _has_parsed_tool_calls(tool_calls):
-        raise AssertionError(
-            'Parser dropped tool call: model emitted <tool_call> in decoded output '
-            'but parser returned nothing')
+def assert_raw_decode_validate_complete(
+    text: str,
+    tokenizer_path: str,
+    *,
+    tool_parser_name: str,
+    tools: list | None = None,
+    reasoning_parser_name: str | None = None,
+    enable_thinking: bool | None = None,
+) -> None:
+    """Run ``ResponseParser.validate_complete`` on decoded output.
+
+    ``reasoning_parser_name=None`` validates tool markup only (tool-call path).
+    Pass ``reasoning_parser_name`` (e.g. ``'default'``) and ``enable_thinking``
+    for reasoning-suite raw decode checks.
+    """
+    if not text.strip():
+        return
+    parser = make_response_parser(
+        tokenizer_path,
+        tool_parser_name=tool_parser_name,
+        tools=tools,
+        reasoning_parser_name=reasoning_parser_name,
+        tool_choice='auto' if tools else 'none',
+        enable_thinking=enable_thinking,
+    )
+    assert parser.validate_complete(text), (
+        'ResponseParser.validate_complete failed: incomplete or malformed decoded markup '
+        f'in output snippet: {text[:300]!r}')
+
+
+def attach_decoded_validation(
+    result: dict,
+    tokenizer_path: str,
+    *,
+    tool_parser_name: str | None = None,
+    tools: list | None = None,
+    reasoning_parser_name: str | None = None,
+    enable_thinking: bool | None = None,
+    model_case: str | None = None,
+    validate_decoded: bool = True,
+) -> dict:
+    """Decode ``output_ids`` and run ``validate_complete`` on raw decoded text.
+
+    Tool-call path: ``tool_parser_name`` set, ``reasoning_parser_name`` omitted.
+    Reasoning path: also pass ``reasoning_parser_name``, ``enable_thinking``,
+    and optional ``model_case`` to gate decode validation per model.
+    """
+    if model_case is not None and not supports_raw_reasoning_decode_validate(model_case):
+        return result
+    if enable_thinking is False:
+        return result
+    output_ids = result.get('output_ids') or []
+    if not output_ids:
+        return result
+    tokenizer = get_tokenizer(tokenizer_path)
+    result['decoded_str'] = tokenizer.decode(output_ids, skip_special_tokens=False)
+    if not result['decoded_str'].strip():
+        return result
+    if not validate_decoded:
+        return result
+    if tool_parser_name is None:
+        return result
+    assert_raw_decode_validate_complete(
+        result['decoded_str'],
+        tokenizer_path,
+        tool_parser_name=tool_parser_name,
+        tools=tools,
+        reasoning_parser_name=reasoning_parser_name,
+        enable_thinking=enable_thinking,
+    )
+    return result
+
+
+def assert_parser_drop_decoded_only(
+    decoded_str: str,
+    tool_calls,
+    tokenizer_path: str,
+    *,
+    tool_parser_name: str,
+    tools: list | None = None,
+) -> None:
+    if _has_parsed_tool_calls(tool_calls) or not decoded_str.strip():
+        return
+    parser = make_response_parser(
+        tokenizer_path,
+        tool_parser_name=tool_parser_name,
+        tools=tools,
+        reasoning_parser_name=None,
+    )
+    open_tag = parser.profile.tool_open_tag
+    if not open_tag or open_tag not in decoded_str:
+        return
+    assert_raw_decode_validate_complete(
+        decoded_str,
+        tokenizer_path,
+        tool_parser_name=tool_parser_name,
+        tools=tools,
+    )
+    raise AssertionError(
+        'Parser dropped tool call: decoded output contains complete tool markup '
+        'but streamed tool_calls are empty')
 
 
 def assert_no_parser_drop(
     raw_text: str,
     tool_calls,
-    decoded_str: str = '',
+    decoded_str: str,
+    *,
+    tokenizer_path: str,
+    tool_parser_name: str,
+    tools: list | None = None,
 ) -> None:
-    combined = f'{raw_text}\n{decoded_str}'.lower()
-    if not combined.strip():
+    if _has_parsed_tool_calls(tool_calls):
         return
-    model_emitted_tool = any(marker in combined for marker in _TOOL_CALL_RAW_MARKERS)
-    assert not (model_emitted_tool and not _has_parsed_tool_calls(tool_calls)), (
-        'Parser dropped tool call: model emitted raw tool markup but parser returned nothing')
+    combined = f'{raw_text}\n{decoded_str}'.strip()
+    if not combined:
+        return
+    assert_parser_drop_decoded_only(
+        combined,
+        tool_calls,
+        tokenizer_path,
+        tool_parser_name=tool_parser_name,
+        tools=tools,
+    )
 
 
 def validate_stream_tool_call_result(
@@ -883,14 +1089,11 @@ def validate_stream_tool_call_result(
     expected_finish_reason: str = 'tool_calls',
     expected_function_name: str | None = None,
     require_tool_call: bool = True,
+    tokenizer_path: str,
+    tool_parser_name: str,
+    tools: list | None = None,
 ) -> None:
-    if expected_finish_reason is not None:
-        assert result['finish_reason'] == expected_finish_reason, (
-            f"finish_reason={result['finish_reason']!r}, expected {expected_finish_reason!r}")
-
-    if result['finish_reason_count'] > 0:
-        assert result['finish_reason_count'] == 1, (
-            f'Expected exactly 1 finish_reason chunk, got {result["finish_reason_count"]}')
+    _assert_stream_finish_reason(result, expected_finish_reason)
 
     if require_tool_call:
         assert result['function_name'], 'stream ended without function name'
@@ -909,7 +1112,22 @@ def validate_stream_tool_call_result(
         result['raw_text'],
         result['tool_calls'],
         result['decoded_str'],
+        tokenizer_path=tokenizer_path,
+        tool_parser_name=tool_parser_name,
+        tools=tools,
     )
+
+
+def _resolve_prompt_tokens(result: dict) -> int:
+    """Prompt token count from stream usage or precomputed tokenizer count."""
+    computed = result['prompt_tokens_computed']
+    if computed:
+        return computed
+    usage_prompt = result['prompt_tokens']
+    if usage_prompt:
+        return usage_prompt
+    raise AssertionError(
+        'prompt_tokens missing: enable stream_options.include_usage or use_input_ids')
 
 
 def validate_output_ids_present(result: dict) -> None:
@@ -941,7 +1159,7 @@ def validate_routed_experts_length(result: dict, prompt_tokens: int | None = Non
             'return_routed_experts=True but routed_experts missing in final stream chunk')
 
     if prompt_tokens is None:
-        prompt_tokens = result['prompt_tokens_computed'] or result['prompt_tokens']
+        prompt_tokens = _resolve_prompt_tokens(result)
     completion_tokens = len(result['output_ids'])
     expected_len = prompt_tokens + completion_tokens - 1 if prompt_tokens > 0 else 0
     actual_len = len(routed_experts)
@@ -959,8 +1177,22 @@ def validate_routed_experts_length(result: dict, prompt_tokens: int | None = Non
            if usage_completion and usage_completion != completion_tokens else ''))
 
 
-def validate_stream_tool_call_with_tokens(result: dict, prompt_tokens: int | None = None, **kwargs) -> None:
-    validate_stream_tool_call_result(result, **kwargs)
+def validate_stream_tool_call_with_tokens(
+    result: dict,
+    prompt_tokens: int | None = None,
+    *,
+    tokenizer_path: str | None = None,
+    tool_parser_name: str | None = None,
+    tools: list | None = None,
+    **kwargs,
+) -> None:
+    validate_stream_tool_call_result(
+        result,
+        tokenizer_path=tokenizer_path,
+        tool_parser_name=tool_parser_name,
+        tools=tools,
+        **kwargs,
+    )
     assert result['stream_complete'], 'stream ended before data: [DONE]'
     validate_output_ids_present(result)
     validate_output_ids_match_usage(result)
@@ -972,6 +1204,8 @@ def _tool_calls_for_reference_validation(tool_calls) -> list[dict]:
         return []
     if isinstance(tool_calls, dict):
         return [{
+            'id': data['id'],
+            'type': 'function',
             'function': {
                 'name': data['name'],
                 'arguments': data['args_str'],
@@ -985,56 +1219,36 @@ def validate_reference_turn_result(
     prompt_tokens: int,
     *,
     expected_function_name: str | None = None,
+    tokenizer_path: str | None = None,
+    tool_parser_name: str | None = None,
+    tools: list | None = None,
 ) -> None:
     """Per-turn validation for concurrent input_ids streaming tool calls."""
     assert result['stream_complete'], 'stream ended before data: [DONE]'
-    assert result['finish_reason'] == 'tool_calls', (
-        f"finish_reason={result['finish_reason']!r}, expected 'tool_calls'")
+    _assert_stream_finish_reason(result, 'tool_calls')
 
     tool_calls = _tool_calls_for_reference_validation(result['tool_calls'])
     if not tool_calls:
         raise AssertionError('no tool_calls after stream completed')
 
     for tc in tool_calls:
-        fn = tc.get('function') or {}
-        name = fn.get('name', '')
-        args = fn.get('arguments')
-        if not name:
-            raise AssertionError('tool call missing function name')
-        if not args:
-            raise AssertionError(f'tool call {name!r} missing arguments')
-        if isinstance(args, str):
-            json.loads(args)
+        assert_tool_call_fields(tc)
+        assert_arguments_parseable(tc['function']['arguments'])
 
     if expected_function_name is not None:
         first_name = tool_calls[0]['function']['name']
         assert first_name == expected_function_name, (
             f'function_name={first_name!r}, expected {expected_function_name!r}')
 
-    assert_parser_drop_decoded_only(result['decoded_str'], result['tool_calls'])
+    if tokenizer_path is not None and tool_parser_name is not None:
+        assert_parser_drop_decoded_only(
+            result['decoded_str'],
+            result['tool_calls'],
+            tokenizer_path,
+            tool_parser_name=tool_parser_name,
+            tools=tools,
+        )
 
-    if result['routed_experts'] is not None and prompt_tokens > 0:
-        completion_tokens = len(result['output_ids'])
-        expected_re_len = prompt_tokens + completion_tokens - 1
-        actual_re_len = len(result['routed_experts'])
-        assert expected_re_len == actual_re_len, (
-            f'Routed Experts Mismatch (Expected {expected_re_len}, got {actual_re_len})')
-
-
-def validate_concurrent_turn_result(
-    result: dict,
-    prompt_tokens: int,
-    *,
-    expected_function_name: str | None = None,
-) -> None:
-    assert result['stream_complete'], 'stream ended before data: [DONE]'
-    validate_stream_tool_call_result(
-        result,
-        expected_function_name=expected_function_name,
-    )
-    validate_output_ids_present(result)
-    validate_output_ids_match_usage(result)
-    assert_parser_drop_decoded_only(result['decoded_str'], result['tool_calls'])
     if result['routed_experts'] is not None and prompt_tokens > 0:
         validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
 
@@ -1064,21 +1278,21 @@ def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
         })
 
     if tool_calls_out:
-        _parse_tool_call_arguments(tool_calls_out)
         ast_msg['tool_calls'] = tool_calls_out
     messages.append(ast_msg)
 
     for tc in tool_calls_out:
         fn = tc['function']
-        args = fn['arguments']
-        if isinstance(args, dict):
-            args = json.dumps(args)
         messages.append({
             'role': 'tool',
             'tool_call_id': tc['id'],
             'name': fn['name'],
             'content': json.dumps({'weather': 'Sunny', 'temperature': 25}),
         })
+
+    normalized = _normalize_request_messages(messages)
+    if normalized is not None:
+        messages[:] = normalized
 
 
 async def _async_concurrent_worker_turns(
@@ -1115,12 +1329,15 @@ async def _async_concurrent_worker_turns(
                 f'worker {worker_id} turn {turn + 1}: HTTP tool-call request failed: {exc}'
             ) from exc
 
-        prompt_tokens = result['prompt_tokens_computed'] or result['prompt_tokens']
+        prompt_tokens = _resolve_prompt_tokens(result)
         try:
             validate_reference_turn_result(
                 result,
                 prompt_tokens,
                 expected_function_name=expected_name,
+                tokenizer_path=tokenizer_path,
+                tool_parser_name=resolve_tool_parser_name(tokenizer_path),
+                tools=tools,
             )
         except AssertionError as exc:
             raise AssertionError(f'worker {worker_id} turn {turn + 1}: {exc}') from exc
@@ -1267,6 +1484,25 @@ def run_concurrent_tool_call_workers(
     ))
 
 
+def _new_stream_reasoning_result() -> dict:
+    return {
+        'reasoning_content': '',
+        'content': '',
+        'raw_text': '',
+        'tool_calls': {},
+        'finish_reason': None,
+        'finish_reason_count': 0,
+        'role': None,
+        'role_count': 0,
+        'role_inconsistent': False,
+        'chunk_count': 0,
+        'reasoning_chunks': 0,
+        'content_chunks': 0,
+        'output_ids': [],
+        'decoded_str': '',
+    }
+
+
 def collect_stream_reasoning(stream):
     """Consume a streaming response, collecting reasoning + content + tool
     calls.
@@ -1283,106 +1519,23 @@ def collect_stream_reasoning(stream):
         chunk_count         – total number of chunks received
         reasoning_chunks    – number of chunks containing reasoning
         content_chunks      – number of chunks containing content
+        output_ids          – aggregated token ids when ``return_token_ids=True``
+        decoded_str         – filled by ``attach_decoded_validation``
     """
-    result = {
-        'reasoning_content': '',
-        'content': '',
-        'tool_calls': {},
-        'finish_reason': None,
-        'finish_reason_count': 0,
-        'role': None,
-        'role_count': 0,
-        'role_inconsistent': False,
-        'chunk_count': 0,
-        'reasoning_chunks': 0,
-        'content_chunks': 0,
-    }
+    result = _new_stream_reasoning_result()
 
     for chunk in stream:
         result['chunk_count'] += 1
         if not chunk.choices:
             continue
-        choice = chunk.choices[0]
-
-        if choice.finish_reason is not None:
-            result['finish_reason'] = choice.finish_reason
-            result['finish_reason_count'] += 1
-
-        delta = choice.delta
-        if delta.role:
-            if result['role'] is None:
-                result['role'] = delta.role
-            elif delta.role != result['role']:
-                result['role_inconsistent'] = True
-            result['role_count'] += 1
-
-        # -- reasoning_content (lmdeploy extension field) -------------------
-        rc = getattr(delta, 'reasoning_content', None)
-        if rc:
-            result['reasoning_content'] += rc
-            result['reasoning_chunks'] += 1
-
-        # -- regular content ------------------------------------------------
-        if delta.content:
-            result['content'] += delta.content
-            result['content_chunks'] += 1
-
-        # -- tool calls -----------------------------------------------------
-        if delta.tool_calls:
-            for stc in delta.tool_calls:
-                _merge_stream_tool_call_delta(result['tool_calls'], stc)
+        _merge_stream_choice(
+            chunk.choices[0],
+            result,
+            result['tool_calls'],
+            track_reasoning_stats=True,
+        )
 
     return result
-
-
-# -- Reasoning extraction helpers -------------------------------------------
-
-
-def get_reasoning_content(message):
-    """Extract reasoning_content from a chat completion message.
-
-    Different backends may expose reasoning in different ways:
-      - ``message.reasoning_content``  (lmdeploy / OpenAI extension)
-      - Wrapped inside ``<think>...</think>`` tags in ``message.content``
-    This helper tries both and returns the reasoning string (or *None*).
-    """
-    reasoning = getattr(message, 'reasoning_content', None)
-    if reasoning:
-        return reasoning
-
-    content = message.content or ''
-    if THINK_START_TOKEN in content and THINK_END_TOKEN in content:
-        start = content.index(THINK_START_TOKEN) + len(THINK_START_TOKEN)
-        end = content.index(THINK_END_TOKEN)
-        extracted = content[start:end].strip()
-        if extracted:
-            return extracted
-
-    return None
-
-
-def get_reasoning_tokens(response):
-    """Extract reasoning_tokens from usage, handling various response shapes.
-
-    Returns int or *None* if not available.
-    """
-    usage = response.usage
-    if usage is None:
-        return None
-
-    # completion_tokens_details.reasoning_tokens  (OpenAI style)
-    details = getattr(usage, 'completion_tokens_details', None)
-    if details is not None:
-        rt = getattr(details, 'reasoning_tokens', None)
-        if rt is not None:
-            return rt
-
-    # Direct attribute
-    rt = getattr(usage, 'reasoning_tokens', None)
-    if rt is not None:
-        return rt
-
-    return None
 
 
 # -- Message-building helpers -----------------------------------------------

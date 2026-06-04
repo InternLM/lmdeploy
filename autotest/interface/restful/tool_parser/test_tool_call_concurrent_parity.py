@@ -76,6 +76,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             r,
             prompt_tokens,
             expected_function_name='get_weather',
+            **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
         )
 
     def test_messages_path_streaming_with_done_and_tokens(self, backend, model_case):
@@ -93,6 +94,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
                 r,
                 prompt_tokens=prompt_tokens,
                 expected_function_name='get_weather',
+                **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
             )
         except RoutedExpertsNotSupported as exc:
             pytest.skip(str(exc))
@@ -112,6 +114,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             r,
             prompt_tokens,
             expected_function_name='get_weather',
+            **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
         )
 
     def test_multi_turn_input_ids_with_tool_name_in_history(self, backend, model_case):
@@ -134,6 +137,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
                 r,
                 prompt_tokens,
                 expected_function_name='get_weather',
+                **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
             )
             self._append_assistant_and_tool_messages(messages, r)
             last_tool = messages[-1]

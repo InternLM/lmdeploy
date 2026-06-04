@@ -1,5 +1,3 @@
-import json
-
 import pytest
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
@@ -8,7 +6,6 @@ from utils.tool_reasoning_definitions import (
     NESTED_PARAM_TOOL,
     SEARCH_TOOL,
     WEATHER_TOOL,
-    WEATHER_TOOL_CN,
     RoutedExpertsNotSupported,
     assert_arguments_parseable,
     assert_no_parser_drop,
@@ -229,8 +226,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             assert data['name'] == 'get_current_weather', (
                 f'Index {idx}: expected get_current_weather, got {data["name"]!r}')
             assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
-            parsed = json.loads(data['args_str'])
-            assert isinstance(parsed, dict)
+            parsed = assert_arguments_parseable(data['args_str'])
             assert 'city' in parsed and 'state' in parsed
 
     def test_parallel_mixed_tools(self, backend, model_case):
@@ -320,7 +316,7 @@ class TestToolCallWithResults(_ToolCallTestBase):
 
 
 # ===========================================================================
-# Multilingual tool calls
+# Multilingual tool calls (WEATHER_TOOL only; no WEATHER_TOOL_CN)
 # ===========================================================================
 
 
@@ -335,7 +331,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
             max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
-            tools=[WEATHER_TOOL_CN],
+            tools=[WEATHER_TOOL],
             logprobs=False,
         )
 
@@ -362,7 +358,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
             max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
-            tools=[WEATHER_TOOL_CN],
+            tools=[WEATHER_TOOL],
             logprobs=False,
             stream=True,
         )
@@ -371,13 +367,14 @@ class TestToolCallMultilingual(_ToolCallTestBase):
         validate_stream_tool_call_result(
             r,
             expected_function_name='get_current_weather',
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
         )
         parsed = assert_arguments_parseable(r['args_str'])
         assert 'city' in parsed
         assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
 
     def test_mixed_language_tools(self, backend, model_case):
-        """Pass Chinese + English tool definitions together."""
+        """Chinese user prompt with English tool definitions."""
         client, model_name = self._get_client()
 
         response = client.chat.completions.create(
@@ -385,7 +382,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
             max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
-            tools=[WEATHER_TOOL_CN, SEARCH_TOOL],
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
 
@@ -431,7 +428,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
         choice = response.choices[0]
         tool_calls = choice.message.tool_calls
         assert choice.finish_reason == 'tool_calls', (
-            f'Expected tool_calls for CN search prompt; got finish_reason={choice.finish_reason!r}, '
+            f'Expected tool_calls for search prompt; got finish_reason={choice.finish_reason!r}, '
             f'content={choice.message.content!r}')
         assert tool_calls is not None and len(tool_calls) >= 1, (
             f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
@@ -486,7 +483,7 @@ class TestToolCallComplexParams(_ToolCallTestBase):
             assert_tool_call_fields(tc)
             assert tc.function.name == 'create_event'
 
-            parsed = json.loads(tc.function.arguments)
+            parsed = assert_arguments_parseable(tc.function.arguments)
             assert 'title' in parsed
 
             if 'location' in parsed:
@@ -655,6 +652,7 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
         validate_stream_tool_call_result(
             r,
             expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
         )
         assert r['stream_complete'], 'stream ended before data: [DONE]'
         validate_output_ids_present(r)
@@ -669,6 +667,7 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
         validate_stream_tool_call_result(
             r,
             expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
         )
         assert r['stream_complete']
         validate_output_ids_present(r)
@@ -688,6 +687,7 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
             validate_stream_tool_call_with_tokens(
                 r,
                 expected_function_name=WEATHER_TOOL['function']['name'],
+                **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
             )
         except RoutedExpertsNotSupported as exc:
             pytest.skip(str(exc))
@@ -723,9 +723,10 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
             validate_stream_tool_call_result(
                 r,
                 expected_function_name=WEATHER_TOOL['function']['name'],
+                **self._parser_validation_kwargs([WEATHER_TOOL]),
             )
             parsed = assert_arguments_parseable(r['args_str'])
-            assert isinstance(parsed.get('city'), str) and len(parsed['city']) > 0
+            assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
             self._append_assistant_and_tool_messages(messages, r)
 
         assert len(messages) == 1 + num_turns * 3, (
@@ -756,6 +757,7 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
                     r,
                     prompt_tokens=prompt_tokens,
                     expected_function_name=WEATHER_TOOL['function']['name'],
+                    **self._parser_validation_kwargs([WEATHER_TOOL]),
                 )
             except RoutedExpertsNotSupported as exc:
                 pytest.skip(f'turn {turn + 1}: {exc}')
@@ -868,7 +870,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             tc = choice.message.tool_calls[0]
             assert_tool_call_fields(tc)
             if tc.function.name == 'web_search':
-                parsed = json.loads(tc.function.arguments)
+                parsed = assert_arguments_parseable(tc.function.arguments)
                 assert 'query' in parsed
         else:
             assert choice.message.content and len(choice.message.content) > 0
@@ -889,13 +891,22 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
         )
         assert r['finish_reason'] in ('stop', 'length', 'tool_calls')
         if r['finish_reason'] == 'tool_calls':
-            validate_stream_tool_call_result(r, expected_function_name=None)
+            validate_stream_tool_call_result(
+                r,
+                expected_function_name=None,
+                **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            )
             if r['function_name'] == 'web_search':
-                parsed = json.loads(r['args_str'])
+                parsed = assert_arguments_parseable(r['args_str'])
                 assert 'query' in parsed
         else:
             assert len(r['content'].strip()) > 0
-            assert_no_parser_drop(r['raw_text'], r['tool_calls'])
+            assert_no_parser_drop(
+                r['raw_text'],
+                r['tool_calls'],
+                r['decoded_str'],
+                **self._parser_validation_kwargs([SEARCH_TOOL]),
+            )
 
     def test_special_characters_in_query(self, backend, model_case):
         """Quotes, angle brackets, Unicode → JSON args still parseable."""

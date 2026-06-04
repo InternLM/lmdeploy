@@ -11,6 +11,7 @@ from utils.tool_reasoning_definitions import (
     collect_stream_tool_call_http,
     make_logged_client,
     resolve_tokenizer_model_path,
+    resolve_tool_parser_name,
     run_concurrent_http_error_workers,
     run_concurrent_tool_call_workers,
     setup_log_file,
@@ -98,6 +99,17 @@ class _ToolCallTestBase:
     def _get_client(self):
         """Return *(client, api_model_name)* with transparent logging."""
         return self._client, self._api_model_name
+
+    def _parser_validation_kwargs(self, tools=None):
+        """Kwargs for ``validate_*`` helpers using
+        ``ResponseParser.validate_complete``."""
+        kwargs = {
+            'tokenizer_path': self._tokenizer_path,
+            'tool_parser_name': resolve_tool_parser_name(self._model_case),
+        }
+        if tools is not None:
+            kwargs['tools'] = tools
+        return kwargs
 
     def _stream_tool_call(self, messages, tools=None, **create_kwargs):
         """Run a streaming tool-call request and return aggregated result."""

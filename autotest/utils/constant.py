@@ -239,7 +239,8 @@ TOOL_REASONING_MODEL_LIST_LATEST = [
     'unsloth/gpt-oss-20b-BF16',
     'Qwen/Qwen2.5-7B-Instruct',
     'internlm/Intern-S1-Pro-FP8',
-    'internlm/interns2-preview-0509',
+    'internlm/Intern-S2-Preview',
+    'internlm/Intern-S2-Preview-FP8',
     'zai-org/GLM-4.7-Flash',
 ]
 
