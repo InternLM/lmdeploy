@@ -97,9 +97,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
             elif modality == Modality.VIDEO:
                 second_per_grid = item.get('video_second_per_grid')
                 if second_per_grid is not None:
-                    second_per_grid = second_per_grid[0]
-                    if isinstance(second_per_grid, torch.Tensor) and second_per_grid.numel() == 1:
-                        second_per_grid = second_per_grid.item()
+                    second_per_grid = second_per_grid[0].item()
                 expanded_mm_items.append(
                     dict(
                         modality=modality,
@@ -119,12 +117,14 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                         audio_token_id=token_id,
                     ))
             elif modality == Modality.TIME_SERIES:
+                ts_channels = item.get('ts_channels')
                 expanded_mm_items.append(
                     dict(
                         modality=modality,
                         ts_values=item['feature'],
                         ts_sr=item['ts_sr'],
                         ts_lens=item['ts_lens'],
+                        ts_channels=ts_channels,
                         offset=item['offset'][0],
                         ts_token_id=token_id,
                     ))
@@ -182,9 +182,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                     start, end = slice_indices[video_idx], slice_indices[video_idx + 1]
                     second_per_grid = item.get('video_second_per_grid')
                     if second_per_grid is not None:
-                        second_per_grid = second_per_grid[video_idx]
-                        if isinstance(second_per_grid, torch.Tensor) and second_per_grid.numel() == 1:
-                            second_per_grid = second_per_grid.item()
+                        second_per_grid = second_per_grid[video_idx].item()
                     expanded_mm_items.append(
                         dict(
                             modality=modality,
@@ -205,9 +203,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                 frame_start, frame_end = frame_start_indices[video_idx], frame_start_indices[video_idx + 1]
                 second_per_grid = item.get('video_second_per_grid')
                 if second_per_grid is not None:
-                    second_per_grid = second_per_grid[video_idx]
-                    if isinstance(second_per_grid, torch.Tensor) and second_per_grid.numel() == 1:
-                        second_per_grid = second_per_grid.item()
+                    second_per_grid = second_per_grid[video_idx].item()
 
                 # TODO: zhouxinyu, not sure per-frame split is good or not
                 # TODO: zhouxinyu, grid_thw [1, h, w] is only for qwen3vl
