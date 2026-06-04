@@ -92,9 +92,7 @@ struct ModuleListConfig: ModuleConfig {
 /// Assumes member `std::unique_ptr<Type> name` and local `std::string name_str`.
 #define TM_ADD_CHILD_CASE(Type, name)                                                                                  \
     if (name_str == #name) {                                                                                           \
-        auto* p = ::turbomind::core::checked_child_cast<Type>(child.get(), #Type);                                     \
-        child.release();                                                                                               \
-        name.reset(p);                                                                                                 \
+        name.reset(static_cast<Type*>(child.release()));                                                               \
         attach_child_(name.get(), this, std::move(name_str));                                                          \
         return name.get();                                                                                             \
     }
@@ -303,26 +301,6 @@ protected:
         child->name_   = std::move(name);
     }
 };
-
-template<typename T>
-struct ModuleChildCastPolicy {
-    static constexpr bool allow_derived = std::is_abstract_v<T>;
-};
-
-template<typename T>
-T* checked_child_cast(Module* child, const char* expected_type_name)
-{
-    TM_CHECK(child != nullptr);
-    if constexpr (ModuleChildCastPolicy<T>::allow_derived) {
-        auto* p = dynamic_cast<T*>(child);
-        TM_CHECK(p != nullptr) << "expected " << expected_type_name << " or derived, got " << child->type();
-        return p;
-    }
-    else {
-        TM_CHECK_EQ(child->type(), T().type());
-        return static_cast<T*>(child);
-    }
-}
 
 // ======================================================================
 // ModuleList — indexed container for layer/expert sequences
