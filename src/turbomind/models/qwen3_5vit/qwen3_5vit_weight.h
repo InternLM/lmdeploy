@@ -85,8 +85,6 @@ public:
     void prepare() override;
     bool verify(std::vector<std::string>& missing) override;
 
-    std::unique_ptr<VisionModel> make_model(const EngineParam& engine, const Context& ctx, int phases) const override;
-
     // --- X-macro field lists ---
 #define QWEN3_5VIT_WEIGHT_CHILDREN(X)                                                                                  \
     X(LinearWeight, patch_embed)                                                                                       \

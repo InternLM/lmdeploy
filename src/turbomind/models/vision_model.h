@@ -3,6 +3,9 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/batch.h"
+#include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/vision_model_weight.h"
 
 #include <array>
 #include <memory>
@@ -73,5 +76,10 @@ private:
         return {std::static_pointer_cast<void>(slot), 1, kCPU};
     }
 };
+
+std::unique_ptr<VisionModel> CreateVisionModel(const VisionModelWeight& weights,  //
+                                               const EngineParam&       engine,
+                                               const Context&           ctx,
+                                               int                      phases);
 
 }  // namespace turbomind

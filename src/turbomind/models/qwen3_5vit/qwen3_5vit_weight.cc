@@ -5,7 +5,6 @@
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear_weight.h"
-#include "src/turbomind/models/qwen3_5vit/qwen3_5vit.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -49,12 +48,6 @@ Qwen3_5VitBlockWeight* Qwen3_5VitWeight::block(int i) const
         return nullptr;
     }
     return static_cast<Qwen3_5VitBlockWeight*>(blocks->child(std::to_string(i)));
-}
-
-std::unique_ptr<VisionModel>
-Qwen3_5VitWeight::make_model(const EngineParam& engine, const Context& ctx, int phases) const
-{
-    return std::make_unique<Qwen3_5Vit>(engine, ctx, *this, phases);
 }
 
 TM_MODULE_REGISTER(Qwen3_5VitWeight, core::Qwen3_5VitConfig);

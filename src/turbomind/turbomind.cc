@@ -278,12 +278,10 @@ void TurboMind::Impl::CreateEngine(int index)
     // create model
     LanguageModel model{param, ctx, *weights_[index]->text_model_ptr(), phases_};
 
-    // create optional vision model — the weight tree itself constructs
-    // its runtime peer (Factory Method); ``ModelRoot::vision_model`` is
-    // null for text-only checkpoints.
+    // create optional vision model
     std::unique_ptr<VisionModel> vision_model;
     if (auto* vw = weights_[index]->vision_model_ptr()) {
-        vision_model = vw->make_model(param, ctx, phases_);
+        vision_model = CreateVisionModel(*vw, param, ctx, phases_);
     }
 
     // create engine
