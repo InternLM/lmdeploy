@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import os
 from contextlib import asynccontextmanager
 
 import aiohttp
@@ -9,8 +10,40 @@ from fastapi.middleware.cors import CORSMiddleware
 from lmdeploy.serve.proxy.core.config import ProxyConfig
 from lmdeploy.serve.proxy.endpoint import admin, distserve, openai
 from lmdeploy.serve.proxy.runtime import ProxyRuntime
-from lmdeploy.serve.proxy.utils import AIOHTTP_TIMEOUT
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
+_DEFAULT_AIOHTTP_LIMIT = 1024
+_DEFAULT_AIOHTTP_LIMIT_PER_HOST = 128
+
+
+def _read_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == '':
+        return default
+    return int(value)
+
+
+def _create_upstream_session() -> aiohttp.ClientSession:
+    """Shared aiohttp session for forwarding to api_server replicas."""
+    timeout_value = os.getenv('AIOHTTP_TIMEOUT')
+    if timeout_value is None or timeout_value == '':
+        timeout = aiohttp.ClientTimeout(total=None)
+    else:
+        timeout = aiohttp.ClientTimeout(total=int(timeout_value))
+
+    connector = aiohttp.TCPConnector(
+        limit=_read_env_int('AIOHTTP_LIMIT', _DEFAULT_AIOHTTP_LIMIT),
+        limit_per_host=_read_env_int('AIOHTTP_LIMIT_PER_HOST', _DEFAULT_AIOHTTP_LIMIT_PER_HOST),
+    )
+    logger.info(
+        f'Proxy upstream aiohttp: timeout={timeout.total}, '
+        f'limit={connector.limit}, limit_per_host={connector.limit_per_host}. '
+        'Override via env AIOHTTP_TIMEOUT, AIOHTTP_LIMIT, AIOHTTP_LIMIT_PER_HOST.',
+    )
+    return aiohttp.ClientSession(timeout=timeout, connector=connector)
 
 
 def create_app(config: ProxyConfig) -> FastAPI:
@@ -18,8 +51,7 @@ def create_app(config: ProxyConfig) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        timeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with _create_upstream_session() as session:
             app.state.runtime = ProxyRuntime(config, session)
             yield
 
