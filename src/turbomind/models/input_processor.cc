@@ -228,19 +228,14 @@ public:
         }
     }
 
-    void PatchEmbedding(int phase, Tensor& embeds, TensorMap& env)
+    void PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy, TensorMap& env)
     {
-        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
-
         PatchInputEmbedding(phase, embeds, copy);
 
-        auto multimodal_ = env.try_consume("multimodal");
-        if (multimodal_) {
-            const auto& multimodal = *multimodal_.data<MultiModalEmbeddingData*>()[0];
+        if (env.try_("multimodal")) {
+            const auto& multimodal = *env.at("multimodal").data<MultiModalEmbeddingData*>()[0];
             PatchMultimodalEmbedding(embeds, copy, multimodal);
         }
-
-        copy.Run();
     }
 
 private:
@@ -290,9 +285,9 @@ void InputProcessor::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-void InputProcessor::PatchEmbedding(int phase, Tensor& embeds, TensorMap& env)
+void InputProcessor::PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy, TensorMap& env)
 {
-    impl_->PatchEmbedding(phase, embeds, env);
+    impl_->PatchEmbedding(phase, embeds, copy, env);
 }
 
 }  // namespace turbomind
