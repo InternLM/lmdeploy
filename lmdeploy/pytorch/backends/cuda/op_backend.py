@@ -49,6 +49,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.SiluAndMul:
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
+        elif layer_type == OpType.SoftmaxTopK:
+            from .moe import CudaSoftmaxTopKBuilder
+            return CudaSoftmaxTopKBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import AwqLinearW4A16Builder
             return AwqLinearW4A16Builder

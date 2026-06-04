@@ -3,6 +3,7 @@ import copy
 import os
 
 from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import apply_backend_policy
 from lmdeploy.pytorch.config import (
     BackendConfig,
@@ -27,6 +28,11 @@ class ConfigBuilder:
             engine_config = PytorchEngineConfig()
         else:
             engine_config = copy.deepcopy(engine_config)
+
+        if _envs.enable_batch_invariant:
+            if engine_config.device_type != 'cuda':
+                raise ValueError('LMDEPLOY_ENABLE_BATCH_INVARIANT is currently supported only for CUDA backend.')
+            engine_config.enable_batch_invariant = True
 
         if engine_config.enable_batch_invariant:
             backend_config = ConfigBuilder.build_backend_config(engine_config)

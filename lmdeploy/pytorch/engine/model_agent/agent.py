@@ -1016,6 +1016,7 @@ class BaseModelAgent:
                                             dllm_config=self.misc_config.dllm_config,
                                             strategy_factory=self.strategy_factory,
                                             enable_return_routed_experts=enable_return_routed_experts,
+                                            enable_batch_invariant=self.backend_config.enable_batch_invariant,
                                             quant_config=self.model_config.quant_config,
                                             fp32_lm_head=self.model_config.fp32_lm_head,
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,

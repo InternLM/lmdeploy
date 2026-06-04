@@ -12,6 +12,12 @@ logger = get_logger('lmdeploy')
 
 _CUBLAS_WORKSPACE_CONFIG = ':16:8'
 _CUBLASLT_WORKSPACE_SIZE = '1'
+_BATCH_INVARIANT_POLICY_ENABLED = False
+
+
+def is_batch_invariant_policy_enabled() -> bool:
+    """Return whether the CUDA batch-invariant policy has been applied."""
+    return _BATCH_INVARIANT_POLICY_ENABLED
 
 
 def _cuda_initialized() -> bool:
@@ -43,11 +49,33 @@ def _set_torch_precision_policy():
     torch.backends.cudnn.allow_tf32 = False
     torch.set_float32_matmul_precision('highest')
 
+    if hasattr(torch.backends.cuda.matmul, 'fp32_precision'):
+        torch.backends.cuda.matmul.fp32_precision = 'ieee'
+    cudnn_conv = getattr(torch.backends.cudnn, 'conv', None)
+    if cudnn_conv is not None and hasattr(cudnn_conv, 'fp32_precision'):
+        cudnn_conv.fp32_precision = 'ieee'
+    cudnn_rnn = getattr(torch.backends.cudnn, 'rnn', None)
+    if cudnn_rnn is not None and hasattr(cudnn_rnn, 'fp32_precision'):
+        cudnn_rnn.fp32_precision = 'ieee'
+
+    preferred_blas_library = getattr(torch.backends.cuda, 'preferred_blas_library', None)
+    if preferred_blas_library is not None:
+        preferred_blas_library(backend='cublaslt')
+
     matmul_backend = torch.backends.cuda.matmul
-    if hasattr(matmul_backend, 'allow_fp16_reduced_precision_reduction'):
-        matmul_backend.allow_fp16_reduced_precision_reduction = False
-    if hasattr(matmul_backend, 'allow_bf16_reduced_precision_reduction'):
-        matmul_backend.allow_bf16_reduced_precision_reduction = False
+    for dtype_name in ('fp16', 'bf16'):
+        attr_name = f'allow_{dtype_name}_reduced_precision_reduction'
+        if hasattr(matmul_backend, attr_name):
+            try:
+                setattr(matmul_backend, attr_name, (False, False))
+            except TypeError:
+                setattr(matmul_backend, attr_name, False)
+        split_k_attr_name = f'{attr_name}_split_k'
+        if hasattr(matmul_backend, split_k_attr_name):
+            try:
+                setattr(matmul_backend, split_k_attr_name, False)
+            except AttributeError:
+                pass
 
 
 def validate_batch_invariant_device(device: int | torch.device | None = None):
@@ -73,6 +101,8 @@ def apply_batch_invariant_policy(config: BackendConfig,
     process before any CUDA query, and again in worker processes before they build models or initialize CUDA-heavy
     runtime state.
     """
+    global _BATCH_INVARIANT_POLICY_ENABLED
+
     if not config.enable_batch_invariant:
         return
 
@@ -85,3 +115,5 @@ def apply_batch_invariant_policy(config: BackendConfig,
 
     if validate_device:
         validate_batch_invariant_device()
+
+    _BATCH_INVARIANT_POLICY_ENABLED = True
