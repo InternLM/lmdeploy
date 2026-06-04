@@ -33,15 +33,29 @@ def _validate_headers(raw_request: Request):
     return None
 
 
-def _validate_return_logprob(request: MessagesRequest, server_context):
-    if not request.return_logprob:
-        return None
-    logprobs_mode = server_context.get_engine_config().logprobs_mode
-    if logprobs_mode is None:
+def _is_tool_choice_auto(tool_choice):
+    if tool_choice is None:
+        return True
+    if isinstance(tool_choice, str):
+        return tool_choice == 'auto'
+    return tool_choice.type == 'auto'
+
+
+def _validate_extended_outputs(request: MessagesRequest, server_context):
+    engine_config = server_context.get_engine_config()
+    logprobs_mode = engine_config.logprobs_mode
+    if request.return_logprob and logprobs_mode is None:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'return_logprob={request.return_logprob} was requested, but '
             'logprobs_mode is not enabled in the engine configuration.')
+
+    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            ('routed experts requested but not configured in engine configuration. '
+             'May start the api_server with --enable-return-routed-experts flag.'))
+
     return None
 
 
@@ -61,9 +75,9 @@ def register(router: APIRouter, server_context) -> None:
                 error_type='not_found_error',
             )
 
-        logprob_error = _validate_return_logprob(request, server_context)
-        if logprob_error is not None:
-            return logprob_error
+        extended_outputs_error = _validate_extended_outputs(request, server_context)
+        if extended_outputs_error is not None:
+            return extended_outputs_error
 
         # Validate input_ids and image_data constraints.
         # messages has higher priority. input_ids and image_data are only used when
@@ -96,11 +110,11 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'system cannot be used when input_ids is set because raw input_ids bypass message rendering.')
-            if request.tools is not None:
+            if request.tools:
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'tools cannot be used when input_ids is set because raw input_ids bypass message rendering.')
-            if request.tool_choice is not None:
+            if request.tool_choice is not None and not _is_tool_choice_auto(request.tool_choice):
                 return create_error_response(
                     HTTPStatus.BAD_REQUEST,
                     'tool_choice cannot be used when input_ids is set because raw input_ids bypass message rendering.')

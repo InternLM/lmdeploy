@@ -96,7 +96,10 @@ class MessagesRequest(BaseModel):
     """Request body for ``POST /v1/messages``."""
 
     model: str
-    messages: list[MessageParam]
+    messages: list[MessageParam] | None = Field(
+        default=None,
+        description='Message history. Omit to use raw input_ids path.',
+    )
     max_tokens: int = Field(gt=0)
     system: str | list[ContentBlockParam] | None = None
     stop_sequences: list[str] | None = None

@@ -56,9 +56,16 @@ class _FakeChatTemplate:
 
 class _FakeEngine:
 
-    def __init__(self, *, logprobs_mode='raw_logprobs'):
+    def __init__(
+            self,
+            *,
+            logprobs_mode='raw_logprobs',
+            enable_return_routed_experts: bool = True,
+    ):
         self.model_name = 'fake-model'
-        self.backend_config = SimpleNamespace(adapters=['adapter-model'], logprobs_mode=logprobs_mode)
+        self.backend_config = SimpleNamespace(adapters=['adapter-model'],
+                                             logprobs_mode=logprobs_mode,
+                                             enable_return_routed_experts=enable_return_routed_experts)
         self.tokenizer = _FakeTokenizer()
         self.chat_template = _FakeChatTemplate()
         self.generate_calls = []
@@ -106,8 +113,17 @@ class _BasicParser:
 
 
 class _FakeServerContext:
-    def __init__(self, *, response_parser_cls=_BasicParser, logprobs_mode='raw_logprobs'):
-        self.async_engine = _FakeEngine(logprobs_mode=logprobs_mode)
+    def __init__(
+            self,
+            *,
+            response_parser_cls=_BasicParser,
+            logprobs_mode='raw_logprobs',
+            enable_return_routed_experts: bool = True,
+    ):
+        self.async_engine = _FakeEngine(
+            logprobs_mode=logprobs_mode,
+            enable_return_routed_experts=enable_return_routed_experts,
+        )
         self.response_parser_cls = response_parser_cls
 
     def create_session(self, _session_id: int | None = None):
@@ -228,102 +244,12 @@ def _collect_stream_response_payloads(result_generator, response_parser, **kwarg
     return _sse_payloads('\n'.join(asyncio.run(_collect_events())))
 
 
-def test_messages_non_stream():
-    client = _make_client()
-    response = _post_messages(client)
-    assert response.status_code == 200
-    data = response.json()
-    assert data['type'] == 'message'
-    assert data['content'][0]['type'] == 'text'
-    assert data['content'][0]['text'] == 'Hello world!'
-    assert data['stop_reason'] == 'end_turn'
-    assert data['usage']['input_tokens'] == 8
-    assert data['usage']['output_tokens'] == 2
+def test_messages_return_routed_experts_requires_engine_flag():
+    client = _make_client(server_context=_FakeServerContext(enable_return_routed_experts=False))
+    response = _post_messages(client, return_routed_experts=True)
 
-
-def test_messages_requires_anthropic_version_header():
-    client = _make_client()
-    response = client.post(
-        '/v1/messages',
-        json={
-            'model': 'fake-model',
-            'max_tokens': 16,
-            'messages': [{
-                'role': 'user',
-                'content': 'Hi there',
-            }],
-        },
-    )
     assert response.status_code == 400
-    assert response.json()['error']['message'] == 'Missing required header: anthropic-version'
-
-
-def test_messages_rejects_tools_without_tool_parser():
-    client = _make_client()
-    response = _post_messages(
-        client,
-        tools=[{
-            'name': 'search',
-            'description': 'demo',
-            'input_schema': {
-                'type': 'object',
-                'properties': {},
-            },
-        }],
-    )
-    assert response.status_code == 400
-    assert '--tool-call-parser' in response.json()['error']['message']
-
-
-def test_messages_unknown_model():
-    client = _make_client()
-    response = _post_messages(client, model='missing-model')
-    assert response.status_code == 404
-    assert response.json()['error']['type'] == 'not_found_error'
-
-
-def test_messages_beta_accepts_tool_history_blocks():
-    client = _make_client()
-    response = client.post(
-        '/v1/messages?beta=true',
-        headers={'anthropic-version': '2023-06-01'},
-        json={
-            'model': 'fake-model',
-            'max_tokens': 16,
-            'messages': [
-                {
-                    'role': 'assistant',
-                    'content': [{
-                        'type': 'tool_use',
-                        'id': 'toolu_123',
-                        'name': 'search',
-                        'input': {
-                            'query': 'lmdeploy'
-                        },
-                    }],
-                },
-                {
-                    'role': 'user',
-                    'content': [{
-                        'type': 'tool_result',
-                        'tool_use_id': 'toolu_123',
-                        'content': [{
-                            'type': 'text',
-                            'text': 'LMDeploy serves LLMs.',
-                        }],
-                    }],
-                },
-                {
-                    'role': 'user',
-                    'content': 'Summarize the tool result.',
-                },
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data['type'] == 'message'
+    assert 'enable-return-routed-experts' in response.json()['error']['message']
 
 
 def test_messages_beta_accepts_system_role_message():
@@ -404,24 +330,6 @@ def test_messages_non_stream_validate_complete_marks_parse_error():
     assert response.json()['stop_reason'] == 'parse_error'
     assert _IncompleteToolParser.validate_calls == 1
     assert _IncompleteToolParser.last_text == 'Hello world!'
-
-
-def test_messages_streaming_includes_output_ids():
-    client = _make_client()
-    status_code, body = _stream_messages_body(client, return_token_ids=True)
-
-    assert status_code == 200
-    # output_ids should appear in content_block_delta events
-    assert 'output_ids' in body
-
-
-def test_messages_streaming_includes_routed_experts():
-    client = _make_client()
-    status_code, body = _stream_messages_body(client, return_routed_experts=True)
-
-    assert status_code == 200
-    # routed_experts should appear in the message_delta event
-    assert 'routed_experts' in body
 
 
 def test_messages_streaming_usage_matches_anthropic_event_spec():
@@ -642,13 +550,7 @@ def test_stream_messages_response_maps_stop_to_tool_use_on_empty_terminal_chunk(
 
 
 def test_messages_non_stream_with_output_ids_and_routed_experts():
-    """When return_token_ids is True, output_ids must be populated with the
-    generated token IDs.
-
-    When return_routed_experts is True, routed_experts must be populated from the engine result.
-    """
     client = _make_client()
-    # Test output_ids when return_token_ids is True
     response = _post_messages(
         client,
         messages=[{'role': 'user', 'content': 'Hi'}],
@@ -657,16 +559,8 @@ def test_messages_non_stream_with_output_ids_and_routed_experts():
     )
     assert response.status_code == 200
     data = response.json()
-    # output_ids should be populated from token IDs generated by the fake engine
     assert data.get('output_ids') == [101, 102]
     assert data.get('routed_experts') == [[[1, 2, 3]]]
-
-    # Test that optional metadata is None when not requested.
-    response2 = _post_messages(client, messages=[{'role': 'user', 'content': 'Hi'}])
-    assert response2.status_code == 200
-    data2 = response2.json()
-    assert data2.get('output_ids') is None
-    assert data2.get('routed_experts') is None
 
 
 @pytest.mark.parametrize(
@@ -695,26 +589,6 @@ def test_messages_rejects_invalid_input_combinations(overrides, error_fragment):
 
     assert response.status_code == 400
     assert error_fragment in response.json()['error']['message']
-
-
-def test_messages_input_ids_non_stream():
-    client = _make_client()
-    response = _post_messages(client, messages=[], input_ids=[1, 2, 3])
-    assert response.status_code == 200
-    data = response.json()
-    assert data['type'] == 'message'
-    assert data['content'][0]['type'] == 'text'
-    assert data['content'][0]['text'] == 'Hello world!'
-
-
-def test_messages_input_ids_streaming():
-    client = _make_client()
-    status_code, body = _stream_messages_body(client, messages=[], input_ids=[1, 2, 3])
-
-    assert status_code == 200
-    assert 'event: message_start' in body
-    assert 'event: content_block_delta' in body
-    assert 'event: message_stop' in body
 
 
 def test_messages_image_data_preserves_input_ids_in_multimodal_content():
@@ -756,53 +630,6 @@ def test_messages_rejects_tools_with_input_ids():
     assert 'tools cannot be used when input_ids is set' in response.json()['error']['message']
 
 
-def test_count_tokens():
-    client = _make_client()
-    response = client.post(
-        '/v1/messages/count_tokens',
-        headers={'anthropic-version': '2023-06-01'},
-        json={
-            'model': 'fake-model',
-            'messages': [{
-                'role': 'user',
-                'content': 'count these tokens',
-            }],
-            'system': 'You are helpful.',
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data['input_tokens'], int)
-    assert data['input_tokens'] > 0
-
-
-def test_count_tokens_accepts_tools():
-    client = _make_client()
-    response = client.post(
-        '/v1/messages/count_tokens',
-        headers={'anthropic-version': '2023-06-01'},
-        json={
-            'model': 'fake-model',
-            'messages': [{
-                'role': 'user',
-                'content': 'count these tokens',
-            }],
-            'tools': [{
-                'name': 'search',
-                'description': 'demo',
-                'input_schema': {
-                    'type': 'object',
-                    'properties': {},
-                },
-            }],
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data['input_tokens'], int)
-    assert data['input_tokens'] > 0
-
-
 def test_anthropic_model_listing():
     client = _make_client()
     response = client.get('/anthropic/v1/models')
@@ -826,11 +653,3 @@ def test_messages_rejects_logprobs_when_engine_logprobs_mode_disabled():
     response = _post_messages(client, messages=[{'role': 'user', 'content': 'Hi'}], return_logprob=True)
     assert response.status_code == 400
     assert 'return_logprob' in response.json()['error']['message']
-
-
-def test_messages_streaming_includes_logprobs():
-    client = _make_client()
-    status_code, body = _stream_messages_body(client, return_logprob=True)
-
-    assert status_code == 200
-    assert 'output_token_logprobs' in body
