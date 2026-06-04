@@ -1,4 +1,8 @@
 import pytest
+from tools.common_case_config import (
+    SPECULATIVE_DECODING_RESTFUL_TEST_MLLM,
+    SPECULATIVE_DECODING_RESTFUL_TEST_MLLM_ASCEND,
+)
 from utils.config_utils import get_func_config_list
 from utils.run_restful_chat import run_mllm_test
 
@@ -33,4 +37,23 @@ def test_restful_chat_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_16
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 16}, model_type='vl_model'))
 def test_restful_chat_tp16(config, run_config, worker_id):
+    run_mllm_test(config, run_config, worker_id)
+
+
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize(
+    'run_config',
+    [item for item in SPECULATIVE_DECODING_RESTFUL_TEST_MLLM if item['parallel_config'].get('tp') == 2])
+def test_restful_chat_speculative_decoding_tp2(config, run_config, worker_id):
+    run_mllm_test(config, run_config, worker_id)
+
+
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
+@pytest.mark.parametrize(
+    'run_config',
+    [item for item in SPECULATIVE_DECODING_RESTFUL_TEST_MLLM_ASCEND if item['parallel_config'].get('tp') == 4])
+def test_restful_chat_speculative_decoding_tp4(config, run_config, worker_id):
     run_mllm_test(config, run_config, worker_id)

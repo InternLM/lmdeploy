@@ -43,14 +43,23 @@ def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool 
         speculative_config = SpeculativeConfig(**spec_cfg)
 
     # Extra params
-    # Map CLI param names to PytorchEngineConfig attribute names
-    param_name_map = {'device': 'device_type'}
+    # Normalize CLI-style kebab-case keys to PytorchEngineConfig attribute
+    param_name_map = {'device': 'device_type', 'cache_block_seq_len': 'block_size'}
+    set_attrs = set()
     for key, value in extra_params.items():
-        attr_name = param_name_map.get(key, key)
+        attr_name = key.replace('-', '_')
+        attr_name = param_name_map.get(attr_name, attr_name)
         try:
             setattr(backend_config, attr_name, value)
+            set_attrs.add(attr_name)
         except AttributeError:
             print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
+
+    # setattr after construction does not re-run __post_init__, so keep
+    # kernel_block_size in sync with an overridden block_size (mirrors the
+    # default ``kernel_block_size == -1`` behaviour used by the CLI path).
+    if 'block_size' in set_attrs and 'kernel_block_size' not in set_attrs:
+        backend_config.kernel_block_size = backend_config.block_size
 
     print('backend_config config: ' + str(backend_config))
     print('speculative_config config: ' + str(speculative_config))

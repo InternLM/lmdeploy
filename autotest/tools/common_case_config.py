@@ -492,3 +492,136 @@ SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [] if not os.getenv('TEST_ENV') or os.ge
     **item, 'backend':
     'pytorch'
 } for item in BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM]
+
+
+BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM_ASCEND = [{
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 4
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 64,
+        'cache-block-seq-len': 128
+    }
+}]
+
+SPECULATIVE_DECODING_RESTFUL_TEST_LLM_ASCEND = [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM_ASCEND]
+
+
+BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND = [{
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 4
+    },
+    'extra_params': {
+        'max_batch_size': 64,
+        'reasoning_parser': 'qwen-qwq',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
+}]
+
+SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND = [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND]
+
+
+# ---------------------------------------------------------------------------
+# Multimodal (VL) speculative decoding (MTP) cases. Mirror the LLM lists above
+# but target VL-capable models. Restful uses CLI-style kebab-case keys; pipeline
+# builds a PytorchEngineConfig directly and uses engine attribute names.
+# ---------------------------------------------------------------------------
+BASE_SPECULATIVE_DECODING_RESTFUL_TEST_MLLM = [{
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256
+    }
+}]
+
+SPECULATIVE_DECODING_RESTFUL_TEST_MLLM = [] if not os.getenv('TEST_ENV') or os.getenv('TEST_ENV') == 'legacy' else [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_RESTFUL_TEST_MLLM]
+
+
+BASE_SPECULATIVE_DECODING_RESTFUL_TEST_MLLM_ASCEND = [{
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 4
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 64,
+        'cache-block-seq-len': 128
+    }
+}]
+
+SPECULATIVE_DECODING_RESTFUL_TEST_MLLM_ASCEND = [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_RESTFUL_TEST_MLLM_ASCEND]
+
+
+BASE_SPECULATIVE_DECODING_PIPELINE_TEST_MLLM = [{
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'max_batch_size': 256,
+        'reasoning_parser': 'qwen-qwq',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
+}]
+
+SPECULATIVE_DECODING_PIPELINE_TEST_MLLM = [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_PIPELINE_TEST_MLLM]
+
+
+BASE_SPECULATIVE_DECODING_PIPELINE_TEST_MLLM_ASCEND = [{
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 4
+    },
+    'extra_params': {
+        'max_batch_size': 64,
+        'reasoning_parser': 'qwen-qwq',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
+}]
+
+SPECULATIVE_DECODING_PIPELINE_TEST_MLLM_ASCEND = [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_PIPELINE_TEST_MLLM_ASCEND]

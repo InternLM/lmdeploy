@@ -128,3 +128,45 @@ h:
     top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
+ascend:
+- model_type: chat
+  engine_config:
+    tp: 4
+    extra:
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: chat
+  engine_config:
+    tp: 4
+    extra:
+      reasoning-parser: qwen-qwq
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 256
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - mtp_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true

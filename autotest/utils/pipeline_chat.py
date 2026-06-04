@@ -6,7 +6,13 @@ import time
 import allure
 from pytest_assume.plugin import assume
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import get_case_str_by_config, get_cuda_prefix_by_workerid, get_workerid, resolve_extra_params
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cuda_prefix_by_workerid,
+    get_workerid,
+    inject_pipeline_run_params,
+    resolve_extra_params,
+)
 from utils.rule_condition_assert import assert_result
 from utils.run_restful_chat import _mm_demo_tomb_run_assert
 
@@ -30,8 +36,13 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     run_config_bk = run_config.copy()
     run_config_bk.pop('env', None)
     run_config_bk.pop('model', None)
+    run_config_bk.setdefault('extra_params', {})
 
-    resolve_extra_params(run_config_bk.get('extra_params', {}), config.get('model_path'))
+    resolve_extra_params(run_config_bk['extra_params'], config.get('model_path'))
+
+    # Inject env-specific device / paging params for static run configs that
+    # bypass the config-driven injection in _build_run_config_entry.
+    inject_pipeline_run_params(config, run_config_bk)
 
     run_config_string = json.dumps(run_config_bk, ensure_ascii=False, indent=None)
     run_config_string = run_config_string.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
@@ -90,6 +101,10 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     run_config_bk = run_config.copy()
     run_config_bk.pop('env', None)
     run_config_bk.pop('model', None)
+    run_config_bk.setdefault('extra_params', {})
+
+    inject_pipeline_run_params(config, run_config_bk)
+
     run_config_string = json.dumps(run_config_bk, ensure_ascii=False, indent=None)
     run_config_string = run_config_string.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
 

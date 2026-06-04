@@ -6,6 +6,7 @@ from tools.common_case_config import (
     PYTORCH_PR_TEST_LLM_GPU1,
     PYTORCH_PR_TEST_LLM_GPU2,
     SPECULATIVE_DECODING_PIPELINE_TEST_LLM,
+    SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND,
 )
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.pipeline_chat import run_pipeline_llm_test
@@ -118,5 +119,17 @@ def test_pipeline_chat_speculative_decoding_tp1(config, run_config, common_case_
 @pytest.mark.parametrize(
     'run_config', [item for item in SPECULATIVE_DECODING_PIPELINE_TEST_LLM if item['parallel_config'].get('tp') == 2])
 def test_pipeline_chat_speculative_decoding_tp2(config, run_config, common_case_config, worker_id):
+    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
+    run_pipeline_llm_test(config, run_config, case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('run_config', [
+    item for item in SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND if item['parallel_config'].get('tp') == 4
+])
+def test_pipeline_chat_speculative_decoding_tp4(config, run_config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
     run_pipeline_llm_test(config, run_config, case_config, worker_id)

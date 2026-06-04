@@ -14,6 +14,7 @@ from utils.config_utils import (
     get_cli_common_param,
     get_cuda_prefix_by_workerid,
     get_workerid,
+    inject_device_param,
     resolve_extra_params,
 )
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, MM_DEMO_TOMB_USER_PROMPT
@@ -47,6 +48,10 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
 
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
+    # Inject target device for non-cuda envs (e.g. ascend) when not already
+    # specified. Covers static run configs (speculative decoding lists, eval
+    # judge server) that bypass the config-driven device injection.
+    inject_device_param(config, run_config['extra_params'])
     model_name = case_name if run_config['extra_params'].get(
         'model-name', None) is None else run_config['extra_params'].pop('model-name')
     cmd = ' '.join([
