@@ -351,6 +351,19 @@ class FusedLogitsProcessor:
         if not stream.query():
             await asyncio.sleep(0)
 
+    def _fill_guided_bitmask(self, guided_bitmask: torch.Tensor):
+        for i, processor in self.guided_processors.items():
+            self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
+
+    def _accept_guided_tokens(self, next_token_ids: torch.Tensor):
+        cpu_result = next_token_ids.tolist()
+        for i, processor in self.guided_processors.items():
+            self.guided_decoding_manager.accept_token(processor, cpu_result[i])
+
+    async def accept_guided_tokens(self, next_token_ids: torch.Tensor):
+        if self.guided_decoding_manager and self.guided_processors:
+            await asyncio.to_thread(self._accept_guided_tokens, next_token_ids)
+
     async def __call__(self, scores: torch.Tensor) -> torch.Tensor:
         r"""
         Args:
@@ -389,9 +402,7 @@ class FusedLogitsProcessor:
             guided_bitmask = self.guided_bitmask
 
             await self._wait_stream_once()
-            for i, processor in self.guided_processors.items():
-                self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
-
+            await asyncio.to_thread(self._fill_guided_bitmask, guided_bitmask)
             self.guided_decoding_manager.apply_batched_bitmap(scores, guided_bitmask)
 
         if any(custom_logits_processors):
@@ -477,10 +488,6 @@ class FusedLogitsProcessor:
             else:
                 scores, indices = _torch_topk(logits, max_topk, dim=1)
             result = __random_sampling(scores, indices)
-
-        if self.guided_decoding_manager and self.guided_processors:
-            for i, processor in self.guided_processors.items():
-                self.guided_decoding_manager.accept_token(processor, result[i])
 
         return result
 

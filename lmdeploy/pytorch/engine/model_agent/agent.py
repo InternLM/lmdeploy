@@ -32,6 +32,7 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
 
+from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
 from .profiler import AgentProfiler
 
@@ -167,11 +168,6 @@ def model_forward(
         )
 
         with ctx_mgr.context(context):
-            # initialize cache for ssm
-            # chunk_indices in gated delta kernel requires cuda synchronize
-            # so we have to init cache after build_context
-            if not inputs.is_decoding and not inputs.is_dummy and inputs.state_offsets is not None:
-                state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
 
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
@@ -203,27 +199,6 @@ def _try_to_cuda(val, non_blocking: bool = False):
         return val.to_device('cuda', non_blocking=non_blocking)
     else:
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
-
-
-class DistGatherScalar:
-    """Distribute value gather."""
-
-    def __init__(self, val, size: int, device: str = 'cpu', group: dist.ProcessGroup = None):
-        self.val = val
-        self.device = device
-        self.group = group
-
-        self.all_vals = torch.tensor([val] * size, device=device)
-        self.worker = dist.all_gather_into_tensor(self.all_vals,
-                                                  self.all_vals.new_tensor([val]),
-                                                  group=group,
-                                                  async_op=True)
-
-    async def async_wait(self, timeout: float = 0.001):
-        while not self.worker.is_completed():
-            await asyncio.sleep(timeout)
-        self.worker.wait()
-        return self.all_vals
 
 
 SwapMap = dict[int, int]
@@ -373,8 +348,11 @@ class BaseModelAgent:
         """warmup."""
         from lmdeploy.pytorch.envs import skip_warmup
         if skip_warmup:
+            if self.rank == 0:
+                logger.warning('Engine warmup is skipped. Set LMDEPLOY_SKIP_WARMUP=0 to enable warmup.')
             return
-
+        if self.rank == 0:
+            logger.info('Starting engine warmup. This may take a while...')
         with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
             world_size = self.dist_config.world_size
@@ -442,21 +420,23 @@ class BaseModelAgent:
         return_logits: bool,
     ):
         """Model forward."""
-        origin_inputs = inputs
         ret = await self.async_forward(inputs)
 
         if not return_logits:
-            ret = self._postprocess_forward_output(ret, origin_inputs)
+            ret = self._postprocess_forward_output(ret, inputs)
 
-        hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, origin_inputs)
+        hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
 
-    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs):
+    async def async_sampling_logits(self, logits: torch.Tensor, inputs: ModelInputs,
+                                    extra_inputs: ExtraInputs, sampling_inputs: SamplingInputs):
         """Sampling logits."""
-
+        if self.spec_agent.is_enabled():
+            extra_inputs = await self.spec_agent.async_sampling_logits(inputs, extra_inputs, sampling_inputs)
+            return extra_inputs.next_token_ids, extra_inputs.logprobs, extra_inputs.output_token_ids, extra_inputs
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
@@ -468,14 +448,17 @@ class BaseModelAgent:
             origin_logits = logits
             logits, raw_logprobs = await logits_processor(origin_logits)
             next_token_ids = logits_processor.sampling(logits)
+            await logits_processor.accept_guided_tokens(next_token_ids)
             logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
             if logprobs is not None:
                 logprobs = BatchedLogProbs(
                     vals=logprobs[0],
                     indices=logprobs[1],
                 )
-
-        return next_token_ids, logprobs
+        # post sampling
+        next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, logits, next_token_ids,
+                                                                             extra_inputs)
+        return next_token_ids, logprobs, next_token_ids, extra_inputs
 
     def _push_output(self, output: BatchedOutputs):
         """Push output."""
@@ -501,16 +484,32 @@ class BaseModelAgent:
         batch size for decoding.
         """
         world_size = self.dist_config.world_size
-        is_decoding = inputs.is_decoding
+        local_is_decoding = is_decoding = inputs.is_decoding
         num_tokens = inputs.input_ids.numel()
         is_dummy = inputs.is_dummy
+        is_spec_enabled = self.spec_agent.is_enabled()
+        is_microbatch_enabled = self.enable_microbatch
 
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
         is_sleeping = self.state.is_sleeping
-        dp_forward_meta = [int(is_decoding), int(is_dummy), num_tokens, int(is_sleeping)]
+        draft_num_tokens = None
+        if is_spec_enabled:
+            draft_num_tokens = num_tokens
+            if inputs.is_chunk:
+                if inputs.is_first_chunk:
+                    draft_num_tokens -= batch_size
+                elif inputs.is_last_chunk:
+                    draft_num_tokens += batch_size
+
+        dp_forward_meta = DPForwardMeta(is_decoding=is_decoding,
+                                        is_dummy=is_dummy,
+                                        num_tokens=num_tokens,
+                                        is_sleeping=is_sleeping,
+                                        batch_size=batch_size,
+                                        draft_num_tokens=draft_num_tokens)
         # check enable_microbatch
-        if self.enable_microbatch:
+        if is_microbatch_enabled:
             tokens_num = inputs.input_ids.numel()
             if is_decoding:
                 enable_microbatch = batch_size >= \
@@ -519,37 +518,56 @@ class BaseModelAgent:
                 enable_microbatch = batch_size >= \
                     self.enable_microbatch_prefill_batchsize_threshold and \
                     tokens_num >= self.enable_microbatch_prefill_token_threshold
-            dp_forward_meta.append(int(enable_microbatch))
+            dp_forward_meta.enable_microbatch = enable_microbatch
         group = self.dist_ctx.cpu_group
         device = 'cpu'
-        gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device=device, group=group)
-        gathered_meta = (await gathered_meta.async_wait()).cpu()
+        gathered_meta = DistGatherScalar(
+            dp_forward_meta.values(
+                is_spec_enabled=is_spec_enabled,
+                is_microbatch_enabled=is_microbatch_enabled,
+            ),
+            world_size,
+            device=device,
+            group=group,
+        )
+        gathered_meta = GatheredDPForwardMeta.from_values(
+            (await gathered_meta.async_wait()).cpu(),
+            is_spec_enabled=is_spec_enabled,
+            is_microbatch_enabled=is_microbatch_enabled,
+        )
 
         # check is_decoding
         # if any one of the rank is prefill, then all ranks are prefill
-        is_decoding = gathered_meta[:, 0].all().item()
+        is_decoding = gathered_meta.global_is_decoding
         inputs.is_decoding = is_decoding
 
         # check if all inputs are dummy inputs
-        is_all_dummy = gathered_meta[:, 1].all().item()
-        is_all_sleeping = gathered_meta[:, 3].all().item()
+        is_all_dummy = gathered_meta.is_all_dummy
+        is_all_sleeping = gathered_meta.is_all_sleeping
+        all_batch_sizes = gathered_meta.all_batch_sizes
         if is_all_dummy:
             return None, is_all_sleeping
 
         # pad batch size for decoding
-        all_num_tokens = gathered_meta[:, 2].tolist()
+        all_num_tokens = gathered_meta.all_num_tokens
         if is_decoding:
-            max_num_tokens = max(all_num_tokens)
+            padding_batch_size = max(all_num_tokens)
+            padding_batch_size = self.spec_agent.get_padding_batch_size(padding_batch_size)
             meta = self.patched_model.get_meta()
-            meta.padding_batch_size = max_num_tokens
-            logger.debug(f'max_num_tokens={max_num_tokens}')
+            meta.padding_batch_size = padding_batch_size
+            logger.debug(f'padding_batch_size={padding_batch_size}')
 
         # update if enable_microbatch
-        if self.enable_microbatch:
-            inputs.enable_microbatch = gathered_meta[:, 4].all().item()
+        if is_microbatch_enabled:
+            inputs.enable_microbatch = gathered_meta.global_enable_microbatch
 
         # update dp meta
         inputs.build_dp_meta(all_num_tokens)
+        inputs.dp_meta.dp_batches = all_batch_sizes
+        inputs.dp_meta.is_decoding = local_is_decoding
+        inputs.dp_meta.dp_is_decoding = is_decoding
+        if is_spec_enabled:
+            inputs.dp_meta.dp_draft_num_tokens = gathered_meta.all_draft_num_tokens
         inputs = self.patched_model.update_inputs(inputs)
         return inputs, is_all_sleeping
 
@@ -607,35 +625,34 @@ class BaseModelAgent:
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
-        # sampling + spec decoding
-        if self.spec_agent.is_enabled():
-            # spec_agent handles sampling + logprobs + rejection sampling internally
-            extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
-            next_token_ids = extra_inputs.next_token_ids
-            output_token_ids = extra_inputs.output_token_ids
-            logprobs = extra_inputs.logprobs
-            logits = None
-        else:
-            # normal (non-spec-decode) path: sample from main model logits
-            next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
-            # post sampling
-            next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                             extra_inputs)
-            output_token_ids = next_token_ids
+        (next_token_ids, logprobs, output_token_ids, extra_inputs) = await self.async_sampling_logits(
+            last_logits, inputs, extra_inputs, sampling_inputs)
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
-            # stopping criteria
-            stopped, stop_pos, stopping_criteria = stopping_criteria.step(
-                next_token_ids,
-                sampling_inputs.stop_words,
-                inputs=inputs,
-                extra_inputs=extra_inputs,
-            )
+        extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
-            # send output
-            logger.debug(f'<ForwardTask> rank[{rank}]: Output')
-            extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+        if inputs.is_dummy:
+            return inputs, extra_inputs, stopping_criteria, None, next_token_ids
+
+        # post broadcast for spec agent
+        with self.spec_agent.post_broadcast(extra_inputs, self.dist_ctx, need_broadcast_next):
+            logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
+
+        if self.spec_agent.is_enabled():
+            logits = None
+
+        # stopping criteria
+        stopped, stop_pos, stopping_criteria = stopping_criteria.step(
+            next_token_ids,
+            sampling_inputs.stop_words,
+            inputs=inputs,
+            extra_inputs=extra_inputs,
+        )
+
+        # send output
+        logger.debug(f'<ForwardTask> rank[{rank}]: Output')
+        extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
         self._push_output(
             BatchedOutputs(next_token_ids=output_token_ids,
@@ -654,6 +671,7 @@ class BaseModelAgent:
         inputs: ModelInputs,
         last_logits: torch.Tensor,
         extra_inputs: ExtraInputs,
+        sampling_inputs: SamplingInputs,
         need_broadcast_next: bool,
     ):
         rank = self.rank
@@ -664,6 +682,18 @@ class BaseModelAgent:
         # broadcast next token for TP > 1
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
+
+        extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
+
+        if inputs.is_dummy:
+            return inputs, next_token_ids, extra_inputs,  None
+
+        # post broadcast for spec agent
+        with self.spec_agent.post_broadcast(extra_inputs, self.dist_ctx, need_broadcast_next):
+            logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
+
+        if self.spec_agent.is_enabled():
+            next_token_ids = extra_inputs.next_token_ids
 
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
@@ -735,15 +765,21 @@ class BaseModelAgent:
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
-                     f'is_decoding={inputs.is_decoding}')
+                     f'is_dummy={inputs.is_dummy} '
+                     f'is_chunk={inputs.is_chunk} '
+                     f'is_first_chunk={inputs.is_first_chunk} '
+                     f'is_last_chunk={inputs.is_last_chunk} '
+                     f'dp_meta={inputs.dp_meta} '
+                     f'is_decoding={is_decoding}')
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits,
-        )
+            )
+
         # recovery is_decoding
         inputs.is_decoding = is_decoding
 
-        if inputs.is_dummy:
+        if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
             return
 
@@ -791,8 +827,13 @@ class BaseModelAgent:
                     inputs,
                     last_logits,
                     extra_inputs,
+                    sampling_inputs,
                     need_broadcast_next,
                 ))
+
+        if inputs.is_dummy:
+            # skip dummy forward output
+            return
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
@@ -1065,10 +1106,11 @@ class BaseModelAgent:
 
     def reset_graph_runner(self):
         """Reset graph runner to prevent tp hanging."""
-        if hasattr(self.patched_model, 'reset'):
-            self.patched_model.reset()
+        with self.all_context():
+            if hasattr(self.patched_model, 'reset'):
+                self.patched_model.reset()
 
-        self.spec_agent.reset_graph_runner()
+            self.spec_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
@@ -1141,7 +1183,7 @@ class BaseModelAgent:
                     continue
 
                 w = list(ModelWeightLoader._rename_weights_iterator(w, m))
-                logger.info(f'Update_params: {tag}_num_tensors={len(w)}')
+                logger.debug(f'Update_params: {tag}_num_tensors={len(w)}')
                 m.load_weights(iter(w))
 
                 if self._update_params_ipc_event is not None:

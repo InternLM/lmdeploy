@@ -97,6 +97,13 @@ class ZMQMPEngine(MPEngine):
 
         from .zmq_rpc import AsyncRPCServer
 
+        # try rename the process
+        try:
+            import ctypes
+            ctypes.CDLL(None).prctl(15, b'ZMQMPEngine', 0, 0, 0)
+        except Exception as e:
+            logger.debug(f'Failed to rename MPEngine process: {e}')
+
         logger.setLevel(log_level)
 
         # create an async rpc server
@@ -178,6 +185,14 @@ class ZMQMPEngine(MPEngine):
         """Collective rpc call."""
         async for out in self.rpc_client.async_stream_call(func, sess_event, *args, **kwargs):
             yield out
+
+    async def get_health_status(self):
+        """Get backend health status."""
+        if self.proc is None or not self.proc.is_alive():
+            return dict(alive=False,
+                        message='PyTorch ZMQ engine process is not alive.',
+                        schedule_metrics=None)
+        return await super().get_health_status()
 
     def close(self) -> None:
         """Close mp engine."""

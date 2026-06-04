@@ -5,6 +5,7 @@ from itertools import groupby
 from typing import Any
 
 import numpy as np
+import torch
 from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
 
@@ -32,6 +33,10 @@ class VisionModel(ABC):
         # video-related attributes
         'pixel_values_videos': Modality.VIDEO,
         'video_grid_thw': Modality.VIDEO,
+        'video_second_per_grid': Modality.VIDEO,
+        # audio-related attributes
+        'input_features': Modality.AUDIO,
+        'feature_attention_mask': Modality.AUDIO,
         # time series-related attributes
         'ts_values': Modality.TIME_SERIES,
         'ts_sr': Modality.TIME_SERIES,
@@ -43,6 +48,7 @@ class VisionModel(ABC):
     FEATURE_NAMES = [
         'pixel_values',
         'pixel_values_videos',
+        'input_features',
         'ts_values',
     ]
 
@@ -58,10 +64,32 @@ class VisionModel(ABC):
         self.with_llm = with_llm
         self.max_memory = max_memory
         self.backend = backend
+        self.mm_feature_dtype: torch.dtype | None = None
         if hf_config is None:
             _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
         self.image_token_id = self.get_pad_token_id(model_path, hf_config, trust_remote_code=trust_remote_code) or 0
+
+    def set_mm_feature_dtype(self, dtype: torch.dtype | None):
+        """Set target dtype for floating MM feature tensors."""
+        self.mm_feature_dtype = dtype
+
+    @classmethod
+    def _postprocess_mm_output(cls, output, target_dtype: torch.dtype | None):
+        """Cast floating processor-output tensors to the target model dtype."""
+        if not isinstance(target_dtype, torch.dtype):
+            return output
+        if not target_dtype.is_floating_point:
+            return output
+        if isinstance(output, torch.Tensor):
+            if output.is_floating_point() and output.dtype != target_dtype:
+                return output.to(dtype=target_dtype)
+            return output
+        if isinstance(output, dict):
+            return {key: cls._postprocess_mm_output(value, target_dtype) for key, value in output.items()}
+        if isinstance(output, list):
+            return [cls._postprocess_mm_output(value, target_dtype) for value in output]
+        return output
 
     def get_pad_token_id(self, model_path, hf_config, trust_remote_code: bool = False):
         """Get pad_token_id from hf_config or tokenizer."""
@@ -105,6 +133,7 @@ class VisionModel(ABC):
         mm_items = self.collect_multimodal_items(messages)
 
         raw_images, raw_videos, video_metadatas = [], [], []
+        raw_audios = []
         raw_time_series, sampling_rates = [], []
         for modality, data, params in mm_items:
             if modality == Modality.IMAGE:
@@ -112,6 +141,8 @@ class VisionModel(ABC):
             elif modality == Modality.VIDEO:
                 raw_videos.append(data)
                 video_metadatas.append(params.get('video_metadata', None))
+            elif modality == Modality.AUDIO:
+                raw_audios.append(data[0] if isinstance(data, tuple) else data)
             elif modality == Modality.TIME_SERIES:
                 raw_time_series.append(data)
                 sampling_rates.append(params.get('sampling_rate', None))
@@ -122,6 +153,7 @@ class VisionModel(ABC):
         kwargs = {}
         images_kwargs = {}
         videos_kwargs = {}
+        audio_kwargs = {}
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
@@ -141,15 +173,24 @@ class VisionModel(ABC):
                                            modality='video')
             if video_size is not None:
                 videos_kwargs['size'] = video_size
+        if raw_audios:
+            kwargs['audio'] = raw_audios
+            audio_kwargs = dict(mm_processor_kwargs.get('audio') or {})
+            feature_extractor = getattr(self.processor, 'feature_extractor', None)
+            sampling_rate = getattr(feature_extractor, 'sampling_rate', None)
+            if sampling_rate is not None:
+                audio_kwargs.setdefault('sampling_rate', sampling_rate)
         if images_kwargs:
             kwargs['images_kwargs'] = images_kwargs
         if videos_kwargs:
             kwargs['videos_kwargs'] = videos_kwargs
+        if audio_kwargs:
+            kwargs['audio_kwargs'] = audio_kwargs
         if raw_time_series:
             assert hasattr(self, 'time_series_processor'), \
                 'time series processor is not defined for time series input'
-            assert not raw_images and not raw_videos, \
-                'time series is not compatible with image/video input'
+            assert not raw_images and not raw_videos and not raw_audios, \
+                'time series is not compatible with image/video/audio input'
             self.tokenizer = self.processor.tokenizer
             time_series_processor = self.time_series_processor
             kwargs['time_series'] = raw_time_series
@@ -173,6 +214,8 @@ class VisionModel(ABC):
                     collected_mm_items[current_modality] = {}
 
                 if attr_name in self.FEATURE_NAMES:
+                    value = self._postprocess_mm_output(value, self.mm_feature_dtype)
+                    processor_outputs[attr_name] = value
                     attr_name = 'feature'
 
                 collected_mm_items[current_modality][attr_name] = value
@@ -191,7 +234,8 @@ class VisionModel(ABC):
         # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
 
-        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+        result = dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+        return result
 
     @staticmethod
     def has_input_ids(messages: list[dict]) -> bool:

@@ -7,6 +7,7 @@ import pytest
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.engine.engine_instance import EngineInstance
+from lmdeploy.pytorch.engine.executor.mp_executor import MPExecutor
 from lmdeploy.pytorch.engine.request import RequestManager, RequestType, Response
 
 
@@ -46,9 +47,8 @@ class _FakeEngineLoop:
         self.drained = True
 
     def resume_from_sleep(self):
+        self.engine.events.append('resume')
         self.resumed = True
-
-
 
 
 class _FakeExecutor:
@@ -57,6 +57,7 @@ class _FakeExecutor:
         self.engine = engine
         self.sleep_calls = []
         self.wakeup_calls = []
+        self.warmup_calls = []
 
     async def sleep(self, level=1):
         assert self.engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
@@ -65,6 +66,13 @@ class _FakeExecutor:
 
     def wakeup(self, tags=None):
         self.wakeup_calls.append(tags)
+        self.engine.events.append(('wakeup', tags))
+
+    def warmup(self):
+        assert self.engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
+        assert self.engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
+        self.warmup_calls.append(self.wakeup_calls[-1])
+        self.engine.events.append(('warmup', self.wakeup_calls[-1]))
 
 
 @pytest.fixture
@@ -98,6 +106,7 @@ def _build_sleeping_test_engine(event_loop):
     session = _FakeSession(seq)
     engine.scheduler = _FakeScheduler(session)
     engine._sleeping_tags = set()
+    engine.events = []
     engine._engine_loop = _FakeEngineLoop(engine)
     engine.executor = _FakeExecutor(engine)
     return engine, resp
@@ -128,6 +137,8 @@ def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):
     assert engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
     assert engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
     assert not engine._engine_loop.resumed
+    assert engine.executor.warmup_calls == []
+    assert engine.events == [('wakeup', ['weights'])]
 
     engine.wakeup(['kv_cache'])
 
@@ -135,6 +146,48 @@ def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):
     assert not engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
     assert engine._engine_loop.resumed
     assert engine.executor.wakeup_calls == [['weights'], ['kv_cache']]
+    assert engine.executor.warmup_calls == [['kv_cache']]
+    assert engine.events == [
+        ('wakeup', ['weights']),
+        ('wakeup', ['kv_cache']),
+        ('warmup', ['kv_cache']),
+        'resume',
+    ]
+
+
+def test_engine_wakeup_all_warms_before_resume(event_loop):
+    engine, _ = _build_sleeping_test_engine(event_loop)
+    engine.req_manager.block_request_types({RequestType.ADD_SESSION, RequestType.ADD_MESSAGE})
+    engine._sleeping_tags = {'weights', 'kv_cache'}
+
+    engine.wakeup()
+
+    assert not engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
+    assert not engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
+    assert engine._engine_loop.resumed
+    assert engine.executor.wakeup_calls == [None]
+    assert engine.executor.warmup_calls == [None]
+    assert engine.events == [('wakeup', None), ('warmup', None), 'resume']
+
+
+def test_mp_executor_wakeup_waits_for_kv_cache():
+    executor = MPExecutor.__new__(MPExecutor)
+    calls = []
+
+    def _collective_rpc(method, args=None, return_mask=0xff):
+        calls.append((method, args, return_mask))
+
+    executor.collective_rpc = _collective_rpc
+
+    executor.wakeup(['weights'])
+    executor.wakeup(['kv_cache'])
+    executor.wakeup()
+
+    assert calls == [
+        ('wakeup', (['weights'], ), 0),
+        ('wakeup', (['kv_cache'], ), 0xff),
+        ('wakeup', (None, ), 0xff),
+    ]
 
 
 def test_engine_instance_new_request_after_sleep_returns_cancel(event_loop):

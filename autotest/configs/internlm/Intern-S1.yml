@@ -1,0 +1,67 @@
+# HF model id: internlm/Intern-S1
+
+a100:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 8
+    extra:
+      cache-max-entry-count: 0.6
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - func
+  - mllm_evaluate
+  - prefix_cache
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+    - kvint4
+    - kvint8
+    pytorch:
+    - kvint4
+    - kvint8
+h:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 4
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - func
+  - mllm_evaluate
+  - prefix_cache
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+ascend:
+- model_type: vl
+  engine_config:
+    tp: 16
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - func
