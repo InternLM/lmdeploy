@@ -8,8 +8,8 @@ from typing import Any
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
-from lmdeploy.vl.model.builder import load_vl_model
 from lmdeploy.utils import is_bf16_supported
+from lmdeploy.vl.model.builder import load_vl_model
 
 
 def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
