@@ -101,6 +101,7 @@ class MessagesRequest(BaseModel):
     temperature: float | None = 1.0
     top_p: float | None = None
     top_k: int | None = None
+    include_stop_str_in_output: bool = False
     metadata: dict[str, Any] | None = None
     tools: list[ToolParam] | None = None
     tool_choice: ToolChoiceParam | Literal['auto', 'any'] | None = None

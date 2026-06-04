@@ -351,6 +351,7 @@ def to_generation_config(request: MessagesRequest) -> GenerationConfig:
         top_p=1.0 if request.top_p is None else request.top_p,
         temperature=1.0 if request.temperature is None else request.temperature,
         stop_words=request.stop_sequences,
+        include_stop_str_in_output=request.include_stop_str_in_output,
         skip_special_tokens=True,
         spaces_between_special_tokens=True,
     )
