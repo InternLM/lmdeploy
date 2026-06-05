@@ -7,7 +7,7 @@ from lmdeploy.serve.proxy.core.config import ProxyConfig
 from lmdeploy.serve.proxy.dispatch.distserve import DistServeDispatcher
 from lmdeploy.serve.proxy.dispatch.hybrid import HybridDispatcher
 from lmdeploy.serve.proxy.metrics.load_tracker import InflightTracker
-from lmdeploy.serve.proxy.registry.heartbeat import start_heartbeat
+from lmdeploy.serve.proxy.registry.health_checker import HealthChecker
 from lmdeploy.serve.proxy.registry.pool import ReplicaPool
 from lmdeploy.serve.proxy.routing.selector import ReplicaSelector
 from lmdeploy.serve.proxy.upstream.forwarder import UpstreamForwarder
@@ -20,7 +20,8 @@ class ProxyRuntime:
         self.config = config
         self.session = session
         self.pool = ReplicaPool(PDConnectionPool())
-        start_heartbeat(self.pool)
+        self.health_checker = HealthChecker(self.pool)
+        self.health_checker.start()
         self.selector = ReplicaSelector(self.pool, config.routing_strategy)
         self.forwarder = UpstreamForwarder(session)
         self.tracker = InflightTracker(self.pool)

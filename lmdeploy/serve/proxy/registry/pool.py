@@ -58,22 +58,28 @@ class ReplicaPool:
             with self._lock:
                 existing = self._replicas.get(url)
                 load = existing.model_copy(deep=True) if existing else ReplicaLoad()
-        if load.models:
-            self.remove(url)
-            with self._lock:
-                self._replicas[url] = load.model_copy(deep=True)
-            return None
         try:
             from lmdeploy.serve.openai.api_client import APIClient
 
             client = APIClient(api_server_url=url)
-            discovered = load.model_copy(deep=True) if load is not None else ReplicaLoad()
-            discovered.models = client.available_models
-            with self._lock:
-                self._replicas[url] = discovered
+            discovered_models = client.available_models
         except requests.exceptions.RequestException as e:
             logger.error(f'exception happened when adding replica {url}, {e}')
             return self._api_timeout_bytes(url)
+        if not discovered_models:
+            logger.error(f'replica {url} returned no models from /v1/models')
+            return self._api_timeout_bytes(url)
+        if load.models:
+            missing = set(load.models) - set(discovered_models)
+            if missing:
+                logger.error(f'replica {url} declared models {sorted(missing)} '
+                             f'not found in /v1/models: {discovered_models}')
+                return self._service_unavailable_bytes(url)
+        entry = load.model_copy(deep=True)
+        entry.models = list(discovered_models)
+        self.remove(url)
+        with self._lock:
+            self._replicas[url] = entry
         return None
 
     def remove(self, url: str) -> None:
@@ -133,28 +139,20 @@ class ReplicaPool:
             load.unfinished -= 1
             load.record_latency(time.time() - start)
 
-    def remove_stale_replicas(self) -> None:
-        with self._lock:
-            urls = list(self._replicas.keys())
-        to_delete: list[str] = []
-        for url in urls:
-            health_url = f'{url}/health'
-            headers = {'accept': 'application/json'}
-            try:
-                response = requests.get(health_url, headers=headers)
-                if response.status_code != HTTPStatus.OK:
-                    to_delete.append(url)
-            except requests.exceptions.RequestException:
-                to_delete.append(url)
-        for url in to_delete:
-            self.remove(url)
-            logger.info(f'Removed replica url: {url} due to heart beat expiration')
-
     @staticmethod
     def _api_timeout_bytes(url: str) -> bytes:
         logger.warning(f'api timeout: {url}')
         ret = {
             'error_code': ErrorCodes.API_TIMEOUT.value,
             'text': err_msg[ErrorCodes.API_TIMEOUT],
+        }
+        return json.dumps(ret).encode() + b'\n'
+
+    @staticmethod
+    def _service_unavailable_bytes(url: str) -> bytes:
+        logger.warning(f'replica model validation failed: {url}')
+        ret = {
+            'error_code': ErrorCodes.SERVICE_UNAVAILABLE.value,
+            'text': err_msg[ErrorCodes.SERVICE_UNAVAILABLE],
         }
         return json.dumps(ret).encode() + b'\n'
