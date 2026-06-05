@@ -59,6 +59,30 @@ ascend:
   engine_config:
     tp: 16
     extra:
+      max-batch-size: 32
+      cache-max-entry-count: 0.9
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: chat
+  engine_config:
+    dp: 8
+    ep: 8
+    extra:
       max-batch-size: 64
       cache-max-entry-count: 0.9
       cache-block-seq-len: 128
@@ -67,8 +91,7 @@ ascend:
     communicators:
     - nccl
   test_coverage:
-  - evaluate
-  - func
+  - benchmark
   gen_config:
     temperature: 1.0
     top-k: 20

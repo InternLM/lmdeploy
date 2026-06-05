@@ -502,10 +502,12 @@ BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM_ASCEND = [{
         'tp': 4
     },
     'extra_params': {
+        'device': 'ascend',
         'reasoning-parser': 'qwen-qwq',
         'speculative-algorithm': 'qwen3_5_mtp',
         'speculative-num-draft-tokens': 4,
         'max-batch-size': 64,
+        'cache-max-entry-count': 0.6,
         'cache-block-seq-len': 128
     }
 }]
@@ -595,10 +597,12 @@ BASE_SPECULATIVE_DECODING_RESTFUL_TEST_MLLM_ASCEND = [{
         'tp': 4
     },
     'extra_params': {
+        'device': 'ascend',
         'reasoning-parser': 'qwen-qwq',
         'speculative-algorithm': 'qwen3_5_mtp',
         'speculative-num-draft-tokens': 4,
         'max-batch-size': 64,
+        'cache-max-entry-count': 0.6,
         'cache-block-seq-len': 128
     }
 }]
