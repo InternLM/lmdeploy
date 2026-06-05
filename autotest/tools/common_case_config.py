@@ -239,7 +239,22 @@ PYTORCH_PR_TEST_LLM_GPU2 = [{
         'tp': 2
     },
     'extra_params': {}
-}]
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256
+    }
+}
+]
 
 PYTORCH_PR_TEST_LLM_GPU1 = [{
     'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
@@ -259,6 +274,22 @@ PYTORCH_PR_TEST_LLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {}
+}, {
+    'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'max_batch_size': 128,
+        'speculative_config': {
+            'method': 'eagle3',
+            'num_speculative_tokens': 3,
+            'model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B'
+        }
+    }
 }]
 
 BASE_TOOLCALL_TEST_LLM = [{
