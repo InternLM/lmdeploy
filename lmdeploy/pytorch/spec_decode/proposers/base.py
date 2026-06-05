@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
+from __future__ import annotations
+
 from typing import Any
 
 import torch
@@ -14,6 +15,7 @@ from ...model_inputs import ModelInputs, step_ctx_manager
 from ...models.patch import build_patched_model, update_custom_module_map
 from ...strategies.base.model_agent import ExtraInputs
 from ...weight_loader.model_weight_loader import load_model_weights
+from ..guided_spec_helper import GuidedSpecHelper
 
 SPEC_PROPOSERS = Registry('spec_proposers')
 
@@ -66,53 +68,7 @@ class BaseSpecProposer:
         self.num_speculative_tokens = specdecode_config.num_speculative_tokens
         self.target_model = None
         # Set by SpecModelAgent after construction
-        self.guided_decoding_manager = None
-
-    async def _prepare_guided_bitmask(self, logits: torch.Tensor,
-                                    guided_processors: dict | None) -> torch.Tensor | None:
-        """Allocate and fill a guided-decoding bitmask for draft logits.
-
-        Returns the filled bitmask tensor (or None if no guided processors are
-        active).  The caller is responsible for actually applying the bitmask to
-        logits — some proposers (e.g. Eagle3) may need to translate the bitmask
-        to their draft vocabulary first.
-
-        CPU-bound xgrammar ``fill_bitmap`` calls are offloaded to a thread
-        so they don't block the asyncio event loop.
-        """
-        if not guided_processors or self.guided_decoding_manager is None:
-            return None
-        guided_manager = self.guided_decoding_manager
-        guided_bitmask = guided_manager.allocate_batched_bitmap(logits.size(0))
-
-        def _fill():
-            for idx, processor in guided_processors.items():
-                guided_manager.fill_bitmap(processor, guided_bitmask, idx)
-
-        await asyncio.to_thread(_fill)
-        return guided_bitmask
-
-    async def _accept_guided_tokens(self, draft_token_ids: torch.Tensor,
-                                    guided_processors: dict | None):
-        """Accept draft tokens on the provided grammar matchers.
-
-        In speculative decoding the matchers are typically forked from the
-        originals (created in ``SpecModelAgent._async_model_forward``), so this
-        method accepts on whichever matchers are passed in.
-
-        CPU-bound xgrammar ``accept_token`` calls are offloaded to a thread
-        so they don't block the asyncio event loop.
-        """
-        if not guided_processors or self.guided_decoding_manager is None:
-            return
-        guided_manager = self.guided_decoding_manager
-        cpu_draft_token_ids = draft_token_ids[:, 0].cpu()
-
-        def _accept():
-            for idx, processor in guided_processors.items():
-                guided_manager.accept_token(processor, cpu_draft_token_ids[idx].item())
-
-        await asyncio.to_thread(_accept)
+        self.guided_helper = GuidedSpecHelper()
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         if self.specdecode_config is None:

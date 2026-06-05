@@ -32,11 +32,11 @@ class DeepseekMTP(BaseSpecProposer):
 
         logits = self.get_logits(hidden_states)[0]
 
-        guided_bitmask = await self._prepare_guided_bitmask(logits, guided_processors)
+        guided_bitmask = await self.guided_helper.prepare_bitmask(logits, guided_processors)
         if guided_bitmask is not None:
-            self.guided_decoding_manager.apply_batched_bitmap(logits, guided_bitmask)
+            self.guided_helper.apply_bitmask(logits, guided_bitmask)
 
         draft_token_ids = logits.argmax(dim=-1, keepdim=True)
-        await self._accept_guided_tokens(draft_token_ids, guided_processors)
+        await self.guided_helper.accept_draft_tokens(draft_token_ids, guided_processors)
 
         return draft_token_ids, model_metas, target_hidden_states
