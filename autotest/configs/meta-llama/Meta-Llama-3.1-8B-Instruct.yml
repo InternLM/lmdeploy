@@ -1,4 +1,5 @@
 # HF model id: meta-llama/Meta-Llama-3.1-8B-Instruct
+
 a100:
 - model_type: chat
   engine_config:
@@ -30,6 +31,20 @@ a100:
     - w8a8
   gen_config:
     temperature: 0.6
+- model_type: chat
+  engine_config:
+    tp: 1
+    extra:
+      session-len: 65536
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - pr_test
 h:
 - model_type: chat
   engine_config:

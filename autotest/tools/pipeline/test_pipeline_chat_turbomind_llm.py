@@ -3,8 +3,6 @@ from tools.common_case_config import (
     MODELSCOPE_CONFIG,
     TURBOMIND_FALLBACK_TEST_LLM_GPU1,
     TURBOMIND_FALLBACK_TEST_LLM_GPU2,
-    TURBOMIND_PR_TEST_LLM_GPU1,
-    TURBOMIND_PR_TEST_LLM_GPU2,
 )
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.pipeline_chat import run_pipeline_llm_test
@@ -68,7 +66,7 @@ def test_pipeline_chat_fallback_backend_tp2(config, run_config, common_case_conf
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.pr_test
-@pytest.mark.parametrize('run_config', TURBOMIND_PR_TEST_LLM_GPU2)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, func_type='pr_test'))
 def test_pipeline_chat_pr_tp2(config, run_config, common_case_config, worker_id):
     worker_id = 'gw' + str(3 + get_workerid(worker_id))
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
@@ -79,7 +77,7 @@ def test_pipeline_chat_pr_tp2(config, run_config, common_case_config, worker_id)
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.pr_test
-@pytest.mark.parametrize('run_config', TURBOMIND_PR_TEST_LLM_GPU1)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 1}, func_type='pr_test'))
 def test_pipeline_chat_pr_tp1(config, run_config, common_case_config, worker_id):
     worker_id = 'gw' + str(6 + get_workerid(worker_id))
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}

@@ -1,3 +1,5 @@
+# HF model id: internlm/Intern-S2-Preview
+
 # HF model id: Qwen/Qwen3.5-35B-A3B
 
 a100:
@@ -18,8 +20,24 @@ a100:
   quantization:
     turbomind:
     - kvint8
-    pytorch:
-    - kvint8
+- model_type: chat
+  engine_config:
+    tp: 2
+    extra:
+      reasoning-parser: qwen-qwq
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 256
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
 - model_type: vl
   engine_config:
     tp: 2
@@ -28,11 +46,22 @@ a100:
     communicators:
     - nccl
   test_coverage:
+  - benchmark
   - func
-  - pr_test
-  quantization:
-    pytorch:
-    - kvint8
+- model_type: vl
+  engine_config:
+    tp: 2
+    extra:
+      reasoning-parser: qwen-qwq
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 256
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
 h:
 - model_type: chat
   engine_config:
@@ -81,6 +110,7 @@ h:
     - nccl
   test_coverage:
   - mtp_evaluate
+  - func
   gen_config:
     temperature: 1.0
     top-k: 20
@@ -122,6 +152,7 @@ h:
     communicators:
     - nccl
   test_coverage:
+  - func
   - mtp_evaluate
   gen_config:
     temperature: 1.0

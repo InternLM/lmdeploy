@@ -13,6 +13,7 @@ a100:
   test_coverage:
   - func
   - mllm_evaluate
+  - pr_test
   quantization:
     pytorch:
     - kvint8

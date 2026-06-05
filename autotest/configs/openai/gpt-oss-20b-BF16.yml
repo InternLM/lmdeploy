@@ -4,6 +4,8 @@ a100:
 - model_type: chat
   engine_config:
     tp: 2
+    extra:
+      model-format: mxfp4
   backends:
   - name: turbomind
     communicators:
@@ -22,6 +24,8 @@ h:
 - model_type: chat
   engine_config:
     tp: 2
+    extra:
+      model-format: mxfp4
   backends:
   - name: turbomind
     communicators:

@@ -17,6 +17,7 @@ a100:
   test_coverage:
   - func
   - mllm_evaluate
+  - pr_test
   gen_config:
     repetition-penalty: 1.0
     top-p: 0.8

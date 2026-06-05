@@ -342,8 +342,8 @@ def _entry_matches_func(entry: dict[str, Any], func_type: str, extra: dict[str, 
         return 'prefix_cache' in funcs
     if func_type == 'benchmark' and funcs == {'prefix_cache'}:
         return False
-    if func_type == 'func':
-        return 'func' in funcs
+    if func_type in ('func', 'pr_test'):
+        return func_type in funcs
     return func_type in funcs
 
 
@@ -480,7 +480,8 @@ def _get_func_config_list_per_model(
         quant_cfg = _quant_cfg_for_entry(entry)
         base_model = model_id
         models_for_quant = [base_model]
-        if 'quantization' in (entry.get(TEST_COVERAGE_KEY) or []):
+        funcs = entry.get(TEST_COVERAGE_KEY) or []
+        if 'quantization' in funcs:
             _extend_quant_models_from_entry(backend, [base_model], quant_cfg, models_for_quant)
         models_for_quant = [m for m in models_for_quant if m in base_case_list]
 
@@ -657,8 +658,8 @@ def get_model_list(config: dict[str, Any],
     parallel_config = parallel_config or {'tp': 1}
     if extra and (extra.get('enable-prefix-caching') is not None or extra.get('enable_prefix_caching') is not None):
         return _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
-    if func_type == 'func':
-        return _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', extra)
+    if func_type in ('func', 'pr_test'):
+        return _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
 
     chat_models = _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', None)
     typed_models = _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
@@ -688,14 +689,21 @@ def _base_model_name(model: str) -> str:
     return model.replace('-inner-4bits', '').replace('-inner-w8a8', '').replace('-inner-gptq', '')
 
 
-def get_quantization_model_list(type: str) -> list[str]:
-    """Get quantization model list by specified quant type(awq/gptq/w8a8)"""
+def get_quantization_model_list(type: str, *, pr_test_only: bool = False) -> list[str]:
+    """Get quantization model list by specified quant type(awq/gptq/w8a8).
+
+    When ``pr_test_only`` is set, only rows that also list ``pr_test`` in
+    ``test_coverage`` are included (PR smoke quant jobs).
+    """
     config = get_config()
     env_key = _model_matrix_env_key(config)
     deps_profile = get_deps_profile_selector()
     quant_model_list: list[str] = []
     for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
-        if 'quantization' not in (entry.get(TEST_COVERAGE_KEY) or []):
+        funcs = entry.get(TEST_COVERAGE_KEY) or []
+        if 'quantization' not in funcs:
+            continue
+        if pr_test_only and 'pr_test' not in funcs:
             continue
         layout = _parallel_layout(_entry_engine_config(entry))
         backend_map = _normalize_entry_backends(entry, config, layout)
@@ -838,6 +846,7 @@ _MODEL_EVAL_CONFIG_RULES = (
     ('gpt', 'gpt'),
     ('sdar', 'sdar'),
     ('intern-s1-pro', 'intern-s1-pro'),
+    ('intern-s2', 'qwen3.5'),
     ('qwen3.5', 'qwen3.5'),
 )
 

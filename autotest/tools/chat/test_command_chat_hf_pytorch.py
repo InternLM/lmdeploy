@@ -3,8 +3,6 @@ from tools.common_case_config import (
     MODELSCOPE_CONFIG,
     PYTORCH_LORA_TEST_LLM_GPU1,
     PYTORCH_LORA_TEST_LLM_GPU2,
-    PYTORCH_PR_TEST_LLM_GPU1,
-    PYTORCH_PR_TEST_LLM_GPU2,
 )
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.run_client_chat import run_tests
@@ -72,7 +70,7 @@ def test_hf_pytorch_base_tp2(config, run_config, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU2)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, func_type='pr_test'))
 def test_hf_pytorch_chat_pr_tp2(config, run_config, cli_case_config, worker_id):
     worker_id = 'gw' + str(3 + get_workerid(worker_id))
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
@@ -81,7 +79,7 @@ def test_hf_pytorch_chat_pr_tp2(config, run_config, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
 @pytest.mark.pr_test
-@pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU1)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 1}, func_type='pr_test'))
 def test_hf_pytorch_chat_pr_tp1(config, run_config, cli_case_config, worker_id):
     worker_id = 'gw' + str(6 + get_workerid(worker_id))
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)

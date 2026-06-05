@@ -12,6 +12,7 @@ a100:
     - nccl
   test_coverage:
   - func
+  - pr_test
   - quantization
   quantization:
     turbomind:

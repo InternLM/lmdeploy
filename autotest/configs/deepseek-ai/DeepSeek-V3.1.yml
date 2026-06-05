@@ -3,7 +3,8 @@
 h:
 - model_type: chat
   engine_config:
-    tp: 8
+    dp: 8
+    ep: 8
     extra:
       session-len: 65536
   backends:
@@ -17,8 +18,7 @@ h:
     temperature: 0.6
 - model_type: chat
   engine_config:
-    dp: 8
-    ep: 8
+    tp: 8
     extra:
       session-len: 65536
   backends:

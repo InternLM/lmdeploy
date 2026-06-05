@@ -81,6 +81,8 @@ ascend:
     tp: 16
     extra:
       session-len: 65536
+      cache-max-entry-count: 0.9
+      max-batch-size: 1024
   backends:
   - name: pytorch
     communicators:

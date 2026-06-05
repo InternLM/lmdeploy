@@ -30,7 +30,7 @@ def test_quantization_gptq(config, model, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-0.6B'])
+@pytest.mark.parametrize('model', get_quantization_model_list('awq', pr_test_only=True))
 def test_quantization_awq_pr(config, model):
     quantization_type = 'awq'
     quantization_all(config, model + '-inner-4bits', model, quantization_type, cuda_prefix='CUDA_VISIBLE_DEVICES=6')

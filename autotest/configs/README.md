@@ -88,6 +88,7 @@ Environment paths and devices are defined in `autotest/env_paths.yml`.
 Available keys:
 
 - `func`
+- `pr_test` — PR smoke slice (same row fields as `func`: `backends`, `quantization`, …)
 - `evaluate`
 - `benchmark`
 - `longtext_benchmark`
@@ -100,6 +101,7 @@ Available keys:
 Rules:
 
 - Keep `mtp_evaluate` on its own row.
+- Narrow PR coverage: add a separate row with only the `backends` / `communicators` / `quantization` PR needs. Do not put `pr_test` on a wide `func` row unless the full cross-product is intended for PR.
 - Use `prefix_cache` in `test_coverage`; do not add `enable-prefix-caching` manually to `engine_config.extra`.
 - Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`, `w8a8`).
 

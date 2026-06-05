@@ -13,6 +13,7 @@ a100:
     - nccl
   test_coverage:
   - func
+  - pr_test
   quantization:
     turbomind:
     - kvint8
@@ -27,6 +28,7 @@ a100:
     - nccl
   test_coverage:
   - func
+  - pr_test
   quantization:
     pytorch:
     - kvint8
