@@ -157,6 +157,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         block_num, block_size, *_ = step_context.kv_caches[0][0].shape
         is_prefill_no_cache = False
+        num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
         
         if not step_context.is_decoding:
             is_prefill_no_cache = all((step_context.q_seqlens == step_context.kv_seqlens).tolist())
@@ -285,12 +286,16 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return 0, 0, 0
             # get padded_tokens_current_rank
-            is_graph = cls.enable_graph and is_decoding
+            is_graph = cls.enable_graph and (is_decoding or is_multi_token_decoding)
             if is_graph:
-                from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
-                actual_tokens_current_rank = step_context.q_seqlens.shape[0]
-                padded_tokens_current_rank = min(get_ascend_compatible_size(actual_tokens_current_rank),
-                                                 cls.max_batches)
+                if is_multi_token_decoding:
+                    actual_tokens_current_rank = step_context.q_seqlens.sum().item()
+                    padded_tokens_current_rank = actual_tokens_current_rank
+                else:
+                    from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
+                    actual_tokens_current_rank = step_context.q_seqlens.shape[0]
+                    padded_tokens_current_rank = min(get_ascend_compatible_size(actual_tokens_current_rank),
+                                                        cls.max_batches)
             else:
                 actual_tokens_current_rank = step_context.q_seqlens.sum().item()
                 padded_tokens_current_rank = actual_tokens_current_rank
@@ -311,7 +316,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         @lru_cache
         def init_mc2_token_capacity(tp_size):
-            max_num_tokens = min(cls.max_batches, 512)
+            max_num_tokens = min(cls.max_batches * (num_spec_tokens + 1), 512)
             num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
             return num_tokens_per_tp_rank * tp_size
 
@@ -319,7 +324,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return DlinferMoECommType.ALLGATHER
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
-            is_graph = cls.enable_graph and is_decoding
+            is_graph = cls.enable_graph and (is_decoding or is_multi_token_decoding)
             if is_graph:
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
@@ -404,7 +409,6 @@ class AscendOpsBackend(DlinferOpsBackend):
             states_shapes = step_context.model_config.states_shapes
             if not is_decoding and not is_multi_token_decoding and len(states_shapes) > 0:
                 has_initial_state = ~(q_seqlens == kv_seqlens)
-                num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
                 # # Conv ring buffer: conv_state_len = conv_kernel_size + num_spec_tokens.
                 conv_state_len = states_shapes[0][0][0]
                 conv_kernel_size = conv_state_len - num_spec_tokens
