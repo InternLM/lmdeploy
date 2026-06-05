@@ -115,8 +115,13 @@ class CudaGraphMixin:
             output_buffers = output
         return output_buffers
 
-    def update_meta_flashattn(self, batch_size: int, max_seqlen_q: int, block_size: int, max_seqlen_k: int,
-                              cache_seqlens: torch.Tensor, num_splits: int = 0):
+    def update_meta_flashattn(self,
+                              batch_size: int,
+                              max_seqlen_q: int,
+                              block_size: int,
+                              max_seqlen_k: int,
+                              cache_seqlens: torch.Tensor,
+                              num_splits: int = 0):
         """Update meta flashattn."""
         ctx_mgr = get_step_ctx_manager()
         step_ctx = ctx_mgr.current_context()
@@ -199,12 +204,14 @@ class CudaGraphMixin:
         # use FA3 decode kernel
         elif graph_meta.use_fa3_decoding is True:
             max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
-            input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
-                                                                             decode_query_len,
-                                                                             block_size=graph_meta.block_size,
-                                                                             max_seqlen_k=max_seqlen_k,
-                                                                             cache_seqlens=input_buffers['kv_seqlens'],
-                                                                             num_splits=graph_meta.fa3_num_splits)
+            input_buffers['scheduler_metadata'] = self.update_meta_flashattn(
+                graph_meta.max_batchs,
+                decode_query_len,
+                block_size=graph_meta.block_size,
+                max_seqlen_k=max_seqlen_k,
+                cache_seqlens=input_buffers['kv_seqlens'],
+                num_splits=graph_meta.fa3_num_splits,
+            )
 
         # mrope
         if graph_meta.use_mrope:

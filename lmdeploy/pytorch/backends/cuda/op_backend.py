@@ -121,6 +121,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig, decoding_query_len: int):
         """Update meta for flashmla."""
         import flash_mla
+
         num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
         num_attention_heads *= decoding_query_len
         is_fp8_kvcache = model_config.use_mla_fp8_cache
