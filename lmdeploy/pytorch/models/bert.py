@@ -52,22 +52,6 @@ def _make_causal_mask(input_shape: torch.Size, dtype: torch.dtype, device: torch
     return mask[None, None, :, :].expand(batch_size, 1, tgt_len, tgt_len)
 
 
-def _init_bert_weights(module: nn.Module, config: BertConfig):
-    with torch.no_grad():
-        if isinstance(module, nn.Embedding):
-            module.weight.normal_(mean=0.0, std=config.initializer_range)
-            if module.padding_idx is not None:
-                module.weight[module.padding_idx].zero_()
-        elif isinstance(module, LayerNorm):
-            module.weight.fill_(1.0)
-            if module.bias is not None:
-                module.bias.zero_()
-        elif hasattr(module, 'weight') and isinstance(module.weight, nn.Parameter) and module.weight.dim() == 2:
-            module.weight.normal_(mean=0.0, std=config.initializer_range)
-            if getattr(module, 'bias', None) is not None:
-                module.bias.zero_()
-
-
 def _prepare_cross_attention_mask(attention_mask: torch.Tensor | None, inputs_embeds: torch.Tensor,
                                   encoder_hidden_states: torch.Tensor | None):
     if attention_mask is None:
@@ -140,15 +124,12 @@ class BertSelfAttention(nn.Module):
         self.all_head_size = self.num_attention_heads * self.attention_head_size
         self.scaling = self.attention_head_size**-0.5
 
-        linear_kwargs = dict(dtype=dtype, device=device)
-        self.query = build_colwise_linear(config.hidden_size, self.all_head_size, bias=True, **linear_kwargs)
-        self.key = build_colwise_linear(config.hidden_size, self.all_head_size, bias=True, **linear_kwargs)
-        self.value = build_colwise_linear(config.hidden_size, self.all_head_size, bias=True, **linear_kwargs)
-
-    def _shape(self, tensor: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len = tensor.shape[:2]
-        tensor = tensor.view(batch_size, seq_len, self.num_attention_heads, self.attention_head_size)
-        return tensor.transpose(1, 2)
+        self.query = build_colwise_linear(
+            config.hidden_size, self.all_head_size, bias=True, dtype=dtype, device=device)
+        self.key = build_colwise_linear(
+            config.hidden_size, self.all_head_size, bias=True, dtype=dtype, device=device)
+        self.value = build_colwise_linear(
+            config.hidden_size, self.all_head_size, bias=True, dtype=dtype, device=device)
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -156,9 +137,12 @@ class BertSelfAttention(nn.Module):
                 encoder_hidden_states: torch.Tensor | None = None):
         key_value_states = hidden_states if encoder_hidden_states is None else encoder_hidden_states
 
-        query_layer = self._shape(self.query(hidden_states))
-        key_layer = self._shape(self.key(key_value_states))
-        value_layer = self._shape(self.value(key_value_states))
+        batch_size = hidden_states.shape[0]
+        hidden_shape = (batch_size, -1, self.num_attention_heads, self.attention_head_size)
+
+        query_layer = self.query(hidden_states).view(*hidden_shape).transpose(1, 2)
+        key_layer = self.key(key_value_states).view(*hidden_shape).transpose(1, 2)
+        value_layer = self.value(key_value_states).view(*hidden_shape).transpose(1, 2)
 
         attn_output = F.scaled_dot_product_attention(
             query_layer,
@@ -294,7 +278,6 @@ class BertModel(nn.Module):
         self.embeddings = BertEmbeddings(config, dtype=dtype, device=device)
         self.encoder = BertEncoder(config, dtype=dtype, device=device)
         self.pooler = BertPooler(config, dtype=dtype, device=device)
-        self.apply(lambda module: _init_bert_weights(module, config))
 
     def forward(self,
                 input_ids: torch.Tensor | None = None,

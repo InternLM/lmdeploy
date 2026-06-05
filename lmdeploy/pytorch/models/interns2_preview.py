@@ -10,6 +10,8 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.vl.constants import Modality
 
+from .interns2_ts_encoder import InternS2PreviewTimeSeriesModel
+from .interns2_ts_forecaster import InternS2PreviewTimeSeriesForecaster, TSForecasterConfig
 from .patch import add_prefix, get_build_model_context
 from .qwen3_5_moe import (
     Qwen3_5MoeForConditionalGeneration,
@@ -18,8 +20,6 @@ from .qwen3_5_moe import (
     Qwen3_5MoeTextModel,
     Qwen3_5MoeVisionModel,
 )
-from .ts_encoder import InternS2PreviewTimeSeriesModel
-from .ts_forecaster import TSForecaster, TSForecasterConfig
 
 
 class InternS2PreviewModel(Qwen3_5MoeModel):
@@ -140,20 +140,25 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
 
         self.input_processor = Qwen3_5MoeInputProcessor(self.config, dtype)
 
+        # build model
         self.model = InternS2PreviewModel(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
+
+        # build lm_head
         self.lm_head = self.build_lm_head(config.text_config.hidden_size,
                                           config.text_config.vocab_size,
                                           bias=False,
                                           dtype=dtype,
                                           device=device)
 
-        forecaster_config = config.ts_forecaster_config
-        if hasattr(forecaster_config, 'to_dict'):
-            forecaster_config = forecaster_config.to_dict()
-        self.time_series_forecaster = TSForecaster(TSForecasterConfig(**forecaster_config),
-                                                   dtype=dtype,
-                                                   device=device)
+        # build time series forecaster
+        forecaster_config = config.ts_forecaster_config.to_dict()
+        self.time_series_forecaster = InternS2PreviewTimeSeriesForecaster(
+            TSForecasterConfig(**forecaster_config),
+            dtype=dtype,
+            device=device,
+        )
 
+        # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
         self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0

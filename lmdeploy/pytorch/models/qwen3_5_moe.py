@@ -13,7 +13,7 @@ from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .interns1_pro_time_series import InternS1ProTimeSeriesModel
+from .interns1_pro_ts_encoder import InternS1ProTimeSeriesModel
 from .patch import add_prefix, get_build_model_context
 from .qwen3_5 import (
     Qwen3_5Attention,

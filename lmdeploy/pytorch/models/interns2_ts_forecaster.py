@@ -1226,7 +1226,7 @@ class Aligner(nn.Module):
 
 
 class TSForecasterConfig:
-    """Configuration for :class:`TSForecaster`.
+    """Configuration for :class:`InternS2PreviewTimeSeriesForecaster`.
 
     The Forecaster backbone dims (model_dims=1280, patch_len=32, 20 layers, ...) are
     fixed by Forecaster 2.5 200M and are not configurable here.
@@ -1261,15 +1261,15 @@ class TSForecasterConfig:
         **kwargs,
     ):
         if not use_horizon_head:
-            raise ValueError('LMDeploy TSForecaster expects use_horizon_head=True.')
+            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster expects use_horizon_head=True.')
         if not use_cross_attn_gate:
-            raise ValueError('LMDeploy TSForecaster expects use_cross_attn_gate=True.')
+            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster expects use_cross_attn_gate=True.')
         if qformer_dropout not in (None, 0, 0.0):
-            raise ValueError('LMDeploy TSForecaster does not support dropout.')
+            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster does not support dropout.')
         if not use_continuous_quantile_head:
-            raise ValueError('LMDeploy TSForecaster expects use_continuous_quantile_head=True.')
+            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster expects use_continuous_quantile_head=True.')
         if return_backcast:
-            raise ValueError('LMDeploy TSForecaster does not support return_backcast.')
+            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster does not support return_backcast.')
 
         self.d_llm = int(d_llm)
         self.d_ts_encoder = int(d_ts_encoder)
@@ -1295,7 +1295,7 @@ class TSForecasterConfig:
 
 @dataclass
 class TSForecasterOutput:
-    """Output of :class:`TSForecaster`.
+    """Output of :class:`InternS2PreviewTimeSeriesForecaster`.
 
     Attributes:
         point_forecast: list of (horizon_i, C_i) per-sample median forecasts.
@@ -1310,7 +1310,7 @@ class TSForecasterOutput:
     predicted_horizon: torch.Tensor | None = None
 
 
-class TSForecaster(nn.Module):
+class InternS2PreviewTimeSeriesForecaster(nn.Module):
     """Standalone TimeOmni_v2 forecaster (cross-attention Forecaster head).
 
     Inputs (see :meth:`forward`): the raw multi-channel ``history``, plus the two
@@ -1628,7 +1628,7 @@ class TSForecaster(nn.Module):
 
 
 def maybe_forecast_on_ts_gen(
-    forecaster: TSForecaster,
+    forecaster: InternS2PreviewTimeSeriesForecaster,
     next_token_ids: torch.Tensor,
     *,
     history: list[Tensor],
@@ -1662,7 +1662,7 @@ def maybe_forecast_on_ts_gen(
 __all__ = [
     'TS_GEN_TOKEN_ID',
     'TSForecasterConfig',
-    'TSForecaster',
+    'InternS2PreviewTimeSeriesForecaster',
     'TSForecasterOutput',
     'Aligner',
     'ForecasterBackbone',
