@@ -66,7 +66,9 @@ def build_state_manager(cache_config: CacheConfig) -> StateManager:
     # state is different from block, we always reserve one state for system use
     num_reserved = 1
     num_state_caches = cache_config.num_state_caches
-    assert num_state_caches is not None
+    if num_state_caches is None:
+        num_state_caches = num_reserved
+
     # `num_state_caches` is the number of allocated cache rows, including
     # reserved rows. Allocatable state ids must therefore stop before
     # `num_state_caches` to remain valid conv_state row indices.
