@@ -3,6 +3,7 @@ import asyncio
 import torch
 
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
+from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
 from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent, _expand_sampling_inputs
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
@@ -210,7 +211,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
-    agent.guided_decoding_manager = None
+    agent.guided_helper = GuidedSpecHelper()
     forward_calls = 0
 
     def _forward_impl(_inputs):
@@ -242,7 +243,7 @@ def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatc
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
-    agent.guided_decoding_manager = None
+    agent.guided_helper = GuidedSpecHelper()
     forward_calls = 0
 
     def _forward_impl(_inputs):
