@@ -24,6 +24,7 @@ import xgrammar as xgr
 
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -591,7 +592,7 @@ def _build_eagle3_proposer(tokenizer_info, vocab_size):
     proposer = Eagle3(spec_cfg, device='cpu')
     # Identity mapping: draft vocab == target vocab
     proposer.draft_id_to_target_id = torch.arange(vocab_size)
-    proposer.guided_decoding_manager = None  # set by caller if needed
+    proposer.guided_helper = GuidedSpecHelper()  # set by caller if needed
     return proposer
 
 
@@ -616,7 +617,7 @@ class TestEagle3GrammarMask:
         matcher = _json_matcher(compiler, schema)
         vocab_size = tokenizer_info.vocab_size
         proposer = _build_eagle3_proposer(tokenizer_info, vocab_size)
-        proposer.guided_decoding_manager = guided_manager
+        proposer.guided_helper = GuidedSpecHelper(guided_manager)
 
         # Test grammar mask flow directly (same pattern as
         # TestDraftModelGrammarMasking in unit tests).
@@ -640,7 +641,7 @@ class TestEagle3GrammarMask:
         original = _json_matcher(compiler, schema)
         vocab_size = tokenizer_info.vocab_size
         proposer = _build_eagle3_proposer(tokenizer_info, vocab_size)
-        proposer.guided_decoding_manager = guided_manager
+        proposer.guided_helper = GuidedSpecHelper(guided_manager)
 
         # Fork the matcher (simulates draft generation in _async_model_forward)
         draft_fork = original.fork()
@@ -676,7 +677,7 @@ class TestEagle3GrammarMask:
         """Without guided_processors, Eagle3.get_outputs behaves normally."""
         vocab_size = tokenizer_info.vocab_size
         proposer = _build_eagle3_proposer(tokenizer_info, vocab_size)
-        # No guided_decoding_manager set → should not crash
+        # No guided_helper set → should not crash
 
         # Simulate the argmax path without grammar mask
         logits = torch.randn(1, vocab_size)
@@ -695,7 +696,7 @@ class TestEagle3GrammarMask:
         original = _json_matcher(compiler, schema)
         vocab_size = tokenizer_info.vocab_size
         proposer = _build_eagle3_proposer(tokenizer_info, vocab_size)
-        proposer.guided_decoding_manager = guided_manager
+        proposer.guided_helper = GuidedSpecHelper(guided_manager)
 
         num_spec_tokens = 3
         draft_fork = original.fork()
@@ -1036,7 +1037,7 @@ class TestEagle3GetOutputs:
             # Force draft token 0 to map to a known-allowed target token
             d2t[0] = min(allowed_before)
         proposer = _build_eagle3_with_model(d2t, hidden_size=64)
-        proposer.guided_decoding_manager = guided_manager
+        proposer.guided_helper = GuidedSpecHelper(guided_manager)
 
         hidden_size = 64
         hidden_states = torch.randn(1, 1, hidden_size)
@@ -1093,7 +1094,7 @@ class TestEagle3GetOutputs:
         torch.manual_seed(789)
         d2t = torch.randint(0, vocab_size, (draft_vocab,))
         proposer = _build_eagle3_with_model(d2t, hidden_size=64)
-        proposer.guided_decoding_manager = guided_manager
+        proposer.guided_helper = GuidedSpecHelper(guided_manager)
 
         # Fork the matcher (same as _async_model_forward)
         draft_fork = original.fork()
@@ -1139,7 +1140,7 @@ class TestEagle3GetOutputs:
         torch.manual_seed(101)
         d2t = torch.randint(0, vocab_size, (draft_vocab,))
         proposer = _build_eagle3_with_model(d2t, hidden_size=64)
-        proposer.guided_decoding_manager = guided_manager
+        proposer.guided_helper = GuidedSpecHelper(guided_manager)
 
         draft_fork = original.fork()
         num_steps = 3
