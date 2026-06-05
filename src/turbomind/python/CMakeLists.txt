@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 project(_turbomind LANGUAGES CXX CUDA)
 
 find_package(pybind11 CONFIG)
