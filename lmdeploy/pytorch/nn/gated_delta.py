@@ -34,7 +34,7 @@ class GatedDeltaMeta:
 
     def __init__(self, num_tokens: int, conv_kernel_size: int, state_ids: torch.Tensor, attn_metadata: Any):
         self.num_tokens = num_tokens
-        self.is_decoding = attn_metadata.is_decoding
+        self.is_decoding = attn_metadata.dispatch_decoding(num_tokens=num_tokens)
         self.cu_seqlens = attn_metadata.cu_seqlens_q
         self.cache_seqlens = None
         self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens

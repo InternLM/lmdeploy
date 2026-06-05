@@ -304,6 +304,14 @@ class StepContext:
     # chunk with multimodal
     is_chunk_multimodal: bool = False
 
+    def dispatch_decoding(self) -> bool:
+        """Whether local input shape can dispatch to decode ops."""
+        if self.is_decoding:
+            return True
+        batch_size = self.q_seqlens.size(0)
+        num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
+        return self.input_ids.numel() == batch_size * (1 + num_spec_tokens)
+
     @classmethod
     def new(
         cls,

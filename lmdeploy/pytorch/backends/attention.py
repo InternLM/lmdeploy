@@ -22,6 +22,17 @@ class AttentionMetadata:
     cu_seqlens_k: torch.Tensor = None
     quant_policy: QuantPolicy = QuantPolicy.NONE
 
+    def dispatch_decoding(self, num_tokens: int) -> bool:
+        """Whether local input shape can dispatch to decode attention ops."""
+        if self.is_decoding:
+            return True
+        if self.q_seqlens is None:
+            return False
+        batch_size = self.q_seqlens.size(0)
+        from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+        num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
+        return num_tokens == batch_size * (1 + num_spec_tokens)
+
 
 T = TypeVar('T', bound=AttentionMetadata)
 

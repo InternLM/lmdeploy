@@ -58,10 +58,12 @@ class FA3Impl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
     ) -> int:
         """Get max q seqlen."""
-        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
-        if attn_metadata.is_decoding:
+        num_tokens = query.numel() // (query.size(-1) * query.size(-2))
+        if attn_metadata.dispatch_decoding(num_tokens=num_tokens):
             batch_size = attn_metadata.q_seqlens.size(0)
-            max_q_seqlen = max_q_seqlen // batch_size
+            max_q_seqlen = num_tokens // batch_size
+        else:
+            max_q_seqlen = num_tokens
         return max_q_seqlen
 
     def _normalize_sliding_window(self, sliding_window):
@@ -346,6 +348,8 @@ class FA3Impl(TritonAttentionImpl):
             Attention output tensor.
         """
         # Shared preparation
+        num_tokens = query.numel() // (query.size(-1) * query.size(-2))
+        dispatch_decoding = attn_metadata.dispatch_decoding(num_tokens=num_tokens)
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
         # Fill KV cache with new key/value if provided
@@ -362,7 +366,7 @@ class FA3Impl(TritonAttentionImpl):
             )
 
         # Dispatch to stage-specific forward method
-        if attn_metadata.is_decoding:
+        if dispatch_decoding:
             return self._forward_decoding(
                 query,
                 k_cache,

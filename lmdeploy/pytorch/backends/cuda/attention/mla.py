@@ -374,10 +374,12 @@ class FlashMLAImpl(TritonAttentionImpl):
     ) -> int:
         """Get max q seqlen."""
         q_seqlens = attn_metadata.q_seqlens
-        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        num_tokens = query.numel() // (query.size(-1) * query.size(-2))
         batch_size = q_seqlens.size(0)
-        if attn_metadata.is_decoding:
-            max_q_seqlen = max_q_seqlen // batch_size
+        if attn_metadata.dispatch_decoding(num_tokens=num_tokens):
+            max_q_seqlen = num_tokens // batch_size
+        else:
+            max_q_seqlen = num_tokens
         return max_q_seqlen
 
     def _fill_kv_cache_impl(self,
@@ -567,6 +569,8 @@ class FlashMLAImpl(TritonAttentionImpl):
             assert is_fp8_kvcache, 'NSA sparse attention requires FP8 KV cache'
 
         # Shared preparation
+        num_tokens = query.numel() // (query.size(-1) * query.size(-2))
+        dispatch_decoding = attn_metadata.dispatch_decoding(num_tokens=num_tokens)
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
         # Fill KV cache with new key/value if provided
@@ -582,7 +586,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         )
 
         # Dispatch to stage-specific forward method
-        if attn_metadata.is_decoding:
+        if dispatch_decoding:
             return self._forward_decoding(query, k_cache, attn_metadata, nsa_indices)
         else:
             return self._forward_prefill(

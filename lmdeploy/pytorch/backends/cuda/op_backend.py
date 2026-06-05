@@ -203,6 +203,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         kv_flatten_size = None
         use_flash_mla = step_context.model_config.use_flash_mla
         use_flash_attn3_decoding = step_context.model_config.model_paradigm == 'ar_spec'
+        dispatch_decoding = step_context.dispatch_decoding()
 
         # pad and cumsum requires 4 kernels, so we fuse seqlens cumsum into one kernel
         seqlens = torch.stack([q_seqlens, kv_seqlens], dim=0)
@@ -210,7 +211,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         cu_seqlens_q = cu_seqlens[0]
         cu_seqlens_k = cu_seqlens[1]
         q_start_loc = step_context.q_start_loc
-        if not step_context.is_decoding:
+        if not dispatch_decoding:
             kv_start_loc = cu_seqlens_k[:-1].to(kv_seqlens.dtype)
             kv_flatten_size = step_context.sum_kv_seqlen
 
@@ -227,7 +228,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             cu_seqlens_k=cu_seqlens_k,
             max_kv_seqlen=step_context.max_kv_seqlen,
         )
-        if step_context.is_decoding:
+        if dispatch_decoding:
             if use_flash_mla:
                 model_config = step_context.model_config
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
@@ -247,7 +248,7 @@ class CudaOpsBackend(DefaultOpsBackend):
 
         # update chunk gated delta indices
         is_gated_delta = step_context.model_config.is_gated_delta
-        if is_gated_delta and not step_context.is_decoding:
+        if is_gated_delta and not dispatch_decoding:
             cls.update_chunked_gated_delta_rule_meta(attn_metadata, step_context)
 
         step_context.attn_metadata = attn_metadata

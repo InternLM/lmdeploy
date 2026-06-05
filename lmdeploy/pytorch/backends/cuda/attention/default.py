@@ -118,13 +118,14 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         attn_metadata: TritonAttentionMetadata,
     ) -> int:
         """Get max q seqlen."""
-        if attn_metadata.is_decoding:
+        num_tokens = query.numel() // (query.size(-1) * query.size(-2))
+        if attn_metadata.dispatch_decoding(num_tokens=num_tokens):
             max_q_seqlen = self.block_sparse_size
         else:
             if attn_metadata.max_q_seqlen is not None:
                 max_q_seqlen = attn_metadata.max_q_seqlen
             else:
-                max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+                max_q_seqlen = num_tokens
         return max_q_seqlen
 
     def _get_fill_meta(
@@ -350,6 +351,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             Attention output tensor.
         """
         # Shared preparation
+        num_tokens = query.numel() // (query.size(-1) * query.size(-2))
+        dispatch_decoding = attn_metadata.dispatch_decoding(num_tokens=num_tokens)
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
         # Fill KV cache with new key/value if provided
@@ -370,7 +373,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             assert self.alibi_slopes is not None, 'alibi_slopes is not set.'
 
         # Dispatch to stage-specific forward method
-        if attn_metadata.is_decoding:
+        if dispatch_decoding:
             return self._forward_decoding(
                 query,
                 k_cache,
