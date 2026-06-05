@@ -113,14 +113,14 @@ class Eagle3(DeepseekMTP):
 
         logits = self.get_logits(hidden_states)[0]
 
-        guided_bitmask = await self._prepare_guided_bitmask(logits, guided_processors)
+        guided_bitmask = await self.guided_helper.prepare_bitmask(logits, guided_processors)
         if guided_bitmask is not None:
             draft_bitmask = self._translate_bitmask(guided_bitmask)
-            self.guided_decoding_manager.apply_batched_bitmap(logits, draft_bitmask)
+            self.guided_helper.apply_bitmask(logits, draft_bitmask)
 
         draft_token_ids = logits.argmax(dim=-1, keepdim=True)
         draft_token_ids = self.draft_id_to_target_id[draft_token_ids]
 
-        await self._accept_guided_tokens(draft_token_ids, guided_processors)
+        await self.guided_helper.accept_draft_tokens(draft_token_ids, guided_processors)
 
         return draft_token_ids, model_metas, hidden_states_prenorm

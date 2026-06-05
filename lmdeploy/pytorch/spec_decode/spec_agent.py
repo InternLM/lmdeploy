@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -22,12 +21,11 @@ from ..model_inputs import DPMeta, ModelInputs
 from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
+from .guided_spec_helper import GuidedSpecHelper
 from .proposers.base import build_specdecode_proposer
 
 if TYPE_CHECKING:
-    import xgrammar as xgr
-
-    from ..engine.guided_process import GuidedDecodingManager
+    pass
 
 logger = get_logger('lmdeploy')
 
@@ -147,28 +145,6 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
     return SamplingInputs(**out_dict)
 
 
-def _accept_spec_rejection_tokens(guided_manager, guided_processors, cpu_num_rejected,
-                                    cpu_output_token_ids, cpu_next_token_ids, num_spec_tokens):
-    for idx, processor in guided_processors.items():
-        n_rejected = cpu_num_rejected[idx].item()
-        n_valid_draft = num_spec_tokens - n_rejected
-        for pos in range(n_valid_draft):
-            tid = cpu_output_token_ids[idx, pos].item()
-            if tid >= 0:
-                guided_manager.accept_token(processor, tid)
-        guided_manager.accept_token(processor, cpu_next_token_ids[idx].item())
-
-
-def _fill_spec_bitmask(guided_manager, forked, guided_bitmask):
-    for idx, fork_proc in forked.items():
-        guided_manager.fill_bitmap(fork_proc, guided_bitmask, idx)
-
-
-def _accept_spec_forked_tokens(guided_manager, forked, cpu_draft_token_ids, pos):
-    for idx, fork_proc in forked.items():
-        guided_manager.accept_token(fork_proc, cpu_draft_token_ids[idx, pos].item())
-
-
 class SpecModelAgent(BaseSpecModelAgent):
     """Speculative model agent."""
 
@@ -194,7 +170,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
 
         # Guided decoding — set by ModelAgent after construction
-        self.guided_decoding_manager = None
+        self.guided_helper = GuidedSpecHelper()
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
@@ -463,24 +439,17 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         num_expand_sampling = 1 if not model_inputs.is_decoding else self.num_spec_tokens + 1
         expanded_sampling_inputs = _expand_sampling_inputs(sampling_inputs, num_expand_sampling)
-        guided_processors = {}
-        guided_manager = self.guided_decoding_manager
-        if guided_manager:
-            session_to_cleanup = sampling_inputs.session_to_cleanup
-            if session_to_cleanup is not None:
-                for session_id in session_to_cleanup:
-                    guided_manager.remove_processor(session_id)
-
-            if sampling_inputs.session_ctx is not None:
-                guided_processors = guided_manager.get_processors(
-                    sampling_inputs.session_ctx, sampling_inputs.response_formats)
+        guided_helper = self.guided_helper
+        guided_helper.cleanup_sessions(sampling_inputs.session_to_cleanup)
+        guided_processors = guided_helper.get_processors(
+            sampling_inputs.session_ctx, sampling_inputs.response_formats)
 
         if model_inputs.is_decoding:
             if guided_processors:
                 # Position-serial grammar mask via forked matchers;
                 # original matchers are NOT modified.
                 processed_logits, raw_logprobs = await self._guided_spec_logits_process(
-                    target_logits, expanded_sampling_inputs, guided_manager,
+                    target_logits, expanded_sampling_inputs, guided_helper,
                     guided_processors, batch_size, num_expand_sampling,
                     draft_token_ids=extra_inputs.output_draft_token_ids)
             else:
@@ -518,16 +487,13 @@ class SpecModelAgent(BaseSpecModelAgent):
             # Forked matchers were used during processing, so originals are still
             # at pre-step state.  Accept rejection-sampled output + bonus token
             # to bring originals to the correct state for the next step.
-            if guided_processors:
-                cpu_num_rejected = num_rejected_tokens.cpu()
-                cpu_output_token_ids = output_token_ids.cpu()
-                cpu_next_token_ids = next_token_ids.cpu()
-                await asyncio.to_thread(
-                    _accept_spec_rejection_tokens,
-                    guided_manager, guided_processors,
-                    cpu_num_rejected, cpu_output_token_ids, cpu_next_token_ids,
-                    self.num_spec_tokens,
-                )
+            await guided_helper.accept_rejection_sampled_tokens(
+                guided_processors,
+                num_rejected_tokens,
+                output_token_ids,
+                next_token_ids,
+                self.num_spec_tokens,
+            )
         else:
             # Prefill path — handle guided decoding manually (same pattern as
             # the decode path) to keep accept_token in asyncio.to_thread and
@@ -544,28 +510,20 @@ class SpecModelAgent(BaseSpecModelAgent):
                 raw_logprobs = None
             else:
                 bonus_logits, raw_logprobs = await logits_processor(target_logits)
-                # Apply guided bitmask manually (no fork needed — single position)
-                if guided_processors:
-                    guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
-                    await asyncio.to_thread(
-                        _fill_spec_bitmask, guided_manager, guided_processors, guided_bitmask,
-                    )
-                    guided_manager.apply_batched_bitmap(bonus_logits, guided_bitmask)
+                # Apply guided bitmask (no fork needed — single position)
+                guided_bitmask = await guided_helper.prepare_bitmask(bonus_logits, guided_processors)
+                guided_helper.apply_bitmask(bonus_logits, guided_bitmask)
                 next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
                 output_token_ids = next_token_ids.unsqueeze(-1)
                 # Accept the sampled token on original grammar matchers
-                if guided_processors:
-                    cpu_next_token_ids = next_token_ids.cpu()
-                    await asyncio.to_thread(
-                        _accept_spec_rejection_tokens,
-                        guided_manager,
-                        guided_processors,
-                        torch.zeros(next_token_ids.shape,
-                                    dtype=next_token_ids.dtype),  # 0 rejected, CPU
-                        output_token_ids.cpu(),
-                        cpu_next_token_ids,
-                        0,  # num_spec_tokens=0, only bonus accepted
-                    )
+                await guided_helper.accept_rejection_sampled_tokens(
+                    guided_processors,
+                    torch.zeros(next_token_ids.shape,
+                                dtype=next_token_ids.dtype),
+                    output_token_ids,
+                    next_token_ids,
+                    0,  # num_spec_tokens=0, only bonus accepted
+                )
 
         logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs.max_num_logprobs)
 
@@ -583,8 +541,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         self,
         target_logits: torch.Tensor,
         expanded_sampling_inputs: SamplingInputs,
-        guided_manager: GuidedDecodingManager,
-        guided_processors: dict[int, xgr.GrammarMatcher],
+        guided_helper: GuidedSpecHelper,
+        guided_processors: dict,
         batch_size: int,
         num_expand: int,
         draft_token_ids: torch.LongTensor,
@@ -596,21 +554,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         on the original matchers after rejection sampling.
 
         All ``num_expand`` positions (including the bonus position) are masked.
-
-        Args:
-            target_logits: [batch_size * num_expand, vocab_size]
-            expanded_sampling_inputs: Expanded sampling inputs.
-            guided_manager: The GuidedDecodingManager instance.
-            guided_processors: {orig_batch_idx: GrammarMatcher} for guided seqs.
-            batch_size: Number of sequences.
-            num_expand: num_spec_tokens + 1.
-            draft_token_ids: [batch_size, num_spec_tokens] draft tokens from
-                the proposer.  Forks are advanced using these (not argmax)
-                because target logits are conditioned on the draft tokens and
-                rejection sampling discards positions after the first rejection.
-
-        Returns:
-            (processed_logits, raw_logprobs) — same shapes as FusedLogitsProcessor.
         """
         logits_processor = FusedLogitsProcessor(
             expanded_sampling_inputs,
@@ -622,29 +565,8 @@ class SpecModelAgent(BaseSpecModelAgent):
             return scores, raw_logprobs
 
         scores_3d = scores.view(batch_size, num_expand, -1)
-
-        forked = {idx: proc.fork() for idx, proc in guided_processors.items()}
-        cpu_draft_token_ids = draft_token_ids.cpu()
-
-        guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
-        for pos in range(num_expand):
-
-            await asyncio.to_thread(_fill_spec_bitmask, guided_manager, forked, guided_bitmask)
-
-            pos_logits = scores_3d[:, pos, :]
-            guided_manager.apply_batched_bitmap(pos_logits, guided_bitmask)
-            scores_3d[:, pos, :] = pos_logits
-
-            # Advance fork using draft tokens for draft positions.
-            # Target logits are conditioned on the draft tokens, so the
-            # grammar state must follow the draft-token path.  If a draft
-            # token is rejected, rejection sampling discards all later
-            # positions — so the draft-token path is the only reachable one.
-            if pos < self.num_spec_tokens:
-                await asyncio.to_thread(
-                    _accept_spec_forked_tokens,
-                    guided_manager, forked, cpu_draft_token_ids, pos,
-                )
+        await guided_helper.apply_serial_bitmask(
+            scores_3d, guided_processors, draft_token_ids, self.num_spec_tokens)
 
         scores = scores_3d.view(batch_size * num_expand, -1)
         return scores, raw_logprobs
@@ -700,10 +622,10 @@ class SpecModelAgent(BaseSpecModelAgent):
         else:
             # Fork guided processors for draft model.
             draft_guided_processors = None
-            guided_manager = self.guided_decoding_manager
-            if guided_manager and sampling_inputs.session_ctx is not None:
-                orig_processors = guided_manager.get_processors(
-                    sampling_inputs.session_ctx, sampling_inputs.response_formats)
+            orig_processors = self.guided_helper.get_processors(
+                sampling_inputs.session_ctx if sampling_inputs else None,
+                sampling_inputs.response_formats if sampling_inputs else None)
+            if orig_processors:
                 draft_guided_processors = {idx: proc.fork()
                                            for idx, proc in orig_processors.items()}
 
