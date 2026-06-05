@@ -113,7 +113,7 @@ class Eagle3(DeepseekMTP):
 
         logits = self.get_logits(hidden_states)[0]
 
-        guided_bitmask = await self._apply_guided_bitmask(logits, guided_processors)
+        guided_bitmask = await self._prepare_guided_bitmask(logits, guided_processors)
         if guided_bitmask is not None:
             draft_bitmask = self._translate_bitmask(guided_bitmask)
             self.guided_decoding_manager.apply_batched_bitmap(logits, draft_bitmask)

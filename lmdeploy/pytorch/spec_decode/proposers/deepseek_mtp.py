@@ -32,7 +32,7 @@ class DeepseekMTP(BaseSpecProposer):
 
         logits = self.get_logits(hidden_states)[0]
 
-        guided_bitmask = await self._apply_guided_bitmask(logits, guided_processors)
+        guided_bitmask = await self._prepare_guided_bitmask(logits, guided_processors)
         if guided_bitmask is not None:
             self.guided_decoding_manager.apply_batched_bitmap(logits, guided_bitmask)
 
