@@ -68,12 +68,14 @@ class BaseSpecProposer:
         # Set by SpecModelAgent after construction
         self.guided_decoding_manager = None
 
-    async def _apply_guided_bitmask(self, logits: torch.Tensor,
+    async def _prepare_guided_bitmask(self, logits: torch.Tensor,
                                     guided_processors: dict | None) -> torch.Tensor | None:
-        """Apply guided-decoding bitmask to draft logits and return the
-        allocated bitmask (caller may need it for e.g. d2t translation).
+        """Allocate and fill a guided-decoding bitmask for draft logits.
 
-        If no guided processors are active, returns None.
+        Returns the filled bitmask tensor (or None if no guided processors are
+        active).  The caller is responsible for actually applying the bitmask to
+        logits — some proposers (e.g. Eagle3) may need to translate the bitmask
+        to their draft vocabulary first.
 
         CPU-bound xgrammar ``fill_bitmap`` calls are offloaded to a thread
         so they don't block the asyncio event loop.
@@ -92,7 +94,11 @@ class BaseSpecProposer:
 
     async def _accept_guided_tokens(self, draft_token_ids: torch.Tensor,
                                     guided_processors: dict | None):
-        """Accept draft tokens on the original grammar matchers.
+        """Accept draft tokens on the provided grammar matchers.
+
+        In speculative decoding the matchers are typically forked from the
+        originals (created in ``SpecModelAgent._async_model_forward``), so this
+        method accepts on whichever matchers are passed in.
 
         CPU-bound xgrammar ``accept_token`` calls are offloaded to a thread
         so they don't block the asyncio event loop.
