@@ -24,7 +24,13 @@ def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
     if hf_config is None:
         return None
 
-    for config in (hf_config, getattr(hf_config, 'text_config', None), getattr(hf_config, 'llm_config', None)):
+    configs = [hf_config, getattr(hf_config, 'text_config', None), getattr(hf_config, 'llm_config', None)]
+
+    # for qwen3-omni thinker
+    if hasattr(hf_config, 'thinker_config'):
+        configs.append(hf_config.thinker_config)
+
+    for config in configs:
         if config is None:
             continue
         for attr_name in ('dtype', 'torch_dtype'):
