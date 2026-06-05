@@ -185,7 +185,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         with self.draft_context():
             draft_dp_meta = DPMeta.build(input_ids.numel(), all_num_tokens)
         draft_dp_meta.dp_batches = dp_meta.dp_batches
-        draft_dp_meta.is_decoding = dp_meta.is_decoding
         draft_dp_meta.dp_is_decoding = dp_meta.dp_is_decoding
         return draft_dp_meta
 
@@ -286,8 +285,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                 if mrope_pos_ids is not None:
                     mrope_pos_ids = self._prepare_long_context_chunk_prepend_saved('mrope_pos_ids', mrope_pos_ids)
 
-        # update when dp > 1
-        is_decoding = model_inputs.is_decoding if model_inputs.dp_meta is None else model_inputs.dp_meta.dp_is_decoding
+        # Keep draft model local decoding state; DP-global state stays in dp_meta.
+        is_decoding = model_inputs.is_decoding
         dp_meta = self._build_dp_meta_from_main(input_ids, model_inputs.dp_meta)
 
         new_model_inputs = ModelInputs(
@@ -313,7 +312,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         # update if dp > 1
         if dp_meta is not None:
-            if is_decoding:
+            if new_model_inputs.global_is_decoding():
                 padding_batch_size = max(dp_meta.dp_batches)
                 meta = self.proposer.model.get_meta()
                 meta.padding_batch_size = padding_batch_size

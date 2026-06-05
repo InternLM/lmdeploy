@@ -105,10 +105,7 @@ class BaseSpecModelAgent:
 
         hidden_states = output['hidden_states']
 
-        # use original is_decoding if dp_meta is not None
         is_decoding = model_inputs.is_decoding
-        if model_inputs.dp_meta is not None:
-            is_decoding = model_inputs.dp_meta.is_decoding
 
         if not is_decoding:
             logits_indices = model_inputs.seq_length.cumsum(0) - 1
