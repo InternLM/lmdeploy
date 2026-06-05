@@ -116,8 +116,6 @@ def get_registered_name(model_path: str, arch: str = None):
 
     Args:
         model_path (str): the path of the input model
-        model_format (str): the format of the model, which can be one of
-            ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
         arch (str): optional architecture string, to avoid reloading config
     """
     if arch is None:
@@ -154,10 +152,10 @@ def get_tm_config(model_path,
                   group_size: int = None,
                   trust_remote_code: bool = False):
     """Resolve dtype/model_format/group_size/session_len, mutate engine_config
-    in place, build the text model.
+    in place, build the model.
 
     Returns:
-        tuple: (text_model, model_path, data_type)
+        tuple: (model, model_path, data_type)
     """
     # 1. Load HF config once; reused for quant_config, dtype, and session_len.
     arch, hf_model_cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
@@ -209,6 +207,12 @@ def get_tm_config(model_path,
     dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
     dtype = getattr(torch, dtype)
 
+    # Capture the user/file dtype before _build_resolver may force fp16 for
+    # AWQ/GPTQ/CT. VL checkpoints list 'vision' in modules_to_not_convert, so
+    # the ViT sub-tree is unquantized and should keep this dtype rather than
+    # inherit the text path's forced fp16.
+    vision_dtype = dtype
+
     # Build resolver after dtype is finalized but before the CT→AWQ rename,
     # so compressed-tensors models instantiate CompressedTensorFormat.
     resolver, dtype = _build_resolver(engine_config.model_format,
@@ -226,13 +230,26 @@ def get_tm_config(model_path,
     engine_config.attn_cp_size = engine_config.attn_cp_size or 1
     engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
-    # 6. Build text model.
+    # 6. Build model.
     cfg = source_model_config(hf_model_cfg)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
         _apply_hf_overrides(cfg, engine_config.hf_overrides)
     registered_name = get_registered_name(model_path, arch=arch)
     model_cls = INPUT_MODELS.get(registered_name)
-    text_model = model_cls(cfg, resolver=resolver)
 
-    return text_model, model_path, resolver.data_type
+    # VL aggregate classes declare `_vision = True` to opt into the vision-
+    # branch contract: receive `disable_vision_encoder` and a dedicated
+    # `vision_resolver` (TrivialFormat only, vision-native dtype). Text-only
+    # models leave the flag unset and keep the strict (cfg, *, resolver)
+    # signature.
+    init_kwargs = {}
+    if getattr(model_cls, '_vision', False):
+        init_kwargs['disable_vision_encoder'] = engine_config.disable_vision_encoder
+        if not engine_config.disable_vision_encoder:
+            init_kwargs['vision_resolver'] = WeightFormatResolver(
+                data_type=_torch_dtype_to_cpp(vision_dtype),
+                formats=[TrivialFormat()])
+    model = model_cls(cfg, resolver=resolver, **init_kwargs)
+
+    return model, model_path, resolver.data_type

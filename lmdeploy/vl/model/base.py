@@ -24,6 +24,7 @@ VISION_MODELS = Registry('vision_model')
 class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: str | list[str] = None
+    _turbomind_native_vision = False
 
     # mapping from processor output attribute names to modality types
     ATTR_NAME_TO_MODALITY = {
