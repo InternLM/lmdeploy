@@ -283,12 +283,10 @@ PYTORCH_PR_TEST_LLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {
-        'max_batch_size': 128,
-        'speculative_config': {
-            'method': 'eagle3',
-            'num_speculative_tokens': 3,
-            'model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B'
-        }
+        'speculative-draft-model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B',
+        'speculative-algorithm': 'eagle3',
+        'speculative-num-draft-tokens': 3,
+        'max-batch-size': 128
     }
 }]
 
