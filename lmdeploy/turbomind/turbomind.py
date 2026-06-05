@@ -174,7 +174,6 @@ class TurboMind:
 
         self.session_len = _engine_config.session_len
 
-
     def _process_weights(self):
         """Process weight."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
@@ -219,10 +218,10 @@ class TurboMind:
         from .converter import get_tm_config
         from .model_loader import ModelLoader
 
-        text_model, model_path, data_type = get_tm_config(model_path, engine_config,
-                                                           trust_remote_code=trust_remote_code)
+        model, model_path, data_type = get_tm_config(model_path, engine_config,
+                                                     trust_remote_code=trust_remote_code)
 
-        self._vocab_size = text_model._vocab_size
+        self._vocab_size = model._vocab_size
         self.engine_config = engine_config
 
         dtype_map = {
@@ -265,7 +264,7 @@ class TurboMind:
         self._create_weight(model_comm)
 
         model_loader = ModelLoader(
-            model=text_model,
+            model=model,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
             model_path=model_path,

@@ -152,10 +152,10 @@ def get_tm_config(model_path,
                   group_size: int = None,
                   trust_remote_code: bool = False):
     """Resolve dtype/model_format/group_size/session_len, mutate engine_config
-    in place, build the text model.
+    in place, build the model.
 
     Returns:
-        tuple: (text_model, model_path, data_type)
+        tuple: (model, model_path, data_type)
     """
     # 1. Load HF config once; reused for quant_config, dtype, and session_len.
     arch, hf_model_cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
@@ -230,7 +230,7 @@ def get_tm_config(model_path,
     engine_config.attn_cp_size = engine_config.attn_cp_size or 1
     engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
-    # 6. Build text model.
+    # 6. Build model.
     cfg = source_model_config(hf_model_cfg)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
@@ -250,6 +250,6 @@ def get_tm_config(model_path,
             init_kwargs['vision_resolver'] = WeightFormatResolver(
                 data_type=_torch_dtype_to_cpp(vision_dtype),
                 formats=[TrivialFormat()])
-    text_model = model_cls(cfg, resolver=resolver, **init_kwargs)
+    model = model_cls(cfg, resolver=resolver, **init_kwargs)
 
-    return text_model, model_path, resolver.data_type
+    return model, model_path, resolver.data_type
