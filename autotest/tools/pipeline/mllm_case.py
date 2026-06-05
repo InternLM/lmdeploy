@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
 from lmdeploy.vl import encode_image_base64, load_image, load_video
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
@@ -93,21 +94,40 @@ def _log_case_result(case_name: str, payload: Any) -> None:
     print(f'[caseresult {case_name} start]{dumped}[caseresult {case_name} end]\n')
 
 
-def _best_effort_runtime_cleanup(pipe=None) -> None:
+def _resolve_runtime_device(device: str | None = None) -> str:
+    if device:
+        return device
+    return os.environ.get('DEVICE', 'cuda')
+
+
+def _release_torch_device_memory(device: str) -> None:
+    try:
+        import torch
+    except Exception:
+        return
+    if device == 'ascend':
+        try:
+            if hasattr(torch, 'npu') and torch.npu.is_available():
+                torch.npu.empty_cache()
+                if hasattr(torch.npu, 'ipc_collect'):
+                    torch.npu.ipc_collect()
+        except Exception:
+            pass
+        return
+    if device == 'cuda' and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, 'ipc_collect'):
+            torch.cuda.ipc_collect()
+
+
+def _best_effort_runtime_cleanup(pipe=None, device: str | None = None) -> None:
     if pipe is not None:
         try:
             pipe.close()
         except Exception as exc:
             print(f'Warning: failed to close pipeline cleanly: {exc!s}')
     gc.collect()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            if hasattr(torch.cuda, 'ipc_collect'):
-                torch.cuda.ipc_collect()
-    except Exception:
-        pass
+    _release_torch_device_memory(_resolve_runtime_device(device))
     try:
         import ray
         if ray.is_initialized():
@@ -145,6 +165,12 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
         backend_config.tp = parallel_config['tp']
 
+    # Extract speculative_config from extra_params if present
+    speculative_config = None
+    spec_cfg = extra_params.pop('speculative_config', None)
+    if isinstance(spec_cfg, dict):
+        speculative_config = SpeculativeConfig(**spec_cfg)
+
     # Extra params
     # Normalize CLI-style kebab-case keys to PytorchEngineConfig attribute
     param_name_map = {'device': 'device_type', 'cache_block_seq_len': 'block_size'}
@@ -162,9 +188,11 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
         backend_config.kernel_block_size = backend_config.block_size
 
     print('backend_config config: ' + str(backend_config))
+    print('speculative_config config: ' + str(speculative_config))
     pipe = None
     try:
-        pipe = pipeline(model_path, backend_config=backend_config, trust_remote_code=True)
+        pipe = pipeline(model_path, backend_config=backend_config, speculative_config=speculative_config,
+                        trust_remote_code=True)
         enable_video_mixed = _is_video_mixed_whitelist_model(model_path)
         image = load_image(f'{resource_path}/{PIC1}')
 
@@ -218,7 +246,8 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
             if 'qwen' in model_path.lower():
                 Qwen_vl_testcase(pipe, resource_path, enable_video_mixed=enable_video_mixed)
     finally:
-        _best_effort_runtime_cleanup(pipe)
+        cleanup_device = getattr(backend_config, 'device_type', None)
+        _best_effort_runtime_cleanup(pipe, device=cleanup_device)
 
 
 def internvl_vl_testcase(pipe, resource_path, lang='en', enable_video_mixed: bool = True):

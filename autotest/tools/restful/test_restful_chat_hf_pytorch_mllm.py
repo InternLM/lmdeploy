@@ -41,6 +41,15 @@ def test_restful_chat_tp16(config, run_config, worker_id):
 
 
 @pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize(
+    'run_config',
+    [item for item in SPECULATIVE_DECODING_RESTFUL_TEST_MLLM if item['parallel_config'].get('tp') == 1])
+def test_restful_chat_speculative_decoding_tp1(config, run_config, worker_id):
+    run_mllm_test(config, run_config, worker_id)
+
+
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize(
     'run_config',

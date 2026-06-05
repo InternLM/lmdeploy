@@ -65,22 +65,6 @@ def resolve_extra_params(extra_params: dict[str, Any], model_base_path: str) -> 
             spec_cfg['model'] = os.path.join(model_base_path, model)
 
 
-def inject_device_param(config: dict[str, Any], extra_params: dict[str, Any]) -> None:
-    device = config.get('device', 'cuda')
-    if device != 'cuda':
-        extra_params.setdefault('device', device)
-
-
-
-ASCEND_PIPELINE_BLOCK_SIZE = 128
-
-def inject_pipeline_run_params(config: dict[str, Any], run_config: dict[str, Any]) -> None:
-    extra_params = run_config.setdefault('extra_params', {})
-    inject_device_param(config, extra_params)
-    if config.get('device') == 'ascend' and run_config.get('backend') == 'pytorch':
-        extra_params.setdefault('block_size', ASCEND_PIPELINE_BLOCK_SIZE)
-
-
 _paths_doc_cache: dict[str, Any] | None = None
 
 

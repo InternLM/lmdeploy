@@ -524,6 +524,8 @@ BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND = [{
     },
     'extra_params': {
         'max_batch_size': 64,
+        'block_size': 128,
+        'device': 'ascend',
         'reasoning_parser': 'qwen-qwq',
         'speculative_config': {
             'method': 'qwen3_5_mtp',
@@ -537,17 +539,40 @@ SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND = [{
 } for item in BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM_ASCEND]
 
 
-# ---------------------------------------------------------------------------
-# Multimodal (VL) speculative decoding (MTP) cases. Mirror the LLM lists above
-# but target VL-capable models. Restful uses CLI-style kebab-case keys; pipeline
-# builds a PytorchEngineConfig directly and uses engine attribute names.
-# ---------------------------------------------------------------------------
+
 BASE_SPECULATIVE_DECODING_RESTFUL_TEST_MLLM = [{
     'model': 'Qwen/Qwen3.5-35B-A3B',
     'communicator': 'nccl',
     'quant_policy': 0,
     'parallel_config': {
         'tp': 2
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256,
+        'model-format': 'fp8'
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B-FP8',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
     },
     'extra_params': {
         'reasoning-parser': 'qwen-qwq',
@@ -598,6 +623,38 @@ BASE_SPECULATIVE_DECODING_PIPELINE_TEST_MLLM = [{
             'num_speculative_tokens': 4
         }
     }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'max_batch_size': 256,
+        'reasoning_parser': 'qwen-qwq',
+        'max_prefill_token_num': 1024,
+        'model_format': 'fp8',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B-FP8',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'max_batch_size': 256,
+        'reasoning_parser': 'qwen-qwq',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
 }]
 
 SPECULATIVE_DECODING_PIPELINE_TEST_MLLM = [{
@@ -614,6 +671,8 @@ BASE_SPECULATIVE_DECODING_PIPELINE_TEST_MLLM_ASCEND = [{
     },
     'extra_params': {
         'max_batch_size': 64,
+        'block_size': 128,
+        'device': 'ascend',
         'reasoning_parser': 'qwen-qwq',
         'speculative_config': {
             'method': 'qwen3_5_mtp',

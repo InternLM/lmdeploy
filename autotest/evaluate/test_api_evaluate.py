@@ -10,7 +10,7 @@ from utils.config_utils import (
     get_workerid,
     resolve_eval_config_name,
 )
-from utils.evaluate_utils import eval_test
+from utils.evaluate_utils import build_eval_judge_run_config, eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
@@ -163,10 +163,8 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     else:  # eval
         port = constant.PROXY_PORT + get_workerid(worker_id)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port, f'{case_name}_eval')
-        eval_run_config = constant.EVAL_RUN_CONFIG.copy()
-        if 'extra_params' not in eval_run_config:
-            eval_run_config['extra_params'] = {}
-        eval_run_config['extra_params']['proxy-url'] = f'http://{constant.DEFAULT_SERVER}:{port}'
+        eval_run_config = build_eval_judge_run_config(
+            config, f'http://{constant.DEFAULT_SERVER}:{port}')
 
         pid, content = start_openai_service(config, eval_run_config, worker_id)
         try:
