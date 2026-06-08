@@ -224,7 +224,7 @@ class CUDAGraphRunner(GraphRunner):
                       attn_metadata: TritonAttentionMetadata, inputs_embeds: torch.Tensor, **kwargs):
         """Get graph key."""
         context = self.ctx_mgr.current_context()
-        is_decoding = context.is_decoding
+        is_decoding = context.global_is_decoding()
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
@@ -260,7 +260,8 @@ class CUDAGraphRunner(GraphRunner):
             self._try_compile_model_once()
 
         kwargs = self._prepare_inputs(**kwargs)
-        enable_graph = self.enable_graph(**kwargs)
+        context = self.ctx_mgr.current_context()
+        enable_graph = context.global_is_decoding() and self.enable_graph(**kwargs)
 
         if not enable_graph:
             with record_function('forward_eager'):
@@ -302,7 +303,7 @@ class CUDAGraphRunner(GraphRunner):
 
         if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
-            deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
             DeepEPBuffer.set_deepep_mode(deepep_mode)
 
         return self.model.prepare_inputs_for_generation(
@@ -327,7 +328,7 @@ class CUDAGraphRunner(GraphRunner):
         """Update inputs."""
         if self.backend_config.eager_mode:
             return inputs
-        is_decoding = inputs.is_decoding
+        is_decoding = inputs.global_is_decoding()
         dp_meta = inputs.dp_meta
         if is_decoding and dp_meta is not None:
             meta = self.get_meta()

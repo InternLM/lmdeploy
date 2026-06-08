@@ -102,7 +102,8 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """Return True is model support cudagraph."""
-        return attn_metadata.is_decoding
+        context = get_step_ctx_manager().current_context()
+        return context.global_is_decoding()
 
     def make_output_buffers(self, output):
         """Make output buffers."""
