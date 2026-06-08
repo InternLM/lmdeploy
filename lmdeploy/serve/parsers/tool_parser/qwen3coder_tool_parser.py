@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from lmdeploy.serve.openai.protocol import (
@@ -17,12 +18,14 @@ from .xml_tool_parser import XmlToolParser
 class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
-    tool_start_token = '<tool_call>'
-    tool_end_token = '</tool_call>'
     func_prefix = '<function='
     func_end_token = '</function>'
     param_prefix = '<parameter='
     param_end_token = '</parameter>'
+    _complete_payload_pattern = re.compile(
+        r'^\s*<function=[^\s>\n]+>\s*(?:<parameter=[^\s>\n]+>.*?</parameter>\s*)*</function>\s*$',
+        re.DOTALL,
+    )
 
     # Qwen3Coder closes tool argument JSON only when the model emits the
     # explicit function end marker (</function>). We intentionally avoid
@@ -31,13 +34,16 @@ class Qwen3CoderToolParser(XmlToolParser):
     def _close_json_on_final(self) -> bool:
         return False
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.tool_start_token
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        return '<tool_call>'
 
-    def get_tool_close_tag(self) -> str | None:
-        return self.tool_end_token
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
+        return '</tool_call>'
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'xml'
 
     def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
@@ -51,9 +57,12 @@ class Qwen3CoderToolParser(XmlToolParser):
         args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
         return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
 
+    def _validate_tool_payload(self, payload: str) -> bool:
+        return bool(self._complete_payload_pattern.fullmatch(payload))
+
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""
-        content = content.replace(self.tool_start_token, '').replace(self.tool_end_token, '').strip()
+        content = content.replace(self.get_tool_open_tag(), '').replace(self.get_tool_close_tag(), '').strip()
 
         func_name = None
         func_start = content.find(self.func_prefix)
