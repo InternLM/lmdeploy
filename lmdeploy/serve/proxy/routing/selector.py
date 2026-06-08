@@ -5,8 +5,8 @@ import random
 import numpy as np
 
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.serve.proxy.core.config import RoutingStrategy
 from lmdeploy.serve.proxy.registry.pool import ReplicaPool
-from lmdeploy.serve.proxy.utils import RoutingStrategy
 
 
 class ReplicaSelector:

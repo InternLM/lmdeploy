@@ -2,10 +2,10 @@
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
+from lmdeploy.serve.proxy.core.config import RoutingStrategy
 from lmdeploy.serve.proxy.core.replica import ReplicaLoad
 from lmdeploy.serve.proxy.registry.pool import ReplicaPool
 from lmdeploy.serve.proxy.routing.selector import ReplicaSelector
-from lmdeploy.serve.proxy.utils import RoutingStrategy
 
 
 def test_selector_picks_replica_with_model():

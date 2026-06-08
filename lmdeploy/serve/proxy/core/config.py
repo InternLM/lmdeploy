@@ -1,10 +1,30 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import enum
 from dataclasses import dataclass
 
 from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, ServingStrategy
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
-from lmdeploy.serve.proxy.utils import RoutingStrategy
+
+
+class RoutingStrategy(enum.Enum):
+    """Strategy to dispatch requests to nodes."""
+
+    RANDOM = enum.auto()
+    MIN_EXPECTED_LATENCY = enum.auto()
+    MIN_OBSERVED_LATENCY = enum.auto()
+
+    @classmethod
+    def from_str(cls, name: str) -> 'RoutingStrategy':
+        """Get strategy from string."""
+        if name == 'random':
+            return cls.RANDOM
+        if name == 'min_expected_latency':
+            return cls.MIN_EXPECTED_LATENCY
+        if name == 'min_observed_latency':
+            return cls.MIN_OBSERVED_LATENCY
+        raise ValueError(f'Invalid strategy: {name}. Supported: random, '
+                         f'min_expected_latency, min_observed_latency.')
 
 
 @dataclass

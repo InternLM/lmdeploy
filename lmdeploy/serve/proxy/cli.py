@@ -8,8 +8,7 @@ import uvicorn
 from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, RDMALinkType, ServingStrategy
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.serve.proxy.app import create_app
-from lmdeploy.serve.proxy.core.config import ProxyConfig
-from lmdeploy.serve.proxy.utils import RoutingStrategy
+from lmdeploy.serve.proxy.core.config import ProxyConfig, RoutingStrategy
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
