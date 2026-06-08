@@ -8,7 +8,7 @@ from http import HTTPStatus
 
 import requests
 
-from lmdeploy.serve.proxy.registry.pool import ReplicaPool
+from lmdeploy.serve.proxy.registry.pool import ReplicaNotFoundError, ReplicaPool
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -101,7 +101,10 @@ class HealthChecker:
         logger.info('Start health check')
         to_delete = [url for url in self.pool.snapshot() if self._should_evict(url)]
         for url in to_delete:
-            self.pool.remove(url)
+            try:
+                self.pool.remove(url)
+            except ReplicaNotFoundError:
+                continue
             self._failures.pop(url, None)
             logger.info(f'Removed replica {url} after failed health checks')
 

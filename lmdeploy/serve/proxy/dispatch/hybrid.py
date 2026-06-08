@@ -4,11 +4,18 @@ from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.serve.proxy.dispatch.base import ProxyContext, safe_json_load, unavailable_model_bytes
+from lmdeploy.serve.proxy.dispatch.base import (
+    ProxyContext,
+    model_not_found_response,
+    replica_unavailable_response,
+    response_from_api_exception,
+    safe_json_load,
+)
 from lmdeploy.serve.proxy.metrics.load_tracker import InflightTracker
 from lmdeploy.serve.proxy.routing.selector import ReplicaSelector
 from lmdeploy.serve.proxy.streaming_response import ProxyStreamingResponse
 from lmdeploy.serve.proxy.upstream.forwarder import UpstreamForwarder
+from lmdeploy.serve.proxy.utils import APIServerException
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -26,12 +33,12 @@ class HybridDispatcher:
     async def dispatch(self, ctx: ProxyContext):
         replica_url = self._selector.select(ctx.model, EngineRole.Hybrid)
         if not replica_url:
-            return unavailable_model_bytes(ctx.model)
+            return model_not_found_response(ctx.model)
 
         logger.info(f'A request is dispatched to {replica_url}')
         start = self._tracker.start(replica_url)
         if start is None:
-            return self._forwarder.api_timeout_bytes(replica_url)
+            return replica_unavailable_response(replica_url)
 
         if ctx.stream:
             response = self._forwarder.forward_raw_stream(ctx.raw_request, replica_url, ctx.endpoint)
@@ -39,6 +46,10 @@ class HybridDispatcher:
             background.add_task(self._tracker.finish, replica_url, start)
             return ProxyStreamingResponse(response, background=background, media_type='text/event-stream')
 
-        response = await self._forwarder.forward_raw_buffer(ctx.raw_request, replica_url, ctx.endpoint)
-        self._tracker.finish(replica_url, start)
-        return JSONResponse(safe_json_load(replica_url, response))
+        try:
+            response = await self._forwarder.forward_raw_buffer(ctx.raw_request, replica_url, ctx.endpoint)
+            return JSONResponse(safe_json_load(replica_url, response))
+        except APIServerException as e:
+            return response_from_api_exception(e)
+        finally:
+            self._tracker.finish(replica_url, start)

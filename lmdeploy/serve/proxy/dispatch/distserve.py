@@ -3,17 +3,25 @@
 import copy
 
 from fastapi import BackgroundTasks
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
 from lmdeploy.serve.proxy.core.config import ProxyConfig
-from lmdeploy.serve.proxy.dispatch.base import ProxyContext, safe_json_load, unavailable_model_bytes
+from lmdeploy.serve.proxy.dispatch.base import (
+    ProxyContext,
+    model_not_found_response,
+    replica_unavailable_response,
+    response_from_api_exception,
+    safe_json_load,
+)
 from lmdeploy.serve.proxy.metrics.load_tracker import InflightTracker
 from lmdeploy.serve.proxy.registry.pool import ReplicaPool
 from lmdeploy.serve.proxy.routing.selector import ReplicaSelector
+from lmdeploy.serve.proxy.streaming_response import ProxyStreamingResponse
 from lmdeploy.serve.proxy.upstream.forwarder import UpstreamForwarder
+from lmdeploy.serve.proxy.utils import APIServerException
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -52,20 +60,22 @@ class DistServeDispatcher:
         if not self._config.dummy_prefill:
             p_url = self._selector.select(ctx.model, EngineRole.Prefill)
             if not p_url:
-                return unavailable_model_bytes(ctx.model)
+                return model_not_found_response(ctx.model)
             logger.info(f'A Prefill request is dispatched to {p_url}')
             start = self._tracker.start(p_url)
             if start is None:
-                return self._forwarder.api_timeout_bytes(p_url)
-            prefill_response = await self._forwarder.forward_json_buffer(prefill_request, p_url, ctx.endpoint)
-            self._tracker.finish(p_url, start)
-            prefill_info = safe_json_load(p_url, prefill_response)
-            if prefill_info.get('error_code') is not None:
-                return JSONResponse(prefill_info)
+                return replica_unavailable_response(p_url)
+            try:
+                prefill_response = await self._forwarder.forward_json_buffer(prefill_request, p_url, ctx.endpoint)
+                prefill_info = safe_json_load(p_url, prefill_response)
+            except APIServerException as e:
+                return response_from_api_exception(e)
+            finally:
+                self._tracker.finish(p_url, start)
 
         d_url = self._selector.select(ctx.model, EngineRole.Decode)
         if not d_url:
-            return unavailable_model_bytes(ctx.model)
+            return model_not_found_response(ctx.model)
         logger.info(f'A Decode request is dispatched to {d_url}')
 
         if not self._config.dummy_prefill:
@@ -92,20 +102,26 @@ class DistServeDispatcher:
 
         start = self._tracker.start(d_url)
         if start is None:
-            return self._forwarder.api_timeout_bytes(d_url)
+            return replica_unavailable_response(d_url)
 
         if not self._config.dummy_prefill:
             self._pool.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info.get('id'))
 
-        if ctx.stream:
-            response = self._forwarder.forward_json_stream(request_dict, d_url, ctx.endpoint)
-            background = BackgroundTasks()
-            background.add_task(self._tracker.finish, d_url, start)
-            resp = StreamingResponse(response, background=background, media_type='text/event-stream')
-        else:
-            response = await self._forwarder.forward_json_buffer(request_dict, d_url, ctx.endpoint)
+        try:
+            if ctx.stream:
+                response = self._forwarder.forward_json_stream(request_dict, d_url, ctx.endpoint)
+                background = BackgroundTasks()
+                background.add_task(self._tracker.finish, d_url, start)
+                resp = ProxyStreamingResponse(response, background=background, media_type='text/event-stream')
+            else:
+                response = await self._forwarder.forward_json_buffer(request_dict, d_url, ctx.endpoint)
+                resp = JSONResponse(safe_json_load(d_url, response))
+                self._tracker.finish(d_url, start)
+        except APIServerException as e:
             self._tracker.finish(d_url, start)
-            resp = JSONResponse(safe_json_load(d_url, response))
+            if not self._config.dummy_prefill:
+                self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
+            return response_from_api_exception(e)
 
         if not self._config.dummy_prefill:
             self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
