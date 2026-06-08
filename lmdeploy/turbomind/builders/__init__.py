@@ -10,20 +10,21 @@ from .ffn import FfnBuilder, fuse_w1w3
 from .mla import MLABuilder
 from .module_list import ModuleListBuilder, ModuleListConfig
 from .moe import MoeBuilder
-from .norm import NormBuilder, make_norm_config
+from .norm import LayerNormBuilder, NormBuilder, make_layer_norm_config, make_norm_config
 from .text_model import TextModelBuilder
+from .vision_model import VisionModelBuilder
 
 __all__ = [
     # Base
-    'Builder', 'BuiltModule', 'TextModelBuilder', 'SplitSide',
+    'Builder', 'BuiltModule', 'TextModelBuilder', 'VisionModelBuilder', 'SplitSide',
     '_act_type_id', '_torch_dtype_to_cpp',
     # Builders
     'AttentionBuilder', 'FfnBuilder', 'MoeBuilder',
     'DeltaNetBuilder', 'MLABuilder',
     'DecoderLayerBuilder', 'ModuleListBuilder',
-    'NormBuilder',
+    'NormBuilder', 'LayerNormBuilder',
     # Primitive config wrappers
-    'make_norm_config',
+    'make_norm_config', 'make_layer_norm_config',
     # C++ config re-exports
     'DecoderLayerConfig', 'ModuleListConfig',
     # Helper functions
