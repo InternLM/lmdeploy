@@ -14,8 +14,6 @@ from torch import Tensor
 from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 
-TS_GEN_TOKEN_ID = 123456
-
 
 class RMSNorm(nn.Module):
     """RMS normalization."""
@@ -822,12 +820,7 @@ class ForecasterBackbone(nn.Module):
 
 
 class QFormerAttention(nn.Module):
-    """Batch-first attention used by QFormer blocks.
-
-    The load hook accepts PyTorch packed attention state dict keys
-    (``in_proj_weight`` / ``in_proj_bias``) and splits them into LMDeploy q/k/v
-    projections.
-    """
+    """Batch-first attention used by QFormer blocks."""
 
     def __init__(
         self,
@@ -872,37 +865,6 @@ class QFormerAttention(nn.Module):
             dtype=dtype,
             device=device,
         )
-        self.register_load_state_dict_pre_hook(self._load_mha_state_dict_hook)
-
-    def _load_mha_state_dict_hook(
-        self,
-        module,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
-    ):
-        in_proj_weight_key = prefix + 'in_proj_weight'
-        if in_proj_weight_key in state_dict:
-            q_weight, k_weight, v_weight = state_dict.pop(in_proj_weight_key).chunk(3, dim=0)
-            state_dict[prefix + 'q_proj.weight'] = q_weight
-            state_dict[prefix + 'k_proj.weight'] = k_weight
-            state_dict[prefix + 'v_proj.weight'] = v_weight
-
-        in_proj_bias_key = prefix + 'in_proj_bias'
-        if in_proj_bias_key in state_dict:
-            q_bias, k_bias, v_bias = state_dict.pop(in_proj_bias_key).chunk(3, dim=0)
-            state_dict[prefix + 'q_proj.bias'] = q_bias
-            state_dict[prefix + 'k_proj.bias'] = k_bias
-            state_dict[prefix + 'v_proj.bias'] = v_bias
-
-    def _shape(self, x: Tensor) -> Tensor:
-        bsz, seq_len, _ = x.shape
-        x = x.view(bsz, seq_len, self.num_heads, self.head_dim)
-        return x.transpose(1, 2)
 
     def forward(
         self,
@@ -911,9 +873,11 @@ class QFormerAttention(nn.Module):
         value: Tensor,
         key_padding_mask: Tensor | None = None,
     ) -> Tensor:
-        q = self._shape(self.q_proj(query))
-        k = self._shape(self.k_proj(key))
-        v = self._shape(self.v_proj(value))
+        batch_size = query.shape[0]
+        hidden_shape = (batch_size, -1, self.num_heads, self.head_dim)
+        q = self.q_proj(query).view(*hidden_shape).transpose(1, 2)
+        k = self.k_proj(key).view(*hidden_shape).transpose(1, 2)
+        v = self.v_proj(value).view(*hidden_shape).transpose(1, 2)
 
         attn_mask = None
         if key_padding_mask is not None:
@@ -1260,17 +1224,6 @@ class TSForecasterConfig:
         default_pred_len: int | None = None,
         **kwargs,
     ):
-        if not use_horizon_head:
-            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster expects use_horizon_head=True.')
-        if not use_cross_attn_gate:
-            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster expects use_cross_attn_gate=True.')
-        if qformer_dropout not in (None, 0, 0.0):
-            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster does not support dropout.')
-        if not use_continuous_quantile_head:
-            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster expects use_continuous_quantile_head=True.')
-        if return_backcast:
-            raise ValueError('LMDeploy InternS2PreviewTimeSeriesForecaster does not support return_backcast.')
-
         self.d_llm = int(d_llm)
         self.d_ts_encoder = int(d_ts_encoder)
 
@@ -1625,47 +1578,3 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
             quantile_forecast=quantile_outputs,
             predicted_horizon=predicted_horizon,
         )
-
-
-def maybe_forecast_on_ts_gen(
-    forecaster: InternS2PreviewTimeSeriesForecaster,
-    next_token_ids: torch.Tensor,
-    *,
-    history: list[Tensor],
-    llm_embedding_input: Tensor,
-    ts_encoder_embedding_input: Tensor,
-    llm_embedding_mask: Tensor | None = None,
-    ts_encoder_embedding_mask: Tensor | None = None,
-    override_horizon: int | Sequence[int] | None = None,
-    ts_gen_token_id: int = TS_GEN_TOKEN_ID,
-) -> tuple[TSForecasterOutput | None, torch.Tensor]:
-    """Run the forecast branch when the generated token is the TS trigger.
-
-    This is a model-local helper for the first integration pass. The token id is test-only until the real model config
-    exposes a checkpoint-specific value.
-    """
-    stop_mask = next_token_ids.reshape(-1).eq(ts_gen_token_id)
-    if not stop_mask.any():
-        return None, stop_mask
-
-    output = forecaster(
-        history=history,
-        llm_embedding_input=llm_embedding_input,
-        ts_encoder_embedding_input=ts_encoder_embedding_input,
-        llm_embedding_mask=llm_embedding_mask,
-        ts_encoder_embedding_mask=ts_encoder_embedding_mask,
-        override_horizon=override_horizon,
-    )
-    return output, stop_mask
-
-
-__all__ = [
-    'TS_GEN_TOKEN_ID',
-    'TSForecasterConfig',
-    'InternS2PreviewTimeSeriesForecaster',
-    'TSForecasterOutput',
-    'Aligner',
-    'ForecasterBackbone',
-    'QFormer',
-    'maybe_forecast_on_ts_gen',
-]

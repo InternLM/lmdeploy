@@ -83,10 +83,6 @@ class CustomWhisperEncoder(WhisperPreTrainedModel):
     def set_input_embeddings(self, value: nn.Module):
         self.conv1 = value
 
-    def define_masktype(self, masktype: str, chunk_length: int | None = None):
-        self.mask_type = masktype
-        self.chunk_length = chunk_length
-
     def _make_causal_mask(self,
                           input_ids_shape: torch.Size,
                           dtype: torch.dtype,
