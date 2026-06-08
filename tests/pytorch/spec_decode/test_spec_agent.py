@@ -119,9 +119,8 @@ def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indi
     assert agent.proposer.model.update_inputs_calls == 1
 
 
-def test_prepare_inputs_from_main_last_chunk_shifts_last_token_indices():
-    """Last chunks prepend the saved token, so last-token indices must shift
-    right."""
+def test_prepare_inputs_from_main_last_chunk_keeps_long_context_kv_metadata():
+    """Last chunks keep aggregate KV metadata aligned after input rewriting."""
     from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
     from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
@@ -131,16 +130,17 @@ def test_prepare_inputs_from_main_last_chunk_shifts_last_token_indices():
     agent._prev_chunk_last = {'hidden_states': saved_hidden_states}
     agent.proposer = _DummyProposer()
 
+    long_kv_seqlen = 94218
     model_inputs = ModelInputs(
         input_ids=torch.tensor([[20, 21, 22]], dtype=torch.long),
         seq_length=torch.tensor([3], dtype=torch.long),
-        history_lengths=torch.tensor([1], dtype=torch.long),
+        history_lengths=torch.tensor([long_kv_seqlen - 3], dtype=torch.long),
         block_offsets=torch.zeros((1, 1), dtype=torch.long),
         is_decoding=False,
         num_ignored_history=torch.zeros(1, dtype=torch.long),
         max_q_seqlen=3,
-        max_kv_seqlen=4,
-        sum_kv_seqlen=4,
+        max_kv_seqlen=long_kv_seqlen,
+        sum_kv_seqlen=long_kv_seqlen,
         dp_meta=DPMeta(dp_batches=[1, 32], dp_is_decoding=False),
         is_chunk=True,
         is_first_chunk=False,
@@ -158,9 +158,13 @@ def test_prepare_inputs_from_main_last_chunk_shifts_last_token_indices():
     torch.testing.assert_close(draft_inputs.input_ids, torch.tensor([[20, 21, 22, 23]], dtype=torch.long))
     torch.testing.assert_close(draft_inputs.seq_length, torch.tensor([4], dtype=torch.long))
     assert draft_inputs.max_q_seqlen == 4
-    assert draft_inputs.max_kv_seqlen == 3
-    assert draft_inputs.sum_kv_seqlen == 3
-    torch.testing.assert_close(draft_inputs.history_lengths, torch.tensor([0], dtype=torch.long))
+    assert draft_inputs.max_kv_seqlen == long_kv_seqlen
+    assert draft_inputs.sum_kv_seqlen == long_kv_seqlen
+    torch.testing.assert_close(draft_inputs.history_lengths, torch.tensor([long_kv_seqlen - 4], dtype=torch.long))
+    torch.testing.assert_close(draft_inputs.seq_length + draft_inputs.history_lengths,
+                               torch.tensor([long_kv_seqlen], dtype=torch.long))
+    assert draft_inputs.sum_kv_seqlen == int((draft_inputs.seq_length + draft_inputs.history_lengths).sum())
+    assert draft_inputs.max_kv_seqlen == int((draft_inputs.seq_length + draft_inputs.history_lengths).max())
     torch.testing.assert_close(draft_extra_inputs.last_token_indices, torch.tensor([3], dtype=torch.long))
     assert draft_extra_inputs.last_token_indices.max().item() < draft_inputs.input_ids.size(1)
     torch.testing.assert_close(draft_inputs.target_hidden_states,
