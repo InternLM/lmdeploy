@@ -168,6 +168,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         cu_seqlens: torch.Tensor | None = None,
         output_final_state: bool = False,
         spec_state_offsets: torch.Tensor | None = None,
+        transpose_state_layout: bool = False,
     ):
 
         assert initial_state is not None
@@ -195,6 +196,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             output_final_state=output_final_state,
             use_qk_l2norm_in_kernel=False,
             cu_seqlens=cu_seqlens,
+            transpose_state_layout=transpose_state_layout,
         )
         if spec_state_offsets is not None:
             # write to next slots
@@ -219,6 +221,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         use_qk_l2norm_in_kernel: bool = False,
         output_final_state: bool = False,
         cache_seqlens: torch.Tensor | None = None,
+        transpose_state_layout: bool = False,
     ):
         return self.recurrent_func(
             q,
@@ -232,6 +235,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
             output_final_state=output_final_state,
             cache_seqlens=cache_seqlens,
+            transpose_state_layout=transpose_state_layout,
         )
 
 

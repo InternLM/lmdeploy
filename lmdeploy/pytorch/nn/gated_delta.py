@@ -256,6 +256,7 @@ class GatedDelta:
                 use_qk_l2norm_in_kernel=False,
                 cu_seqlens=cu_seqlens,
                 spec_state_offsets=spec_state_offsets,
+                transpose_state_layout=True,
             )
         else:
             if kv_ratio > 1:
@@ -274,6 +275,7 @@ class GatedDelta:
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
                 state_indices=gated_delta_meta.origin_state_ids,
                 cache_seqlens=cache_seqlens,
+                transpose_state_layout=True,
             )
             # out (seqlen, B, ...) -> (1, seqlen * B, ...)
             core_attn_out = core_attn_out.flatten(0, 1).unsqueeze(0)
