@@ -240,7 +240,12 @@ class AWQFormat(WeightFormat):
         scales  = tensors['scales']
         qzeros  = tensors['zeros']
         group_size = qweight.shape[0] // scales.shape[0]
-        w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
+        if qweight.dtype == torch.int32 and qzeros.dtype == torch.int32:
+            w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
+        else:
+            w = qweight.unflatten(0, (-1, group_size))
+            w = (w - qzeros[:, None]) * scales[:, None]
+            w = w.flatten(0, 1)
         result: dict[str, Tensor] = {'weight': w}
         if 'bias' in tensors:
             result['bias'] = tensors['bias']
