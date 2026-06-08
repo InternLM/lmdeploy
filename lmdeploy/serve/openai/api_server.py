@@ -1514,7 +1514,10 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    _, pipeline_class = get_task(backend, model_path, trust_remote_code=trust_remote_code)
+    _, pipeline_class = get_task(backend,
+                                 model_path,
+                                 trust_remote_code=trust_remote_code,
+                                 backend_config=backend_config)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
         # router replay
