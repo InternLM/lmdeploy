@@ -407,7 +407,7 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
 
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
-        input_processor_->PatchEmbedding(phase, input_embeds, copy);
+        input_processor_->PatchEmbedding(phase, input_embeds, copy, env);
         copy.Run();
 
         env.produce("input_embeds", std::move(input_embeds));

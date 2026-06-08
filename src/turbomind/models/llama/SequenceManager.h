@@ -14,6 +14,8 @@
 
 namespace turbomind {
 
+struct MultiModalData;
+
 struct Sequence {
 
     enum Status
@@ -45,6 +47,9 @@ struct Sequence {
     // embedding data
     mutable std::vector<Tensor> input_embeds;
     mutable std::vector<int>    input_embeds_offsets;
+
+    // multimodal inputs
+    mutable std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;
 
     // Gated DeltaNet linear attention persistent states (e.g. Qwen3.5-MoE).
     // Allocated on first request, preserved across requests for the same session,

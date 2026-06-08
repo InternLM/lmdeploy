@@ -158,8 +158,12 @@ class ResponseParser:
     @abstractmethod
     def parse_complete(self,
                        text: str,
-                       token_ids: list[int] | None = None, **kwargs) -> tuple[str, list | None, str | None]:
+                       token_ids: list[int] | None = None,
+                       **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
+
+    def validate_complete(self, text: str | None = None) -> bool:
+        return True
 
 @dataclass
 class ProtocolProfile:
@@ -669,6 +673,21 @@ class BaseResponseParser(ResponseParser):
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
         return content if content != '' else None, tool_calls or None, reasoning_content
+
+    def validate_complete(self, text: str | None = None) -> bool:
+        text = self._accumulated_text if text is None else text
+
+        if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
+                and self.enable_thinking is not False):
+            close_tag = self.profile.reasoning_close_tag
+            close_idx = text.find(close_tag) if close_tag else -1
+            if close_idx < 0:
+                return False
+
+        if self.tool_parser is None or self.request.tool_choice == 'none':
+            return True
+
+        return self.tool_parser.validate_complete(text)
 
     @staticmethod
     def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:

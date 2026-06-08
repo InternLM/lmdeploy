@@ -72,7 +72,10 @@ class Pipeline:
         # Create inference engine
         backend, backend_config = autoget_backend_config(model_path, backend_config,
                                                          trust_remote_code=trust_remote_code)
-        _, pipeline_class = get_task(backend, model_path, trust_remote_code=trust_remote_code)
+        _, pipeline_class = get_task(backend,
+                                     model_path,
+                                     trust_remote_code=trust_remote_code,
+                                     backend_config=backend_config)
         self.async_engine = pipeline_class(model_path,
                                            backend=backend,
                                            backend_config=backend_config,
