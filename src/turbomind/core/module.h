@@ -92,7 +92,6 @@ struct ModuleListConfig: ModuleConfig {
 /// Assumes member `std::unique_ptr<Type> name` and local `std::string name_str`.
 #define TM_ADD_CHILD_CASE(Type, name)                                                                                  \
     if (name_str == #name) {                                                                                           \
-        TM_CHECK_EQ(child->type(), Type().type());                                                                     \
         name.reset(static_cast<Type*>(child.release()));                                                               \
         attach_child_(name.get(), this, std::move(name_str));                                                          \
         return name.get();                                                                                             \

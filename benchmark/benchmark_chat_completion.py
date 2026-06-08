@@ -6,8 +6,8 @@ chat ``messages``, or a string/list ``prompt`` (e.g. dapo-math-17k). List-type
 aggregates TTFT/ITL/TPOT metrics, and writes table plus report artifacts for concurrency/RPS sweeps.
 
 Generation options include ``--output-tokens`` (``max_completion_tokens``),
-``--ignore-eos``, ``--return-token-ids``, ``--return-routed-experts``, and
-``--logprobs`` / ``--top-logprobs``.
+``--ignore-eos``, ``--return-token-ids``, ``--return-routed-experts``,
+``--return-logprob``, and ``--logprobs`` / ``--top-logprobs``.
 """
 
 from __future__ import annotations
@@ -336,6 +336,7 @@ def build_payload(
     ignore_eos: bool = False,
     return_token_ids: bool = False,
     return_routed_experts: bool = False,
+    return_logprob: bool = False,
     logprobs: bool = False,
     top_logprobs: int | None = None,
     extra_body: dict[str, Any] | None = None,
@@ -365,6 +366,8 @@ def build_payload(
         payload['return_token_ids'] = True
     if return_routed_experts:
         payload['return_routed_experts'] = True
+    if return_logprob:
+        payload['return_logprob'] = True
     if logprobs:
         payload['logprobs'] = True
         if top_logprobs is not None:
@@ -415,6 +418,7 @@ async def request_chat_completion(
     ignore_eos: bool,
     return_token_ids: bool,
     return_routed_experts: bool,
+    return_logprob: bool,
     logprobs: bool,
     top_logprobs: int | None,
     extra_body: dict[str, Any] | None,
@@ -432,6 +436,7 @@ async def request_chat_completion(
         ignore_eos=ignore_eos,
         return_token_ids=return_token_ids,
         return_routed_experts=return_routed_experts,
+        return_logprob=return_logprob,
         logprobs=logprobs,
         top_logprobs=top_logprobs,
         extra_body=extra_body,
@@ -1005,6 +1010,8 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
             print('return_token_ids=True')
         if args.return_routed_experts:
             print('return_routed_experts=True')
+        if args.return_logprob:
+            print('return_logprob=True')
         if args.logprobs:
             print(f'logprobs=True top_logprobs={args.top_logprobs!r}')
 
@@ -1024,6 +1031,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                 ignore_eos=args.ignore_eos,
                 return_token_ids=args.return_token_ids,
                 return_routed_experts=args.return_routed_experts,
+                return_logprob=args.return_logprob,
                 logprobs=args.logprobs,
                 top_logprobs=args.top_logprobs,
                 extra_body=extra_body,
@@ -1219,9 +1227,14 @@ def parse_args() -> argparse.Namespace:
         help='Set return_routed_experts=true to include MoE routed expert indices (LMDeploy extension).',
     )
     parser.add_argument(
+        '--return-logprob',
+        action='store_true',
+        help='Set return_logprob=true to include raw (logprob, token_id) pairs without OpenAI token formatting.',
+    )
+    parser.add_argument(
         '--logprobs',
         action='store_true',
-        help='Set logprobs=true to return per-token logprobs (requires logprobs_mode in server config).',
+        help='Set logprobs=true to return OpenAI-compatible per-token logprobs.',
     )
     parser.add_argument(
         '--top-logprobs',

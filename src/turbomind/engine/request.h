@@ -11,6 +11,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/interval.h"
+#include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/utils/metrics.h"
 
 namespace xgrammar {
@@ -96,6 +97,8 @@ struct Request {
     // reference to IO tensors
     TensorMap inputs;
     TensorMap outputs;
+    // TODO: update serdes to support multiple nodes inference
+    std::shared_ptr<multimodal::Input> mm_inputs;
     // fast path for accessing common output buffers
     Tensor_<int> output_ids;
     Tensor_<int> sequence_length;
