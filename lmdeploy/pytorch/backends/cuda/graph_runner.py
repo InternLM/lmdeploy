@@ -8,6 +8,7 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.envs import fake_capture
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
@@ -99,6 +100,9 @@ class CUDASingleGraphRunner:
         self.is_decoding = is_decoding
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
+        self.USE_GRAPH = not fake_capture
+        logger.info(f'Initialized CUDASingleGraphRunner with max_batches={max_batches}, max_tokens={max_tokens}, '
+                    f'num_blocks={num_blocks}, is_decoding={is_decoding}, use_graph={self.USE_GRAPH}')
 
     @record_function('capture_cudagraph')
     def capture(self, **kwargs):
@@ -114,11 +118,17 @@ class CUDASingleGraphRunner:
         warmup_output = self.model(**padded_kwargs)
         warmup_buffers = self.model.make_output_buffers(warmup_output)
 
-        self._graph = torch.cuda.CUDAGraph()
-        # unsafe kernel call in other thread might invalid the capture
-        # so we set thread_safe capture mode here.
-        with torch.cuda.graph(self._graph, pool=self.pool, stream=current_stream, capture_error_mode='thread_local'):
-            output = self.model(**padded_kwargs)
+        if self.USE_GRAPH:
+            self._graph = torch.cuda.CUDAGraph()
+            # unsafe kernel call in other thread might invalid the capture
+            # so we set thread_safe capture mode here.
+            with torch.cuda.graph(self._graph,
+                                  pool=self.pool,
+                                  stream=current_stream,
+                                  capture_error_mode='thread_local'):
+                output = self.model(**padded_kwargs)
+        else:
+            output = warmup_output
 
         output_buffers = self.model.make_output_buffers(output)
         self.meta.output_buffers = output_buffers
@@ -128,12 +138,16 @@ class CUDASingleGraphRunner:
     @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
-        assert self._graph is not None
-        self.model.fill_buffers_cudagraph(self.meta, **kwargs)
+        padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
         self.model.update_context_cudagraph(self.meta, context)
-        self._graph.replay()
-        output_buffers = self.meta.output_buffers
+        if self.USE_GRAPH:
+            assert self._graph is not None
+            self._graph.replay()
+            output_buffers = self.meta.output_buffers
+        else:
+            output = self.model(**padded_kwargs)
+            output_buffers = self.model.make_output_buffers(output)
         output = self.model.get_outputs_cudagraph(output_buffers, **kwargs)
         return output
 
@@ -149,7 +163,6 @@ class CUDAGraphRunner(GraphRunner):
                  backend_config: BackendConfig, device: torch.device):
         super().__init__(model, model_config, cache_config, backend_config, device)
         self.max_batches = cache_config.max_batches
-        self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks
 
         # Speculative decoding on CUDA requires FlashAttention-3 (FA3),

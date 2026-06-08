@@ -248,8 +248,11 @@ class SpecModelAgent(BaseSpecModelAgent):
                 seq_length = model_inputs.seq_length + 1
                 max_q_seqlen = model_inputs.max_q_seqlen + 1
                 last_token_indices = last_token_indices + 1
-                max_kv_seqlen = model_inputs.max_kv_seqlen - 1
-                sum_kv_seqlen = model_inputs.sum_kv_seqlen - 1
+                # history_lengths is decremented below, while seq_length is
+                # incremented above. The final KV length is unchanged, so keep
+                # the aggregate KV metadata aligned with kv_seqlens.
+                max_kv_seqlen = model_inputs.max_kv_seqlen
+                sum_kv_seqlen = model_inputs.sum_kv_seqlen
                 history_lengths = model_inputs.history_lengths - 1
                 input_ids = torch.cat([model_inputs.input_ids, next_token_ids.unsqueeze(0)], dim=-1)
 
