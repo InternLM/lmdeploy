@@ -80,6 +80,7 @@ from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
     UsageInfo,
 )
+from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -139,34 +140,11 @@ class VariableInterface:
         return cls.async_engine.backend_config
 
 
-async def _cleanup_result_generators(result_generators, sessions):
-    """Close engine generators and remove API sessions idempotently."""
-    for generator in result_generators:
-        try:
-            await generator.aclose()
-        except (asyncio.CancelledError, GeneratorExit):
-            pass
-        except Exception:
-            logger.exception('Close result generator failed.')
-    session_mgr = VariableInterface.get_session_manager()
-    for session in sessions:
-        session_mgr.remove(session)
-
-
 async def _with_request_cleanup(generator, result_generators, sessions):
     """Yield from an API generator and cleanup when the HTTP task exits."""
-    try:
-        async for item in generator:
-            yield item
-    finally:
-        cleanup_task = asyncio.create_task(_cleanup_result_generators(result_generators, sessions),
-                                           name='api_request_cleanup')
-        try:
-            await asyncio.shield(cleanup_task)
-        except (asyncio.CancelledError, GeneratorExit):
-            raise
-        except Exception:
-            logger.exception('API request cleanup failed.')
+    session_mgr = VariableInterface.get_session_manager()
+    async for item in with_request_cleanup(generator, result_generators, sessions, session_mgr):
+        yield item
 
 
 router = APIRouter()

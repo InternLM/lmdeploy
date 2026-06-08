@@ -15,11 +15,27 @@ from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, Delt
 
 class _FakeSession:
 
-    def __init__(self):
+    def __init__(self, session_id: int):
+        self.session_id = session_id
         self.aborted = False
 
     async def async_abort(self):
         self.aborted = True
+
+
+class _FakeSessionManager:
+
+    def __init__(self):
+        self.next_session_id = 0
+        self.removed = []
+
+    def get(self):
+        session = _FakeSession(self.next_session_id)
+        self.next_session_id += 1
+        return session
+
+    def remove(self, session):
+        self.removed.append(session)
 
 
 class _FakeTokenizer:
@@ -68,11 +84,15 @@ class _FakeEngine:
 
 class _FakeServerContext:
     def __init__(self, *, response_parser_cls=None):
+        self.session_mgr = _FakeSessionManager()
         self.async_engine = _FakeEngine()
         self.response_parser_cls = response_parser_cls
 
     def create_session(self, _session_id: int):
-        return _FakeSession()
+        return self.session_mgr.get()
+
+    def get_session_manager(self):
+        return self.session_mgr
 
 
 class _ToolAndReasoningParser:
@@ -121,10 +141,14 @@ class _ToolAndReasoningParser:
         )
 
 
-def _make_client(response_parser_cls=None) -> TestClient:
+def _make_client(response_parser_cls=None, *, return_context=False):
     app = FastAPI()
-    app.include_router(create_anthropic_router(_FakeServerContext(response_parser_cls=response_parser_cls)))
-    return TestClient(app)
+    context = _FakeServerContext(response_parser_cls=response_parser_cls)
+    app.include_router(create_anthropic_router(context))
+    client = TestClient(app)
+    if return_context:
+        return client, context
+    return client
 
 
 def test_endpoint_modules_export_register():
@@ -134,7 +158,7 @@ def test_endpoint_modules_export_register():
 
 
 def test_messages_non_stream():
-    client = _make_client()
+    client, context = _make_client(return_context=True)
     response = client.post(
         '/v1/messages',
         headers={'anthropic-version': '2023-06-01'},
@@ -155,6 +179,7 @@ def test_messages_non_stream():
     assert data['stop_reason'] == 'end_turn'
     assert data['usage']['input_tokens'] == 8
     assert data['usage']['output_tokens'] == 2
+    assert len(context.session_mgr.removed) == 1
 
 
 def test_messages_requires_anthropic_version_header():
@@ -304,7 +329,7 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
 
 
 def test_messages_streaming_sse_shape():
-    client = _make_client()
+    client, context = _make_client(return_context=True)
     with client.stream(
             'POST',
             '/v1/messages',
@@ -327,6 +352,7 @@ def test_messages_streaming_sse_shape():
     assert 'event: content_block_delta' in body
     assert 'event: message_delta' in body
     assert 'event: message_stop' in body
+    assert len(context.session_mgr.removed) == 1
 
 
 def test_messages_streaming_with_reasoning_and_tool_use_events():

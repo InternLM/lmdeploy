@@ -579,11 +579,12 @@ class AsyncEngine:
         if gen_config.max_new_tokens == 0:
             logger.info(f'run out of tokens. session={session_id}.')
             metrics_processor.increase_failed_requests('error')
+            history_len = session.step
             if sequence_end is True and sequence_start is False:
                 await session.async_close()
             remove_session_once()
             yield GenOut(response='',
-                         history_token_len=session.step,
+                         history_token_len=history_len,
                          input_token_len=len(input_ids),
                          generate_token_len=0,
                          finish_reason='length',

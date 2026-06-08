@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
 from ..adapter import (
@@ -97,14 +98,20 @@ def register(router: APIRouter, server_context) -> None:
         )
 
         request_id = f'msg_{shortuuid.random()}'
+        session_mgr = server_context.get_session_manager()
 
         if request.stream:
             return StreamingResponse(
-                stream_messages_response(
-                    result_generator,
-                    request_id=request_id,
-                    model=request.model,
-                    response_parser=response_parser,
+                with_request_cleanup(
+                    stream_messages_response(
+                        result_generator,
+                        request_id=request_id,
+                        model=request.model,
+                        response_parser=response_parser,
+                    ),
+                    [result_generator],
+                    [session],
+                    session_mgr,
                 ),
                 media_type='text/event-stream',
             )
@@ -112,7 +119,7 @@ def register(router: APIRouter, server_context) -> None:
         text = ''
         final_token_ids: list[int] = []
         final_res = None
-        async for res in result_generator:
+        async for res in with_request_cleanup(result_generator, [result_generator], [session], session_mgr):
             if await raw_request.is_disconnected():
                 await session.async_abort()
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
