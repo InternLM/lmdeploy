@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 
 
 find_package(CUDAToolkit REQUIRED)
@@ -13,7 +13,6 @@ add_library(Llama STATIC
         BlockTrie.cc
         SequenceManager.cc
         LlamaWeight.cc
-        LlamaDenseWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc
         moe_ffn_layer.cc

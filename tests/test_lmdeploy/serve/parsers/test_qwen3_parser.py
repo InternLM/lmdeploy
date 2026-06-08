@@ -1,24 +1,17 @@
 import pytest
-from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
+from .helpers import first_stream_delta
+
 MODEL_ID = 'Qwen/Qwen3-8B'
 
 
-@pytest.fixture(scope='module')
-def tokenizer():
-    try:
-        return AutoTokenizer.from_pretrained(MODEL_ID)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f'Could not load tokenizer for {MODEL_ID}: {exc}')
-
-
 @pytest.fixture()
-def response_parser(tokenizer):
+def response_parser():
     # Configure ResponseParser to use unified reasoning parser and Qwen3 tool parser.
     cls = ResponseParserManager.get('default')
     cls.reasoning_parser_cls = ReasoningParserManager.get('default')
@@ -33,7 +26,7 @@ def response_parser(tokenizer):
         # Explicitly enable thinking mode to exercise reasoning parsing.
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=object())
 
 
 # Reference streaming sequence
@@ -106,7 +99,8 @@ REFERENCE_CHUNKS_2 = [
     ('This is the mock', True, 'This is the mock', None, False, None, None, None),
     (' user prompt.', True, ' user prompt.', None, False, None, None, None),
     (' reasoning</think>\n\n<tool_call>\n', True, ' reasoning', None, False, None, None, None),
-    ('{"', True, None, '\n\n', False, None, None, None),
+    (None, True, None, '\n\n', False, None, None, None),
+    ('{"', False, None, None, False, None, None, None),
     ('name', False, None, None, False, None, None, None),
     ('":', False, None, None, False, None, None, None),
     (' "', False, None, None, False, None, None, None),
@@ -136,12 +130,8 @@ REFERENCE_CHUNKS_2 = [
 class TestQwenResponseParserStreaming:
     """Integration test for ResponseParser.stream_chunk with Qwen3 parsers."""
 
-    @staticmethod
-    def _encode_ids(tokenizer, text: str) -> list[int]:
-        return tokenizer.encode(text, add_bos=False, add_special_tokens=False)
-
     @pytest.mark.parametrize('reference_chunks', [REFERENCE_CHUNKS_0, REFERENCE_CHUNKS_1, REFERENCE_CHUNKS_2])
-    def test_stream_chunk_matches_reference(self, tokenizer, response_parser, reference_chunks):
+    def test_stream_chunk_matches_reference(self, response_parser, reference_chunks):
         """Feed the real streaming sequence into ResponseParser.stream_chunk
         and verify each parsed chunk.
 
@@ -162,18 +152,28 @@ class TestQwenResponseParserStreaming:
               after streaming completes.
         """
 
-        for (delta_text, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted,
-             exp_function_name, exp_function_arguments,
-             exp_type) in reference_chunks:
-            delta_ids = self._encode_ids(tokenizer, delta_text)
-            delta_msg, tool_emitted = response_parser.stream_chunk(
-                delta_text=delta_text,
-                delta_token_ids=delta_ids,
-            )
-            if not exp_delta_msg:
-                assert delta_msg is None
+        expected = [
+            (exp_reasoning, exp_content, exp_tool_emitted, exp_function_name, exp_function_arguments, exp_type)
+            for (_, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted, exp_function_name,
+                 exp_function_arguments, exp_type) in reference_chunks
+            if exp_delta_msg
+        ]
+
+        actual = []
+        for (delta_text, *_) in reference_chunks:
+            if delta_text is None:
                 continue
-            # reasoning: when an expected reasoning chunk is provided, it must match exactly.
+            for delta_msg, tool_emitted in response_parser.stream_chunk(
+                delta_text=delta_text,
+                delta_token_ids=[],
+            ):
+                if delta_msg is None:
+                    continue
+                actual.append((delta_msg, tool_emitted))
+
+        assert len(actual) == len(expected)
+        for (delta_msg, tool_emitted), (exp_reasoning, exp_content, exp_tool_emitted, exp_function_name,
+                                        exp_function_arguments, exp_type) in zip(actual, expected):
             assert delta_msg.reasoning_content == exp_reasoning
             assert delta_msg.content == exp_content
             assert tool_emitted == exp_tool_emitted
@@ -187,7 +187,7 @@ class TestQwenResponseParserStreaming:
                 assert call.function.name == exp_function_name
                 assert call.function.arguments == exp_function_arguments
 
-    def test_stream_chunk_handles_mixed_reasoning_content_tool(self, tokenizer, response_parser):
+    def test_stream_chunk_handles_mixed_reasoning_content_tool(self, response_parser):
         """A single delta may contain reasoning/content/tool segments together.
 
         This test covers chunk shapes:
@@ -198,45 +198,33 @@ class TestQwenResponseParserStreaming:
         """
 
         def _call(delta_text: str):
-            ids = self._encode_ids(tokenizer, delta_text)
-            return response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=ids)
+            return response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])
 
         # 1) tag-only chunk should be swallowed
-        delta_msg, tool_emitted = _call('<think>')
+        delta_msg, tool_emitted = first_stream_delta(_call('<think>'))
         assert delta_msg is None
         assert tool_emitted is False
 
         # 2) open-think plus reasoning text should emit only reasoning
-        delta_msg, tool_emitted = _call('<think> Let me think ')
+        delta_msg, tool_emitted = first_stream_delta(_call('<think> Let me think '))
         assert delta_msg is not None
         assert delta_msg.reasoning_content == ' Let me think '
         assert delta_msg.content is None
         assert tool_emitted is False
 
-        # 3) chunk carries reasoning end + normal content.
-        # New parser emits ordered events, so this call emits reasoning first.
-        delta_msg, tool_emitted = _call('The answer is 9 </think> OK. The')
-        assert delta_msg is not None
-        assert delta_msg.reasoning_content == 'The answer is 9 '
-        assert delta_msg.content is None
-        assert tool_emitted is False
+        # 3) chunk carries reasoning end + normal content in one step.
+        deltas = _call('The answer is 9 </think> OK. The')
+        assert len(deltas) >= 2
+        assert deltas[0][0].reasoning_content == 'The answer is 9 '
+        assert deltas[1][0].content == ' OK. The'
 
-        # Next call flushes queued plain content from previous chunk first.
-        delta_msg, tool_emitted = _call('fine. </think> \n\n <tool_call> ')
-        assert delta_msg is not None
-        assert delta_msg.reasoning_content is None
-        assert delta_msg.content == ' OK. The'
-        assert tool_emitted is False
+        # 4) chunk carries stray close tag + plain content before tool open tag.
+        deltas = _call('fine. </think> \n\n <tool_call> ')
+        assert len(deltas) == 1
+        assert deltas[0][0].content == 'fine. </think> \n\n '
+        assert deltas[0][1] is False
 
-        # Flush the next queued plain segment from chunk-4.
-        delta_msg, tool_emitted = _call('')
-        assert delta_msg is not None
-        # Stray closing tag after reasoning has ended is treated as plain content.
-        assert delta_msg.reasoning_content is None
-        assert delta_msg.content == 'fine. </think> \n\n '
-        assert tool_emitted is False
-
-    def test_stream_chunk_tool_enabled_without_reasoning_parser(self, tokenizer):
+    def test_stream_chunk_tool_enabled_without_reasoning_parser(self):
         """When reasoning parser is disabled, tool parsing still works.
 
         This proves the tool branch is reachable from plain mode after seeing the tool open tag, even with no reasoning
@@ -256,7 +244,7 @@ class TestQwenResponseParserStreaming:
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': False},
             )
-            parser = cls(request=request, tokenizer=tokenizer)
+            parser = cls(request=request, tokenizer=object())
 
             chunks = [
                 'prefix ',
@@ -272,8 +260,8 @@ class TestQwenResponseParserStreaming:
             ]
             tool_seen = False
             for chunk in chunks:
-                delta_ids = self._encode_ids(tokenizer, chunk)
-                delta_msg, tool_emitted = parser.stream_chunk(delta_text=chunk, delta_token_ids=delta_ids)
+                delta_msg, tool_emitted = first_stream_delta(parser.stream_chunk(delta_text=chunk,
+                                                                                 delta_token_ids=[]))
                 if delta_msg is not None:
                     assert delta_msg.reasoning_content is None
                 if tool_emitted:
@@ -287,7 +275,7 @@ class TestQwenResponseParserStreaming:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
 
-    def test_stream_chunk_reasoning_without_open_tag(self, tokenizer, response_parser):
+    def test_stream_chunk_reasoning_without_open_tag(self, response_parser):
         """Qwen thinking mode may omit ``<think>`` and start directly with
         reasoning.
 
@@ -296,35 +284,34 @@ class TestQwenResponseParserStreaming:
         """
 
         def _call(delta_text: str):
-            delta_ids = self._encode_ids(tokenizer, delta_text)
-            return response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=delta_ids)
+            return response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])
 
         # No opening <think> tag, but still in reasoning mode initially.
-        delta_msg, tool_emitted = _call('Let me reason ')
+        delta_msg, tool_emitted = first_stream_delta(_call('Let me reason '))
         assert delta_msg is not None
         assert delta_msg.reasoning_content == 'Let me reason '
         assert delta_msg.content is None
         assert tool_emitted is False
 
-        delta_msg, tool_emitted = _call('step by step')
+        delta_msg, tool_emitted = first_stream_delta(_call('step by step'))
         assert delta_msg is not None
         assert delta_msg.reasoning_content == 'step by step'
         assert delta_msg.content is None
         assert tool_emitted is False
 
         # Closing tag chunk itself is swallowed.
-        delta_msg, tool_emitted = _call('</think>')
+        delta_msg, tool_emitted = first_stream_delta(_call('</think>'))
         assert delta_msg is None
         assert tool_emitted is False
 
         # After close tag, emit normal content.
-        delta_msg, tool_emitted = _call(' final answer')
+        delta_msg, tool_emitted = first_stream_delta(_call(' final answer'))
         assert delta_msg is not None
         assert delta_msg.reasoning_content is None
         assert delta_msg.content == ' final answer'
         assert tool_emitted is False
 
-    def test_stream_chunk_preserves_order(self, tokenizer, response_parser):
+    def test_stream_chunk_preserves_order(self):
         """Mixed single chunk should preserve event order without content
         merge."""
         class PlainStartQwenReasoningParser(ReasoningParserManager.get('default')):
@@ -345,31 +332,47 @@ class TestQwenResponseParserStreaming:
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': True},
             )
-            parser = cls(request=request, tokenizer=tokenizer)
+            parser = cls(request=request, tokenizer=object())
 
             delta_text = 'content-xxx <think> reasoning-yyy </think> content-zzz <tool_call> '
-            delta_ids = self._encode_ids(tokenizer, delta_text)
 
-            # 1st event: plain content before <think>
-            delta_msg, tool_emitted = parser.stream_chunk(delta_text=delta_text, delta_token_ids=delta_ids)
-            assert delta_msg is not None
-            assert delta_msg.content == 'content-xxx '
-            assert delta_msg.reasoning_content is None
-            assert tool_emitted is False
+            deltas = parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])
+            assert len(deltas) >= 3
+            assert deltas[0][0].content == 'content-xxx '
+            assert deltas[0][0].reasoning_content is None
+            assert deltas[0][1] is False
+            assert deltas[1][0].reasoning_content == ' reasoning-yyy '
+            assert deltas[1][0].content is None
+            assert deltas[1][1] is False
+            assert deltas[2][0].content == ' content-zzz '
+            assert deltas[2][0].reasoning_content is None
+            assert deltas[2][1] is False
+        finally:
+            cls.reasoning_parser_cls = old_reasoning_cls
+            cls.tool_parser_cls = old_tool_cls
 
-            # 2nd event: reasoning segment
-            delta_msg, tool_emitted = parser.stream_chunk(delta_text='', delta_token_ids=[])
-            assert delta_msg is not None
-            assert delta_msg.content is None
-            assert delta_msg.reasoning_content == ' reasoning-yyy '
-            assert tool_emitted is False
 
-            # 3rd event: trailing content segment before <tool_call>
-            delta_msg, tool_emitted = parser.stream_chunk(delta_text='', delta_token_ids=[])
-            assert delta_msg is not None
-            assert delta_msg.content == ' content-zzz '
-            assert delta_msg.reasoning_content is None
-            assert tool_emitted is False
+class TestQwenResponseParserComplete:
+
+    def test_parse_complete_strips_reasoning_open_tag(self):
+        cls = ResponseParserManager.get('default')
+        old_reasoning_cls = cls.reasoning_parser_cls
+        old_tool_cls = cls.tool_parser_cls
+        try:
+            cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+            cls.tool_parser_cls = None
+            request = ChatCompletionRequest(
+                model=MODEL_ID,
+                messages=[],
+                stream=False,
+                tool_choice='none',
+                chat_template_kwargs={'enable_thinking': True},
+            )
+            parser = cls(request=request, tokenizer=object())
+            content, tool_calls, reasoning = parser.parse_complete('<think>\nabc\n</think>\n\nHello')
+            assert reasoning == '\nabc\n'
+            assert content == '\n\nHello'
+            assert tool_calls is None
         finally:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls

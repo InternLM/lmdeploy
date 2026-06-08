@@ -74,7 +74,6 @@ class CUDASingleGraphRunner:
         pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
-        decode_query_len: int = 1,
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
@@ -92,8 +91,8 @@ class CUDASingleGraphRunner:
             use_mla_fp8_cache=getattr(self.model_config, 'use_mla_fp8_cache', False),
             use_flash_mla=getattr(self.model_config, 'use_flash_mla', False),
             mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
-            decode_query_len=decode_query_len,
-            use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
+            use_fa3_decoding=(model_config.model_paradigm == 'ar_spec'
+                              and not getattr(model_config, 'use_flash_mla', False)),
             is_ssm=len(model_config.states_shapes) > 0,
             use_mrope=model_config.use_mrope,
             block_size=model_config.block_size,
@@ -158,6 +157,24 @@ class CUDAGraphRunner(GraphRunner):
         self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks
 
+        # Speculative decoding on CUDA requires FlashAttention-3 (FA3),
+        # unless the model uses FlashMLA (e.g., DeepSeek MTP) which handles
+        # multi-token decoding queries natively.
+        # FA3 is available on SM80+ (Ampere and above) GPUs with CUDA >= 12.3.
+        # Without FA3, the Triton paged attention kernel cannot handle
+        # multi-token decoding queries (max_q_seqlen > 1) used in spec decoding.
+        if model_config.model_paradigm == 'ar_spec' and not getattr(model_config, 'use_flash_mla', False):
+            from .attention import use_fa3
+            if not use_fa3:
+                sm = torch.cuda.get_device_capability()
+                cuda_ver = torch.version.cuda or 'N/A'
+                raise RuntimeError(
+                    f'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
+                    f'which needs SM80+ (Ampere and above) with CUDA >= 12.3 and '
+                    f'flash-attn installed. Detected: SM{sm[0]}.{sm[1]}, CUDA {cuda_ver}. '
+                    f'Please ensure your GPU meets SM80+, CUDA >= 12.3, and flash-attn '
+                    f'is installed, or disable speculative decoding.')
+
         self.enable_graph = self.check_enable_graph()
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
@@ -204,12 +221,14 @@ class CUDAGraphRunner(GraphRunner):
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         # for draft model to distinguish inputs from target model and itself
-        query_len = input_ids.size(1) // batch_size
+        target_hidden_size = None
+        if context.target_hidden_states is not None:
+            target_hidden_size = context.target_hidden_states.size(-1)
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch, query_len)
+        return (batch_size, is_decoding, enable_microbatch, target_hidden_size)
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
@@ -243,7 +262,6 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
-        decode_query_len = graph_key[3]
         if graph_key not in self._runner_map:
             max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
             runner = CUDASingleGraphRunner(
@@ -255,7 +273,6 @@ class CUDAGraphRunner(GraphRunner):
                 pool=self.graph_pool_handle,
                 model_config=self.model_config,
                 device=self.device,
-                decode_query_len=decode_query_len,
             )
             output = runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
@@ -307,7 +324,9 @@ class CUDAGraphRunner(GraphRunner):
         if is_decoding and dp_meta is not None:
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
-            tp_size = self._get_capture_tokens(padding_batch_size)
+            batch_size = inputs.seq_length.size(0)
+            query_len = inputs.input_ids.numel() // batch_size
+            tp_size = self._get_capture_tokens(padding_batch_size) * query_len
             dp_meta.sync_tp_size(tp_size)
         return inputs
 

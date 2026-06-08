@@ -8,6 +8,8 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
 
+from .helpers import first_stream_delta
+
 
 @dataclass
 class _FakeMsg:
@@ -96,7 +98,8 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk(delta_text='ignored', delta_token_ids=[1, 2, 3, 4, 5, 6, 7, 8])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk(delta_text='ignored',
+                                                                     delta_token_ids=[1, 2, 3, 4, 5, 6, 7, 8]))
         assert delta is not None
         assert delta.content == 'Result: sunny'
         assert delta.reasoning_content == 'Need tool. '
@@ -205,7 +208,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
         assert delta is not None
         assert delta.role == 'assistant'
         assert delta.content == ''
@@ -220,7 +223,7 @@ class TestGptOssResponseParser:
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
         parser.stream_chunk('warmup', [])
-        delta, tool_emitted = parser.stream_chunk('', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
         assert delta is None
         assert tool_emitted is False
 
@@ -232,7 +235,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('plain text', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('plain text', []))
         assert delta is not None
         assert delta.content == 'plain text'
         assert delta.reasoning_content is None
@@ -250,7 +253,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [10])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', [10]))
         assert delta is None
         assert tool_emitted is False
 
@@ -266,7 +269,7 @@ class TestGptOssResponseParser:
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [1, 2])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', [1, 2]))
         assert delta is not None
         assert delta.content is None
         assert delta.reasoning_content == 'think more'
@@ -329,3 +332,232 @@ class TestGptOssResponseParser:
     )
     def test_extract_tool_name(self, recipient, expected):
         assert gpt_oss_mod.GptOssResponseParser._extract_tool_name(recipient) == expected
+
+
+class TestGptOssResponseFormatHarmonyConversion:
+    """Tests for
+    :meth:`GptOssResponseParser._convert_response_format_to_harmony`."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_streamable_parser(self, monkeypatch):
+        monkeypatch.setattr(
+            openai_harmony_mod,
+            'StreamableParser',
+            lambda *args, **kwargs: _FakeStreamableParser({}),
+        )
+
+    def test_response_format_cleared_after_conversion(self):
+        """response_format must be None after the parser processes it."""
+        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=ResponseFormat(
+                type='json_schema',
+                json_schema=JsonSchema(
+                    name='test',
+                    schema={'type': 'object', 'properties': {'x': {'type': 'integer'}}},
+                ),
+            ),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        assert parser.request.response_format is None
+
+    def test_schema_appended_to_existing_system_message(self):
+        """When a system message already exists the schema is appended to
+        it."""
+        import json as _json
+
+        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+
+        schema_dict = {'type': 'object', 'properties': {'x': {'type': 'integer'}}}
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[
+                {'role': 'system', 'content': 'You are helpful.'},
+                {'role': 'user', 'content': 'hi'},
+            ],
+            response_format=ResponseFormat(
+                type='json_schema',
+                json_schema=JsonSchema(name='test', schema=schema_dict),
+            ),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+
+        msgs = parser.request.messages
+        assert msgs[0]['role'] == 'system'
+        assert parser.request.response_format is None
+        # The schema body must appear in the system message
+        assert '# Response Formats' in msgs[0]['content']
+        assert _json.dumps(schema_dict) in msgs[0]['content']
+        # The original content is preserved before the appended section
+        assert msgs[0]['content'].startswith('You are helpful.')
+        # No leading blank lines in the appended section
+        assert '\n\n# Response Formats' in msgs[0]['content']
+
+    def test_schema_inserted_as_new_system_message_when_none_exists(self):
+        """When no system message exists a new one is inserted at position
+        0."""
+        import json as _json
+
+        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+
+        schema_dict = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=ResponseFormat(
+                type='json_schema',
+                json_schema=JsonSchema(name='test', schema=schema_dict),
+            ),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+
+        msgs = parser.request.messages
+        assert msgs[0]['role'] == 'system'
+        assert parser.request.response_format is None
+        # New system message content must NOT start with blank lines
+        assert not msgs[0]['content'].startswith('\n')
+        assert msgs[0]['content'].startswith('# Response Formats')
+        assert _json.dumps(schema_dict) in msgs[0]['content']
+        # The user message is still present after the inserted system message
+        assert msgs[1]['role'] == 'user'
+
+    def test_text_response_format_is_cleared_by_normalize(self):
+        from lmdeploy.serve.openai.protocol import ResponseFormat
+
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=ResponseFormat(type='text'),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        assert parser.request.response_format is None
+
+    def test_no_response_format_leaves_request_unchanged(self):
+        """When response_format is None the request is not modified."""
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        assert parser.request.response_format is None
+        assert len(parser.request.messages) == 1
+
+    def test_str_messages_gets_schema_appended(self):
+        """When messages is a string, the schema section is appended to it."""
+        import json as _json
+
+        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+
+        schema_dict = {'type': 'object', 'properties': {'x': {'type': 'integer'}}}
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages='Tell me a joke',
+            response_format=ResponseFormat(
+                type='json_schema',
+                json_schema=JsonSchema(name='test', schema=schema_dict),
+            ),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+
+        assert parser.request.response_format is None
+        assert isinstance(parser.request.messages, str)
+        assert parser.request.messages.startswith('Tell me a joke')
+        assert '# Response Formats' in parser.request.messages
+        assert _json.dumps(schema_dict) in parser.request.messages
+
+    def test_non_pydantic_request_messages_updated(self):
+        """Non-Pydantic sentinel requests also get messages updated."""
+        import json as _json
+
+        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+
+        schema_dict = {'type': 'object', 'properties': {'y': {'type': 'number'}}}
+        fmt = ResponseFormat(
+            type='json_schema',
+            json_schema=JsonSchema(name='test', schema=schema_dict),
+        )
+
+        # Sentinel must NOT have tools/tool_choice attrs so that __init__
+        # skips the Pydantic-dependent tool-rendering branch.
+        class _Sentinel:
+            messages = [{'role': 'user', 'content': 'hi'}]
+            response_format = fmt
+
+        sentinel = _Sentinel()
+        parser = gpt_oss_mod.GptOssResponseParser(request=sentinel, tokenizer=object())
+
+        assert parser.request.response_format is None
+        msgs = parser.request.messages
+        assert isinstance(msgs, list)
+        assert msgs[0]['role'] == 'system'
+        assert '# Response Formats' in msgs[0]['content']
+        assert _json.dumps(schema_dict) in msgs[0]['content']
+
+    def test_list_content_system_message_gets_text_block_appended(self):
+        """When system message content is a list (multimodal), append a text
+        block."""
+        import json as _json
+
+        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+
+        schema_dict = {'type': 'object', 'properties': {'z': {'type': 'boolean'}}}
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[
+                {'role': 'system', 'content': [
+                    {'type': 'text', 'text': 'You are helpful.'},
+                    {'type': 'image_url', 'image_url': {'url': 'http://example.com/img.png'}},
+                ]},
+                {'role': 'user', 'content': 'hi'},
+            ],
+            response_format=ResponseFormat(
+                type='json_schema',
+                json_schema=JsonSchema(name='test', schema=schema_dict),
+            ),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+
+        assert parser.request.response_format is None
+        sys_msg = parser.request.messages[0]
+        assert sys_msg['role'] == 'system'
+        content = sys_msg['content']
+        assert isinstance(content, list)
+        assert len(content) == 3
+        # Original two blocks preserved
+        assert content[0]['type'] == 'text'
+        assert content[0]['text'] == 'You are helpful.'
+        assert content[1]['type'] == 'image_url'
+        # Schema appended as a text block
+        assert content[2]['type'] == 'text'
+        assert '# Response Formats' in content[2]['text']
+        assert _json.dumps(schema_dict) in content[2]['text']
+
+    def test_none_content_system_message_inserts_separate_system(self):
+        """When system message content is None, insert a new system message."""
+        import json as _json
+
+        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+
+        schema_dict = {'type': 'object', 'properties': {'w': {'type': 'string'}}}
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[
+                {'role': 'system', 'content': None},
+                {'role': 'user', 'content': 'hi'},
+            ],
+            response_format=ResponseFormat(
+                type='json_schema',
+                json_schema=JsonSchema(name='test', schema=schema_dict),
+            ),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+
+        assert parser.request.response_format is None
+        msgs = parser.request.messages
+        # A new system message with the schema is inserted at position 0
+        assert msgs[0]['role'] == 'system'
+        assert '# Response Formats' in msgs[0]['content']
+        assert _json.dumps(schema_dict) in msgs[0]['content']

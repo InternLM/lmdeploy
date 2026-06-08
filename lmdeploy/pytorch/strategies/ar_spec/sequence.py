@@ -166,6 +166,13 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             if len(self.all_routed_experts) > step:
                 self.all_routed_experts.resize(step)
 
+    def cleanup(self):
+        """Setup history meta after sequence stopped or cancelled."""
+        # truncate history cache to valid ids
+        self.history_cache.resize(self.num_valid_ids)
+        self._num_history_ids = self.num_valid_ids - 1
+        self._num_token_ids = 1
+
 
 class ARSpecSequenceStrategy(ARSequenceStrategy):
 

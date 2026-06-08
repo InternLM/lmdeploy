@@ -78,11 +78,15 @@ class CudaGraphMeta:
     use_mla_fp8_cache: bool = False
     use_flash_mla: bool = False
     mla_index_topk: int | None = None
-    decode_query_len: int = 1
     use_fa3_decoding: bool = False
     is_ssm: bool = False
     use_mrope: bool = False
     block_size: int = 64
+
+
+def get_graph_decode_query_len(graph_meta: CudaGraphMeta) -> int:
+    """Get decode query length from padded graph buffers."""
+    return graph_meta.max_tokens // graph_meta.max_batchs
 
 
 class CudaGraphMixin:
@@ -142,14 +146,15 @@ class CudaGraphMixin:
         )
         return scheduler_metadata
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: list[list[torch.Tensor]],
-                               **kwargs) -> BuffType:
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
+                               past_key_values: list[list[torch.Tensor]], attn_metadata: Any,
+                               inputs_embeds: Tensor = None, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
         device = graph_meta.device
-        decode_query_len = graph_meta.decode_query_len
+        decode_query_len = get_graph_decode_query_len(graph_meta)
 
         input_buffers: BuffType = dict()
         input_buffers['input_ids'] = torch.randint(0,
@@ -189,10 +194,11 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
+            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
             input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
-                                                                             graph_meta.decode_query_len,
+                                                                             decode_query_len,
                                                                              block_size=graph_meta.block_size,
-                                                                             max_seqlen_k=decode_query_len,
+                                                                             max_seqlen_k=max_seqlen_k,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
 
         # mrope
@@ -220,11 +226,14 @@ class CudaGraphMixin:
 
         batch_size, num_blocks = block_offsets.size()
         num_tokens = input_ids.size(-1)
-        decode_query_len = graph_meta.decode_query_len
+        decode_query_len = get_graph_decode_query_len(graph_meta)
         # fill buffer
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids
         input_buffers['position_ids'][:, :num_tokens] = position_ids
+        # 0 is reserved for padding requests
+        # fill zero to prevent writing to the unexpected blocks
+        input_buffers['block_offsets'].zero_()
         input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
@@ -271,11 +280,16 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
+            # FA3's mha_fwd internally computes seqlen_k = page_table.size(1) * page_size
+            # where page_table is the (padded) block_offsets buffer. We must use
+            # graph_meta.num_blocks * graph_meta.block_size to match the buffer shape
+            # allocated in make_buffers_cudagraph, not the runtime attn_metadata value.
+            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
             scheduler_metadata = self.update_meta_flashattn(
                 new_batch_size,
                 decode_query_len,
                 block_size=graph_meta.block_size,
-                max_seqlen_k=attn_metadata.max_kv_seqlen,
+                max_seqlen_k=max_seqlen_k,
                 cache_seqlens=input_buffers['kv_seqlens'],
             )
             num_meta = scheduler_metadata.size(0)

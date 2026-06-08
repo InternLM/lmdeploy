@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -94,21 +95,22 @@ template<int VecSize, class Ti, class To>
 void invokeCast(To* dst, const Ti* src, size_t n, cudaStream_t st)
 {
     cast_kernel<VecSize><<<256, 256, 0, st>>>(dst, src, n);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void extend_to_u8(uint8_t* dst, const uint4_t* src, size_t n, cudaStream_t st)
 {
-    invokeCast<8>(dst, src, n, st);
+    TM_SCOPE_CALL(invokeCast<8>(dst, src, n, st));
 }
 
 void compact_to_u4(uint4_t* dst, const uint8_t* src, size_t n, cudaStream_t st)
 {
-    invokeCast<8>(dst, src, n, st);
+    TM_SCOPE_CALL(invokeCast<8>(dst, src, n, st));
 }
 
 void extend_to_u16(uint16_t* dst, const uint4_t* src, size_t n, cudaStream_t st)
 {
-    invokeCast<8>(dst, src, n, st);
+    TM_SCOPE_CALL(invokeCast<8>(dst, src, n, st));
 }
 
 namespace {
@@ -126,6 +128,7 @@ __global__ void extend_u16_u8(uint16_t* dst, const uint8_t* src, size_t n)
 void extend_to_u16(uint16_t* dst, const uint8_t* src, size_t n, cudaStream_t st)
 {
     extend_u16_u8<<<(n + 511) / 512, 512, 0, st>>>(dst, src, n);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int VecSize, class T>
@@ -158,6 +161,7 @@ __global__ void fuse_scales_and_zeros_kernel(T* fused, const T* scales, T* zeros
 void fuse_scales_and_zeros(half* fused, const half* scales, half* zeros, size_t n, cudaStream_t st)
 {
     fuse_scales_and_zeros_kernel<4><<<256, 256, 0, st>>>(fused, scales, zeros, n);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int VecSize, class T>
@@ -203,6 +207,7 @@ void interleave_output_dims_impl(T* fused, const T* a, const T* b, int m, int k,
     const dim3    grid(1, k);  // x is a grid stride loop
 
     interleave_output_dims_kernel<kVecSize><<<grid, block, 0, st>>>(fused, a, b, m, k);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void
@@ -226,6 +231,7 @@ void AdjustUe8m0ScaleForHalf(uint8_t* data, int n, cudaStream_t st)
     constexpr int block = 512;
     const int     grid  = cdiv(n, block);
     adjust_ue8m0_scale_for_half_kernel<<<grid, block, 0, st>>>(data, n);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T0, class T1>
@@ -252,6 +258,8 @@ Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int bloc
     };
 
     TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
+
+    TM_CUDA_CHECK(cudaGetLastError());
 
     return ret;
 }

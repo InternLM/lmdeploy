@@ -91,6 +91,8 @@ class ReadyState(StateBase):
         self.to_state(RunningState)
 
     def evict(self):
+        # clean up meta before evict
+        self.seq.cleanup()
         self.to_state(WaitingState)
 
 

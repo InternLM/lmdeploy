@@ -178,6 +178,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>Qwen3-VL (2B - 235B)</li>
   <li>Qwen3.5 (0.8B - 397B)</li>
+  <li>Qwen3-Omni (30B-A3B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -188,6 +189,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
   <li>Intern-S1-Pro (1TB)</li>
+  <li>Intern-S2-Preview (35B-A3B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -224,15 +226,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-Since v0.3.0, the default prebuilt package is compiled on **CUDA 12**. Starting from v0.10.2, LMDeploy no longer supports CUDA 11 series.
-
-If you are using a GeForce RTX 50 series graphics card, please install the LMDeploy prebuilt package compiled with **CUDA 12.8** as follows:
-
-```shell
-export LMDEPLOY_VERSION=0.12.3
-export PYTHON_VERSION=312
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
-```
+Starting from **v0.13.0**, the default prebuilt wheels published on **PyPI** are built against **CUDA 12.8**, so `pip install lmdeploy` is sufficient for typical setups including GeForce RTX 50 series.
 
 ## Offline Batch Inference
 

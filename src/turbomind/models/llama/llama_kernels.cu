@@ -57,6 +57,7 @@ void invokeGatherOutput(int*         output_ids,
     int grid_size  = batch_size;
     gatherOutput<<<grid_size, block_size, 0, stream>>>(
         output_ids, ids, context_length, max_context_len, max_gen_step, max_output_len, batch_size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void updateOutput(int**      request_output_ids_ptrs,
@@ -104,6 +105,7 @@ void invokeUpdateOutput(int**        request_output_ids_ptrs,
                                                        request_output_ids_lens,
                                                        max_session_len,
                                                        token_generated);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int BLOCK_DIM>
@@ -152,6 +154,7 @@ void invokeCompactOutputIds(int*         cu_output_ids,
     constexpr int BLOCK_DIM = 128;
     compactOutputIds<BLOCK_DIM><<<batch_size, BLOCK_DIM, 0, stream>>>(
         cu_output_ids, output_ids, sequence_lengths, max_session_len, token_generated);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int N, int C>
@@ -201,7 +204,7 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
             std::copy_n(h_dst_ptr, N, param.dst_ptr.data());
             std::transform(h_elem_sz, h_elem_sz + N, param.stride.data(), [](int size) {
                 // Basic alignment check
-                FT_CHECK_WITH_INFO(size % sizeof(T) == 0, fmtstr("misalignment: %d %% %d", size, (int)sizeof(T)));
+                TM_CHECK(size % sizeof(T) == 0) << fmtstr("misalignment: %d %% %d", size, (int)sizeof(T));
                 return size / sizeof(T);
             });
             param.max_stride = *std::max_element(param.stride.begin(), param.stride.end());
@@ -215,6 +218,7 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
                 indexedCopy<T><<<batch_size, 128, 0, st>>>(param);
             }
         });
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeIndexedCopy(void**       h_src_ptr,
@@ -233,7 +237,8 @@ void invokeIndexedCopy(void**       h_src_ptr,
         }
         return false;
     });
-    FT_CHECK(success);
+    TM_CHECK(success);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void padLastTokenIds(int* token_ids, const int* context_length, int max_context_len, int batch_size)
@@ -247,6 +252,7 @@ void invokePadLastTokenIds(
     int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream)
 {
     padLastTokenIds<<<1, 512, 0, stream>>>(token_ids, context_length, max_context_len, batch_size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T>
@@ -263,6 +269,7 @@ void invokeGetFeatureOfLastToken(
     uint16_t* output, const uint16_t* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
 {
     getFeatureOfLastToken<<<batch_size, 256, 0, stream>>>(output, input, cu_seqlens, dims);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T, int C>
@@ -323,7 +330,7 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                 for (int i = 0; i < bsz; ++i) {
                     params.src_ptr[i] = (T*)src_ptr[c + i];
                     params.dst_ptr[i] = (T*)dst_ptr[c + i];
-                    FT_CHECK(size[c + i] % sizeof(T) == 0);
+                    TM_CHECK(size[c + i] % sizeof(T) == 0);
                     params.size[i] = size[c + i] / sizeof(T);
                 }
                 const int max_size = *std::max_element(params.size.begin(), params.size.end());
@@ -333,6 +340,7 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                     BatchedCopyLauncher<BatchedCopyParam<T, C>>{max_size, count, &params, st});
             }
         });
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T>
@@ -350,6 +358,7 @@ template<typename T>
 void invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream)
 {
     maskOutput<<<batch_size, 1024, 0, stream>>>(output, mask, dim);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #ifdef ENABLE_FP32
@@ -413,14 +422,14 @@ void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t 
     auto dispatch_t = [&](auto vec_size) {
         switch (src.dtype()) {
             case kFloat32:
-                return invoke(float{}, vec_size);
+                invoke(float{}, vec_size);
                 break;
             case kFloat16:
-                return invoke(half{}, vec_size);
+                invoke(half{}, vec_size);
                 break;
 #ifdef ENABLE_BF16
             case kBfloat16:
-                return invoke(__nv_bfloat16{}, vec_size);
+                invoke(__nv_bfloat16{}, vec_size);
                 break;
 #endif
             default:
@@ -429,14 +438,15 @@ void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t 
     };
 
     if (channels % 4 == 0) {
-        return dispatch_t(std::integral_constant<int, 4>{});
+        dispatch_t(std::integral_constant<int, 4>{});
     }
     else if (channels % 2 == 0) {
-        return dispatch_t(std::integral_constant<int, 2>{});
+        dispatch_t(std::integral_constant<int, 2>{});
     }
     else {
-        return dispatch_t(std::integral_constant<int, 1>{});
+        dispatch_t(std::integral_constant<int, 1>{});
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T>
@@ -483,8 +493,9 @@ void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor
         invoke(ushort{});
     }
     else {
-        TM_CHECK(0) << "unsupported byte stride: " << stride;
+        TM_LOG_FATAL("unsupported byte stride: {}", stride);
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int BLOCK_DIM, int MAX_COUNT>
@@ -539,6 +550,7 @@ void BatchPrefixSum(const int** srcs, const int* ns, int** dsts, int count, cuda
     const int     grid  = count;
 
     BatchPrefixSumKernel<block><<<grid, block, 0, st>>>(p_srcs, p_ns, p_dsts);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void AppendTokenIdsKernel(int** token_ids_ptrs, const int* output_ids, const int* positions, int batch_size)
@@ -557,6 +569,7 @@ void AppendTokenIds(
     constexpr int block = 128;
     const int     grid  = cdiv(batch_size, block);
     AppendTokenIdsKernel<<<grid, block, 0, stream>>>(token_ids_ptrs, output_ids, positions, batch_size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T>
@@ -586,6 +599,7 @@ void invokeSigmoidGateMultiply(
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

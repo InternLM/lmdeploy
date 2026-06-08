@@ -13,6 +13,7 @@ from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .interns1_pro_time_series import InternS1ProTimeSeriesModel
 from .patch import add_prefix, get_build_model_context
 from .qwen3_5 import (
     Qwen3_5Attention,
@@ -232,6 +233,9 @@ class Qwen3_5MoeModel(Qwen3_5Model):
                                                   device=device,
                                                   prefix=add_prefix('language_model', prefix))
 
+        # build time series model
+        if hasattr(config, 'ts_config'):
+            self.time_series = InternS1ProTimeSeriesModel(config.ts_config, dtype=dtype, device=device)
 
 class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
     """ModelForCausalLM."""
@@ -259,7 +263,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         self.ctx_mgr = ctx_mgr
 
         # build preprocessor
-        self.input_processor = Qwen3_5MoeInputProcessor(self.config)
+        self.input_processor = Qwen3_5MoeInputProcessor(self.config, dtype)
 
         # build model
         self.model = Qwen3_5MoeModel(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
@@ -351,6 +355,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
 
         params_dict = dict(self.named_parameters())
+        buffers_dict = dict(self.named_buffers())
         for name, loaded_weight in weights:
 
             if __skip_layers(name):
@@ -369,7 +374,9 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                 self._load_weight_experts(name, loaded_weight, params_dict)
             else:
                 for (param_name, weight_name, shard_id) in stacked_params_mapping:
-                    if weight_name not in name:
+                    # include dot to avoid partial match
+                    # e.g. in_proj_ba (in linear attn) vs in_proj_bias (in time series)
+                    if f'{weight_name}.' not in name:
                         continue
                     name = name.replace(weight_name, param_name)
                     param = params_dict[name]
@@ -384,9 +391,15 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                         load_weight(param, k, shard_id='k')
                         load_weight(param, v, shard_id='v')
                     else:
-                        for rms_norm_key in rms_norm_keys:
-                            if rms_norm_key in name and 'weight' in name:
-                                loaded_weight = loaded_weight + 1
-                                break
-                        param = params_dict[name]
-                        load_weight(param, loaded_weight)
+                        if name in params_dict:
+                            for rms_norm_key in rms_norm_keys:
+                                if rms_norm_key in name and 'weight' in name:
+                                    loaded_weight = loaded_weight + 1
+                                    break
+                            param = params_dict[name]
+                            load_weight(param, loaded_weight)
+                        elif name in buffers_dict:
+                            param = buffers_dict[name]
+                            load_weight(param, loaded_weight)
+                        else:
+                            raise KeyError(f'Unexpected weight name: {name}')

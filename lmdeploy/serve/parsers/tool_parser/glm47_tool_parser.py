@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from lmdeploy.serve.openai.protocol import (
     FunctionCall,
@@ -20,20 +21,25 @@ class Glm47ToolParser(XmlToolParser):
     ``function_name<arg_key>k</arg_key><arg_value>v</arg_value>...``
     """
 
-    tool_start_token = '<tool_call>'
-    tool_end_token = '</tool_call>'
     arg_key_start_token = '<arg_key>'
     arg_key_end_token = '</arg_key>'
     arg_value_start_token = '<arg_value>'
     arg_value_end_token = '</arg_value>'
+    _complete_payload_pattern = re.compile(
+        r'^\s*[^\s<]+(?:\s*<arg_key>[^<]+</arg_key>\s*<arg_value>.*?</arg_value>)*\s*$',
+        re.DOTALL,
+    )
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.tool_start_token
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        return '<tool_call>'
 
-    def get_tool_close_tag(self) -> str | None:
-        return self.tool_end_token
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
+        return '</tool_call>'
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'xml'
 
     def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, str], bool]:
@@ -46,6 +52,9 @@ class Glm47ToolParser(XmlToolParser):
             return None
         args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
         return ToolCall(function=FunctionCall(name=func_name, arguments=json.dumps(args_dict, ensure_ascii=False)))
+
+    def _validate_tool_payload(self, payload: str) -> bool:
+        return bool(self._complete_payload_pattern.fullmatch(payload))
 
     def _parse_payload(self, payload: str, *, final: bool = False) -> tuple[str | None, dict[str, str]]:
         payload = payload.strip()

@@ -94,6 +94,30 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                         offset=item['offset'][0],
                         image_token_id=token_id,
                     ))
+            elif modality == Modality.VIDEO:
+                second_per_grid = item.get('video_second_per_grid')
+                if second_per_grid is not None:
+                    second_per_grid = second_per_grid[0]
+                    if isinstance(second_per_grid, torch.Tensor) and second_per_grid.numel() == 1:
+                        second_per_grid = second_per_grid.item()
+                expanded_mm_items.append(
+                    dict(
+                        modality=modality,
+                        pixel_values_videos=item['feature'],
+                        video_grid_thw=item['video_grid_thw'][0],
+                        offset=item['offset'][0],
+                        second_per_grid=second_per_grid,
+                        video_token_id=token_id,
+                    ))
+            elif modality == Modality.AUDIO:
+                expanded_mm_items.append(
+                    dict(
+                        modality=modality,
+                        input_features=item['feature'],
+                        feature_attention_mask=item.get('feature_attention_mask'),
+                        offset=item['offset'][0],
+                        audio_token_id=token_id,
+                    ))
             elif modality == Modality.TIME_SERIES:
                 expanded_mm_items.append(
                     dict(
@@ -125,7 +149,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                 expanded_mm_items.append(
                     dict(
                         modality=modality,
-                        pixel_values=item['feature'][start_idx:end_idx],
+                        pixel_values=item['feature'][start_idx:end_idx].clone(),
                         image_grid_thw=image_grid_thw[i],
                         offset=item['offset'][i],
                         image_token_id=token_id,
@@ -143,10 +167,6 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                 frames_per_video.append(T)
                 total_frames += T
 
-            if num_items != total_frames:
-                expanded_mm_items.append(item)
-                continue
-
             patches_per_video = []
             for i in range(num_videos):
                 grid = video_grid_thw[i]
@@ -157,6 +177,25 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
             cumulative = torch.cumsum(torch.tensor(patches_per_video, dtype=torch.long), dim=0)
             slice_indices = [0] + cumulative.tolist()
 
+            if num_items != total_frames:
+                for video_idx in range(num_videos):
+                    start, end = slice_indices[video_idx], slice_indices[video_idx + 1]
+                    second_per_grid = item.get('video_second_per_grid')
+                    if second_per_grid is not None:
+                        second_per_grid = second_per_grid[video_idx]
+                        if isinstance(second_per_grid, torch.Tensor) and second_per_grid.numel() == 1:
+                            second_per_grid = second_per_grid.item()
+                    expanded_mm_items.append(
+                        dict(
+                            modality=modality,
+                            pixel_values_videos=item['feature'][start:end].clone(),
+                            video_grid_thw=video_grid_thw[video_idx],
+                            offset=item['offset'][video_idx],
+                            second_per_grid=second_per_grid,
+                            video_token_id=token_id,
+                        ))
+                continue
+
             frame_start_indices = [0]
             for i in range(num_videos):
                 frame_start_indices.append(frame_start_indices[-1] + frames_per_video[i])
@@ -164,19 +203,41 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
             for video_idx in range(num_videos):
                 start, end = slice_indices[video_idx], slice_indices[video_idx + 1]
                 frame_start, frame_end = frame_start_indices[video_idx], frame_start_indices[video_idx + 1]
+                second_per_grid = item.get('video_second_per_grid')
+                if second_per_grid is not None:
+                    second_per_grid = second_per_grid[video_idx]
+                    if isinstance(second_per_grid, torch.Tensor) and second_per_grid.numel() == 1:
+                        second_per_grid = second_per_grid.item()
 
                 # TODO: zhouxinyu, not sure per-frame split is good or not
                 # TODO: zhouxinyu, grid_thw [1, h, w] is only for qwen3vl
                 t, h, w = video_grid_thw[video_idx].tolist()
                 for frame_idx in range(t):
                     video_feature = item['feature'][start:end]
+                    offset = item['offset'][frame_start:frame_end][frame_idx]
                     expanded_mm_items.append(
                         dict(
                             modality=modality,
-                            pixel_values_videos=video_feature[frame_idx * h * w:(frame_idx + 1) * h * w],
+                            pixel_values_videos=video_feature[frame_idx * h * w:(frame_idx + 1) * h * w].clone(),
                             video_grid_thw=torch.tensor([1, h, w]),
-                            offset=item['offset'][frame_start:frame_end][frame_idx],
+                            offset=offset,
+                            second_per_grid=second_per_grid,
                             video_token_id=token_id,
                         ))
+        elif modality == Modality.AUDIO:
+            for i in range(num_items):
+                feature_attention_mask = item.get('feature_attention_mask')
+                if feature_attention_mask is not None:
+                    feature_attention_mask = feature_attention_mask[i:i + 1].clone()
+                expanded_mm_items.append(
+                    dict(
+                        modality=modality,
+                        input_features=item['feature'][i:i + 1].clone(),
+                        feature_attention_mask=feature_attention_mask,
+                        offset=item['offset'][i],
+                        audio_token_id=token_id,
+                    ))
 
+    # HF processors return features grouped by modality; offsets restore prompt order for mixed inputs.
+    expanded_mm_items.sort(key=lambda item: item['offset'][0])
     return expanded_mm_items

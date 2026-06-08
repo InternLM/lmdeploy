@@ -4,13 +4,9 @@ __pycache__/
 *$py.class
 .vscode/
 .idea/
+.cursor/
 # C extensions
 *.so
-
-# skills
-.cursor/
-!.claude/skills/docker-build/
-!.claude/skills/docker-build/SKILL.md
 
 # Distribution / packaging
 .Python
@@ -50,7 +46,9 @@ htmlcov/
 .coverage.*
 .cache
 *build*/
+!lmdeploy/turbomind/builders
 !builder/
+!.claude/skills/docker-build/
 lmdeploy/lib/
 lmdeploy/bin/
 dist/
@@ -63,6 +61,8 @@ install/
 # LMDeploy
 workspace/
 work_dir*/
+workdir/
+wscripts/
 
 # Huggingface
 *.bin
@@ -80,6 +80,7 @@ work_dir*/
 
 # Outputs and logs
 *.txt
+!requirements/*.txt
 *.log
 *.out
 *.csv
@@ -88,3 +89,7 @@ work_dir*/
 
 !CMakeLists.txt
 proxy_config.yml
+
+# Claude Code local config
+CLAUDE.local.md
+.worktrees/

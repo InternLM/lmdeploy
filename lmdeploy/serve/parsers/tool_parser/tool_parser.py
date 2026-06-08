@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from functools import cached_property
 from typing import TYPE_CHECKING
 
 import partial_json_parser
@@ -29,33 +28,29 @@ ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.t
 class ToolParser:
     """Base class for model-specific tool parsers."""
 
-    def __init__(self, tokenizer: object):
-        self.model_tokenizer = tokenizer
+    def __init__(self):
         self._tool_payload: str = ''
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
 
-    @cached_property
-    def vocab(self) -> dict[str, int]:
-        # NOTE: Only PreTrainedTokenizerFast is guaranteed to have .vocab
-        # whereas all tokenizers have .get_vocab()
-        return self.model_tokenizer.get_vocab()
-
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
         return BaseResponseParser.dump_tools(request)
 
-    def get_tool_open_tag(self) -> str | None:
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
         """Return tool opening tag string, or None if unsupported."""
         raise NotImplementedError('ToolParser.get_tool_open_tag has not been implemented!')
 
-    def get_tool_close_tag(self) -> str | None:
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
         """Return tool closing tag string, or None if unsupported."""
         raise NotImplementedError('ToolParser.get_tool_close_tag has not been implemented!')
 
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         """Return payload format for tool call body."""
         raise NotImplementedError('ToolParser.get_tool_payload_format has not been implemented!')
 
@@ -81,6 +76,42 @@ class ToolParser:
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         """Parse one complete tool payload into OpenAI tool call object."""
         raise NotImplementedError('ToolParser.parse_tool_call_complete has not been implemented!')
+
+    def validate_complete(self, text: str) -> bool:
+        """Return whether complete response text has valid tool calls."""
+        open_tag = self.get_tool_open_tag()
+        close_tag = self.get_tool_close_tag()
+
+        pos = 0
+        while True:
+            open_idx = text.find(open_tag, pos)
+            close_idx = text.find(close_tag, pos)
+            if open_idx < 0:
+                return close_idx < 0
+
+            payload_start = open_idx + len(open_tag)
+            if close_idx < payload_start:
+                return False
+
+            payload = text[payload_start:close_idx].strip()
+            if not self._validate_tool_payload(payload):
+                return False
+
+            pos = close_idx + len(close_tag)
+            if pos >= len(text):
+                return True
+
+    def _validate_tool_payload(self, payload: str) -> bool:
+        """Return whether one complete JSON tool payload is structurally
+        valid."""
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(obj, dict):
+            return False
+        name = obj.get('name')
+        return isinstance(name, str) and bool(name)
 
     def _decode_tool_incremental_json(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._tool_payload += added_text
@@ -124,7 +155,7 @@ class ToolParser:
             diff = args_json[self._args_emitted_len:]
             out.append(
                 DeltaToolCall(
-                    id=self._active_tool_call_id,
+                    id=None,
                     index=self._active_tool_index,
                     type=None,
                     function=DeltaFunctionCall(arguments=diff),

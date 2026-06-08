@@ -11,9 +11,10 @@
 
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/BlockTrie.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
+
+struct MultiModalData;
 
 struct Sequence {
 
@@ -46,6 +47,9 @@ struct Sequence {
     // embedding data
     mutable std::vector<Tensor> input_embeds;
     mutable std::vector<int>    input_embeds_offsets;
+
+    // multimodal inputs
+    mutable std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;
 
     // Gated DeltaNet linear attention persistent states (e.g. Qwen3.5-MoE).
     // Allocated on first request, preserved across requests for the same session,
@@ -90,18 +94,28 @@ public:
     };
     // clang-format on
 
-    explicit SequenceManager(const ModelParam& model_param,
-                             DataType          runtime_dtype,
-                             int               cache_block_seq_len,
-                             int               attn_tp_size,
-                             int               max_batch_size,
-                             double            block_count,
-                             int               chunk_size,
-                             bool              enable_prefix_caching,
-                             int               rank,
-                             int               attn_cp_size,
-                             core::Allocator   allocator,
-                             GetFreeMemSize    get_free_size);
+    explicit SequenceManager(int                     head_dim,
+                             int                     kv_head_num,
+                             int                     num_layer,
+                             const std::vector<int>& layer_types,
+                             int                     quant_policy,
+                             DataType                data_type,
+                             DataType                runtime_dtype,
+                             int                     linear_key_head_dim,
+                             int                     linear_value_head_dim,
+                             int                     linear_conv_kernel_dim,
+                             int                     linear_num_key_heads,
+                             int                     linear_num_value_heads,
+                             int                     cache_block_seq_len,
+                             int                     attn_tp_size,
+                             int                     max_batch_size,
+                             double                  block_count,
+                             int                     chunk_size,
+                             bool                    enable_prefix_caching,
+                             int                     rank,
+                             int                     attn_cp_size,
+                             core::Allocator         allocator,
+                             GetFreeMemSize          get_free_size);
 
     SequenceManager(const SequenceManager&)     = delete;
     SequenceManager(SequenceManager&&) noexcept = default;

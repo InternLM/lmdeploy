@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+import re
+from typing import Any
 
 from lmdeploy.serve.openai.protocol import (
     FunctionCall,
@@ -12,74 +13,19 @@ from lmdeploy.serve.openai.protocol import (
 from .tool_parser import ToolParserManager
 from .xml_tool_parser import XmlToolParser
 
-if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
-
-
-def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
-    """Return dict-like tool arguments for Qwen3Coder request normalization."""
-    if not isinstance(arguments, str):
-        return None
-
-    try:
-        parsed_arguments = json.loads(arguments)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if isinstance(parsed_arguments, dict):
-        return parsed_arguments
-    return None
-
 
 @ToolParserManager.register_module(['qwen3coder'])
 class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
-    tool_start_token = '<tool_call>'
-    tool_end_token = '</tool_call>'
     func_prefix = '<function='
     func_end_token = '</function>'
     param_prefix = '<parameter='
     param_end_token = '</parameter>'
-
-    def _normalize_request_messages(self, messages: list[dict]) -> list[dict] | None:
-        """Return a render-safe copy of request messages when needed."""
-        normalized_messages = None
-
-        for msg_idx, message in enumerate(messages):
-            if not isinstance(message, dict) or message.get('role') != 'assistant':
-                continue
-            tool_calls = message.get('tool_calls')
-            if not isinstance(tool_calls, list):
-                continue
-
-            normalized_tool_calls = None
-            for tool_idx, tool_call in enumerate(tool_calls):
-                if not isinstance(tool_call, dict):
-                    continue
-                function = tool_call.get('function')
-                if not isinstance(function, dict) or isinstance(function.get('arguments'), dict):
-                    continue
-
-                parsed_arguments = _parse_tool_call_arguments_dict(function.get('arguments'))
-                if parsed_arguments is None:
-                    continue
-
-                if normalized_messages is None:
-                    normalized_messages = list(messages)
-                if normalized_tool_calls is None:
-                    normalized_tool_calls = list(tool_calls)
-                    normalized_message = dict(message)
-                    normalized_message['tool_calls'] = normalized_tool_calls
-                    normalized_messages[msg_idx] = normalized_message
-
-                normalized_function = dict(function)
-                normalized_function['arguments'] = parsed_arguments
-
-                normalized_tool_call = dict(tool_call)
-                normalized_tool_call['function'] = normalized_function
-                normalized_tool_calls[tool_idx] = normalized_tool_call
-
-        return normalized_messages
+    _complete_payload_pattern = re.compile(
+        r'^\s*<function=[^\s>\n]+>\s*(?:<parameter=[^\s>\n]+>.*?</parameter>\s*)*</function>\s*$',
+        re.DOTALL,
+    )
 
     # Qwen3Coder closes tool argument JSON only when the model emits the
     # explicit function end marker (</function>). We intentionally avoid
@@ -88,23 +34,16 @@ class Qwen3CoderToolParser(XmlToolParser):
     def _close_json_on_final(self) -> bool:
         return False
 
-    def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
-        messages = request.messages
-        if not isinstance(messages, list):
-            return super().adjust_request(request)
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        return '<tool_call>'
 
-        normalized_messages = self._normalize_request_messages(messages)
-        if normalized_messages is None:
-            return super().adjust_request(request)
-        return super().adjust_request(request.model_copy(update={'messages': normalized_messages}))
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
+        return '</tool_call>'
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.tool_start_token
-
-    def get_tool_close_tag(self) -> str | None:
-        return self.tool_end_token
-
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'xml'
 
     def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
@@ -118,9 +57,12 @@ class Qwen3CoderToolParser(XmlToolParser):
         args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
         return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
 
+    def _validate_tool_payload(self, payload: str) -> bool:
+        return bool(self._complete_payload_pattern.fullmatch(payload))
+
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""
-        content = content.replace(self.tool_start_token, '').replace(self.tool_end_token, '').strip()
+        content = content.replace(self.get_tool_open_tag(), '').replace(self.get_tool_close_tag(), '').strip()
 
         func_name = None
         func_start = content.find(self.func_prefix)

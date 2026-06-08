@@ -4,6 +4,7 @@
 
 #include <type_traits>
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/attention/attention_template.h"
 #include "src/turbomind/kernels/attention/cta_map.h"
@@ -38,10 +39,12 @@ public:
         desc_.arch      = K::Arch::value;
         desc_.head_dim  = K::kHeadDim;
         desc_.data_type = data_type_v<typename K::T>;
+        desc_.causal    = K::kCausal;
 
         if constexpr (kIsDecoding) {
             desc_.kv_quant = kv_quant_from_type<typename K::Tkv>();
             desc_.qh       = K::CTA_H;
+            desc_.causal   = true;
         }
         else {
             desc_.kv_quant = 0;
@@ -50,18 +53,30 @@ public:
 
         auto func               = &attention_kernel<K>;
         info_.dynamic_smem_size = sizeof(typename K::SharedStorage);
+        info_.num_warps         = K::kWarpCount;
+        info_.name              = to_string(desc_);
 
-        cudaFuncGetAttributes(&info_.attr, func);
+        // cudaErrorInvalidDeviceFunction here means `func` is not registered
+        // with the CUDA runtime — almost always a link issue where the per-arch
+        // kernel's .obj got stripped (e.g. whole-archive missing on Windows).
+        // Fail loud with the kernel name instead of letting it surface later
+        // as an opaque "invalid argument" at kernel launch.
+        TM_CHECK(cudaFuncGetAttributes(&info_.attr, func) == cudaSuccess)
+            << "cudaFuncGetAttributes failed for attention kernel '" << info_.name
+            << "'; the kernel is not registered with the CUDA runtime ";
 
+        // Opt-in for >48KB dynamic smem.  May legitimately fail when the
+        // kernel exceeds the device's per-block optin; Registry::Add will
+        // filter such kernels out later.  Swallow any sticky error so it
+        // doesn't poison subsequent CUDA calls.
         if (info_.dynamic_smem_size > (48 << 10)) {
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
+            (void)cudaGetLastError();
         }
 
-        info_.num_warps = K::kWarpCount;
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &info_.max_active_ctas, func, info_.num_warps * WARP_SIZE, info_.dynamic_smem_size);
-
-        info_.name = to_string(desc_);
+        (void)cudaGetLastError();
     }
 
     bool Launch(const void* params, int sm_count) const override

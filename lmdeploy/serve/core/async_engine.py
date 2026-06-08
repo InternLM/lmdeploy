@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import random
+import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any, Literal
@@ -163,6 +164,11 @@ class AsyncEngine:
         # build stat loggers
         self._build_stat_loggers()
         self.epoch = 0
+        self._health_probe_task: asyncio.Task | None = None
+        self._last_scheduler_tick: int | None = None
+        self._last_scheduler_tick_time: float = time.monotonic()
+        self._dispatched_start_time: float | None = None
+        self._idle_schedule_start_time: float | None = None
 
     def close(self):
         self.session_mgr.clear()
@@ -240,6 +246,112 @@ class AsyncEngine:
         if asyncio.iscoroutine(result):
             return await result
         return result
+
+    def _validate_scheduler_progress(self, metrics, scheduler_stall_timeout: float) -> tuple[bool, str]:
+        now = time.monotonic()
+        if self._last_scheduler_tick is None or metrics.scheduler_tick != self._last_scheduler_tick:
+            self._last_scheduler_tick = metrics.scheduler_tick
+            self._last_scheduler_tick_time = now
+            self._idle_schedule_start_time = None
+
+        if self.session_mgr.request_handle_pool.num_dispatched == 0:
+            self._dispatched_start_time = None
+            self._idle_schedule_start_time = None
+            return True, ''
+
+        if self._dispatched_start_time is None:
+            self._dispatched_start_time = now
+
+        if metrics.active_seqs + metrics.waiting_seqs == 0:
+            if self._idle_schedule_start_time is None:
+                self._idle_schedule_start_time = now
+            if now - self._idle_schedule_start_time > scheduler_stall_timeout:
+                return False, ('Backend has dispatched request handle(s), but schedule metrics report no active or '
+                               'waiting sequences.')
+        else:
+            self._idle_schedule_start_time = None
+
+        last_progress_time = max(self._last_scheduler_tick_time, self._dispatched_start_time)
+        if now - last_progress_time > scheduler_stall_timeout:
+            return False, f'Backend scheduler_tick has not advanced for {now - last_progress_time:.1f}s.'
+        return True, ''
+
+    @staticmethod
+    def _make_health_result(status: str, message: str) -> dict:
+        return dict(status=status, message=message)
+
+    async def health_probe(self, timeout: float = 2.0, scheduler_stall_timeout: float = 15.0) -> dict:
+        """Probe backend health with a bounded, non-overlapping call."""
+        if self.is_sleeping:
+            return self._make_health_result(
+                status='sleeping',
+                message='Engine is sleeping.',
+            )
+
+        if self._health_probe_task is not None:
+            if not self._health_probe_task.done():
+                return self._make_health_result(
+                    status='unhealthy',
+                    message='Previous backend health probe is still pending.',
+                )
+            try:
+                self._health_probe_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            self._health_probe_task = None
+
+        self._health_probe_task = asyncio.create_task(self.engine.get_health_status(), name='EngineHealthProbe')
+        try:
+            backend_status = await asyncio.wait_for(asyncio.shield(self._health_probe_task), timeout=timeout)
+        except asyncio.TimeoutError:
+            return self._make_health_result(
+                status='unhealthy',
+                message=f'Backend health probe timed out after {timeout:.1f}s.',
+            )
+        except Exception as e:
+            self._health_probe_task = None
+            return self._make_health_result(
+                status='unhealthy',
+                message=f'Backend health probe failed: {e}',
+            )
+
+        self._health_probe_task = None
+        if not backend_status['alive']:
+            return self._make_health_result(
+                status='unhealthy',
+                message=backend_status['message'] or 'Backend reported unhealthy.',
+            )
+
+        schedule_metrics = backend_status['schedule_metrics']
+        if schedule_metrics is None:
+            if self.session_mgr.request_handle_pool.num_dispatched == 0:
+                self._dispatched_start_time = None
+                self._idle_schedule_start_time = None
+                return self._make_health_result(
+                    status='healthy',
+                    message=backend_status['message'] or 'Engine is healthy.',
+                )
+            return self._make_health_result(
+                status='unhealthy',
+                message='Backend did not return schedule metrics for dispatched request handle(s).',
+            )
+
+        valid_progress, invalid_message = self._validate_scheduler_progress(
+            schedule_metrics,
+            scheduler_stall_timeout=scheduler_stall_timeout,
+        )
+        if not valid_progress:
+            return self._make_health_result(
+                status='unhealthy',
+                message=invalid_message,
+            )
+
+        return self._make_health_result(
+            status='healthy',
+            message=backend_status['message'] or 'Engine is healthy.',
+        )
 
     async def do_log_stats(self):
         """Loop through CLI logger and Prometheus logger and output the
@@ -398,25 +510,36 @@ class AsyncEngine:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
         if messages:
-            prompt = messages
-            self.request_logger.log_prompt(session, prompt=prompt)
-            prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
-                                                                        do_preprocess=do_preprocess,
-                                                                        sequence_start=sequence_start,
-                                                                        adapter_name=adapter_name,
-                                                                        tools=tools,
-                                                                        reasoning_effort=reasoning_effort,
-                                                                        chat_template_kwargs=chat_template_kwargs,
-                                                                        media_io_kwargs=media_io_kwargs,
-                                                                        mm_processor_kwargs=mm_processor_kwargs,
-                                                                        **kwargs)
-            prompt = prompt_input.get('prompt')
-            input_ids = prompt_input.get('input_ids')
-            self.request_logger.log_inputs(session,
-                                           prompt=prompt,
-                                           prompt_token_ids=input_ids,
-                                           gen_config=gen_config,
-                                           adapter_name=adapter_name)
+            try:
+                prompt = messages
+                self.request_logger.log_prompt(session, prompt=prompt)
+                prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
+                                                                            do_preprocess=do_preprocess,
+                                                                            sequence_start=sequence_start,
+                                                                            adapter_name=adapter_name,
+                                                                            tools=tools,
+                                                                            reasoning_effort=reasoning_effort,
+                                                                            chat_template_kwargs=chat_template_kwargs,
+                                                                            media_io_kwargs=media_io_kwargs,
+                                                                            mm_processor_kwargs=mm_processor_kwargs,
+                                                                            **kwargs)
+                prompt = prompt_input.get('prompt')
+                input_ids = prompt_input.get('input_ids')
+                self.request_logger.log_inputs(session,
+                                            prompt=prompt,
+                                            prompt_token_ids=input_ids,
+                                            gen_config=gen_config,
+                                            adapter_name=adapter_name)
+            except Exception:
+                logger.exception('[generate] error in prompt processing')
+                metrics_processor.increase_failed_requests('error')
+                yield GenOut(response='in prompt processing error',
+                             history_token_len=session.step,
+                             input_token_len=len(input_ids) if input_ids is not None else 0,
+                             generate_token_len=0,
+                             finish_reason='error',
+                             token_ids=[])
+                return
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
@@ -491,6 +614,7 @@ class AsyncEngine:
             output_len, gen_len = 0, 0
             state = DetokenizeState(input_len)
             response = ''
+            response_chunks = []
             finish_reason = None
             async with self.safe_run(handle,
                                      session=session,
@@ -534,6 +658,7 @@ class AsyncEngine:
                         state,
                         skip_special_tokens=gen_config.skip_special_tokens,
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
+                    response_chunks.append(response)
                     res = token_ids[ids_offset:]
 
                     out = GenOut(response,
@@ -553,6 +678,7 @@ class AsyncEngine:
                         out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
+                self.request_logger.log_response(session_id, response_chunks)
 
                 if not is_error(outputs.status):
                     if outputs.status == ResponseType.CANCEL:
@@ -713,6 +839,8 @@ class AsyncEngine:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
+                if sequence_end and self.backend == 'pytorch':
+                    await handle.async_end(session.session_id)
 
         create_sessions = False
         if sessions is None:
@@ -720,9 +848,6 @@ class AsyncEngine:
             sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
-        if sequence_end and self.backend == 'pytorch':
-            for session in sessions:
-                await session.async_close()
         if sequence_end and create_sessions:
             for session in sessions:
                 self.session_mgr.remove(session)

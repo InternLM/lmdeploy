@@ -21,8 +21,8 @@ class XmlToolParser(ToolParser):
     Subclasses only need to implement XML payload extraction.
     """
 
-    def __init__(self, tokenizer: object):
-        super().__init__(tokenizer)
+    def __init__(self):
+        super().__init__()
         self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
         self._xml_has_emitted_json_start = False
         self._xml_json_closed = False
@@ -81,7 +81,7 @@ class XmlToolParser(ToolParser):
         if json_fragments:
             out.append(
                 DeltaToolCall(
-                    id=self._active_tool_call_id,
+                    id=None,
                     index=self._active_tool_index,
                     type=None,
                     function=DeltaFunctionCall(arguments=''.join(json_fragments)),

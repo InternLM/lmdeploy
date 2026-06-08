@@ -71,7 +71,7 @@ class _FakeServerContext:
         self.async_engine = _FakeEngine()
         self.response_parser_cls = response_parser_cls
 
-    def get_session(self, _session_id: int):
+    def create_session(self, _session_id: int):
         return _FakeSession()
 
 
@@ -83,22 +83,27 @@ class _ToolAndReasoningParser:
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         if delta_text.startswith('Hello'):
-            return DeltaMessage(role='assistant', reasoning_content='internal reasoning', content='visible text'), False
+            return [(DeltaMessage(role='assistant',
+                                  reasoning_content='internal reasoning',
+                                  content='visible text'), False)]
         if delta_text.startswith('world'):
-            return DeltaMessage(
-                role='assistant',
-                tool_calls=[
-                    DeltaToolCall(
-                        index=0,
-                        id='toolu_123',
-                        function=DeltaFunctionCall(
-                            name='search',
-                            arguments='{"query":"lmdeploy"}',
-                        ),
-                    )
-                ],
-            ), True
-        return None, False
+            return [(
+                DeltaMessage(
+                    role='assistant',
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=0,
+                            id='toolu_123',
+                            function=DeltaFunctionCall(
+                                name='search',
+                                arguments='{"query":"lmdeploy"}',
+                            ),
+                        )
+                    ],
+                ),
+                True,
+            )]
+        return []
 
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return (
@@ -369,31 +374,37 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
             self.calls += 1
             if self.calls == 1:
-                return DeltaMessage(
+                return [(
+                    DeltaMessage(
+                        role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(
+                                index=0,
+                                id='toolu_123',
+                                function=DeltaFunctionCall(
+                                    name='search',
+                                    arguments='{"query":',
+                                ),
+                            )
+                        ],
+                    ),
+                    True,
+                )]
+            if self.calls == 2:
+                return [(DeltaMessage(role='assistant', content='interlude'), False)]
+            return [(
+                DeltaMessage(
                     role='assistant',
                     tool_calls=[
                         DeltaToolCall(
                             index=0,
                             id='toolu_123',
-                            function=DeltaFunctionCall(
-                                name='search',
-                                arguments='{"query":',
-                            ),
+                            function=DeltaFunctionCall(arguments='"lmdeploy"}'),
                         )
                     ],
-                ), True
-            if self.calls == 2:
-                return DeltaMessage(role='assistant', content='interlude'), False
-            return DeltaMessage(
-                role='assistant',
-                tool_calls=[
-                    DeltaToolCall(
-                        index=0,
-                        id='toolu_123',
-                        function=DeltaFunctionCall(arguments='"lmdeploy"}'),
-                    )
-                ],
-            ), True
+                ),
+                True,
+            )]
 
     async def _result_generator():
         for idx, finish_reason in enumerate([None, None, 'stop'], start=1):
@@ -435,6 +446,58 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
         for item in payloads[:resumed_tool_delta_index])
 
 
+def test_stream_messages_response_maps_stop_to_tool_use_on_empty_terminal_chunk():
+    class _ToolParser:
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            if delta_text == 'chunk-1':
+                return [(
+                    DeltaMessage(
+                        role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(
+                                index=0,
+                                id='toolu_123',
+                                function=DeltaFunctionCall(
+                                    name='search',
+                                    arguments='{"query":"lmdeploy"}',
+                                ),
+                            )
+                        ],
+                    ),
+                    True,
+                )]
+            return []
+
+    async def _result_generator():
+        for idx, finish_reason in enumerate([None, 'stop'], start=1):
+            yield SimpleNamespace(
+                response=f'chunk-{idx}',
+                token_ids=[idx],
+                input_token_len=8,
+                generate_token_len=idx,
+                finish_reason=finish_reason,
+            )
+
+    async def _collect_events():
+        return [
+            event async for event in stream_messages_response(
+                _result_generator(),
+                request_id='msg_test',
+                model='fake-model',
+                response_parser=_ToolParser(),
+            )
+        ]
+
+    events = asyncio.run(_collect_events())
+    payloads = [
+        json.loads(line.removeprefix('data: ')) for event in events for line in event.splitlines()
+        if line.startswith('data: ')
+    ]
+
+    message_delta = next(item for item in payloads if item['type'] == 'message_delta')
+    assert message_delta['delta']['stop_reason'] == 'tool_use'
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(
@@ -447,6 +510,33 @@ def test_count_tokens():
                 'content': 'count these tokens',
             }],
             'system': 'You are helpful.',
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data['input_tokens'], int)
+    assert data['input_tokens'] > 0
+
+
+def test_count_tokens_accepts_tools():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages/count_tokens',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'messages': [{
+                'role': 'user',
+                'content': 'count these tokens',
+            }],
+            'tools': [{
+                'name': 'search',
+                'description': 'demo',
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {},
+                },
+            }],
         },
     )
     assert response.status_code == 200

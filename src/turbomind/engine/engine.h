@@ -8,6 +8,7 @@
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/vision_model.h"
 
 namespace turbomind {
 
@@ -26,14 +27,15 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    Engine(DataType      dtype,
-           EngineParam   param,
-           LanguageModel model,
-           Context&      ctx,
-           Gateway&      gateway,
-           int           device_id,
-           int           queue_id,
-           int           phases);
+    Engine(EngineParam                  param,
+           LanguageModel                model,
+           std::unique_ptr<VisionModel> vision_model,  // null for text-only
+           const ModelWeight&           weights,
+           Context&                     ctx,
+           Gateway&                     gateway,
+           int                          device_id,
+           int                          queue_id,
+           int                          phases);
 
     void Start();
 

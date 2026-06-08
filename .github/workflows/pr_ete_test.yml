@@ -47,7 +47,7 @@ jobs:
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
       - name: Install lmdeploy
         run: |
           python3 -m pip install -r requirements/lite.txt
@@ -64,9 +64,6 @@ jobs:
         run: |
           pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=${{env.REPORT_DIR}} --clean-alluredir
           pytest autotest -m 'pr_test and gpu_num_1' -n 2 -x --alluredir=${{env.REPORT_DIR}}
-      - name: Update transformers
-        run: |
-          pip install transformers==4.57.3
       - name: Test restful server - turbomind Qwen3-32B
         run: |
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log 2>&1 &

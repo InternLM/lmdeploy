@@ -99,7 +99,6 @@ class SubCliServe:
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
-        ArgumentHelper.disable_vision_encoder(pt_group)
         ArgumentHelper.logprobs_mode(pt_group)
         ArgumentHelper.dllm_block_length(pt_group)
         ArgumentHelper.dllm_unmasking_strategy(pt_group)
@@ -110,6 +109,7 @@ class SubCliServe:
         ArgumentHelper.kernel_block_size(pt_group)
 
         # common engine args
+        disable_vision_encoder = ArgumentHelper.disable_vision_encoder(pt_group)
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
@@ -151,6 +151,7 @@ class SubCliServe:
         tb_group._group_actions.append(hf_overrides)
         tb_group._group_actions.append(disable_metrics)
         tb_group._group_actions.append(dp)
+        tb_group._group_actions.append(disable_vision_encoder)
         ArgumentHelper.cp(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
@@ -276,6 +277,7 @@ class SubCliServe:
                                                    max_prefill_iters=args.max_prefill_iters,
                                                    async_=args.async_,
                                                    communicator=args.communicator,
+                                                   disable_vision_encoder=args.disable_vision_encoder,
                                                    enable_metrics=not args.disable_metrics,
                                                    hf_overrides=args.hf_overrides)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
