@@ -139,6 +139,36 @@ class VariableInterface:
         return cls.async_engine.backend_config
 
 
+async def _cleanup_result_generators(result_generators, sessions):
+    """Close engine generators and remove API sessions idempotently."""
+    for generator in result_generators:
+        try:
+            await generator.aclose()
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        except Exception:
+            logger.exception('Close result generator failed.')
+    session_mgr = VariableInterface.get_session_manager()
+    for session in sessions:
+        session_mgr.remove(session)
+
+
+async def _with_request_cleanup(generator, result_generators, sessions):
+    """Yield from an API generator and cleanup when the HTTP task exits."""
+    try:
+        async for item in generator:
+            yield item
+    finally:
+        cleanup_task = asyncio.create_task(_cleanup_result_generators(result_generators, sessions),
+                                           name='api_request_cleanup')
+        try:
+            await asyncio.shield(cleanup_task)
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            logger.exception('API request cleanup failed.')
+
+
 router = APIRouter()
 server_context = VariableInterface()
 
@@ -636,7 +666,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     final_logprobs = []
@@ -645,7 +676,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     text = ''
     cache_block_ids = []
     remote_token_ids = []
-    async for res in result_generator:
+    async for res in _with_request_cleanup(result_generator, [result_generator], [session]):
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
             await session.async_abort()
@@ -906,7 +937,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), generators, sessions)
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     usage = UsageInfo()
@@ -914,13 +946,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     cache_block_ids = []
     remote_token_ids = []
 
-    async def _inner_call(i, generator):
+    async def _inner_call(i, generator, session):
         nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
         text = ''
-        async for res in generator:
+        async for res in _with_request_cleanup(generator, [generator], [session]):
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
                 await VariableInterface.async_engine.stop_session(request.session_id)
@@ -951,7 +983,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
 
-    await asyncio.gather(*[_inner_call(i, generators[i]) for i in range(len(generators))])
+    await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
 
     response = CompletionResponse(
         id=request_id,
@@ -1056,7 +1088,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         yield 'data: [DONE]\n\n'
 
     if request.stream:
-        return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(generate_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     response = None
 
@@ -1064,7 +1097,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''
         output_ids = []
         logprobs = []
-        async for res in result_generator:
+        async for res in _with_request_cleanup(result_generator, [result_generator], [session]):
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
                 await session.async_abort()
