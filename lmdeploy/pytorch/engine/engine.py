@@ -539,6 +539,8 @@ class Engine(EngineBase):
         logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
                     wakeup_tags, sorted(self._sleeping_tags))
         self.executor.wakeup(wakeup_tags)
+        if wakeup_tags is None or 'kv_cache' in wakeup_tags:
+            self.executor.warmup()
         if wakeup_tags is None:
             self._sleeping_tags.clear()
         else:

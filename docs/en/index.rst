@@ -79,6 +79,7 @@ Documentation
 
    multi_modal/vl_pipeline.md
    multi_modal/api_server_vl.md
+   multi_modal/multimodal_inputs.md
    multi_modal/index.rst
 
 .. _quantization:

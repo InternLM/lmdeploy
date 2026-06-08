@@ -17,18 +17,21 @@ constexpr int kCTA_S   = 64;
 constexpr int kWARP_Q  = 16;
 constexpr int kStages  = 2;
 
-template<class T>
+template<class T, bool Causal = true>
 using KT = AttentionUniversal<
     arch::Sm80,
     Mainloop<Sm80_CpAsync<kStages>, Impl<MMA_16816, T, T, 1, kCTA_Q, kCTA_S, 1, kWARP_Q, kCTA_S, kHeadDim, kStages>>,
     LinearIteratorFactory<T, kCTA_S, kHeadDim>,
-    AttentionCtaMap>;
+    AttentionCtaMap,
+    Causal>;
 
 namespace {
 Registrar reg([](Collector& c) {
     c.add<KT<half>>();
+    c.add<KT<half, false>>();
 #if ENABLE_BF16
     c.add<KT<nv_bfloat16>>();
+    c.add<KT<nv_bfloat16, false>>();
 #endif
 });
 }  // namespace

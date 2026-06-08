@@ -3,7 +3,13 @@ import time
 
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid, resolve_eval_config_name
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_eval_preset_config,
+    get_func_config_list,
+    get_workerid,
+    resolve_eval_config_name,
+)
 from utils.evaluate_utils import mllm_eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
@@ -11,7 +17,7 @@ from utils.run_restful_chat import start_openai_service, start_proxy_server, sto
 
 def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
     eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
-    extra_config = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
+    extra_config = get_eval_preset_config(config, run_config, eval_config_name, mllm=True)
     eval_path = config.get('mllm_eval_path')
     if eval_subpath:
         eval_path = os.path.join(eval_path, eval_subpath)
@@ -83,7 +89,7 @@ def _run_proxy_distributed_mllm_test(
 
     eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    preset_config = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name, mllm=True)
     model_name = run_config['model']
     model_path = os.path.join(config['model_path'], model_name)
 

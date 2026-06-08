@@ -348,8 +348,11 @@ class BaseModelAgent:
         """warmup."""
         from lmdeploy.pytorch.envs import skip_warmup
         if skip_warmup:
+            if self.rank == 0:
+                logger.warning('Engine warmup is skipped. Set LMDEPLOY_SKIP_WARMUP=0 to enable warmup.')
             return
-
+        if self.rank == 0:
+            logger.info('Starting engine warmup. This may take a while...')
         with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
             world_size = self.dist_config.world_size
@@ -445,6 +448,7 @@ class BaseModelAgent:
             origin_logits = logits
             logits, raw_logprobs = await logits_processor(origin_logits)
             next_token_ids = logits_processor.sampling(logits)
+            await logits_processor.accept_guided_tokens(next_token_ids)
             logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
             if logprobs is not None:
                 logprobs = BatchedLogProbs(
@@ -1102,10 +1106,11 @@ class BaseModelAgent:
 
     def reset_graph_runner(self):
         """Reset graph runner to prevent tp hanging."""
-        if hasattr(self.patched_model, 'reset'):
-            self.patched_model.reset()
+        with self.all_context():
+            if hasattr(self.patched_model, 'reset'):
+                self.patched_model.reset()
 
-        self.spec_agent.reset_graph_runner()
+            self.spec_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
@@ -1178,7 +1183,7 @@ class BaseModelAgent:
                     continue
 
                 w = list(ModelWeightLoader._rename_weights_iterator(w, m))
-                logger.info(f'Update_params: {tag}_num_tensors={len(w)}')
+                logger.debug(f'Update_params: {tag}_num_tensors={len(w)}')
                 m.load_weights(iter(w))
 
                 if self._update_params_ipc_event is not None:

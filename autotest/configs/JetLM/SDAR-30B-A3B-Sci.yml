@@ -1,0 +1,24 @@
+# HF model id: JetLM/SDAR-30B-A3B-Sci
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 2
+    extra:
+      session-len: 65536
+      dllm-block-length: 4
+      dllm-denoising-steps: 4
+      dllm-confidence-threshold: 0.9
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 1.0
+    top-p: 1.0
+    top-k: 0
+  deps:
+    transformers: 4.57.6

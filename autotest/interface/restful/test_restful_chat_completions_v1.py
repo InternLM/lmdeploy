@@ -471,7 +471,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             continue
         assert output.get('choices')[0].get('finish_reason') == 'length'
-        assert output.get('choices')[0].get('message').get('content') == ''
+        assert not output.get('choices')[0].get('message').get('content')
 
     def test_longtext_input_streaming(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -489,7 +489,7 @@ class TestRestfulInterfaceChatCompletions:
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
         assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
-        assert outputList[0].get('choices')[0].get('delta').get('content') == ''
+        assert not outputList[0].get('choices')[0].get('delta').get('content')
         assert len(outputList) == 1
 
     def test_ignore_eos(self, backend, model_case):
