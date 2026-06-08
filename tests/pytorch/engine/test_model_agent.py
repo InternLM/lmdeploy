@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -256,6 +257,36 @@ class TestResetGraphRunner:
             'main_reset',
             'spec_reset',
             'exit_all_context',
+        ]
+
+
+class TestModelAgentWakeup:
+
+    def test_dp_kv_cache_wakeup_syncs_inside_wakeup_rpc(self, monkeypatch):
+        from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
+
+        events = []
+        cpu_group = object()
+
+        def _barrier(group=None):
+            events.append(('barrier', group))
+
+        monkeypatch.setattr(agent_module.dist, 'barrier', _barrier)
+
+        model_agent = BaseModelAgent.__new__(BaseModelAgent)
+        model_agent.state = SleepWakeupState()
+        model_agent.dist_config = SimpleNamespace(dp=2)
+        model_agent.dist_ctx = SimpleNamespace(cpu_group=cpu_group)
+        model_agent.build_cache_engine = lambda: events.append('build_cache_engine')
+
+        model_agent.wakeup(['kv_cache'])
+
+        assert model_agent.state.is_sleeping is False
+        assert model_agent.state.to_wakeup.is_set()
+        assert events == [
+            'build_cache_engine',
+            ('barrier', cpu_group),
         ]
 
     def test_spec_agent_reset_graph_runner_uses_draft_context(self):
