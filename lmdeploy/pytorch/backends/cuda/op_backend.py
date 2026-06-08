@@ -139,7 +139,8 @@ class CudaOpsBackend(DefaultOpsBackend):
     def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig, decoding_query_len: int):
         """Update meta for flashmla."""
         import flash_mla
-        num_attention_heads = model_config.num_attention_heads * decoding_query_len
+        num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
+        num_attention_heads *= decoding_query_len
         is_fp8_kvcache = model_config.use_mla_fp8_cache
         index_topk = model_config.mla_index_topk
         num_heads_q = None if index_topk is None else num_attention_heads
@@ -168,12 +169,13 @@ class CudaOpsBackend(DefaultOpsBackend):
         # (paged KV without varlen_k). get_scheduler_metadata must use
         # the same value to produce a correctly-sized metadata buffer.
         max_seqlen_k = attn_metadata.block_offsets.size(1) * step_context.model_config.block_size
+        num_attention_heads, num_key_value_heads = step_context.model_config.get_num_qkv_head_by_tp()
         scheduler_metadata = _get_meta_flashattn(
             batch_size=batch_size,
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
-            num_heads_q=step_context.model_config.num_attention_heads,
-            num_heads_kv=step_context.model_config.num_key_value_heads,
+            num_heads_q=num_attention_heads,
+            num_heads_kv=num_key_value_heads,
             headdim=step_context.model_config.head_dim,
             cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
             qkv_dtype=step_context.model_config.dtype,

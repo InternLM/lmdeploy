@@ -345,6 +345,7 @@ class ModelConfig:
     vocab_size: int = 40000
     hf_config: Any = None
     llm_config: Any = None
+    dist_config: DistConfig = None
     cogvlm_style: bool = False
     custom_module_map: dict[str, setattr] = None
 
@@ -394,6 +395,19 @@ class ModelConfig:
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
+
+    def get_num_qkv_head_by_tp(self):
+        """Get q and kv heads per TP rank."""
+        dist_config = self.dist_config or DistConfig()
+        tp = dist_config.attn_tp
+        assert self.num_attention_heads % tp == 0
+        if self.num_key_value_heads >= tp:
+            assert self.num_key_value_heads % tp == 0
+        else:
+            assert tp % self.num_key_value_heads == 0
+        num_q_heads = self.num_attention_heads // tp
+        num_kv_heads = max(self.num_key_value_heads // tp, 1)
+        return num_q_heads, num_kv_heads
 
     @classmethod
     def from_pretrained(
@@ -504,6 +518,7 @@ class ModelConfig:
             assert model_config.num_key_value_heads % tp == 0
         else:
             assert tp % model_config.num_key_value_heads == 0
+        model_config.dist_config = dist_config
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)

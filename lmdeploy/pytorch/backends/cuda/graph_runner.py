@@ -101,6 +101,8 @@ class CUDASingleGraphRunner:
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
         self.USE_GRAPH = not fake_capture
+        logger.info(f'Initialized CUDASingleGraphRunner with max_batches={max_batches}, max_tokens={max_tokens}, '
+                    f'num_blocks={num_blocks}, is_decoding={is_decoding}, use_graph={self.USE_GRAPH}')
 
     @record_function('capture_cudagraph')
     def capture(self, **kwargs):
