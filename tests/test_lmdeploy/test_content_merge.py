@@ -237,6 +237,11 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
             self.image_io = image_io
             self.kwargs = kwargs
 
+    class FakeAudioMediaIO:
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
     def fake_load_from_url(data_src, media_io):
         load_calls.append((data_src, type(media_io).__name__))
         if isinstance(media_io, FakeVideoMediaIO):
@@ -244,6 +249,7 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         return f'loaded:{data_src}'
 
     monkeypatch.setattr(multimodal_module, 'VideoMediaIO', FakeVideoMediaIO)
+    monkeypatch.setattr(multimodal_module, 'AudioMediaIO', FakeAudioMediaIO)
     monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
 
     messages = [{
@@ -284,6 +290,11 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
                 'fps': 1
             },
             {
+                'type': 'audio',
+                'audio': 'file:///tmp/a.wav',
+                'sample_rate': 16000
+            },
+            {
                 'type': 'time_series',
                 'time_series': {
                     'url': 'file:///tmp/a.npy',
@@ -311,11 +322,13 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
             'duration': 2
         }
     }
-    assert content[6] == {'type': Modality.TIME_SERIES, 'data': 'loaded:file:///tmp/a.npy', 'sr': 16000}
+    assert content[6] == {'type': Modality.AUDIO, 'data': 'loaded:file:///tmp/a.wav', 'sample_rate': 16000}
+    assert content[7] == {'type': Modality.TIME_SERIES, 'data': 'loaded:file:///tmp/a.npy', 'sr': 16000}
     assert load_calls == [
         ('http://example.com/a.png', 'ImageMediaIO'),
         ('/tmp/b.png', 'ImageMediaIO'),
         ('file:///tmp/a.mp4', 'FakeVideoMediaIO'),
+        ('file:///tmp/a.wav', 'FakeAudioMediaIO'),
         ('file:///tmp/a.npy', 'TimeSeriesMediaIO'),
     ]
 
@@ -332,9 +345,9 @@ def test_async_parse_multimodal_item_rejects_missing_payload(item):
 
 def test_async_parse_multimodal_item_rejects_unknown_type():
     """Test unknown multimodal item types still fail explicitly."""
-    messages = [{'role': 'user', 'content': [{'type': 'audio', 'audio': 'file:///tmp/a.wav'}]}]
+    messages = [{'role': 'user', 'content': [{'type': 'unknown_media', 'unknown_media': 'file:///tmp/a.bin'}]}]
 
-    with pytest.raises(NotImplementedError, match='unknown type: audio'):
+    with pytest.raises(NotImplementedError, match='unknown type: unknown_media'):
         asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
 
 
@@ -342,7 +355,10 @@ def test_has_multimodal_input_detects_all_supported_types():
     """Test multimodal detection includes every supported item type."""
     processor = MultimodalProcessor(tokenizer=None, chat_template=None)
 
-    for item_type in ['image_url', 'image_data', 'image', 'video_url', 'video', 'time_series_url', 'time_series']:
+    for item_type in [
+            'image_url', 'image_data', 'image', 'video_url', 'video', 'audio_url', 'audio', 'time_series_url',
+            'time_series'
+    ]:
         assert processor._has_multimodal_input([{'role': 'user', 'content': [{'type': item_type}]}])
     assert not processor._has_multimodal_input([{'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]}])
 

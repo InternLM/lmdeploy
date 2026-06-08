@@ -1,0 +1,22 @@
+# HF model id: zai-org/GLM-5-FP8
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 8
+    extra:
+      cache-max-entry-count: 0.9
+      max-batch-size: 128
+      session-len: 65536
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - prefix_cache
+  gen_config:
+    temperature: 0.6

@@ -9,6 +9,7 @@
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 // #include "dbg.h"
@@ -21,6 +22,7 @@ using std::unique_ptr;
 struct ModelExecutor::Impl {
 
     LanguageModel& model_;
+    VisionModel*   vision_model_;  // nullable
     LlamaLinear&   linear_;
 
     const int device_id_;
@@ -62,10 +64,16 @@ struct ModelExecutor::Impl {
         BatchCopy copy;
         TensorMap env{{"batch", d.buf()}, {"copy", copy.buf()}};
 
+        if (vision_model_) {
+            vision_model_->Run(BatchOp::kPrepare, d.phase, env);
+        }
         model_.Run(BatchOp::kPrepare, d.phase, env);
         // dbg(copy);
         copy.Run();
 
+        if (vision_model_) {
+            vision_model_->Run(BatchOp::kForward, d.phase, env);
+        }
         model_.Run(BatchOp::kForward, d.phase, env);
 
         model_.Run(BatchOp::kUnprep, d.phase, env);
@@ -78,11 +86,17 @@ struct ModelExecutor::Impl {
     }
 
     Impl(LanguageModel&                model,
+         VisionModel*                  vision_model,
          Context&                      context,
          int                           device_id,
          Queue<unique_ptr<BatchData>>& inbound,
          Queue<unique_ptr<BatchData>>& outbound):
-        model_{model}, linear_{*context.linear}, device_id_{device_id}, inbound_{inbound}, outbound_{outbound}
+        model_{model},
+        vision_model_{vision_model},
+        linear_{*context.linear},
+        device_id_{device_id},
+        inbound_{inbound},
+        outbound_{outbound}
     {
     }
 
@@ -106,11 +120,17 @@ ModelExecutor::ModelExecutor(ModelExecutor&&) noexcept = default;
 ModelExecutor& ModelExecutor::operator=(ModelExecutor&&) noexcept = default;
 
 ModelExecutor::ModelExecutor(LanguageModel&                model,
+                             VisionModel*                  vision_model,
                              Context&                      context,
                              int                           device_id,
                              Queue<unique_ptr<BatchData>>& inbound,
                              Queue<unique_ptr<BatchData>>& outbound):
-    impl_{std::make_unique<Impl>(model, context, device_id, inbound, outbound)}
+    impl_{std::make_unique<Impl>(model,  //
+                                 vision_model,
+                                 context,
+                                 device_id,
+                                 inbound,
+                                 outbound)}
 {
 }
 

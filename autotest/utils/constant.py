@@ -4,6 +4,8 @@ DEFAULT_PORT = 23333
 DEFAULT_SERVER = os.getenv('MASTER_ADDR', '127.0.0.1')
 PROXY_PORT = 8000
 
+# Scalar presets for export/normalize fallback. Model-specific sampling (reasoning-effort,
+# top-k, chat-template-kwargs, …) live in per-model ``autotest/configs/**/gen_config``.
 EVAL_CONFIGS = {
     'default': {
         'query_per_second': 4,
@@ -34,7 +36,7 @@ EVAL_CONFIGS = {
         'temperature': 0.6,
         'openai_extra_kwargs': {
             'reasoning_effort': 'high',
-        }
+        },
     },
     'gpt-32k': {
         'query_per_second': 4,
@@ -44,7 +46,7 @@ EVAL_CONFIGS = {
         'temperature': 0.6,
         'openai_extra_kwargs': {
             'reasoning_effort': 'high',
-        }
+        },
     },
     'gpt-2batch': {
         'query_per_second': 4,
@@ -54,7 +56,7 @@ EVAL_CONFIGS = {
         'temperature': 0.6,
         'openai_extra_kwargs': {
             'reasoning_effort': 'high',
-        }
+        },
     },
     'sdar': {
         'query_per_second': 4,
@@ -67,7 +69,7 @@ EVAL_CONFIGS = {
         },
         'extra_body': {
             'top_k': 0,
-        }
+        },
     },
     'sdar-32k': {
         'query_per_second': 4,
@@ -80,7 +82,7 @@ EVAL_CONFIGS = {
         },
         'extra_body': {
             'top_k': 0,
-        }
+        },
     },
     'sdar-2batch': {
         'query_per_second': 4,
@@ -93,7 +95,7 @@ EVAL_CONFIGS = {
         },
         'extra_body': {
             'top_k': 0,
-        }
+        },
     },
     'intern-s1-pro': {
         'query_per_second': 4,
@@ -107,7 +109,7 @@ EVAL_CONFIGS = {
         'extra_body': {
             'top_k': 50,
             'min_p': 0.0,
-        }
+        },
     },
     'intern-s1-pro-32k': {
         'query_per_second': 4,
@@ -121,7 +123,7 @@ EVAL_CONFIGS = {
         'extra_body': {
             'top_k': 50,
             'min_p': 0.0,
-        }
+        },
     },
     'intern-s1-pro-2batch': {
         'query_per_second': 4,
@@ -135,7 +137,7 @@ EVAL_CONFIGS = {
         'extra_body': {
             'top_k': 50,
             'min_p': 0.0,
-        }
+        },
     },
     'qwen3.5': {
         'query_per_second': 4,
@@ -206,14 +208,20 @@ BACKEND_LIST = ['turbomind', 'pytorch']
 RESTFUL_MODEL_LIST_LATEST = [
     'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B-FP8', 'Qwen/Qwen3.5-122B-A10B',
     'Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-0.6B', 'OpenGVLab/InternVL3_5-30B-A3B',
-    'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1',
-    'internlm/internlm3-8b-instruct', 'meta-llama/Llama-3.2-3B-Instruct',
+    'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1', 'meta-llama/Llama-3.2-3B-Instruct',
     'Qwen/Qwen3-VL-30B-A3B-Instruct',
 ]
 
 RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
 
-_IS_LEGACY = 'legacy' in os.getenv('TEST_ENV', '')
+def _deps_profile_is_legacy() -> bool:
+    """True when ``DEPS_PROFILE`` selects pinned-deps matrix rows
+    (``pkg==ver``)."""
+    raw = os.getenv('DEPS_PROFILE', '').strip()
+    return bool(raw) and raw != 'all' and '==' in raw
+
+
+_IS_LEGACY = _deps_profile_is_legacy()
 
 RESTFUL_MODEL_LIST = RESTFUL_MODEL_LIST_LEGACY if _IS_LEGACY else RESTFUL_MODEL_LIST_LATEST
 
@@ -239,7 +247,7 @@ TOOL_REASONING_MODEL_LIST = TOOL_REASONING_MODEL_LIST_LEGACY if _IS_LEGACY else 
 
 RESTFUL_BASE_MODEL_LIST = [
     'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3.5-35B-A3B-Base','Qwen/Qwen3-8B-Base',
-    'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B', 'internlm/internlm3-8b-instruct'
+    'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B'
 ]
 
 SUFFIX_INNER_AWQ = '-inner-4bits'
