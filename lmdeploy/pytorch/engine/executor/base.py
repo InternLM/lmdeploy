@@ -363,6 +363,9 @@ class ExecutorBase:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
         self.build_cache_engine()
+        if self.misc_config.empty_init:
+            logger.info('Skip warming up model during empty init.')
+            return
         logger.info('Warming up model.')
         self.warmup()
 

@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from contextlib import contextmanager
 
 import pytest
 import torch
@@ -217,3 +218,71 @@ class TestDPForwardMeta:
         assert gathered.all_batch_sizes == [2, 1]
         assert gathered.draft_num_tokens is None
         assert gathered.enable_microbatch is None
+
+
+class TestResetGraphRunner:
+
+    def test_model_agent_reset_graph_runner_uses_all_context(self):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        events = []
+
+        class _PatchedModel:
+
+            def reset(self):
+                events.append('main_reset')
+
+        class _SpecAgent:
+
+            def reset_graph_runner(self):
+                events.append('spec_reset')
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.patched_model = _PatchedModel()
+        agent.spec_agent = _SpecAgent()
+
+        @contextmanager
+        def _all_context():
+            events.append('enter_all_context')
+            yield
+            events.append('exit_all_context')
+
+        agent.all_context = _all_context
+
+        agent.reset_graph_runner()
+
+        assert events == [
+            'enter_all_context',
+            'main_reset',
+            'spec_reset',
+            'exit_all_context',
+        ]
+
+    def test_spec_agent_reset_graph_runner_uses_draft_context(self):
+        from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+        events = []
+
+        class _Model:
+
+            def reset(self):
+                events.append('reset')
+
+        agent = SpecModelAgent.__new__(SpecModelAgent)
+        agent.proposer = type('Proposer', (), {'model': _Model()})()
+
+        @contextmanager
+        def _draft_context():
+            events.append('enter_draft_context')
+            yield
+            events.append('exit_draft_context')
+
+        agent.draft_context = _draft_context
+
+        agent.reset_graph_runner()
+
+        assert events == [
+            'enter_draft_context',
+            'reset',
+            'exit_draft_context',
+        ]

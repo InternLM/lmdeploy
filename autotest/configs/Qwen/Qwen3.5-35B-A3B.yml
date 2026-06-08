@@ -1,0 +1,130 @@
+# HF model id: Qwen/Qwen3.5-35B-A3B
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+- model_type: vl
+  engine_config:
+    tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    pytorch:
+    - kvint8
+h:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: chat
+  engine_config:
+    tp: 2
+    extra:
+      reasoning-parser: qwen-qwq
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 256
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - mtp_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: vl
+  engine_config:
+    tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: vl
+  engine_config:
+    tp: 2
+    extra:
+      reasoning-parser: qwen-qwq
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 256
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - mtp_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true

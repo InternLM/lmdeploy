@@ -116,11 +116,7 @@ def check_vl_llm(backend: str, config: dict) -> bool:
         'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
         'InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM',
     ])
-    turbomind_unsupported_archs = ['Qwen3_5ForConditionalGeneration',
-                                   'Qwen3_5MoeForConditionalGeneration',
-                                   'Qwen3OmniMoeForConditionalGeneration',
-                                   'InternS2PreviewForConditionalGeneration',
-                                   'InternS2PreviewForCausalLM']
+    turbomind_unsupported_archs = []
     if arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
@@ -134,10 +130,15 @@ def check_vl_llm(backend: str, config: dict) -> bool:
     return False
 
 
-def get_task(backend: str, model_path: str, trust_remote_code: bool = False):
+def get_task(backend: str,
+             model_path: str,
+             trust_remote_code: bool = False,
+             backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None):
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
+    if backend_config and backend_config.disable_vision_encoder:
+        return 'llm', AsyncEngine
     _, config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     if check_vl_llm(backend, config.to_dict()):
         from lmdeploy.serve.core import VLAsyncEngine

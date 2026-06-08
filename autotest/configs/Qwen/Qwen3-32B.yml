@@ -1,0 +1,35 @@
+# HF model id: Qwen/Qwen3-32B
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+    - kvint8
+    pytorch:
+    - kvint8
+ascend:
+- model_type: chat
+  engine_config:
+    tp: 4
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - func
+  - prefix_cache

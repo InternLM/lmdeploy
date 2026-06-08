@@ -3,9 +3,11 @@ import math
 import numpy as np
 
 from lmdeploy.vl import (
+    encode_audio_base64,
     encode_image_base64,
     encode_time_series_base64,
     encode_video_base64,
+    load_audio,
     load_image,
     load_time_series,
     load_video,
@@ -58,6 +60,24 @@ def test_time_series_encode_decode():
 
     assert ts1.shape == ts2.shape
     assert np.allclose(ts1, ts2)
+
+
+def test_audio_encode_decode():
+    import pytest
+    pytest.importorskip('librosa')
+    pytest.importorskip('soundfile')
+
+    sr = 16000
+    seconds = 0.25
+    t = np.linspace(0, seconds, int(sr * seconds), endpoint=False, dtype=np.float32)
+    audio = 0.1 * np.sin(2 * np.pi * 440 * t)
+
+    b64 = encode_audio_base64((audio, sr))
+    audio_out, sr_out = load_audio(f'data:audio/wav;base64,{b64}', sampling_rate=sr)
+
+    assert sr_out == sr
+    assert audio_out.shape == audio.shape
+    assert np.allclose(audio_out, audio, atol=1e-4)
 
 
 def test_image_modes():

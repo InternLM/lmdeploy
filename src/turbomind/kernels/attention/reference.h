@@ -32,7 +32,8 @@ public:
                  size_t head_dim,
                  size_t kv_head_num,
                  size_t batch_size,
-                 int    window_size);
+                 int    window_size,
+                 bool   causal = true);
 
     void Execute(T*       output,
                  T*       k_cache,
@@ -77,6 +78,8 @@ private:
     int kv_head_num_{};
     int batch_size_{};
     int window_size_{};
+
+    bool causal_{true};
 };
 
 }  // namespace turbomind

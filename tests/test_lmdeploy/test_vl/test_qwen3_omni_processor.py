@@ -83,6 +83,7 @@ def _fake_model():
                                               image_token_id=model.image_token_id,
                                               audio_token_id=model.audio_token_id,
                                               video_token_id=model.video_token_id)
+    model.mm_feature_dtype = None
     return model
 
 

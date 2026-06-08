@@ -20,6 +20,7 @@ struct AttnDesc {
     DataType data_type;
     int      kv_quant;        // 0=none, 8=int8, 4=int4
     int      query_group_sz;  // num_heads/num_kv_heads for decoding; 0 for prefill
+    bool     causal{true};
 };
 
 inline std::string to_string(const AttnDesc& d)
@@ -35,6 +36,9 @@ inline std::string to_string(const AttnDesc& d)
             ss << "_kvint4";
         ss << "_gs" << d.query_group_sz;
     }
+    else if (!d.causal) {
+        ss << "_noncausal";
+    }
     return ss.str();
 }
 
@@ -45,6 +49,7 @@ struct KernelDesc {
     DataType       data_type;
     int            kv_quant;  // 0=none, 8=int8, 4=int4
     int            qh;        // query heads per CTA (1 for prefill)
+    bool           causal{true};
 };
 
 struct KernelInfo {
@@ -68,6 +73,9 @@ inline std::string to_string(const KernelDesc& d)
         else if (d.kv_quant == 4)
             ss << "_kvint4";
         ss << "_qh" << d.qh;
+    }
+    else if (!d.causal) {
+        ss << "_noncausal";
     }
     return ss.str();
 }

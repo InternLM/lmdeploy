@@ -84,9 +84,9 @@ class CudaGraphMeta:
     block_size: int = 64
 
 
-def get_decode_query_len(input_ids: Tensor, q_seqlens: Tensor) -> int:
-    """Get decode query length from graph inputs."""
-    return input_ids.size(-1) // q_seqlens.size(0)
+def get_graph_decode_query_len(graph_meta: CudaGraphMeta) -> int:
+    """Get decode query length from padded graph buffers."""
+    return graph_meta.max_tokens // graph_meta.max_batchs
 
 
 class CudaGraphMixin:
@@ -154,7 +154,7 @@ class CudaGraphMixin:
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
         device = graph_meta.device
-        decode_query_len = get_decode_query_len(input_ids, attn_metadata.q_seqlens)
+        decode_query_len = get_graph_decode_query_len(graph_meta)
 
         input_buffers: BuffType = dict()
         input_buffers['input_ids'] = torch.randint(0,
@@ -226,7 +226,7 @@ class CudaGraphMixin:
 
         batch_size, num_blocks = block_offsets.size()
         num_tokens = input_ids.size(-1)
-        decode_query_len = get_decode_query_len(input_ids, q_seqlens)
+        decode_query_len = get_graph_decode_query_len(graph_meta)
         # fill buffer
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids

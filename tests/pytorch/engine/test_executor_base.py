@@ -11,6 +11,62 @@ from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
 
 
+class _RecordingExecutor(ExecutorBase):
+
+    def __init__(self, empty_init: bool):
+        super().__init__(
+            model_path='',
+            model_config=SimpleNamespace(sliding_window=None, states_shapes=None),
+            cache_config=SimpleNamespace(),
+            backend_config=SimpleNamespace(),
+            dist_config=SimpleNamespace(dp=1, world_size=1),
+            misc_config=SimpleNamespace(empty_init=empty_init),
+        )
+        self.calls = []
+
+    def build_model(self):
+        self.calls.append('build_model')
+
+    def update_configs(self):
+        self.calls.append('update_configs')
+
+    def build_graph_runner(self):
+        self.calls.append('build_graph_runner')
+
+    def build_cache_engine(self):
+        self.calls.append('build_cache_engine')
+
+    def warmup(self):
+        self.calls.append('warmup')
+
+
+def test_init_warms_up_model_by_default():
+    executor = _RecordingExecutor(empty_init=False)
+
+    executor.init()
+
+    assert executor.calls == [
+        'build_model',
+        'update_configs',
+        'build_graph_runner',
+        'build_cache_engine',
+        'warmup',
+    ]
+
+
+def test_init_skips_model_warmup_for_empty_init():
+    executor = _RecordingExecutor(empty_init=True)
+
+    executor.init()
+
+    assert executor.calls == [
+        'build_model',
+        'update_configs',
+        'build_graph_runner',
+        'build_cache_engine',
+    ]
+
+
 def test_get_num_gpu_blocks_without_spec_cache():
     available_mem = 4096
     cache_block_size = 256
