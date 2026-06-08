@@ -9,7 +9,7 @@ import aiohttp
 from fastapi import Request
 
 from lmdeploy.serve.openai.protocol import ErrorResponse
-from lmdeploy.serve.proxy.utils import APIServerException
+from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -63,7 +63,9 @@ class UpstreamForwarder:
                 return body.decode()
         except APIServerException:
             raise
-        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:
+        except GeneratorExit:
+            raise
+        except (Exception, aiohttp.ClientError, asyncio.CancelledError) as e:
             raise self._gateway_error(replica_url, cause=e) from e
 
     async def forward_json_stream(self, payload: dict, replica_url: str,
@@ -79,7 +81,9 @@ class UpstreamForwarder:
                         yield line + b'\n\n'
         except APIServerException:
             raise
-        except (Exception, GeneratorExit, aiohttp.ClientError) as e:
+        except GeneratorExit:
+            raise
+        except (Exception, aiohttp.ClientError) as e:
             raise self._gateway_error(replica_url, cause=e) from e
 
     async def forward_raw_buffer(self, raw_request: Request, replica_url: str, endpoint: str) -> str:
@@ -94,7 +98,9 @@ class UpstreamForwarder:
                 return body.decode()
         except APIServerException:
             raise
-        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:
+        except GeneratorExit:
+            raise
+        except (Exception, aiohttp.ClientError, asyncio.CancelledError) as e:
             raise self._gateway_error(replica_url, cause=e) from e
 
     async def forward_raw_stream(self, raw_request: Request, replica_url: str,
@@ -112,5 +118,7 @@ class UpstreamForwarder:
                         yield line + b'\n\n'
         except APIServerException:
             raise
-        except (Exception, GeneratorExit, aiohttp.ClientError) as e:
+        except GeneratorExit:
+            raise
+        except (Exception, aiohttp.ClientError) as e:
             raise self._gateway_error(replica_url, cause=e) from e

@@ -3,11 +3,12 @@
 from pydantic import BaseModel, Field
 
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.serve.proxy.utils import LATENCY_DEQUE_LEN
 
 
 class ReplicaLoad(BaseModel):
     """Per-replica load snapshot and capability metadata."""
+
+    _LATENCY_DEQUE_LEN = 15
 
     role: EngineRole = EngineRole.Hybrid
     models: list[str] = Field(default_factory=list)
@@ -17,8 +18,8 @@ class ReplicaLoad(BaseModel):
 
     def record_latency(self, duration: float) -> None:
         self.latency.append(duration)
-        if len(self.latency) > LATENCY_DEQUE_LEN:
-            self.latency = self.latency[-LATENCY_DEQUE_LEN:]
+        if len(self.latency) > self._LATENCY_DEQUE_LEN:
+            self.latency = self.latency[-self._LATENCY_DEQUE_LEN:]
 
     def mean_latency(self) -> float:
         if not self.latency:

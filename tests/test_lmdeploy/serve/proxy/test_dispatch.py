@@ -10,7 +10,7 @@ import pytest
 from lmdeploy.serve.openai.protocol import ErrorResponse
 from lmdeploy.serve.proxy.dispatch.base import response_from_api_exception, safe_json_load
 from lmdeploy.serve.proxy.dispatch.hybrid import HybridDispatcher
-from lmdeploy.serve.proxy.utils import APIServerException
+from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 
 
 def test_response_from_api_exception_openai_body():

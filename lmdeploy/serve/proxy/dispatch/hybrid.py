@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -14,8 +13,8 @@ from lmdeploy.serve.proxy.dispatch.base import (
 from lmdeploy.serve.proxy.metrics.load_tracker import InflightTracker
 from lmdeploy.serve.proxy.routing.selector import ReplicaSelector
 from lmdeploy.serve.proxy.streaming_response import ProxyStreamingResponse
+from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 from lmdeploy.serve.proxy.upstream.forwarder import UpstreamForwarder
-from lmdeploy.serve.proxy.utils import APIServerException
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -42,9 +41,12 @@ class HybridDispatcher:
 
         if ctx.stream:
             response = self._forwarder.forward_raw_stream(ctx.raw_request, replica_url, ctx.endpoint)
-            background = BackgroundTasks()
-            background.add_task(self._tracker.finish, replica_url, start)
-            return ProxyStreamingResponse(response, background=background, media_type='text/event-stream')
+            return ProxyStreamingResponse(
+                response,
+                raw_request=ctx.raw_request,
+                on_complete=lambda: self._tracker.finish(replica_url, start),
+                media_type='text/event-stream',
+            )
 
         try:
             response = await self._forwarder.forward_raw_buffer(ctx.raw_request, replica_url, ctx.endpoint)

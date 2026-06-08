@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from lmdeploy.serve.openai.api_server import create_error_response
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ErrorResponse
 from lmdeploy.serve.proxy.registry.pool import ReplicaPool
-from lmdeploy.serve.proxy.utils import APIServerException
+from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 
 
 @dataclass

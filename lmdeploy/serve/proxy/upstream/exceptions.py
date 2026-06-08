@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-LATENCY_DEQUE_LEN = 15
-
 
 class APIServerException(Exception):
+    """Carry upstream api_server HTTP error through the proxy forwarding
+    path."""
 
     def __init__(self, status_code: int, body: bytes, headers: dict | None = None):
         self.status_code = status_code

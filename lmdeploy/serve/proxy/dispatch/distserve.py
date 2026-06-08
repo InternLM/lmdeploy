@@ -2,7 +2,6 @@
 
 import copy
 
-from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -20,8 +19,8 @@ from lmdeploy.serve.proxy.metrics.load_tracker import InflightTracker
 from lmdeploy.serve.proxy.registry.pool import ReplicaPool
 from lmdeploy.serve.proxy.routing.selector import ReplicaSelector
 from lmdeploy.serve.proxy.streaming_response import ProxyStreamingResponse
+from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 from lmdeploy.serve.proxy.upstream.forwarder import UpstreamForwarder
-from lmdeploy.serve.proxy.utils import APIServerException
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -110,9 +109,12 @@ class DistServeDispatcher:
         try:
             if ctx.stream:
                 response = self._forwarder.forward_json_stream(request_dict, d_url, ctx.endpoint)
-                background = BackgroundTasks()
-                background.add_task(self._tracker.finish, d_url, start)
-                resp = ProxyStreamingResponse(response, background=background, media_type='text/event-stream')
+                resp = ProxyStreamingResponse(
+                    response,
+                    raw_request=ctx.raw_request,
+                    on_complete=lambda: self._tracker.finish(d_url, start),
+                    media_type='text/event-stream',
+                )
             else:
                 response = await self._forwarder.forward_json_buffer(request_dict, d_url, ctx.endpoint)
                 resp = JSONResponse(safe_json_load(d_url, response))
