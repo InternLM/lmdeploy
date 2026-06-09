@@ -1,6 +1,5 @@
 import pytest
 import utils.constant as constant
-from tools.common_case_config import SPECULATIVE_DECODING_RESTFUL_TEST_LLM_ASCEND
 from utils.benchmark_utils import restful_profile, restful_test
 from utils.config_utils import get_func_config_list
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
@@ -150,15 +149,6 @@ def test_pytorch_apiserver_tp16(config, run_config, worker_id):
 def test_restful_func_tp2(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id, is_smoke=True)
 
-    assert result, msg
-
-
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', SPECULATIVE_DECODING_RESTFUL_TEST_LLM_ASCEND)
-def test_speculative_decoding_apiserver_tp4(config, run_config, worker_id):
-    result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 

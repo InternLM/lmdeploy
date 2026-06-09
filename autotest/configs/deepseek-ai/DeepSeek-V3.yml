@@ -1,28 +1,10 @@
-# HF model id: zai-org/GLM-4.7-Flash
+# HF model id: deepseek-ai/DeepSeek-V3
 
-a100:
-- model_type: chat
-  engine_config:
-    tp: 2
-  backends:
-  - name: turbomind
-    communicators:
-    - nccl
-    - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func
 h:
 - model_type: chat
   engine_config:
-    tp: 2
+    tp: 16
   backends:
-  - name: turbomind
-    communicators:
-    - nccl
-    - cuda-ipc
   - name: pytorch
     communicators:
     - nccl
@@ -30,7 +12,7 @@ h:
   - func
 - model_type: chat
   engine_config:
-    tp: 2
+    tp: 16
     extra:
       speculative-algorithm: deepseek_mtp
       speculative-num-draft-tokens: 3

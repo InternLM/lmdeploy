@@ -55,7 +55,9 @@ h:
     chat-template-kwargs:
       enable_thinking: true
 ascend:
-- model_type: chat
+- model_type:
+  - chat
+  - vl
   engine_config:
     tp: 16
     extra:
@@ -71,6 +73,7 @@ ascend:
   - evaluate
   - func
   - longtext_benchmark
+  - mllm_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20
@@ -78,7 +81,9 @@ ascend:
     top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
-- model_type: chat
+- model_type:
+  - chat
+  - vl
   engine_config:
     dp: 8
     ep: 8
@@ -92,6 +97,9 @@ ascend:
     - nccl
   test_coverage:
   - benchmark
+  - evaluate
+  - func
+  - mllm_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20

@@ -165,11 +165,21 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
         backend_config.tp = parallel_config['tp']
 
-    # Extract speculative_config from extra_params if present
     speculative_config = None
     spec_cfg = extra_params.pop('speculative_config', None)
     if isinstance(spec_cfg, dict):
         speculative_config = SpeculativeConfig(**spec_cfg)
+    else:
+        spec_kwargs = {}
+        for src, dst in (
+            ('speculative-algorithm', 'method'),
+            ('speculative-num-draft-tokens', 'num_speculative_tokens'),
+            ('speculative-draft-model', 'model'),
+        ):
+            if src in extra_params:
+                spec_kwargs[dst] = extra_params.pop(src)
+        if 'method' in spec_kwargs:
+            speculative_config = SpeculativeConfig(**spec_kwargs)
 
     # Extra params
     # Normalize CLI-style kebab-case keys to PytorchEngineConfig attribute

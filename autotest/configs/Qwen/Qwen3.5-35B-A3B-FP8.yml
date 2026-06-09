@@ -40,6 +40,8 @@ h:
     communicators:
     - nccl
   test_coverage:
+  - benchmark
+  - func
   - mtp_evaluate
   gen_config:
     temperature: 1.0
@@ -81,6 +83,9 @@ h:
     communicators:
     - nccl
   test_coverage:
+  - benchmark
+  - func
+  - mllm_evaluate
   - mtp_evaluate
   gen_config:
     temperature: 1.0
