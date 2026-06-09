@@ -87,7 +87,8 @@ class InternS2PreviewModel(Qwen3_5MoeModel):
                 multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
             elif ts_values is not None:
-                ts_embeds, ts_pad_mask = self.time_series(ts_values, ts_lens, ts_sr, ts_channels)
+                ts_embeds, ts_pad_mask, ts_embeds_before_project = self.time_series(
+                    ts_values, ts_lens, ts_sr, ts_channels)
                 ts_valid_mask = ~ts_pad_mask
                 ts_features = ts_embeds[ts_valid_mask].to(inputs_embeds.device, inputs_embeds.dtype)
 
@@ -106,7 +107,7 @@ class InternS2PreviewModel(Qwen3_5MoeModel):
                         ts_history=[
                             ts_values[i, :ts_lens[i], :ts_channels[i]] for i in range(ts_values.shape[0])
                         ],
-                        ts_encoder_embedding=ts_embeds,
+                        ts_encoder_embedding=ts_embeds_before_project,
                         ts_encoder_embedding_mask=ts_valid_mask,
                     )
 

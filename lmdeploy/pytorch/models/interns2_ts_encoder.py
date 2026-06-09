@@ -366,11 +366,12 @@ class SingleResChunkQformerSubsampling(nn.Module):
                 input_lens: torch.Tensor | None = None,
                 sr=None,
                 force_strides=None,
-                mask: torch.Tensor | None = None):
+                mask: torch.Tensor | None = None,
+                subrate: torch.Tensor | None = None):
         if mask is None:
             mask = torch.ones(inputs.shape).to(inputs.device)
         features, feature_lens, learnable_lens, strides, raw_outputs = self.forward_patch(
-            inputs, input_lens, sr, force_strides, mask)
+            inputs, input_lens, sr, force_strides, mask, subrate)
 
         return features, feature_lens, learnable_lens, strides, raw_outputs
 
@@ -379,7 +380,8 @@ class SingleResChunkQformerSubsampling(nn.Module):
                       input_lens: torch.Tensor,
                       sr,
                       force_strides,
-                      mask: torch.Tensor | None = None):
+                      mask: torch.Tensor | None = None,
+                      subrate: torch.Tensor | None = None):
         pred_strides = None
 
         output_list = []
@@ -398,11 +400,15 @@ class SingleResChunkQformerSubsampling(nn.Module):
 
         seq = (seq - mean) / (std + 1e-7)
 
-        max_patch = torch.tensor([max(self.patch_list)]).to(seq.device)
-        max_num_query = torch.tensor([max(self.num_query_list)]).to(seq.device)
-        patch_size = max_patch
-        step = max_patch
-        seq_len = torch.tensor(inputs.shape[1]).to(seq.device)
+        max_patch = torch.tensor(max(self.patch_list), dtype=torch.float32, device=seq.device)
+        max_num_query = torch.tensor(max(self.num_query_list), dtype=torch.float32, device=seq.device)
+        if subrate is None:
+            subrate = max_patch / max_num_query
+        else:
+            subrate = subrate.to(device=seq.device, dtype=torch.float32)
+        step = subrate * max_num_query
+        patch_size = torch.ceil(step)
+        seq_len = torch.tensor(inputs.shape[1], dtype=torch.float32, device=seq.device)
 
         output_len = torch.ceil((seq_len - patch_size) / step + 1)
         pad_len = (torch.ceil((output_len - 1) * step + patch_size - seq_len)).long().item()
@@ -435,11 +441,14 @@ class SingleResChunkQformerSubsampling(nn.Module):
             padded_mask = self.mask_pool(padded_mask)
             padded_mask = padded_mask.permute(0, 2, 1)
 
-        for res_idx, patch in enumerate(self.patch_list):
-            patch_output_len = output_len * max_patch / (patch * (2**self.num_conv_layers))
+        for res_idx, _ in enumerate(self.patch_list):
+            num_query = torch.tensor(self.num_query_list[res_idx], dtype=torch.float32, device=seq.device)
+            stride = subrate * num_query
+            patch = torch.ceil(stride)
+            patch_output_len = torch.floor(output_len * step / (stride * (2**self.num_conv_layers)))
 
-            indices = (torch.floor(torch.arange(0, patch_output_len.item()).to(seq.device) * patch).unsqueeze(1)
-                       + torch.arange(patch).to(seq.device)).long()
+            indices = (torch.floor(torch.arange(0, patch_output_len.item(), device=seq.device) * stride).unsqueeze(1)
+                       + torch.arange(patch, device=seq.device)).long()
             patched = seq[:, indices, :, :]
             _, num_patch, patch_len, _, _ = patched.shape
             patched = patched.permute(1, 2, 0, 3, 4)
@@ -462,7 +471,7 @@ class SingleResChunkQformerSubsampling(nn.Module):
 
         outputs = outputs.reshape(batch_size, -1, out_hidden_dim)
 
-        output_lens = torch.ceil(padded_mask[:, :, 0].sum(dim=-1) / max_patch) * max_num_query
+        output_lens = torch.ceil((padded_mask[:, :, 0].sum(dim=-1) - patch_size) / step + 1) * max_num_query
 
         learnable_lens = None
         raw_outputs = None
@@ -619,9 +628,10 @@ class ChunkModel(nn.Module):
         for b in range(batch_size):
             seq = x[b, :x_lens[b], :x_channels[b]]
             chunks, mask = self.chunk_tensor(seq)
+            subrate = torch.clamp(x_lens[b].to(device=chunks.device, dtype=torch.float32) / 500, min=1.0)
 
             chunk_output, chunk_lens, learnable_lens, _, _ = self.encoder_embed(
-                chunks, x_lens[b], sr, force_strides, mask=mask)
+                chunks, x_lens[b], sr, force_strides, mask=mask, subrate=subrate)
 
             outputs.append(chunk_output)
             output_lens.append(chunk_lens)
@@ -702,7 +712,7 @@ class InternS2PreviewTimeSeriesModel(ChunkModel):
         ts_lens: torch.Tensor,
         sr: torch.Tensor | None = None,
         channels: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if channels is None:
             raise ValueError('channels must be specified')
         if time_series_signals.ndim != 3:
@@ -714,8 +724,9 @@ class InternS2PreviewTimeSeriesModel(ChunkModel):
         for b in range(time_series_signals.shape[0]):
             seq = time_series_signals[b, :ts_lens[b], :channels[b]]
             chunks, mask = self.chunk_tensor(seq)
+            subrate = torch.clamp(ts_lens[b].to(device=chunks.device, dtype=torch.float32) / 500, min=1.0)
 
-            chunk_output, chunk_lens, _, _, _ = self.encoder_embed(chunks, mask=mask)
+            chunk_output, chunk_lens, _, _, _ = self.encoder_embed(chunks, mask=mask, subrate=subrate)
             outputs.append(chunk_output)
             output_lens.append(chunk_lens.long())
             output_chunks.append(chunk_output.shape[0])
@@ -748,4 +759,4 @@ class InternS2PreviewTimeSeriesModel(ChunkModel):
 
         ts_pad_mask = self.make_pad_mask(encoder_out_lens)
         ts_embeds = self.projector(encoder_out)
-        return ts_embeds, ts_pad_mask
+        return ts_embeds, ts_pad_mask, encoder_out

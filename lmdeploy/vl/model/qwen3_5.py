@@ -85,15 +85,11 @@ class Qwen3_5Model(Qwen3VLModel):
         # compute num ts tokens
         if getattr(self.hf_config, 'model_type', None) == 'intern_s2_preview':
             chunk_size = getattr(self.processor, 'chunk_size', 12800)
-            patch = getattr(self.processor, 'patch', 50)
-            num_query = getattr(self.processor, 'num_query', 2)
-            ts_tokens = 0
-            start = 0
-            while start < ts_len:
-                chunk_len = min(chunk_size, ts_len - start)
-                subsampling_len = int(np.ceil(chunk_len / patch)) * num_query
-                ts_tokens += (subsampling_len + 1) // 2
-                start += chunk_size
+            patch = max(ts_len / 500, 1.0)
+            chunk_num = ts_len // chunk_size
+            full_chunk_tokens = (np.ceil(chunk_size / patch) + 1) // 2
+            tail_tokens = (np.ceil((ts_len - chunk_size * chunk_num) / patch) + 1) // 2
+            ts_tokens = int(chunk_num * full_chunk_tokens + tail_tokens)
         else:
             stride = np.floor(160 / ((1 + np.exp(-sampling_rate / 100))**6))
             patch_size = stride * 2
