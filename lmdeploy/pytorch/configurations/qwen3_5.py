@@ -55,9 +55,9 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         # for spec decoding
         if num_spec_tokens > 0:
-            recurrent_state_shape = (num_delta_layers, 1 + num_spec_tokens, num_v_heads, head_k_dim, head_v_dim)
+            recurrent_state_shape = (num_delta_layers, 1 + num_spec_tokens, num_v_heads, head_v_dim, head_k_dim)
         else:
-            recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
+            recurrent_state_shape = (num_delta_layers, num_v_heads, head_v_dim, head_k_dim)
 
         device_type = kwargs.get('device_type', 'auto')
         if is_bf16_supported(device_type):

@@ -36,21 +36,40 @@ def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool 
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
         backend_config.tp = parallel_config['tp']
 
-    # Extract speculative_config from extra_params if present
     speculative_config = None
     spec_cfg = extra_params.pop('speculative_config', None)
     if isinstance(spec_cfg, dict):
         speculative_config = SpeculativeConfig(**spec_cfg)
+    else:
+        spec_kwargs = {}
+        for src, dst in (
+            ('speculative-algorithm', 'method'),
+            ('speculative-num-draft-tokens', 'num_speculative_tokens'),
+            ('speculative-draft-model', 'model'),
+        ):
+            if src in extra_params:
+                spec_kwargs[dst] = extra_params.pop(src)
+        if 'method' in spec_kwargs:
+            speculative_config = SpeculativeConfig(**spec_kwargs)
 
     # Extra params
-    # Map CLI param names to PytorchEngineConfig attribute names
-    param_name_map = {'device': 'device_type'}
+    # Normalize CLI-style kebab-case keys to PytorchEngineConfig attribute
+    param_name_map = {'device': 'device_type', 'cache_block_seq_len': 'block_size'}
+    set_attrs = set()
     for key, value in extra_params.items():
-        attr_name = param_name_map.get(key, key)
+        attr_name = key.replace('-', '_')
+        attr_name = param_name_map.get(attr_name, attr_name)
         try:
             setattr(backend_config, attr_name, value)
+            set_attrs.add(attr_name)
         except AttributeError:
             print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
+
+    # setattr after construction does not re-run __post_init__, so keep
+    # kernel_block_size in sync with an overridden block_size (mirrors the
+    # default ``kernel_block_size == -1`` behaviour used by the CLI path).
+    if 'block_size' in set_attrs and 'kernel_block_size' not in set_attrs:
+        backend_config.kernel_block_size = backend_config.block_size
 
     print('backend_config config: ' + str(backend_config))
     print('speculative_config config: ' + str(speculative_config))
