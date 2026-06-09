@@ -230,6 +230,7 @@ class CUDAGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.global_is_decoding()
         batch_size = attn_metadata.q_seqlens.size(0)
+        query_len = input_ids.size(1) // batch_size
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         # for draft model to distinguish inputs from target model and itself
@@ -240,7 +241,7 @@ class CUDAGraphRunner(GraphRunner):
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch, target_hidden_size)
+        return (batch_size, is_decoding, enable_microbatch, target_hidden_size, query_len)
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""

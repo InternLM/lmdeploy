@@ -12,8 +12,10 @@ class ARSpecCudagraphStrategy(CudagraphStrategy):
     def get_max_tokens(self, batch_size: int, origin_batch_size: int, num_tokens: int) -> int:
         """Get max tokens."""
 
-        # only eagle3 has two sets of cudagraph due to different target_hidden_size
-        if num_tokens == origin_batch_size and self.method == 'eagle3':
+        # Draft speculative decoding has both wide verification forwards and
+        # single-token iterative forwards. Keep their graph buffers shaped like
+        # the runtime query layout even when target_hidden_size is identical.
+        if num_tokens == origin_batch_size:
             return batch_size
 
         return batch_size * (self.num_spec_tokens + 1)
