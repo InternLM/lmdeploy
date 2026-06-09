@@ -135,6 +135,8 @@ def _resolve_dtype(requested: str, hf_model_cfg) -> str:
     if dtype == 'auto':
         if getattr(hf_model_cfg, 'text_config', None):
             hf_model_cfg = hf_model_cfg.text_config
+        elif getattr(hf_model_cfg, 'llm_config', None):
+            hf_model_cfg = hf_model_cfg.llm_config
         dtype = 'bfloat16' if has_bf16 else 'float16'
         torch_dtype = getattr(hf_model_cfg, 'dtype', None)
         if torch_dtype is None:
