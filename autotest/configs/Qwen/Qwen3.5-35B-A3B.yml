@@ -72,9 +72,6 @@ h:
     communicators:
     - nccl
     - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - benchmark
   - evaluate
@@ -96,8 +93,31 @@ h:
 - model_type: chat
   engine_config:
     tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  quantization:
+    pytorch:
+    - fp8
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: chat
+  engine_config:
+    tp: 2
     extra:
-      reasoning-parser: qwen-qwq
       speculative-algorithm: qwen3_5_mtp
       speculative-num-draft-tokens: 4
       max-batch-size: 256
@@ -106,11 +126,40 @@ h:
     communicators:
     - nccl
     - cuda-ipc
+  test_coverage:
+  - benchmark
+  - longtext_benchmark
+  - func
+  - mtp_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: chat
+  engine_config:
+    tp: 2
+    extra:
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 256
+  backends:
   - name: pytorch
     communicators:
     - nccl
   test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
   - mtp_evaluate
+  quantization:
+    pytorch:
+    - fp8
   gen_config:
     temperature: 1.0
     top-k: 20
@@ -132,6 +181,9 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
+  quantization:
+    pytorch:
+    - fp8
   gen_config:
     temperature: 1.0
     top-k: 20
@@ -143,7 +195,6 @@ h:
   engine_config:
     tp: 2
     extra:
-      reasoning-parser: qwen-qwq
       speculative-algorithm: qwen3_5_mtp
       speculative-num-draft-tokens: 4
       max-batch-size: 256
@@ -152,6 +203,109 @@ h:
     communicators:
     - nccl
   test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  - mtp_evaluate
+  quantization:
+    pytorch:
+    - fp8
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+ascend:
+- model_type: chat
+  engine_config:
+    tp: 4
+    extra:
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - prefix_cache
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: chat
+  engine_config:
+    tp: 4
+    extra:
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 64
+      cache-max-entry-count: 0.6
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - longtext_benchmark
+  - func
+  - mtp_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: vl
+  engine_config:
+    tp: 4
+    extra:
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - mllm_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type: vl
+  engine_config:
+    tp: 4
+    extra:
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 64
+      cache-max-entry-count: 0.6
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - mllm_evaluate
   - mtp_evaluate
   gen_config:
     temperature: 1.0
