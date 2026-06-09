@@ -425,6 +425,17 @@ class BlockTrie:
         parent = node.parent
         return parent is not None and parent.children.get(node.hash_key) is node
 
+    @staticmethod
+    def _is_attached_leaf(node: Node):
+        """Check whether a node is a current attached trie leaf."""
+        return BlockTrie._is_attached_node(node) and len(node.children) == 0
+
+    @staticmethod
+    def _is_evict_candidate_leaf(node: Node):
+        """Check whether a leaf-set entry can be considered by KV eviction."""
+        return (node.block >= 0 and len(node.children) == 0
+                and (node.parent is None or BlockTrie._is_attached_node(node)))
+
     def reserve_state_checkpoint_for_seq(self,
                                          seq: SchedulerSequence,
                                          step: int = None,
@@ -994,7 +1005,7 @@ class BlockTrie:
             return
 
         if len(node.children) == 0 and node.parent is not None:
-            self.leaves.remove(node)
+            self.leaves.discard(node)
 
         block_id = num_matched // block_size
         blocks = []
@@ -1048,15 +1059,32 @@ class BlockTrie:
             return 0
 
         def __remove_leaf(leaves, evicted_blocks):
-            _, leaf = heapq.heappop(leaves)
+            while len(leaves) > 0:
+                _, leaf = heapq.heappop(leaves)
+                if leaf not in self.leaves:
+                    continue
+                if not self._is_evict_candidate_leaf(leaf):
+                    self.leaves.discard(leaf)
+                    continue
+                if int(self.allocator.get_ref_count(leaf.block)) != 1:
+                    continue
+                break
+            else:
+                return False, None
+
             evicted_blocks.append(leaf.block)
             self.release_state_checkpoint(leaf)
             parent = leaf.parent
-            leaf.parent = None
-            self.leaves.remove(leaf)
-            return parent
+            if parent is not None:
+                leaf.parent = None
+            self.leaves.discard(leaf)
+            return True, parent
 
         def __add_leaf(leaves, parent):
+            if not self._is_attached_leaf(parent):
+                return
+            if parent in self.leaves:
+                return
             self.leaves.add(parent)
             if self.allocator.get_ref_count(parent.block) == 1:
                 access_time = self.allocator.get_access_time(parent.block)
@@ -1066,7 +1094,11 @@ class BlockTrie:
             return 0
 
         evicted_blocks = []
-        leaves = list(self.leaves)
+        leaves = list(leaf for leaf in self.leaves if self._is_evict_candidate_leaf(leaf))
+        if len(leaves) != len(self.leaves):
+            self.leaves.intersection_update(leaves)
+        if len(leaves) == 0:
+            return 0
 
         # filter ref-cnt == 1 (trie own one block ref)
         leave_blocks = np.array(list(leaf.block for leaf in leaves))
@@ -1083,8 +1115,10 @@ class BlockTrie:
         heapq.heapify(leaves)
 
         while len(leaves) > 0 and len(evicted_blocks) < max_num_blocks:
-            parent = __remove_leaf(leaves, evicted_blocks)
-            if parent.parent is None:
+            removed, parent = __remove_leaf(leaves, evicted_blocks)
+            if not removed:
+                break
+            if parent is None or parent.parent is None:
                 # ignore root
                 continue
             if len(parent.children) == 0:
