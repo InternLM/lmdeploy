@@ -78,6 +78,10 @@ def _expand_bundled_image_items(item: dict, token_id: int) -> list[dict]:
     expanded_mm_items = []
     image_grid_thw = item['image_grid_thw']
     num_items = len(item['offset'])
+    num_images = len(image_grid_thw)
+
+    if num_items != num_images:
+        raise ValueError(f'Image offsets must match image grids: got {num_items} offsets for {num_images} images.')
 
     patches_per_item = []
     for grid in image_grid_thw:
@@ -106,7 +110,7 @@ def _expand_bundled_video_items(item: dict, token_id: int) -> list[dict]:
     num_items = len(item['offset'])
     num_videos = video_grid_thw.shape[0]
 
-    # calculate patches for each video (i.e. feature len): T * H * W
+    # calculate patches for each video (i.e. feature rows): T * H * W
     patches_per_video = []
     for i in range(num_videos):
         grid = video_grid_thw[i]
@@ -144,6 +148,11 @@ def _expand_bundled_video_items(item: dict, token_id: int) -> list[dict]:
                     video_token_id=token_id,
                 ))
         return expanded_mm_items
+
+    total_frames = sum(frames_per_video)
+    if num_items != total_frames:
+        raise ValueError('Video offsets must be per-video or per-frame: '
+                         f'got {num_items} offsets for {num_videos} videos and {total_frames} frames.')
 
     # qwen3-vl emits one offset per frame: split into [1, H, W] items.
     # because MultiModalData carries one prompt span per item
