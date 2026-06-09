@@ -1299,6 +1299,57 @@ def handle_torchrun():
         _set_func('mmengine.logging.logger._get_device_id', dummy_get_device_id)
 
 
+async def _wait_until_listening(url: str, timeout: float = 60.0) -> bool:
+    """Wait until the local HTTP server accepts connections."""
+    import requests
+
+    health_url = f'{url}/health'
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            await asyncio.to_thread(
+                requests.get,
+                health_url,
+                headers={'accept': 'application/json'},
+                timeout=2.0,
+            )
+            return True
+        except requests.exceptions.RequestException:
+            await asyncio.sleep(1)
+    return False
+
+
+async def _register_with_proxy() -> None:
+    """Register this api_server with the proxy after HTTP is listening."""
+    proxy_url = VariableInterface.proxy_url
+    api_server_url = VariableInterface.api_server_url
+    if proxy_url is None or api_server_url is None:
+        return
+    if not await _wait_until_listening(api_server_url):
+        logger.error(f'Service registration timed out waiting for {api_server_url} to listen')
+        return
+    try:
+        import requests
+
+        engine_config = VariableInterface.async_engine.backend_config
+        engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
+        url = f'{proxy_url}/nodes/add'
+        data = {
+            'url': api_server_url,
+            'status': {
+                'models': get_model_list(),
+                'role': engine_role,
+            },
+        }
+        headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
+        response = await asyncio.to_thread(requests.post, url, headers=headers, json=data, timeout=60)
+        if response.status_code != HTTPStatus.OK:
+            raise RuntimeError(f'HTTP {response.status_code}: {response.text}')
+        logger.info(f'Service registered with proxy: {api_server_url}')
+    except Exception as e:
+        logger.error(f'Service registration failed: {e}')
+
+
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
@@ -1309,19 +1360,7 @@ async def startup_event():
     elif getattr(async_engine.engine, 'is_dummy', False):
         logger.info('Dummy node started')
         return
-    try:
-        import requests
-        engine_config = VariableInterface.async_engine.backend_config
-        engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
-        url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
-        headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
-        response = requests.post(url, headers=headers, json=data)
-
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        logger.error(f'Service registration failed: {e}')
+    asyncio.create_task(_register_with_proxy(), name='ProxyRegistration')
 
 
 @router.on_event('shutdown')

@@ -76,7 +76,7 @@ lmdeploy serve api_server \
     --enable-metrics
 ```
 
-您应该能在代理服务器列表中看到多个 API 服务实例。详细信息可以在 `lmdeploy/serve/proxy/proxy_config.json` 中找到。
+您应该能在代理服务器列表中看到多个 API 服务实例。可通过代理的 `GET /nodes/status` 查看当前副本列表。
 
 例如，您可能会看到如下 API 服务地址：
 
