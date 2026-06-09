@@ -105,9 +105,9 @@ class GuidedSpecHelper:
         """
         if not processors or self._mgr is None:
             return
-        cpu_ids = draft_token_ids[:, 0].cpu()
 
         def _accept():
+            cpu_ids = draft_token_ids[:, 0].cpu()
             for idx, proc in processors.items():
                 self._mgr.accept_token(proc, cpu_ids[idx].item())
 
@@ -190,11 +190,11 @@ class GuidedSpecHelper:
         """
         if not processors or self._mgr is None:
             return
-        cpu_num_rejected = num_rejected.cpu() if num_rejected.is_cuda else num_rejected
-        cpu_output_token_ids = output_token_ids.cpu() if output_token_ids.is_cuda else output_token_ids
-        cpu_next_token_ids = next_token_ids.cpu() if next_token_ids.is_cuda else next_token_ids
 
         def _accept():
+            cpu_num_rejected = num_rejected.cpu() if num_rejected.is_cuda else num_rejected
+            cpu_output_token_ids = output_token_ids.cpu() if output_token_ids.is_cuda else output_token_ids
+            cpu_next_token_ids = next_token_ids.cpu() if next_token_ids.is_cuda else next_token_ids
             for idx, processor in processors.items():
                 n_rejected = cpu_num_rejected[idx].item()
                 n_valid_draft = num_spec_tokens - n_rejected
