@@ -65,7 +65,15 @@ class DistServeDispatcher:
             if start is None:
                 return replica_unavailable_response(p_url)
             try:
-                prefill_response = await self._forwarder.forward_json_buffer(prefill_request, p_url, ctx.endpoint)
+                prefill_response = await self._forwarder.forward_json_buffer(
+                    prefill_request,
+                    p_url,
+                    ctx.endpoint,
+                    raw_request=ctx.raw_request,
+                )
+                if prefill_response is None:
+                    logger.info('client disconnected during prefill; upstream cancelled')
+                    return
                 prefill_info = safe_json_load(p_url, prefill_response)
             except APIServerException as e:
                 return response_from_api_exception(e)
@@ -116,7 +124,18 @@ class DistServeDispatcher:
                     media_type='text/event-stream',
                 )
             else:
-                response = await self._forwarder.forward_json_buffer(request_dict, d_url, ctx.endpoint)
+                response = await self._forwarder.forward_json_buffer(
+                    request_dict,
+                    d_url,
+                    ctx.endpoint,
+                    raw_request=ctx.raw_request,
+                )
+                if response is None:
+                    self._tracker.finish(d_url, start)
+                    if not self._config.dummy_prefill:
+                        self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
+                    logger.info('client disconnected during decode; upstream cancelled')
+                    return
                 resp = JSONResponse(safe_json_load(d_url, response))
                 self._tracker.finish(d_url, start)
         except APIServerException as e:

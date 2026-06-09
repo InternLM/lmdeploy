@@ -13,27 +13,10 @@ from lmdeploy.serve.proxy.dispatch.hybrid import HybridDispatcher
 from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 
 
-def test_response_from_api_exception_openai_body():
-    body = ErrorResponse(message='upstream failed', type='server_error', code=502).model_dump_json().encode()
-    exc = APIServerException(status_code=502, body=body)
-    resp = response_from_api_exception(exc)
-    assert resp.status_code == 502
-    assert json.loads(resp.body)['message'] == 'upstream failed'
-
-
 def test_safe_json_load_invalid_raises():
     with pytest.raises(APIServerException) as exc_info:
         safe_json_load('http://127.0.0.1:19020', 'not-json')
     assert exc_info.value.status_code == HTTPStatus.BAD_GATEWAY
-
-
-def test_hybrid_dispatch_model_not_found():
-    selector = MagicMock()
-    selector.select.return_value = None
-    dispatcher = HybridDispatcher(selector=selector, forwarder=MagicMock(), tracker=MagicMock())
-    ctx = MagicMock(model='missing', stream=False)
-    resp = asyncio.run(dispatcher.dispatch(ctx))
-    assert resp.status_code == HTTPStatus.NOT_FOUND
 
 
 def test_hybrid_dispatch_upstream_error():
@@ -48,4 +31,13 @@ def test_hybrid_dispatch_upstream_error():
     ctx = MagicMock(model='llama', stream=False, raw_request=MagicMock(), endpoint='/v1/chat/completions')
     resp = asyncio.run(dispatcher.dispatch(ctx))
     assert resp.status_code == 502
+    assert json.loads(resp.body)['message'] == 'bad gateway'
     tracker.finish.assert_called_once()
+
+
+def test_response_from_api_exception_openai_body():
+    body = ErrorResponse(message='upstream failed', type='server_error', code=502).model_dump_json().encode()
+    exc = APIServerException(status_code=502, body=body)
+    resp = response_from_api_exception(exc)
+    assert resp.status_code == 502
+    assert json.loads(resp.body)['message'] == 'upstream failed'

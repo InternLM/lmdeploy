@@ -9,6 +9,7 @@ import aiohttp
 from fastapi import Request
 
 from lmdeploy.serve.openai.protocol import ErrorResponse
+from lmdeploy.serve.proxy.upstream.disconnect import race_awaitable_with_disconnect
 from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 from lmdeploy.utils import get_logger
 
@@ -53,20 +54,31 @@ class UpstreamForwarder:
     def _target_url(self, replica_url: str, endpoint: str) -> str:
         return replica_url.rstrip('/') + endpoint
 
-    async def forward_json_buffer(self, payload: dict, replica_url: str, endpoint: str) -> str:
+    async def forward_json_buffer(
+        self,
+        payload: dict,
+        replica_url: str,
+        endpoint: str,
+        *,
+        raw_request: Request | None = None,
+    ) -> str | None:
         try:
-            target_url = self._target_url(replica_url, endpoint)
-            async with self._session.post(target_url, json=payload) as response:
-                body = await response.read()
-                if response.status != HTTPStatus.OK:
-                    raise APIServerException(status_code=response.status, body=body)
-                return body.decode()
+            return await race_awaitable_with_disconnect(
+                raw_request,
+                self._forward_json_buffer_impl(payload, replica_url, endpoint),
+            )
         except APIServerException:
-            raise
-        except GeneratorExit:
             raise
         except (Exception, aiohttp.ClientError, asyncio.CancelledError) as e:
             raise self._gateway_error(replica_url, cause=e) from e
+
+    async def _forward_json_buffer_impl(self, payload: dict, replica_url: str, endpoint: str) -> str:
+        target_url = self._target_url(replica_url, endpoint)
+        async with self._session.post(target_url, json=payload) as response:
+            body = await response.read()
+            if response.status != HTTPStatus.OK:
+                raise APIServerException(status_code=response.status, body=body)
+            return body.decode()
 
     async def forward_json_stream(self, payload: dict, replica_url: str,
                                   endpoint: str) -> AsyncIterator[bytes]:
@@ -83,25 +95,36 @@ class UpstreamForwarder:
             raise
         except GeneratorExit:
             raise
+        except asyncio.CancelledError:
+            raise
         except (Exception, aiohttp.ClientError) as e:
             raise self._gateway_error(replica_url, cause=e) from e
 
-    async def forward_raw_buffer(self, raw_request: Request, replica_url: str, endpoint: str) -> str:
+    async def forward_raw_buffer(
+        self,
+        raw_request: Request,
+        replica_url: str,
+        endpoint: str,
+    ) -> str | None:
         try:
-            target_url = self._target_url(replica_url, endpoint)
-            headers = self._prepare_headers(raw_request)
-            body_bytes = await raw_request.body()
-            async with self._session.post(target_url, headers=headers, data=body_bytes) as response:
-                body = await response.read()
-                if response.status != HTTPStatus.OK:
-                    raise APIServerException(status_code=response.status, body=body)
-                return body.decode()
+            return await race_awaitable_with_disconnect(
+                raw_request,
+                self._forward_raw_buffer_impl(raw_request, replica_url, endpoint),
+            )
         except APIServerException:
-            raise
-        except GeneratorExit:
             raise
         except (Exception, aiohttp.ClientError, asyncio.CancelledError) as e:
             raise self._gateway_error(replica_url, cause=e) from e
+
+    async def _forward_raw_buffer_impl(self, raw_request: Request, replica_url: str, endpoint: str) -> str:
+        target_url = self._target_url(replica_url, endpoint)
+        headers = self._prepare_headers(raw_request)
+        body_bytes = await raw_request.body()
+        async with self._session.post(target_url, headers=headers, data=body_bytes) as response:
+            body = await response.read()
+            if response.status != HTTPStatus.OK:
+                raise APIServerException(status_code=response.status, body=body)
+            return body.decode()
 
     async def forward_raw_stream(self, raw_request: Request, replica_url: str,
                                  endpoint: str) -> AsyncIterator[bytes]:
@@ -119,6 +142,8 @@ class UpstreamForwarder:
         except APIServerException:
             raise
         except GeneratorExit:
+            raise
+        except asyncio.CancelledError:
             raise
         except (Exception, aiohttp.ClientError) as e:
             raise self._gateway_error(replica_url, cause=e) from e

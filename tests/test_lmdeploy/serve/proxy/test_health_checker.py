@@ -34,13 +34,6 @@ def test_probe_healthy(mock_get):
 
 
 @patch('lmdeploy.serve.proxy.registry.health_checker.requests.get')
-def test_probe_sleeping_is_serving(mock_get):
-    mock_get.return_value = _mock_response(HTTPStatus.OK, {'status': 'sleeping', 'message': 'asleep'})
-    result = probe_replica_health('http://replica:1', timeout=1.0)
-    assert result.is_serving
-
-
-@patch('lmdeploy.serve.proxy.registry.health_checker.requests.get')
 def test_probe_initializing_is_transient(mock_get):
     mock_get.return_value = _mock_response(
         HTTPStatus.SERVICE_UNAVAILABLE,

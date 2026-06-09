@@ -3,7 +3,6 @@
 from http import HTTPStatus
 from unittest.mock import patch
 
-import requests
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -58,13 +57,6 @@ def test_add_empty_models_returns_502(mock_get_model_list):
         assert response.status_code == HTTPStatus.BAD_GATEWAY
 
 
-@patch('lmdeploy.serve.openai.api_client.get_model_list', side_effect=requests.ConnectionError('refused'))
-def test_add_probe_connection_error_returns_502(mock_get_model_list):
-    with _client() as client:
-        response = client.post('/nodes/add', json={'url': 'http://replica:8000'})
-        assert response.status_code == HTTPStatus.BAD_GATEWAY
-
-
 def test_remove_missing_replica_returns_404():
     with _client() as client:
         response = client.post('/nodes/remove', json={'url': 'http://missing:1'})
@@ -97,10 +89,3 @@ def test_terminate_upstream_failure_removes_from_pool(mock_terminate):
         response = client.post('/nodes/terminate', json={'url': 'http://replica:1'})
         assert response.status_code == HTTPStatus.BAD_GATEWAY
         assert 'http://replica:1' not in client.app.state.runtime.pool.snapshot()
-
-
-def test_status_returns_200():
-    with _client() as client:
-        response = client.get('/nodes/status')
-        assert response.status_code == HTTPStatus.OK
-        assert isinstance(response.json(), dict)

@@ -50,6 +50,9 @@ class HybridDispatcher:
 
         try:
             response = await self._forwarder.forward_raw_buffer(ctx.raw_request, replica_url, ctx.endpoint)
+            if response is None:
+                logger.info('client disconnected during proxy request; upstream cancelled')
+                return
             return JSONResponse(safe_json_load(replica_url, response))
         except APIServerException as e:
             return response_from_api_exception(e)
