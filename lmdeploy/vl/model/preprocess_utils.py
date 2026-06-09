@@ -205,9 +205,9 @@ def _expand_bundled_audio_items(item: dict, token_id: int) -> list[dict]:
 
 # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
 def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialTokens'):
-    """When multiple multimodal items of the same modality are present, Hugging
-    Face (HF) processors return them in a bundled format (e.g., all images
-    combined into a single tensor).
+    """When multiple mm items of the same modality present, HF processors
+    return them in a bundled format (e.g., all images are combined into a
+    single tensor).
 
     This function expands such bundled HF processor outputs into per-image / video entries for better cache locality.
     """
