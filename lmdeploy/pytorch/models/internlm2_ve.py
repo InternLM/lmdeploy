@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.models.internlm2 import InternLM2Attention, InternLM2MLP
 from lmdeploy.pytorch.nn import RMSNorm, RopeType, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
@@ -247,7 +247,8 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         **kwargs,
     ):
         """Support cudagraph."""
-        if not attn_metadata.is_decoding:
+        context = get_step_ctx_manager().current_context()
+        if not context.global_is_decoding():
             return False
         seq_lens = input_ids.size(1)
         if seq_lens <= 512:

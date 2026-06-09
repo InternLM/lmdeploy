@@ -103,6 +103,8 @@ void LinearWeight::prepare()
         return;
     }
 
+    EnsureFloatDtype(bias, data_type);
+
     // Set up GEMM descriptor (was previously in do_allocate)
     k_desc.type  = weight.dtype();
     k_desc.order = gemm::kRowMajor;

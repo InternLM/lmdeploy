@@ -464,7 +464,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     parser_cls = VariableInterface.response_parser_cls
     try:
-        response_parser = parser_cls(request=request, tokenizer=tokenizer)
+        response_parser = parser_cls(request)
     except ValueError as e:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(e))
     # request is normalized and may be adjusted by the parser
@@ -1514,7 +1514,10 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    _, pipeline_class = get_task(backend, model_path, trust_remote_code=trust_remote_code)
+    _, pipeline_class = get_task(backend,
+                                 model_path,
+                                 trust_remote_code=trust_remote_code,
+                                 backend_config=backend_config)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
         # router replay
