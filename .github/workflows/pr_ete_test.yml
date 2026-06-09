@@ -50,6 +50,7 @@ jobs:
         uses: actions/checkout@v6
       - name: Install lmdeploy
         run: |
+          python3 -m pip install --upgrade -r requirements/runtime_cuda.txt
           python3 -m pip install -r requirements/lite.txt
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install -e .
@@ -74,7 +75,7 @@ jobs:
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch' -m 'not not_pytorch and not internlm2_5 and not interns1 and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch' -m 'not not_pytorch and not experts' --alluredir=${{env.REPORT_DIR}}
+              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch' -m 'not not_pytorch' --alluredir=${{env.REPORT_DIR}}
               curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
