@@ -96,22 +96,29 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
     step_ctx_mgr = SimpleNamespace(current_context=lambda: step_context)
     monkeypatch.setattr(cuda_graph_runner, 'get_step_ctx_manager', lambda: step_ctx_mgr)
 
-    attn_metadata = SimpleNamespace(q_seqlens=torch.ones(8, dtype=torch.long))
+    def make_attn_metadata(batch_size: int, query_len: int):
+        return SimpleNamespace(
+            q_seqlens=torch.full((batch_size, ), query_len, dtype=torch.long),
+            q_start_loc=torch.arange(batch_size, dtype=torch.long) * query_len,
+        )
+
     input_ids_qlen4 = torch.zeros((1, 32), dtype=torch.long)
     input_ids_qlen1 = torch.zeros((1, 8), dtype=torch.long)
+    attn_metadata_qlen4 = make_attn_metadata(batch_size=8, query_len=4)
+    attn_metadata_qlen1 = make_attn_metadata(batch_size=8, query_len=1)
 
     key_qlen4 = runner.get_graph_key(
         input_ids=input_ids_qlen4,
         position_ids=torch.zeros_like(input_ids_qlen4),
         past_key_values=[],
-        attn_metadata=attn_metadata,
+        attn_metadata=attn_metadata_qlen4,
         inputs_embeds=None,
     )
     key_qlen1 = runner.get_graph_key(
         input_ids=input_ids_qlen1,
         position_ids=torch.zeros_like(input_ids_qlen1),
         past_key_values=[],
-        attn_metadata=attn_metadata,
+        attn_metadata=attn_metadata_qlen1,
         inputs_embeds=None,
     )
     assert key_qlen4 != key_qlen1
@@ -121,7 +128,7 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
         input_ids=input_ids_qlen4,
         position_ids=torch.zeros_like(input_ids_qlen4),
         past_key_values=[],
-        attn_metadata=attn_metadata,
+        attn_metadata=attn_metadata_qlen4,
         inputs_embeds=None,
     )
     assert key_hidden32 == key_qlen4

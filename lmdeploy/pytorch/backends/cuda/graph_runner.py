@@ -165,7 +165,6 @@ class CUDAGraphRunner(GraphRunner):
                  backend_config: BackendConfig, device: torch.device):
         super().__init__(model, model_config, cache_config, backend_config, device)
         self.max_batches = cache_config.max_batches
-        self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks
 
         # Speculative decoding on CUDA requires FlashAttention-3 (FA3),
@@ -231,7 +230,6 @@ class CUDAGraphRunner(GraphRunner):
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
-        # for draft model to distinguish inputs from target model and itself
         query_len = input_ids.size(1) // batch_size
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
