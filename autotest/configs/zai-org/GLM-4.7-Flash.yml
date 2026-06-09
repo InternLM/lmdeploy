@@ -41,4 +41,3 @@ h:
     - nccl
   test_coverage:
   - func
-  - mtp_evaluate
