@@ -27,6 +27,9 @@ class XmlToolParser(ToolParser):
         self._xml_has_emitted_json_start = False
         self._xml_json_closed = False
         self._xml_emitted_param_names: set[str] = set()
+        self._payload_parts: list[str] = []
+        self._coerced_args: dict[str, Any] = {}
+        self._in_progress_value = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         self._function_param_schemas = self._build_function_param_schemas(request)
@@ -34,20 +37,54 @@ class XmlToolParser(ToolParser):
 
     def start_tool_call(self) -> None:
         super().start_tool_call()
-        self._xml_has_emitted_json_start = False
-        self._xml_json_closed = False
-        self._xml_emitted_param_names.clear()
+        self._reset_xml_stream_state()
 
     def finish_tool_call(self) -> None:
         super().finish_tool_call()
+        self._reset_xml_stream_state()
+
+    def _reset_xml_stream_state(self) -> None:
         self._xml_has_emitted_json_start = False
         self._xml_json_closed = False
         self._xml_emitted_param_names.clear()
+        self._payload_parts.clear()
+        self._coerced_args.clear()
+        self._in_progress_value = False
+        self._tool_payload = ''
+        self._reset_incremental_state()
+
+    def _reset_incremental_state(self) -> None:
+        """Reset subclass-specific incremental parse state."""
+
+    def _payload_text(self) -> str:
+        if not self._payload_parts:
+            return self._tool_payload
+        return ''.join(self._payload_parts)
+
+    def _value_close_token(self) -> str:
+        return ''
+
+    def _should_buffer_value_chunk(self, added_text: str, final: bool) -> bool:
+        """Fast-path plain value fragments that cannot close an XML tag."""
+        if final or not self._in_progress_value:
+            return False
+        if any(ch in added_text for ch in '<>/'):
+            return False
+        close = self._value_close_token()
+        return not close or close not in added_text
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        self._tool_payload += added_text
-        func_name, raw_args_dict, is_closed = self._extract_incremental_state(self._tool_payload, final=final)
-        args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
+        self._payload_parts.append(added_text)
+        if self._should_buffer_value_chunk(added_text, final):
+            return []
+
+        self._tool_payload = self._payload_text()
+        func_name, raw_args_dict, is_closed = self._extract_incremental_state(
+            self._tool_payload,
+            final=final,
+            added_text=added_text,
+        )
+        args_dict = self._get_coerced_args(func_name, raw_args_dict)
 
         out: list[DeltaToolCall] = []
         if func_name and not self._name_emitted:
@@ -132,6 +169,8 @@ class XmlToolParser(ToolParser):
     def _coerce_value(raw_value: str, schema_type: str | None) -> Any:
         raw_value = raw_value.strip()
         if schema_type is None or schema_type == 'string':
+            if not raw_value.startswith('"'):
+                return raw_value
             try:
                 parsed_val = json.loads(raw_value)
                 return parsed_val if isinstance(parsed_val, str) else raw_value
@@ -187,28 +226,40 @@ class XmlToolParser(ToolParser):
 
         return raw_value
 
-    def _coerce_args_by_schema(self, func_name: str | None, args_dict: dict[str, Any]) -> dict[str, Any]:
-        if not func_name or not args_dict:
-            return args_dict
+    def _get_coerced_args(self, func_name: str | None, raw_args_dict: dict[str, Any]) -> dict[str, Any]:
+        if not func_name or not raw_args_dict:
+            return raw_args_dict
         param_schemas = getattr(self, '_function_param_schemas', {}).get(func_name, {})
         if not param_schemas:
-            return args_dict
+            return raw_args_dict
 
-        coerced: dict[str, Any] = {}
-        for key, value in args_dict.items():
+        coerced = dict(self._coerced_args)
+        for key, value in raw_args_dict.items():
+            if key in self._coerced_args:
+                continue
             if not isinstance(value, str):
+                self._coerced_args[key] = value
                 coerced[key] = value
                 continue
             schema = param_schemas.get(key)
             if not isinstance(schema, dict):
+                self._coerced_args[key] = value
                 coerced[key] = value
                 continue
             schema_type = self._resolve_schema_type(schema)
-            coerced[key] = self._coerce_value(value, schema_type)
+            coerced_value = self._coerce_value(value, schema_type)
+            self._coerced_args[key] = coerced_value
+            coerced[key] = coerced_value
         return coerced
+
+    def _coerce_args_by_schema(self, func_name: str | None, args_dict: dict[str, Any]) -> dict[str, Any]:
+        return self._get_coerced_args(func_name, args_dict)
 
     def _close_json_on_final(self) -> bool:
         return True
 
-    def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
+    def _extract_incremental_state(self,
+                                 payload: str,
+                                 final: bool = False,
+                                 added_text: str = '') -> tuple[str | None, dict[str, Any], bool]:
         raise NotImplementedError

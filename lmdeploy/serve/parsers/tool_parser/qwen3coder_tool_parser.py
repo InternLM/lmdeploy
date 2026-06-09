@@ -27,6 +27,18 @@ class Qwen3CoderToolParser(XmlToolParser):
         re.DOTALL,
     )
 
+    def _value_close_token(self) -> str:
+        return self.param_end_token
+
+    def _reset_incremental_state(self) -> None:
+        self._qwen_func_name: str | None = None
+        self._qwen_args: dict[str, Any] = {}
+        self._qwen_param_scan_pos = 0
+        self._qwen_open_tag_stripped = False
+        self._qwen_func_closed = False
+        self._qwen_open_param_name: str | None = None
+        self._qwen_value_start = -1
+
     # Qwen3Coder closes tool argument JSON only when the model emits the
     # explicit function end marker (</function>). We intentionally avoid
     # auto-closing on stream final to prevent producing a syntactically
@@ -46,8 +58,104 @@ class Qwen3CoderToolParser(XmlToolParser):
     def get_tool_payload_format(cls) -> str:
         return 'xml'
 
-    def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
-        return self._extract_params(payload)
+    def _strip_outer_open_tag_once(self, payload: str) -> str:
+        if self._qwen_open_tag_stripped:
+            return payload
+        open_tag = self.get_tool_open_tag()
+        if open_tag and payload.startswith(open_tag):
+            self._qwen_open_tag_stripped = True
+            return payload[len(open_tag):]
+        return payload
+
+    def _extract_incremental_state(self,
+                                   payload: str,
+                                   final: bool = False,
+                                   added_text: str = '') -> tuple[str | None, dict[str, Any], bool]:
+        content = self._strip_outer_open_tag_once(payload).strip()
+        if not content:
+            return self._qwen_func_name, dict(self._qwen_args), self._qwen_func_closed
+
+        if self._qwen_func_name is None:
+            func_start = content.find(self.func_prefix)
+            if func_start != -1:
+                name_start = func_start + len(self.func_prefix)
+                terminators = [
+                    idx for idx in (content.find('>', name_start), content.find('\n', name_start)) if idx != -1
+                ]
+                if terminators:
+                    self._qwen_func_name = content[name_start:min(terminators)].strip()
+
+        self._parse_params_incremental(content)
+        self._qwen_func_closed = self.func_end_token in content
+        return self._qwen_func_name, dict(self._qwen_args), self._qwen_func_closed
+
+    def _complete_open_param_if_ready(self, content: str) -> bool:
+        if self._qwen_value_start < 0 or not self._qwen_open_param_name:
+            return False
+        val_end = content.find(self.param_end_token, self._qwen_value_start)
+        if val_end == -1:
+            self._in_progress_value = True
+            return False
+        param_val_str = content[self._qwen_value_start:val_end].strip()
+        self._qwen_args[self._qwen_open_param_name] = self._parse_param_value(param_val_str)
+        self._qwen_param_scan_pos = val_end + len(self.param_end_token)
+        self._qwen_open_param_name = None
+        self._qwen_value_start = -1
+        self._in_progress_value = False
+        return True
+
+    def _parse_params_incremental(self, content: str) -> None:
+        if self._qwen_value_start >= 0:
+            if not self._complete_open_param_if_ready(content):
+                return
+
+        search_idx = 0
+        while True:
+            param_start = content.find(self.param_prefix, search_idx)
+            if param_start == -1:
+                self._qwen_param_scan_pos = len(content)
+                self._in_progress_value = False
+                return
+
+            name_start = param_start + len(self.param_prefix)
+            terminators = [
+                idx for idx in (content.find('>', name_start), content.find('\n', name_start)) if idx != -1
+            ]
+            if not terminators:
+                self._qwen_param_scan_pos = param_start
+                self._in_progress_value = True
+                return
+
+            name_end = min(terminators)
+            param_name = content[name_start:name_end].strip()
+
+            val_start = name_end + 1
+            val_end = content.find(self.param_end_token, val_start)
+            if val_end == -1:
+                self._qwen_open_param_name = param_name
+                self._qwen_value_start = val_start
+                self._qwen_param_scan_pos = val_start
+                self._in_progress_value = True
+                return
+
+            if param_name in self._qwen_args:
+                search_idx = val_end + len(self.param_end_token)
+                self._qwen_param_scan_pos = search_idx
+                continue
+
+            param_val_str = content[val_start:val_end].strip()
+            self._qwen_args[param_name] = self._parse_param_value(param_val_str)
+            search_idx = val_end + len(self.param_end_token)
+            self._qwen_param_scan_pos = search_idx
+            self._in_progress_value = False
+
+    @staticmethod
+    def _parse_param_value(param_val_str: str) -> Any:
+        try:
+            parsed_val = json.loads(param_val_str)
+            return parsed_val if isinstance(parsed_val, str) else param_val_str
+        except json.JSONDecodeError:
+            return param_val_str
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         func_name, raw_args_dict, _ = self._extract_params(payload)
@@ -62,7 +170,13 @@ class Qwen3CoderToolParser(XmlToolParser):
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""
-        content = content.replace(self.get_tool_open_tag(), '').replace(self.get_tool_close_tag(), '').strip()
+        open_tag = self.get_tool_open_tag()
+        close_tag = self.get_tool_close_tag()
+        if open_tag and content.startswith(open_tag):
+            content = content[len(open_tag):]
+        if close_tag and content.endswith(close_tag):
+            content = content[:-len(close_tag)]
+        content = content.strip()
 
         func_name = None
         func_start = content.find(self.func_prefix)
@@ -93,16 +207,7 @@ class Qwen3CoderToolParser(XmlToolParser):
                 break
 
             param_val_str = content[val_start:val_end].strip()
-
-            # Qwen3Coder XML payloads do not carry explicit type metadata.
-            # Keep parameter values as strings to avoid implicit type coercion
-            # (e.g., zip codes like 77004 being parsed into integers).
-            try:
-                parsed_val = json.loads(param_val_str)
-                val = parsed_val if isinstance(parsed_val, str) else param_val_str
-            except json.JSONDecodeError:
-                val = param_val_str
-            args_dict[param_name] = val
+            args_dict[param_name] = self._parse_param_value(param_val_str)
             search_idx = val_end + len(self.param_end_token)
 
         is_func_closed = self.func_end_token in content
