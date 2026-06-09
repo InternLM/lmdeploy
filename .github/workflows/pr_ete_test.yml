@@ -67,7 +67,7 @@ jobs:
           pytest autotest -m 'pr_test and gpu_num_1' -n 2 -x --alluredir=${{env.REPORT_DIR}}
       - name: Test restful server - pytorch Qwen3.5-35B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts -reasoning-parser qwen-qwq --tool-call-parser qwen3coder --speculative-algorithm qwen3_5_mtp --speculative-num-draft-tokens 4 --max-batch-size 256 --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3.5-35B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --reasoning-parser qwen-qwq --tool-call-parser qwen3coder --speculative-algorithm qwen3_5_mtp --speculative-num-draft-tokens 4 --max-batch-size 256 --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3.5-35B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
