@@ -8,17 +8,16 @@ from torch.profiler import record_function
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
-from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from ..engine.model_agent.agent import BatchedLogProbs
-from ..model_inputs import ModelInputs
+from ..model_inputs import DPMeta, ModelInputs
 from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
 from .proposers.base import build_specdecode_proposer
-from .reject_sampler import RejectionSampler
 
 logger = get_logger('lmdeploy')
 
@@ -113,22 +112,16 @@ class SpecModelAgent(BaseSpecModelAgent):
         dist_ctx: DistContext,
         device: str = 'cuda',
     ):
-        super().__init__(specdecode_config, enable=True)
+        super().__init__(specdecode_config,
+                         backend_config,
+                         inputs_strategy,
+                         agent_strategy,
+                         misc_config,
+                         dist_ctx,
+                         device,
+                         )
 
-        self.backend_config = backend_config
-        self.dist_ctx = dist_ctx
-        self.device = device
-        self.cache_engine = None
-        self.inputs_strategy = inputs_strategy
-        self.agent_strategy = agent_strategy
-        self.misc_config = misc_config
-        self.rejection_sampler = RejectionSampler()
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
-        self.method = specdecode_config.method
-        self.model_config = specdecode_config.model_config
-        self.cache_config = specdecode_config.cache_config
-        self.draft_dist_ctx = DistContext.build(rank=dist_ctx.rank, dist_config=DistConfig())
-
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
         # for long context carry-over in chunked decoding
@@ -171,12 +164,29 @@ class SpecModelAgent(BaseSpecModelAgent):
         """Build cache engine."""
         if self.cache_config is not None:
             with self.draft_context():
+                draft_tp = self.draft_dist_ctx.dist_config.attn_tp
                 self.cache_engine = CacheEngine(self.cache_config,
                                                 self.model_config,
-                                                rank=0,
-                                                tp_rank=0,
-                                                world_size=1,
+                                                rank=0 if draft_tp == 1 else self.dist_ctx.rank,
+                                                tp_rank=self.draft_dist_ctx.attn_tp_group.rank,
+                                                world_size=draft_tp,
                                                 cache_stream=cache_stream)
+
+    def _build_dp_meta_from_main(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
+        """Build DP meta for draft inputs after MTP input shifting."""
+        if dp_meta is None:
+            return None
+
+        all_num_tokens = dp_meta.dp_draft_num_tokens
+        if all_num_tokens is None:
+            return dp_meta
+
+        all_num_tokens = list(all_num_tokens)
+        with self.draft_context():
+            draft_dp_meta = DPMeta.build(input_ids.numel(), all_num_tokens)
+        draft_dp_meta.dp_batches = dp_meta.dp_batches
+        draft_dp_meta.dp_is_decoding = dp_meta.dp_is_decoding
+        return draft_dp_meta
 
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
         """Update inputs from main model inputs."""
@@ -194,8 +204,10 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
-            # clear each time
-            self._prev_chunk_last.clear()
+            # Dummy inputs are DP placeholders and should not disturb
+            # local long-context carry-over state.
+            if not model_inputs.is_dummy:
+                self._prev_chunk_last.clear()
             # Case A: non-chunked — shift left by 1, place next_token at end
             input_ids = model_inputs.input_ids.clone()
             input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
@@ -215,6 +227,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                 # Case B: first chunk — skip first token, save last for next chunk
                 input_ids = model_inputs.input_ids[:, 1:]
                 seq_length = model_inputs.seq_length - 1
+                # Shift indices into the draft layout after dropping the first token.
+                last_token_indices = last_token_indices - 1
                 max_q_seqlen = model_inputs.max_q_seqlen - 1
                 max_kv_seqlen = model_inputs.max_kv_seqlen - 1
                 sum_kv_seqlen = model_inputs.sum_kv_seqlen - 1
@@ -233,8 +247,11 @@ class SpecModelAgent(BaseSpecModelAgent):
                 seq_length = model_inputs.seq_length + 1
                 max_q_seqlen = model_inputs.max_q_seqlen + 1
                 last_token_indices = last_token_indices + 1
-                max_kv_seqlen = model_inputs.max_kv_seqlen - 1
-                sum_kv_seqlen = model_inputs.sum_kv_seqlen - 1
+                # history_lengths is decremented below, while seq_length is
+                # incremented above. The final KV length is unchanged, so keep
+                # the aggregate KV metadata aligned with kv_seqlens.
+                max_kv_seqlen = model_inputs.max_kv_seqlen
+                sum_kv_seqlen = model_inputs.sum_kv_seqlen
                 history_lengths = model_inputs.history_lengths - 1
                 input_ids = torch.cat([model_inputs.input_ids, next_token_ids.unsqueeze(0)], dim=-1)
 
@@ -271,6 +288,10 @@ class SpecModelAgent(BaseSpecModelAgent):
                 if mrope_pos_ids is not None:
                     mrope_pos_ids = self._prepare_long_context_chunk_prepend_saved('mrope_pos_ids', mrope_pos_ids)
 
+        # Keep draft model local decoding state; DP-global state stays in dp_meta.
+        is_decoding = model_inputs.is_decoding
+        dp_meta = self._build_dp_meta_from_main(input_ids, model_inputs.dp_meta)
+
         new_model_inputs = ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -280,7 +301,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             history_lengths=history_lengths,
             block_offsets=model_inputs.block_offsets,
             num_ignored_history=model_inputs.num_ignored_history,
-            is_decoding=model_inputs.is_decoding,
+            is_decoding=is_decoding,
             target_hidden_states=target_hidden_states,
             target_position_ids=target_position_ids,
             target_inputs_embeds=target_inputs_embeds,
@@ -288,7 +309,17 @@ class SpecModelAgent(BaseSpecModelAgent):
             is_chunk=model_inputs.is_chunk,
             is_first_chunk=model_inputs.is_first_chunk,
             is_last_chunk=model_inputs.is_last_chunk,
+            is_dummy=model_inputs.is_dummy,
+            dp_meta=dp_meta,
         )
+
+        # update if dp > 1
+        if dp_meta is not None:
+            if new_model_inputs.global_is_decoding():
+                padding_batch_size = max(dp_meta.dp_batches)
+                meta = self.proposer.model.get_meta()
+                meta.padding_batch_size = padding_batch_size
+            new_model_inputs = self.proposer.model.update_inputs(new_model_inputs)
 
         new_extra_inputs = extra_inputs.clone(
             target_hidden_states=None,
@@ -339,15 +370,31 @@ class SpecModelAgent(BaseSpecModelAgent):
         # Process target_logits via FusedLogitsProcessor for BOTH prefill and decoding
         target_logits = extra_inputs.target_logits
         batch_size = model_inputs.seq_length.size(0)
+        num_rejected_tokens = torch.zeros_like(model_inputs.seq_length)
+        last_token_indices = model_inputs.seq_length.cumsum(0) - 1
+
+        if model_inputs.is_dummy:
+            # skip rejection sampling for dummy inputs
+            next_token_ids = model_inputs.input_ids.new_zeros(batch_size)
+            output_len = 1 + self.num_spec_tokens if model_inputs.is_decoding else 1
+            output_token_ids = model_inputs.input_ids.new_zeros(batch_size, output_len)
+            new_extra_inputs = extra_inputs.clone(
+                next_token_ids=next_token_ids,
+                last_token_indices=last_token_indices,
+                num_rejected_tokens=num_rejected_tokens,
+                output_token_ids=output_token_ids,
+                target_logits=None,  # clear for next step
+                logprobs=None,
+                )
+            return new_extra_inputs
 
         num_expand_sampling = 1 if not model_inputs.is_decoding else self.num_spec_tokens + 1
         expanded_sampling_inputs = _expand_sampling_inputs(sampling_inputs, num_expand_sampling)
-        num_rejected_tokens = torch.zeros_like(model_inputs.seq_length)
-        last_token_indices = model_inputs.seq_length.cumsum(0) - 1
         logits_processor = FusedLogitsProcessor(
             expanded_sampling_inputs,
             logprobs_mode=self.misc_config.logprobs_mode,
         )
+
         if model_inputs.is_decoding:
             # TODO: guided decoding not supported yet for spec decoding
             processed_logits, raw_logprobs = await logits_processor(target_logits)
@@ -402,6 +449,12 @@ class SpecModelAgent(BaseSpecModelAgent):
             output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
+    async def async_sampling_logits(self, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs,
+                                    sampling_inputs: SamplingInputs):
+        """Sample target logits and run rejection sampling."""
+        with record_function('spec_rejection_sampling'):
+            return await self._rejection_sampling(model_inputs, extra_inputs, sampling_inputs)
+
     async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                    sampling_inputs: SamplingInputs):
         """Model forward.
@@ -409,10 +462,35 @@ class SpecModelAgent(BaseSpecModelAgent):
         Args:
             inputs (dict): The input data comes from _make_inputs.
         """
+        def __build_dp_meta(inputs: ModelInputs):
+            """Prepare for dp."""
+            # update inputs for draft model
+            dp_meta = inputs.dp_meta
+            padding_batch_size = None
+            if dp_meta is None:
+                return dp_meta, None
+
+            padding_batch_size = max(dp_meta.dp_batches)
+            new_dpmeta = DPMeta.build(inputs.input_ids.numel(), dp_meta.dp_batches)
+            return new_dpmeta, padding_batch_size
+
+        def _update_dp_model_inputs(inputs: ModelInputs, dp_meta: DPMeta, padding_batch_size: int | None):
+            if dp_meta is None:
+                return inputs
+
+            inputs.dp_meta = dp_meta
+            meta = self.proposer.model.get_meta()
+            meta.padding_batch_size = padding_batch_size
+            logger.debug(f'SpecAgent rank={self.rank} padding_batch_size={padding_batch_size} dp_meta={dp_meta}')
+            # update dp meta
+            inputs = self.proposer.model.update_inputs(inputs)
+            return inputs
+
         outputs = self._forward_impl(inputs)
-        if inputs.is_chunk and not inputs.is_last_chunk:
-            # create dummy draft tokens
-            output_draft_ids = inputs.input_ids.new_zeros(1, self.num_spec_tokens)
+        if inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk:
+            # DP=1 non-last chunks do not consume draft tokens, so skip the
+            # remaining speculative forwards.
+            output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
         else:
             loop_count = self.num_spec_tokens - 1
             draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
@@ -423,8 +501,11 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                               target_hidden_states, model_metas)
                 # set last_token_indices to None for decoding
                 extra_inputs.last_token_indices = None
+                # for dp > 1, need to update dp_meta and model inputs for next loop
+                dp_meta, padding_batch_size = __build_dp_meta(inputs)
 
                 for loop_idx in range(loop_count):
+                    inputs = _update_dp_model_inputs(inputs, dp_meta, padding_batch_size)
                     outputs = self._forward_impl(inputs)
                     draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
                     draft_tokens_li.append(draft_token_ids)
@@ -455,9 +536,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         sampling_inputs: SamplingInputs,
     ):
         """Draft model forward."""
-        with record_function('spec_rejection_sampling'):
-            draft_extra_inputs = await self._rejection_sampling(model_inputs, extra_inputs, sampling_inputs)
-        draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, draft_extra_inputs)
+        draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, extra_inputs)
         return await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
@@ -473,11 +552,11 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  target_dtype=self.model_config.dtype,
                                                  meta=self.make_dummy_meta)
 
-        capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
-        capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
-
         # warmup prefill
         self._forward_impl(inputs)
+
+        capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
+        capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
 
         # warmup decode
         for batch_size in capture_batch_sizes:

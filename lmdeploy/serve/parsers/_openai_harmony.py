@@ -22,7 +22,6 @@ from lmdeploy.utils import get_logger
 from .response_parser import ResponseParser, ResponseParserManager, normalize_chat_request
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
 
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
@@ -43,7 +42,7 @@ class GptOssResponseParser(ResponseParser):
     """Harmony stream parser for GPT-OSS (assistant role)."""
     tool_parser_cls = object()  # API server checks `is not None` for tool support.
 
-    def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
+    def __init__(self, request: ChatCompletionRequest):
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
             # GPT-OSS templates expect full tool wrappers.
             if request.tools is None or request.tool_choice == 'none':
@@ -61,7 +60,6 @@ class GptOssResponseParser(ResponseParser):
             self.request = request
         self._convert_response_format_to_harmony()
         self.request = normalize_chat_request(self.request)
-        self.model_tokenizer = tokenizer
         self.parser = StreamableParser(get_encoding(), role=Role.ASSISTANT)
         self._seen_any = False
         self._next_tool_index = 0
@@ -144,13 +142,18 @@ class GptOssResponseParser(ResponseParser):
             if messages is not None:
                 self.request.messages = messages
 
-    def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs) -> tuple[DeltaMessage | None, bool]:
+    def stream_chunk(
+        self,
+        delta_text: str,
+        delta_token_ids: list[int],
+        **kwargs,
+    ) -> list[tuple[DeltaMessage, bool]]:
         if (
             not delta_text
             and not delta_token_ids
             and not self._seen_any
         ):
-            return DeltaMessage(role='assistant', content=''), False
+            return [(DeltaMessage(role='assistant', content=''), False)]
 
         self._seen_any = True
 
@@ -158,8 +161,8 @@ class GptOssResponseParser(ResponseParser):
         # degrade gracefully as plain content.
         if not delta_token_ids:
             if not delta_text:
-                return None, False
-            return DeltaMessage(role='assistant', content=delta_text), False
+                return []
+            return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
         content = ''
         reasoning = ''
@@ -195,14 +198,17 @@ class GptOssResponseParser(ResponseParser):
                 reasoning += event_value
 
         if not content and not reasoning and not tool_deltas:
-            return None, False
+            return []
 
-        return DeltaMessage(
-            role='assistant',
-            content=content or None,
-            reasoning_content=reasoning or None,
-            tool_calls=tool_deltas or None,
-        ), bool(tool_deltas)
+        return [(
+            DeltaMessage(
+                role='assistant',
+                content=content or None,
+                reasoning_content=reasoning or None,
+                tool_calls=tool_deltas or None,
+            ),
+            bool(tool_deltas),
+        )]
 
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs) -> tuple:
         if not token_ids:

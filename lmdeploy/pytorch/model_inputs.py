@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 class DPMeta:
     tp_sizes: list[int] = None
     moe_tp_sizes: list[int] = None
+    # added extra info for spec decoding
+    dp_is_decoding: bool = False
+    dp_batches: list[int] = None
+    dp_draft_num_tokens: list[int] = None
 
     @staticmethod
     def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):
@@ -241,6 +245,12 @@ class ModelInputs:
         """Build dp meta."""
         self.dp_meta = DPMeta.build(self.input_ids.numel(), num_tokens)
 
+    def global_is_decoding(self) -> bool:
+        """Check whether all DP ranks are decoding."""
+        if self.dp_meta is None:
+            return self.is_decoding
+        return self.dp_meta.dp_is_decoding
+
     def log_info(self):
         """Get log info."""
         ret = (f'num_tokens={self.input_ids.numel()}, batch_size={self.seq_length.numel()}'
@@ -369,6 +379,12 @@ class StepContext:
 
         ret = get_backend().update_step_context(ret)
         return ret
+
+    def global_is_decoding(self) -> bool:
+        """Check whether all DP ranks are decoding."""
+        if self.dp_meta is None:
+            return self.is_decoding
+        return self.dp_meta.dp_is_decoding
 
     @classmethod
     def get_mask_and_position_ids(cls, inputs: ModelInputs):

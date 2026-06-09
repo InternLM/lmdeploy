@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <array>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -20,14 +21,20 @@
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/engine_config.h"
 #include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
+#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
+#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_input.h"
+#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
+#include "src/turbomind/models/vision_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -324,6 +331,46 @@ void bind_struct(py::module_& m, const char* name)
 
 PYBIND11_MODULE(_turbomind, m)
 {
+    py::module_ multimodal = m.def_submodule("multimodal");
+
+    using MMInput      = ft::multimodal::Input;
+    using MMModality   = ft::multimodal::Modality;
+    using QwenVitItem  = ft::multimodal::Qwen3_5VitItem;
+    using QwenVitInput = ft::multimodal::Qwen3_5VitInput;
+    py::class_<MMInput, std::shared_ptr<MMInput>>(multimodal, "Input");
+    py::enum_<MMModality>(multimodal, "Modality")
+        .value("IMAGE", MMModality::kImage)
+        .value("VIDEO", MMModality::kVideo)
+        .value("AUDIO", MMModality::kAudio)
+        .value("TIME_SERIES", MMModality::kTimeSeries)
+        .export_values();
+    py::class_<QwenVitItem>(multimodal, "Qwen3_5VitItem")
+        .def(py::init<>())
+        .def(py::init([](MMModality              modality,
+                         std::shared_ptr<Tensor> data,
+                         int                     token_begin,
+                         int                     token_end,
+                         std::array<int, 3>      grid_thw) {
+                 return QwenVitItem{modality, *data, token_begin, token_end, grid_thw};
+             }),
+             "modality"_a,
+             "data"_a,
+             "token_begin"_a,
+             "token_end"_a,
+             "grid_thw"_a)
+        .def_readwrite("modality", &QwenVitItem::modality)
+        .def_property(
+            "data",
+            [](const QwenVitItem& self) { return std::make_shared<Tensor>(self.data); },
+            [](QwenVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
+        .def_readwrite("token_begin", &QwenVitItem::token_begin)
+        .def_readwrite("token_end", &QwenVitItem::token_end)
+        .def_readwrite("grid_thw", &QwenVitItem::grid_thw);
+    py::class_<QwenVitInput, MMInput, std::shared_ptr<QwenVitInput>>(multimodal, "Qwen3_5VitInput")
+        .def(py::init<>())
+        .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
+        .def_readwrite("items", &QwenVitInput::items);
+
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
         .def_property_readonly("enqueue_time",
@@ -339,7 +386,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("total_blocks", &ft::ScheduleMetrics::total_blocks)
         .def_readonly("active_blocks", &ft::ScheduleMetrics::active_blocks)
         .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
-        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks);
+        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks)
+        .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
 
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {
@@ -458,6 +506,9 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::NormConfig>(m, "NormConfig");
     bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
     bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
+    bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
+    bind_config<turbomind::core::Qwen3_5VitConfig>(m, "Qwen3_5VitConfig");
+    bind_config<turbomind::core::Qwen3_5VitBlockConfig>(m, "Qwen3_5VitBlockConfig");
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
@@ -524,6 +575,7 @@ PYBIND11_MODULE(_turbomind, m)
             "forward",
             [](ModelRequest*               model_request,
                std::shared_ptr<TensorMap>  input_tensors,
+               std::shared_ptr<MMInput>    mm_inputs,
                const ft::SessionParam&     session,
                const ft::GenerationConfig& gen_cfg,
                bool                        stream_output,
@@ -531,6 +583,7 @@ PYBIND11_MODULE(_turbomind, m)
                std::function<void()>       cb) {
                 ModelRequest::InputParam param{};
                 param.tensors        = std::move(input_tensors);
+                param.mm_inputs      = std::move(mm_inputs);
                 param.session        = session;
                 param.gen_cfg        = gen_cfg;
                 param.stream_output  = stream_output;
@@ -548,6 +601,7 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
+            "mm_inputs"_a,
             "session"_a,
             "gen_cfg"_a,
             "stream_output"_a,

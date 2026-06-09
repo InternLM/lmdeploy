@@ -65,6 +65,7 @@ struct AttentionParams {
     int   size_per_head;
     float inv_sqrt_dh;
     int   window_size;
+    bool  causal{true};
     int   layer_id;  // for debugging
 
     // rotary embedding

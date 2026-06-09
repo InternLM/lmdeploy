@@ -13,18 +13,16 @@ from .tool_parser import ToolParser, ToolParserManager
 class Qwen2d5ToolParser(ToolParser):
     """Tool parser for Qwen2.5 JSON tool-call payloads."""
 
-    def __init__(self, tokenizer: object):
-        super().__init__(tokenizer)
-        self.tool_start_token = '<tool_call>'
-        self.tool_end_token = '</tool_call>'
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        return '<tool_call>'
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.tool_start_token
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
+        return '</tool_call>'
 
-    def get_tool_close_tag(self) -> str | None:
-        return self.tool_end_token
-
-    def get_tool_payload_format(self) -> str:
+    @classmethod
+    def get_tool_payload_format(cls) -> str:
         return 'json'
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:

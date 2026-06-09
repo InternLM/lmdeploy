@@ -8,6 +8,8 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.model_inputs import ModelInputs
 
+from .model_agent import ExtraInputs
+
 
 @dataclass
 class MakeDummyMeta:
@@ -82,5 +84,11 @@ class ModelInputsStrategy(ABC):
                    dummy_block_id: int = 0,
                    vocab_size: int = 1,
                    meta: MakeDummyMeta | None = None) -> ModelInputs:
+        """Create dummy model inputs."""
+        pass
+
+    def make_dummy_extra_inputs(self,
+                   inputs: ModelInputs,
+                   meta: MakeDummyMeta | None = None) -> ExtraInputs:
         """Create dummy model inputs."""
         pass

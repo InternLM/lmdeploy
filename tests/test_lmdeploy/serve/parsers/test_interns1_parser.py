@@ -2,6 +2,8 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
+from .helpers import first_stream_delta
+
 
 def _build_parser():
     cls = ResponseParserManager.get('default')
@@ -13,7 +15,7 @@ def _build_parser():
         stream=True,
         tool_choice='auto',
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 def test_stream_chunk_handles_split_internlm_open_tag():
@@ -30,7 +32,7 @@ def test_stream_chunk_handles_split_internlm_open_tag():
     leaked_tag_text = []
 
     for chunk in chunks:
-        delta, _tool_emitted = parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
+        delta, _tool_emitted = first_stream_delta(parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
         if delta is None:
             continue
         if delta.content:
