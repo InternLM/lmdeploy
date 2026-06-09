@@ -6,7 +6,6 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.proxy.dispatch.base import (
     ProxyContext,
     model_not_found_response,
-    replica_unavailable_response,
     response_from_api_exception,
     safe_json_load,
 )
@@ -30,31 +29,27 @@ class HybridDispatcher:
         self._tracker = tracker
 
     async def dispatch(self, ctx: ProxyContext):
-        replica_url = self._selector.select(ctx.model, EngineRole.Hybrid)
-        if not replica_url:
+        selected = self._selector.acquire(ctx.model, EngineRole.Hybrid)
+        if selected is None:
             return model_not_found_response(ctx.model)
 
-        logger.info(f'A request is dispatched to {replica_url}')
-        start = self._tracker.start(replica_url)
-        if start is None:
-            return replica_unavailable_response(replica_url)
-
+        logger.info(f'A request is dispatched to {selected.url}')
         if ctx.stream:
-            response = self._forwarder.forward_raw_stream(ctx.raw_request, replica_url, ctx.endpoint)
+            response = self._forwarder.forward_raw_stream(ctx.raw_request, selected.url, ctx.endpoint)
             return ProxyStreamingResponse(
                 response,
                 raw_request=ctx.raw_request,
-                on_complete=lambda: self._tracker.finish(replica_url, start),
+                on_complete=lambda: self._tracker.finish(selected),
                 media_type='text/event-stream',
             )
 
         try:
-            response = await self._forwarder.forward_raw_buffer(ctx.raw_request, replica_url, ctx.endpoint)
+            response = await self._forwarder.forward_raw_buffer(ctx.raw_request, selected.url, ctx.endpoint)
             if response is None:
                 logger.info('client disconnected during proxy request; upstream cancelled')
                 return
-            return JSONResponse(safe_json_load(replica_url, response))
+            return JSONResponse(safe_json_load(selected.url, response))
         except APIServerException as e:
             return response_from_api_exception(e)
         finally:
-            self._tracker.finish(replica_url, start)
+            self._tracker.finish(selected)

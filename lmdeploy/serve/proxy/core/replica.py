@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field
 
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -27,8 +29,26 @@ class ReplicaLoad(BaseModel):
         return sum(self.latency) / len(self.latency)
 
 
+@dataclass(frozen=True)
+class SelectedReplica:
+    """A replica chosen for one request, with inflight slot already
+    reserved."""
+
+    url: str
+    start_time: float
+
+
 class ReplicaRegistration(BaseModel):
-    """Registration payload for POST /nodes/add."""
+    """Request body for replica admin endpoints (``/nodes/add``,
+    ``/nodes/remove``, ``/nodes/terminate``).
+
+    Attributes:
+        url: Base URL of the api_server replica (e.g. ``http://127.0.0.1:23333``).
+        status: Optional metadata supplied by the caller. On add, ``role`` and
+            ``speed`` are kept; ``models`` may be declared for validation against
+            ``GET {url}/v1/models`` but are always replaced with the discovered
+            model list. Omitted fields use :class:`ReplicaLoad` defaults.
+    """
 
     url: str
     status: ReplicaLoad | None = None

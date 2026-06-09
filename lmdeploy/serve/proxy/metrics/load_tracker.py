@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from lmdeploy.serve.proxy.core.replica import SelectedReplica
 from lmdeploy.serve.proxy.registry.pool import ReplicaPool
 
 
@@ -9,8 +10,5 @@ class InflightTracker:
     def __init__(self, pool: ReplicaPool) -> None:
         self._pool = pool
 
-    def start(self, url: str) -> float | None:
-        return self._pool.inflight_start(url)
-
-    def finish(self, url: str, start: float | None) -> None:
-        self._pool.inflight_finish(url, start)
+    def finish(self, selected: SelectedReplica) -> None:
+        self._pool.inflight_finish(selected)

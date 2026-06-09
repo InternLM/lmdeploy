@@ -3,9 +3,10 @@
 import copy
 import threading
 import time
+from collections.abc import Callable
 
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.serve.proxy.core.replica import ReplicaLoad
+from lmdeploy.serve.proxy.core.replica import ReplicaLoad, SelectedReplica
 
 
 class ReplicaNotFoundError(Exception):
@@ -64,20 +65,32 @@ class ReplicaPool:
         if existed is not None:
             self.pd_connection_pool.dereg_instance(url)
 
-    def inflight_start(self, url: str) -> float | None:
+    def acquire(
+        self,
+        role: EngineRole,
+        model_name: str,
+        pick: Callable[[dict[str, ReplicaLoad]], str | None],
+    ) -> SelectedReplica | None:
+        """Pick a replica and reserve an inflight slot atomically."""
         with self._lock:
-            load = self._replicas.get(url)
-            if load is None:
+            candidates = {
+                url: load
+                for url, load in self._replicas.items()
+                if load.role == role and model_name in load.models
+            }
+            if not candidates:
                 return None
-            load.unfinished += 1
-        return time.time()
+            url = pick(candidates)
+            if url is None:
+                return None
+            self._replicas[url].unfinished += 1
+            start_time = time.time()
+            return SelectedReplica(url=url, start_time=start_time)
 
-    def inflight_finish(self, url: str, start: float | None) -> None:
-        if start is None:
-            return
+    def inflight_finish(self, selected: SelectedReplica) -> None:
         with self._lock:
-            load = self._replicas.get(url)
+            load = self._replicas.get(selected.url)
             if load is None:
                 return
             load.unfinished -= 1
-            load.record_latency(time.time() - start)
+            load.record_latency(time.time() - selected.start_time)

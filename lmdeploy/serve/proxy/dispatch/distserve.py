@@ -11,7 +11,6 @@ from lmdeploy.serve.proxy.core.config import ProxyConfig
 from lmdeploy.serve.proxy.dispatch.base import (
     ProxyContext,
     model_not_found_response,
-    replica_unavailable_response,
     response_from_api_exception,
     safe_json_load,
 )
@@ -57,13 +56,11 @@ class DistServeDispatcher:
         prefill_info: dict = {}
 
         if not self._config.dummy_prefill:
-            p_url = self._selector.select(ctx.model, EngineRole.Prefill)
-            if not p_url:
+            prefill = self._selector.acquire(ctx.model, EngineRole.Prefill)
+            if prefill is None:
                 return model_not_found_response(ctx.model)
+            p_url = prefill.url
             logger.info(f'A Prefill request is dispatched to {p_url}')
-            start = self._tracker.start(p_url)
-            if start is None:
-                return replica_unavailable_response(p_url)
             try:
                 prefill_response = await self._forwarder.forward_json_buffer(
                     prefill_request,
@@ -78,11 +75,12 @@ class DistServeDispatcher:
             except APIServerException as e:
                 return response_from_api_exception(e)
             finally:
-                self._tracker.finish(p_url, start)
+                self._tracker.finish(prefill)
 
-        d_url = self._selector.select(ctx.model, EngineRole.Decode)
-        if not d_url:
+        decode = self._selector.acquire(ctx.model, EngineRole.Decode)
+        if decode is None:
             return model_not_found_response(ctx.model)
+        d_url = decode.url
         logger.info(f'A Decode request is dispatched to {d_url}')
 
         if not self._config.dummy_prefill:
@@ -107,10 +105,6 @@ class DistServeDispatcher:
             is_dummy_prefill=self._config.dummy_prefill,
         ).model_dump(mode='json')
 
-        start = self._tracker.start(d_url)
-        if start is None:
-            return replica_unavailable_response(d_url)
-
         if not self._config.dummy_prefill:
             self._pool.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info.get('id'))
 
@@ -120,7 +114,7 @@ class DistServeDispatcher:
                 resp = ProxyStreamingResponse(
                     response,
                     raw_request=ctx.raw_request,
-                    on_complete=lambda: self._tracker.finish(d_url, start),
+                    on_complete=lambda: self._tracker.finish(decode),
                     media_type='text/event-stream',
                 )
             else:
@@ -131,15 +125,15 @@ class DistServeDispatcher:
                     raw_request=ctx.raw_request,
                 )
                 if response is None:
-                    self._tracker.finish(d_url, start)
+                    self._tracker.finish(decode)
                     if not self._config.dummy_prefill:
                         self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
                     logger.info('client disconnected during decode; upstream cancelled')
                     return
                 resp = JSONResponse(safe_json_load(d_url, response))
-                self._tracker.finish(d_url, start)
+                self._tracker.finish(decode)
         except APIServerException as e:
-            self._tracker.finish(d_url, start)
+            self._tracker.finish(decode)
             if not self._config.dummy_prefill:
                 self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
             return response_from_api_exception(e)
