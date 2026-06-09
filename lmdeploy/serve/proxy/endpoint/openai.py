@@ -31,7 +31,7 @@ def available_models(runtime: ProxyRuntime = Depends(get_runtime)):
     return ModelList(data=model_cards)
 
 
-async def _dispatch_completion(ctx: ProxyContext, runtime: ProxyRuntime):
+async def _dispatch(ctx: ProxyContext, runtime: ProxyRuntime):
     check_response = await check_model(runtime.pool, ctx.model)
     if check_response is not None:
         return check_response
@@ -53,7 +53,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         parsed_request=request,
         request_dict=request.model_dump(),
     )
-    return await _dispatch_completion(ctx, runtime)
+    return await _dispatch(ctx, runtime)
 
 
 @router.post('/v1/completions', dependencies=[Depends(validate_json_request)])
@@ -67,4 +67,4 @@ async def completions_v1(request: CompletionRequest, raw_request: Request,
         parsed_request=request,
         request_dict=request.model_dump(),
     )
-    return await _dispatch_completion(ctx, runtime)
+    return await _dispatch(ctx, runtime)
