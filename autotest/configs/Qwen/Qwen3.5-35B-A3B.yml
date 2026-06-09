@@ -97,7 +97,6 @@ h:
       speculative-num-draft-tokens: 4
       max-batch-size: 256
       model-format: fp8
-      max-prefill-token-num: 1024
   backends:
   - name: pytorch
     communicators:
@@ -166,7 +165,6 @@ h:
       speculative-num-draft-tokens: 4
       max-batch-size: 256
       model-format: fp8
-      max-prefill-token-num: 1024
   backends:
   - name: pytorch
     communicators:
