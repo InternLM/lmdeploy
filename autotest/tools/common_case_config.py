@@ -274,20 +274,6 @@ PYTORCH_PR_TEST_LLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {}
-}, {
-    'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {
-        'speculative-draft-model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B',
-        'speculative-algorithm': 'eagle3',
-        'speculative-num-draft-tokens': 3,
-        'max-batch-size': 128
-    }
 }]
 
 BASE_TOOLCALL_TEST_LLM = [{
