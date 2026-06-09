@@ -67,24 +67,14 @@ def _gated_delta_preprocess_kernel(
     mask_t = offs_t < NUM_TOKENS
     mask_d = offs_d < HEAD_DIM
 
-    if BATCH_SIZE == 1:
-        q_batch_offset = 0
-        k_batch_offset = 0
-        b_batch_offset = 0
-        a_batch_offset = 0
-        q_out_batch_offset = 0
-        k_out_batch_offset = 0
-        beta_out_batch_offset = 0
-        g_out_batch_offset = 0
-    else:
-        q_batch_offset = batch_id * q_stride_b
-        k_batch_offset = batch_id * k_stride_b
-        b_batch_offset = batch_id * b_stride_b
-        a_batch_offset = batch_id * a_stride_b
-        q_out_batch_offset = batch_id * q_out_stride_b
-        k_out_batch_offset = batch_id * k_out_stride_b
-        beta_out_batch_offset = batch_id * beta_out_stride_b
-        g_out_batch_offset = batch_id * g_out_stride_b
+    q_batch_offset = batch_id * q_stride_b
+    k_batch_offset = batch_id * k_stride_b
+    b_batch_offset = batch_id * b_stride_b
+    a_batch_offset = batch_id * a_stride_b
+    q_out_batch_offset = batch_id * q_out_stride_b
+    k_out_batch_offset = batch_id * k_out_stride_b
+    beta_out_batch_offset = batch_id * beta_out_stride_b
+    g_out_batch_offset = batch_id * g_out_stride_b
 
     q_ptrs = q + q_batch_offset + offs_t[:, None] * q_stride_t + src_head_id * q_stride_h \
         + offs_d[None, :] * q_stride_d

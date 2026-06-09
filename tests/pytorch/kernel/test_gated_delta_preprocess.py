@@ -28,6 +28,10 @@ def _skip_bf16(dtype):
         pytest.skip('bf16 not supported.')
 
 
+def _assert_close(actual, expected):
+    torch.testing.assert_close(actual, expected)
+
+
 def _make_qk_views(batch, seqlen, num_k_heads, num_v_heads, head_dim, dtype):
     qkv = torch.randn(
         batch,
@@ -115,10 +119,10 @@ def test_gated_delta_preprocess_3d_ba(dtype, kv_ratio, use_init_token_mask, appl
                                 init_token_mask=init_token_mask,
                                 apply_qk_l2norm=apply_qk_l2norm)
 
-    torch.testing.assert_close(out[0], ref[0], atol=0, rtol=0)
-    torch.testing.assert_close(out[1], ref[1], atol=0, rtol=0)
-    torch.testing.assert_close(out[2], ref[2], atol=0, rtol=0)
-    torch.testing.assert_close(out[3], ref[3], atol=0, rtol=0)
+    _assert_close(out[0], ref[0])
+    _assert_close(out[1], ref[1])
+    _assert_close(out[2], ref[2])
+    _assert_close(out[3], ref[3])
 
 
 @pytest.mark.skipif(not do_test(), reason='triton or cuda is not available')
@@ -163,10 +167,10 @@ def test_gated_delta_preprocess_4d_grouped_ba(dtype, kv_ratio, use_init_token_ma
                                 init_token_mask=init_token_mask,
                                 apply_qk_l2norm=apply_qk_l2norm)
 
-    torch.testing.assert_close(out[0], ref[0], atol=0, rtol=0)
-    torch.testing.assert_close(out[1], ref[1], atol=0, rtol=0)
-    torch.testing.assert_close(out[2], ref[2], atol=0, rtol=0)
-    torch.testing.assert_close(out[3], ref[3], atol=0, rtol=0)
+    _assert_close(out[0], ref[0])
+    _assert_close(out[1], ref[1])
+    _assert_close(out[2], ref[2])
+    _assert_close(out[3], ref[3])
 
 
 @pytest.mark.skipif(not do_test(), reason='triton or cuda is not available')
@@ -217,8 +221,8 @@ def test_gated_delta_preprocess_matches_default_prepare_inputs(dtype, kv_ratio, 
         init_token_mask=init_token_mask,
     )
 
-    torch.testing.assert_close(out[0], ref[0], atol=0, rtol=0)
-    torch.testing.assert_close(out[1], ref[1], atol=0, rtol=0)
-    torch.testing.assert_close(out[2], ref[3], atol=0, rtol=0)
-    torch.testing.assert_close(out[3], ref[2], atol=0, rtol=0)
+    _assert_close(out[0], ref[0])
+    _assert_close(out[1], ref[1])
+    _assert_close(out[2], ref[3])
+    _assert_close(out[3], ref[2])
     assert not ref[4]

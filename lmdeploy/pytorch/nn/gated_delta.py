@@ -40,7 +40,6 @@ class GatedDeltaMeta:
         self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
         self.spec_conv_offsets = None
         self.spec_state_offsets = None
-        self.is_init_token = None
 
         device = self.cu_seqlens.device
 
