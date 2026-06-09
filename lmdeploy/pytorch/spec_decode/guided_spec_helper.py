@@ -145,7 +145,7 @@ class GuidedSpecHelper:
         if not processors or self._mgr is None:
             return
         forked = {idx: proc.fork() for idx, proc in processors.items()}
-        cpu_draft = draft_token_ids.cpu()
+        cpu_draft = await asyncio.to_thread(draft_token_ids.cpu)
         batch_size = scores_3d.size(0)
         num_expand = scores_3d.size(1)
         bitmask = self._mgr.allocate_batched_bitmap(batch_size)
