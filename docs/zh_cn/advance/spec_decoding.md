@@ -128,28 +128,28 @@ deepseek-ai/DeepSeek-V3 \
 from lmdeploy import PytorchEngineConfig, pipeline
 from lmdeploy.messages import GenerationConfig, SpeculativeConfig
 
-model_path = 'deepseek-ai/DeepSeek-V3'
-spec_cfg = SpeculativeConfig(method='deepseek_mtp', num_speculative_tokens=3)
-pipe = pipeline(
-    model_path,
-    backend_config=PytorchEngineConfig(tp=16, max_batch_size=128),
-    speculative_config=spec_cfg,
-)
-
-schema = {
-    'type': 'object',
-    'properties': {
-        'name': {'type': 'string'},
-        'age': {'type': 'integer'},
-    },
-    'required': ['name', 'age'],
-}
-gen_config = GenerationConfig(
-    response_format=dict(type='json_schema', json_schema=dict(name='person', schema=schema)),
-    max_new_tokens=256,
-)
-
 if __name__ == '__main__':
+
+  model_path = 'deepseek-ai/DeepSeek-V3'
+  spec_cfg = SpeculativeConfig(method='deepseek_mtp', num_speculative_tokens=3)
+  pipe = pipeline(
+      model_path,
+      backend_config=PytorchEngineConfig(tp=16, max_batch_size=128),
+      speculative_config=spec_cfg,
+  )
+
+  schema = {
+      'type': 'object',
+      'properties': {
+          'name': {'type': 'string'},
+          'age': {'type': 'integer'},
+      },
+      'required': ['name', 'age'],
+  }
+  gen_config = GenerationConfig(
+      response_format=dict(type='json_schema', json_schema=dict(name='person', schema=schema)),
+      max_new_tokens=256,
+  )
 
   response = pipe(['请用 JSON 格式做自我介绍。'], gen_config=gen_config)
   print(response)
@@ -173,17 +173,17 @@ deepseek-ai/DeepSeek-V3 \
 ```python
 from openai import OpenAI
 
-schema = {
-    'type': 'object',
-    'properties': {
-        'name': {'type': 'string'},
-        'age': {'type': 'integer'},
-    },
-    'required': ['name', 'age'],
-}
-response_format = dict(type='json_schema', json_schema=dict(name='person', schema=schema))
-
 if __name__ == '__main__':
+
+  schema = {
+      'type': 'object',
+      'properties': {
+          'name': {'type': 'string'},
+          'age': {'type': 'integer'},
+      },
+      'required': ['name', 'age'],
+  }
+  response_format = dict(type='json_schema', json_schema=dict(name='person', schema=schema))
 
   client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:24545/v1')
   model_name = client.models.list().data[0].id
