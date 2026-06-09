@@ -23,7 +23,7 @@ def _build_response_parser():
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 REFERENCE_CHUNKS = [

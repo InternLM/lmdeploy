@@ -1,3 +1,4 @@
+import copy
 import csv
 import glob
 import json
@@ -13,6 +14,16 @@ from mmengine.config import Config
 from utils.common_utils import execute_command_with_logging
 from utils.config_utils import get_case_str_by_config, get_cli_str, parse_config_by_case
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, EVAL_RUN_CONFIG
+
+
+def build_eval_judge_run_config(config: dict, proxy_url: str) -> dict:
+    """Build judge ``api_server`` run_config for the eval scoring stage."""
+    eval_run_config = copy.deepcopy(EVAL_RUN_CONFIG)
+    extra_params = eval_run_config.setdefault('extra_params', {})
+    extra_params['proxy-url'] = proxy_url
+    if config.get('device') == 'ascend':
+        extra_params['device'] = 'ascend'
+    return eval_run_config
 
 
 @contextmanager

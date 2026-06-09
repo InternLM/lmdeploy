@@ -23,7 +23,7 @@ def response_parser():
         stream=True,
         tool_choice='auto',
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 @pytest.fixture()
@@ -38,7 +38,7 @@ def response_parser_with_reasoning():
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 REFERENCE_CHUNKS = [
