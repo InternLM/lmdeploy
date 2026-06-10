@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from functools import partial
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Literal
@@ -82,6 +82,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
+from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -139,6 +140,13 @@ class VariableInterface:
     @classmethod
     def get_engine_config(cls):
         return cls.async_engine.backend_config
+
+
+async def _with_request_cleanup(generator, result_generators, sessions):
+    """Yield from an API generator and cleanup when the HTTP task exits."""
+    session_mgr = VariableInterface.get_session_manager()
+    async for item in with_request_cleanup(generator, result_generators, sessions, session_mgr):
+        yield item
 
 
 router = APIRouter()
@@ -466,7 +474,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     parser_cls = VariableInterface.response_parser_cls
     try:
-        response_parser = parser_cls(request=request, tokenizer=tokenizer)
+        response_parser = parser_cls(request)
     except ValueError as e:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(e))
     # request is normalized and may be adjusted by the parser
@@ -639,7 +647,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     final_logprobs = []
@@ -648,19 +657,20 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     text = ''
     cache_block_ids = []
     remote_token_ids = []
-    async for res in result_generator:
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            await session.async_abort()
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-        final_res = res
-        text += res.response
-        if res.token_ids:
-            final_token_ids.extend(res.token_ids)
-        if res.logprobs:
-            final_logprobs.extend(res.logprobs)
-        cache_block_ids.append(res.cache_block_ids)
-        remote_token_ids.append(res.token_ids)
+    async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+        async for res in generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                await session.async_abort()
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+            final_res = res
+            text += res.response
+            if res.token_ids:
+                final_token_ids.extend(res.token_ids)
+            if res.logprobs:
+                final_logprobs.extend(res.logprobs)
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
 
     tool_calls = None
     reasoning_content = None
@@ -910,7 +920,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), generators, sessions)
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     usage = UsageInfo()
@@ -918,25 +929,26 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     cache_block_ids = []
     remote_token_ids = []
 
-    async def _inner_call(i, generator):
+    async def _inner_call(i, generator, session):
         nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
         text = ''
-        async for res in generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            final_res = res
-            text += res.response
-            cache_block_ids.append(res.cache_block_ids)
-            remote_token_ids.append(res.token_ids)
-            if res.token_ids:
-                final_token_ids.extend(res.token_ids)
-            if res.logprobs:
-                final_logprobs.extend(res.logprobs)
+        async with aclosing(_with_request_cleanup(generator, [generator], [session])) as cleanup_generator:
+            async for res in cleanup_generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await VariableInterface.async_engine.stop_session(request.session_id)
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                final_res = res
+                text += res.response
+                cache_block_ids.append(res.cache_block_ids)
+                remote_token_ids.append(res.token_ids)
+                if res.token_ids:
+                    final_token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    final_logprobs.extend(res.logprobs)
 
         logprobs = None
         assert final_res is not None
@@ -955,7 +967,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
 
-    await asyncio.gather(*[_inner_call(i, generators[i]) for i in range(len(generators))])
+    await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
 
     response = CompletionResponse(
         id=request_id,
@@ -1060,7 +1072,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         yield 'data: [DONE]\n\n'
 
     if request.stream:
-        return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(generate_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     response = None
 
@@ -1068,14 +1081,15 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''
         output_ids = []
         logprobs = []
-        async for res in result_generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await session.async_abort()
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            text += res.response or ''
-            output_ids.extend(res.token_ids or [])
-            logprobs.extend(res.logprobs or [])
+        async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+            async for res in generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await session.async_abort()
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                text += res.response or ''
+                output_ids.extend(res.token_ids or [])
+                logprobs.extend(res.logprobs or [])
 
         output_token_logprobs = []
         if len(logprobs) and len(output_ids):

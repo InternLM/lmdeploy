@@ -19,7 +19,7 @@ logger = get_logger('lmdeploy')
 
 @dataclass
 class SessionState:
-    is_exists: asyncio.Event = field(default_factory=asyncio.Event)
+    init_done: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: bool = False
 
 
@@ -39,7 +39,7 @@ class MPEngine(EngineBase):
         """Collective rpc call."""
         raise NotImplementedError('This method has not been implemented yet.')
 
-    async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event, *args, **kwargs):
+    async def _collective_rpc_streaming_async(self, func: str, init_done: asyncio.Event, *args, **kwargs):
         """Collective rpc call."""
         raise NotImplementedError('This method has not been implemented yet.')
 
@@ -109,11 +109,13 @@ class MPEngineInstance(EngineInstanceBase):
             self.engine.pending_cancel_sessions.discard(session_id)
             logger.warning(f'Session {session_id} not found when end session.')
             return ResponseType.SESSION_NOT_EXIST
-        await self.session_states[session_id].is_exists.wait()
-        ret = await self.engine._collective_rpc_async('instance_async_end', session_id)
-        self.session_states.pop(session_id)
-        self.engine.pending_cancel_sessions.discard(session_id)
-        return ret
+        state = self.session_states[session_id]
+        await state.init_done.wait()
+        try:
+            return await self.engine._collective_rpc_async('instance_async_end', session_id)
+        finally:
+            self.session_states.pop(session_id, None)
+            self.engine.pending_cancel_sessions.discard(session_id)
 
     async def async_cancel(self, session_id: int):
         """Stop current streaming inference."""
@@ -122,8 +124,7 @@ class MPEngineInstance(EngineInstanceBase):
             return ResponseType.SESSION_NOT_EXIST
         state = self.session_states[session_id]
         self.engine.pending_cancel_sessions.add(session_id)
-        if not state.is_exists.is_set():
-            logger.warning(f'Session {session_id} not started yet, recording pending cancel.')
+        if not state.init_done.is_set():
             state.cancelled = True
             return ResponseType.SUCCESS
         return await self.engine._collective_rpc_async('instance_async_cancel', session_id)
@@ -132,15 +133,18 @@ class MPEngineInstance(EngineInstanceBase):
         """Send stream inference request."""
         state = self.session_states[session_id]
         if state.cancelled or session_id in self.engine.pending_cancel_sessions:
-            state.is_exists.set()
-            logger.warning(f'Session {session_id} canceld, async_stream_infer')
+            state.init_done.set()
             yield EngineOutput(ResponseType.CANCEL, [])
             return
         kwargs['session_id'] = session_id
         generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer',
-                                                                state.is_exists,
+                                                                state.init_done,
                                                                 *args,
                                                                 **kwargs)
 
-        async for result in generator:
-            yield result
+        try:
+            async for result in generator:
+                yield result
+        except Exception:
+            logger.exception(f'MPEngine session {session_id} stream inference failed.')
+            raise

@@ -276,6 +276,11 @@ def _parallel_launch_extra(engine_config: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(extra) if isinstance(extra, dict) else {}
 
 
+def _entry_launch_extra_sig(entry: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    launch_extra = _parallel_launch_extra(_entry_engine_config(entry))
+    return tuple(sorted(launch_extra.items()))
+
+
 def _parallel_dicts_equal(a: dict[str, int], b: dict[str, int]) -> bool:
     return a == b
 
@@ -461,6 +466,7 @@ def _get_func_config_list_per_model(
     env_key = _model_matrix_env_key(config)
     deps_profile = get_deps_profile_selector()
     run_configs: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
     base_case_list = get_model_list(
         config, backend, parallel_config, model_type, func_type, extra=extra,
     )
@@ -483,15 +489,15 @@ def _get_func_config_list_per_model(
         if 'quantization' in (entry.get(TEST_COVERAGE_KEY) or []):
             _extend_quant_models_from_entry(backend, [base_model], quant_cfg, models_for_quant)
         models_for_quant = [m for m in models_for_quant if m in base_case_list]
+        launch_extra_sig = _entry_launch_extra_sig(entry)
 
-        seen: set[tuple] = set()
         for model in models_for_quant:
             qcfg = quant_cfg
             for quant_policy in [0, 4, 8, 42]:
                 if not _is_kvint_enabled_in_entry(backend, _base_model_name(model), quant_policy, qcfg):
                     continue
                 for communicator in backend_map[backend]:
-                    sig = (model, communicator, quant_policy)
+                    sig = (model, communicator, quant_policy, launch_extra_sig)
                     if sig in seen:
                         continue
                     seen.add(sig)
@@ -969,6 +975,9 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
     model_format = extra_params.get('model-format')
     if model_format:
         extra_params_case += f'_{model_format}'
+    spec_algo = extra_params.get('speculative-algorithm')
+    if spec_algo:
+        extra_params_case += f'_{spec_algo}'.replace('_', '-')
     if not is_simple:
         for k, v in extra_params.items():
             if len(v) > 10:
