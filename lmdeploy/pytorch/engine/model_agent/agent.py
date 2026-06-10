@@ -79,6 +79,7 @@ class BatchedOutputs:
     stop_pos: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     model_metas: list[dict[str, Any]] = None
+    multimodal_outputs: list[dict[str, Any] | None] | None = None
     logprobs: BatchedLogProbs | None = None
     new_token_timestamp: int = 0
     extra_outputs: ExtraOutputs | None = None
@@ -460,6 +461,23 @@ class BaseModelAgent:
                                                                              extra_inputs)
         return next_token_ids, logprobs, next_token_ids, extra_inputs
 
+    def _update_multimodal_outputs(
+        self,
+        model_outputs: dict,
+        next_token_ids: torch.Tensor,
+        output_token_ids: torch.Tensor | None = None,
+        stopped: torch.Tensor | None = None,
+    ):
+        model = self.patched_model.get_model()
+        if not hasattr(model, 'update_multimodal_outputs'):
+            return output_token_ids, stopped, None
+        return model.update_multimodal_outputs(
+            model_outputs=model_outputs,
+            next_token_ids=next_token_ids,
+            output_token_ids=output_token_ids,
+            stopped=stopped,
+        )
+
     def _push_output(self, output: BatchedOutputs):
         """Push output."""
         event = torch.cuda.Event()
@@ -621,7 +639,8 @@ class BaseModelAgent:
                                             need_broadcast_next: bool,
                                             return_logits: bool = False,
                                             all_routed_experts: Any = None,
-                                            extra_inputs: ExtraInputs = None):
+                                            extra_inputs: ExtraInputs = None,
+                                            model_outputs: dict | None = None):
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
@@ -649,6 +668,12 @@ class BaseModelAgent:
             inputs=inputs,
             extra_inputs=extra_inputs,
         )
+        output_token_ids, stopped, multimodal_outputs = self._update_multimodal_outputs(
+            model_outputs or {},
+            next_token_ids=next_token_ids,
+            output_token_ids=output_token_ids,
+            stopped=stopped,
+        )
 
         # send output
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
@@ -660,6 +685,7 @@ class BaseModelAgent:
                            stopped=stopped,
                            stop_pos=stop_pos,
                            model_metas=model_metas,
+                           multimodal_outputs=multimodal_outputs,
                            logprobs=logprobs,
                            all_routed_experts=all_routed_experts,
                            extra_outputs=extra_outputs))
@@ -673,6 +699,7 @@ class BaseModelAgent:
         extra_inputs: ExtraInputs,
         sampling_inputs: SamplingInputs,
         need_broadcast_next: bool,
+        model_outputs: dict | None = None,
     ):
         rank = self.rank
         # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
@@ -815,6 +842,7 @@ class BaseModelAgent:
                     return_logits=return_logits,
                     all_routed_experts=all_routed_experts,
                     extra_inputs=extra_inputs,
+                    model_outputs=output,
                 ))
         else:
             (
@@ -829,6 +857,7 @@ class BaseModelAgent:
                     extra_inputs,
                     sampling_inputs,
                     need_broadcast_next,
+                    model_outputs=output,
                 ))
 
         if inputs.is_dummy:

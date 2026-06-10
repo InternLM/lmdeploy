@@ -1216,7 +1216,9 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         ts_lens = None
         ts_sr = None
         if context.input_multimodals is not None:
-            mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
+            mm_inputs = [
+                input_mm.get('mm_data', []) for input_mm in context.input_multimodals if input_mm is not None
+            ]
             # flatten batch
             mm_inputs = [item for sublist in mm_inputs for item in sublist]
 

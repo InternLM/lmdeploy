@@ -169,6 +169,10 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
     min_p: float = 0.0
+    forecast_horizon: int | list[int] | None = Field(
+        default=None,
+        description='Forecast horizon for time-series forecast outputs. This does not trigger forecasting.',
+    )
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False
     return_logprob: bool | None = False
@@ -240,6 +244,7 @@ class ChatMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = Field(default=None, examples=[None])
     tool_calls: list[ToolCall] | None = Field(default=None, examples=[None])
+    ts_forecast: dict[str, Any] | None = Field(default=None, examples=[None])
 
 
 class LogProbs(BaseModel):
@@ -306,6 +311,7 @@ class DeltaMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
     tool_calls: list[DeltaToolCall] | None = None
+    ts_forecast: dict[str, Any] | None = None
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):

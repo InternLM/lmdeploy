@@ -210,6 +210,7 @@ class EngineLoop:
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
+                                multimodal_outputs=out.multimodal_outputs,
                                 logprobs=logprobs))
 
     @staticmethod
@@ -307,6 +308,7 @@ class EngineLoop:
 
         new_token_timestamp = batched_outputs.new_token_timestamp
         logprobs = batched_outputs.logprobs
+        multimodal_outputs = batched_outputs.multimodal_outputs or [None] * len(running)
 
         all_logprobs = __get_logprobs(batched_outputs)
 
@@ -339,7 +341,8 @@ class EngineLoop:
             # logprobs
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
-            if logprobs is not None and num_logprobs > 0:
+            # forecast-only steps hide <TS_GEN> as -1, so their token logprobs are not user-visible.
+            if logprobs is not None and num_logprobs > 0 and multimodal_outputs[idx] is None:
                 cur_logprobs = list([_dat[:num_logprobs + 1] for _dat in vals_indices]
                                     for vals_indices in all_logprobs[idx])
 
@@ -357,7 +360,8 @@ class EngineLoop:
                               cache_block_ids=cache_block_ids,
                               req_metrics=req_metrics,
                               logprobs=cur_logprobs,
-                              routed_experts=msg.routed_experts)
+                              routed_experts=msg.routed_experts,
+                              multimodal_outputs=multimodal_outputs[idx])
             outputs[session_id] = out
 
             if msg.return_logits:

@@ -34,6 +34,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
         local_adapter_ids=inputs.local_adapter_ids,
         model_metas=model_metas,
+        forecast_horizons=inputs.forecast_horizons,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -75,6 +76,13 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     if inputs.model_metas is not None and other.model_metas is not None:
         model_metas = inputs.model_metas + other.model_metas
 
+    # forecast horizons
+    forecast_horizons = None
+    if inputs.forecast_horizons is not None or other.forecast_horizons is not None:
+        input_horizons = inputs.forecast_horizons or [None] * inputs.seq_length.numel()
+        other_horizons = other.forecast_horizons or [None] * other.seq_length.numel()
+        forecast_horizons = input_horizons + other_horizons
+
     # ssm
     state_offsets = None
     if inputs.state_offsets is not None:
@@ -98,6 +106,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         sum_kv_seqlen=inputs.sum_kv_seqlen + other.sum_kv_seqlen,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
+        forecast_horizons=forecast_horizons,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -160,6 +169,11 @@ def index_select_model_inputs(inputs: ModelInputs,
     if model_metas is not None and indice_cpu is not None:
         model_metas = [model_metas[i] for i in indice_cpu]
 
+    # forecast horizons
+    forecast_horizons = inputs.forecast_horizons
+    if forecast_horizons is not None and indice_cpu is not None:
+        forecast_horizons = [forecast_horizons[i] for i in indice_cpu]
+
     # for ssm
     state_offsets = inputs.state_offsets
     if state_offsets is not None:
@@ -191,6 +205,7 @@ def index_select_model_inputs(inputs: ModelInputs,
         sum_kv_seqlen=sum_kv_seqlen,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
+        forecast_horizons=forecast_horizons,
         state_offsets=state_offsets,
         target_hidden_states=target_hidden_states,
         target_position_ids=target_position_ids,

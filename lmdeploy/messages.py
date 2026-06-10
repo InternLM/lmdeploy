@@ -110,6 +110,7 @@ class GenerationConfig:
             Must be non-negative; values below 0 are treated as 0.
         repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
             Must be non-negative; values below 0 are treated as 0.
+        forecast_horizon: Forecast horizon for time series forecast outputs. It does not trigger forecasting.
     """
 
     n: int = 1
@@ -147,6 +148,7 @@ class GenerationConfig:
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
+    forecast_horizon: int | list[int] | None = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -534,6 +536,7 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
+    multimodal_outputs: dict[str, Any] | None = None
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -563,6 +566,7 @@ class Response:
         fields.extend(_format_tensor('logits', self.logits))
         fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
         fields.extend(_format_tensor('routed_experts', self.routed_experts))
+        fields.append(f'multimodal_outputs={self.multimodal_outputs}')
         return '\n'.join(fields)
 
     def extend(self, other: 'Response') -> 'Response':
@@ -589,6 +593,7 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.multimodal_outputs = other.multimodal_outputs
         return self
 
 
@@ -672,6 +677,7 @@ class EngineOutput:
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
+    multimodal_outputs: dict[str, Any] | None = None
 
 
 @dataclass

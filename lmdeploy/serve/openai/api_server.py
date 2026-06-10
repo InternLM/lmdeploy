@@ -278,6 +278,17 @@ async def terminate():
 
 
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
+# Keep this top-level so logit-bias processors can be pickled by the MP engine.
+def _logit_bias_processor(
+    logit_bias,
+    token_ids,
+    logits,
+):
+    for token_id, bias in logit_bias.items():
+        logits[token_id] = logits[token_id] + bias
+    return logits
+
+
 def logit_bias_logits_processor(logit_bias: dict[int, float] | dict[str, float],
                                 tokenizer: PreTrainedTokenizerBase) -> LogitsProcessor:
     try:
@@ -296,15 +307,6 @@ def logit_bias_logits_processor(logit_bias: dict[int, float] | dict[str, float],
         if token_id < 0 or token_id >= tokenizer.vocab_size:
             raise ValueError(f'token_id {token_id} in logit_bias contains '
                              'out-of-vocab token id')
-
-    def _logit_bias_processor(
-        logit_bias,
-        token_ids,
-        logits,
-    ):
-        for token_id, bias in logit_bias.items():
-            logits[token_id] = logits[token_id] + bias
-        return logits
 
     return partial(_logit_bias_processor, clamped_logit_bias)
 
@@ -495,6 +497,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         repetition_ngram_size=request.repetition_ngram_size,
         repetition_ngram_threshold=request.repetition_ngram_threshold,
         return_routed_experts=request.return_routed_experts,
+        forecast_horizon=request.forecast_horizon,
     )
 
     # text completion for string input or input_ids
@@ -526,13 +529,21 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         mm_processor_kwargs=request.mm_processor_kwargs)
     include_usage = bool(request.stream_options and request.stream_options.include_usage)
 
+    def get_ts_forecast(multimodal_outputs):
+        if multimodal_outputs is None:
+            return None
+        return multimodal_outputs.get('time_series_forecast')
+
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,
                                     finish_reason: str | None = None,
                                     logprobs: ChoiceLogprobs | None = None,
                                     output_token_logprobs: list[tuple[float, int]] | None = None,
                                     routed_experts=None,
-                                    output_ids=None) -> dict:
+                                    output_ids=None,
+                                    ts_forecast=None) -> dict:
+        if ts_forecast is not None:
+            delta_message.ts_forecast = ts_forecast
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
@@ -565,7 +576,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
         final_usage = None
+        stream_ts_forecast = None
         async for res in result_generator:
+            if stream_ts_forecast is None:
+                stream_ts_forecast = get_ts_forecast(res.multimodal_outputs)
             logprobs = None
             output_token_logprobs = None
             if request.logprobs and res.logprobs:
@@ -615,6 +629,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
                 # Only output routed_experts in the final chunk
                 routed_experts = res.routed_experts if finish_reason is not None else None
+                ts_forecast = stream_ts_forecast if finish_reason is not None else None
                 # Emit token ids once per engine yield on the last parsed delta, when
                 # accumulated delta text and token ids for this step are aligned.
                 stream_output_ids = delta_token_ids if (request.return_token_ids and is_last_delta) else None
@@ -625,7 +640,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                             logprobs=chunk_logprobs,
                                                             output_token_logprobs=chunk_output_token_logprobs,
                                                             routed_experts=routed_experts,
-                                                            output_ids=stream_output_ids)
+                                                            output_ids=stream_output_ids,
+                                                            ts_forecast=ts_forecast)
                 if res.cache_block_ids is not None and is_last_delta:
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
@@ -682,7 +698,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     message = ChatMessage(role='assistant',
                             content=text,
                             tool_calls=tool_calls,
-                            reasoning_content=reasoning_content)
+                            reasoning_content=reasoning_content,
+                            ts_forecast=get_ts_forecast(final_res.multimodal_outputs))
 
     logprobs = None
     if request.logprobs and len(final_logprobs):

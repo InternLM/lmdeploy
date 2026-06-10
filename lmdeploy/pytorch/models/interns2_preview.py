@@ -4,6 +4,7 @@ from typing import Any
 
 import torch
 from torch import nn
+from torch.nn.utils.rnn import pad_sequence
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -184,7 +185,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         ts_lens: torch.Tensor | None = None,
         ts_sr: torch.Tensor | None = None,
         ts_channels: torch.Tensor | None = None,
-        forecast_horizon: int | list[int] | None = None,
+        ts_forecast_meta: dict[str, Any] | None = None,
         **kwargs,
     ):
         all_routed_experts = None
@@ -194,7 +195,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
             all_routed_experts = position_ids.new_empty(
                 (num_tokens, config.num_hidden_layers, config.num_experts_per_tok), dtype=torch.uint16)
 
-        need_forecast = forecast_horizon is not None and ts_values is not None
+        need_ts_context = ts_values is not None and ts_forecast_meta is not None
         hidden_states, target_inputs_embeds, ts_context = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -211,7 +212,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
             grid_thw=grid_thw,
             all_routed_experts=all_routed_experts,
             return_input_embeds=return_input_embeds,
-            return_ts_context=need_forecast,
+            return_ts_context=need_ts_context,
             ts_values=ts_values,
             ts_lens=ts_lens,
             ts_sr=ts_sr,
@@ -222,19 +223,118 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
                       all_routed_experts=all_routed_experts,
                       target_inputs_embeds=target_inputs_embeds)
 
-        if need_forecast:
-            forecast = self.time_series_forecaster(
+        if need_ts_context:
+            q_seqlens = ts_forecast_meta['q_seqlens']
+            ts_batch_indices = ts_forecast_meta['ts_batch_indices']
+            llm_hidden, llm_mask = self._select_ts_llm_hidden(hidden_states, q_seqlens, ts_batch_indices)
+            output['pending_ts_forecast'] = dict(
                 history=ts_context['ts_history'],
-                llm_embedding_input=hidden_states,
-                ts_encoder_embedding_input=ts_context['ts_encoder_embedding'],
+                llm_embedding_input=llm_hidden,
+                llm_embedding_mask=llm_mask,
+                ts_encoder_embedding=ts_context['ts_encoder_embedding'],
                 ts_encoder_embedding_mask=ts_context['ts_encoder_embedding_mask'],
-                override_horizon=forecast_horizon,
+                ts_batch_indices=ts_batch_indices,
+                forecast_horizon=ts_forecast_meta['forecast_horizon'],
             )
-            output.update(ts_point_forecast=forecast.point_forecast,
-                          ts_quantile_forecast=forecast.quantile_forecast,
-                          ts_predicted_horizon=forecast.predicted_horizon)
 
         return output
+
+    @staticmethod
+    def _select_ts_llm_hidden(hidden_states: torch.Tensor, q_seqlens: torch.Tensor,
+                              ts_batch_indices: torch.Tensor):
+        # Select TS requests from packed prefill hidden states for the forecaster.
+        q_lens = [int(length) for length in q_seqlens.tolist()]
+        if hidden_states.size(0) == 1:
+            chunks = hidden_states.squeeze(0).split(q_lens, dim=0)
+        else:
+            chunks = [hidden_states[idx, :length] for idx, length in enumerate(q_lens)]
+
+        selected = [chunks[int(idx)] for idx in ts_batch_indices.tolist()]
+        lengths = torch.tensor([item.size(0) for item in selected], device=hidden_states.device)
+        padded = pad_sequence(selected, batch_first=True)
+        mask = torch.arange(padded.size(1), device=hidden_states.device)[None, :] < lengths[:, None]
+        return padded, mask
+
+    def _run_ts_forecaster(self, pending: dict[str, Any], item_indices: torch.Tensor):
+        """Run forecaster for TS items that emitted <TS_GEN>."""
+
+        def to_payload(forecast, idx: int):
+            # Convert one forecast item from tensors to an API-serializable payload.
+            predicted_horizon = None
+            if forecast.predicted_horizon is not None:
+                predicted_horizon = int(forecast.predicted_horizon[idx].item())
+            return dict(
+                point_forecast=forecast.point_forecast[idx].detach().float().cpu().tolist(),
+                quantile_forecast=forecast.quantile_forecast[idx].detach().float().cpu().tolist(),
+                predicted_horizon=predicted_horizon,
+            )
+
+        item_ids = item_indices.tolist()
+        override_horizon = pending['forecast_horizon']
+        if override_horizon is not None:
+            override_horizon = [override_horizon[int(idx)] for idx in item_ids]
+            if all(horizon == override_horizon[0] for horizon in override_horizon):
+                override_horizon = override_horizon[0]
+
+        if isinstance(override_horizon, list) and any(horizon is None for horizon in override_horizon):
+            payloads = []
+            for item_idx, horizon in zip(item_ids, override_horizon):
+                forecast = self.time_series_forecaster(
+                    history=[pending['history'][item_idx]],
+                    llm_embedding_input=pending['llm_embedding_input'][item_idx:item_idx + 1],
+                    llm_embedding_mask=pending['llm_embedding_mask'][item_idx:item_idx + 1],
+                    ts_encoder_embedding_input=pending['ts_encoder_embedding'][item_idx:item_idx + 1],
+                    ts_encoder_embedding_mask=pending['ts_encoder_embedding_mask'][item_idx:item_idx + 1],
+                    override_horizon=horizon,
+                )
+                payloads.append(to_payload(forecast, 0))
+            return payloads
+
+        forecast = self.time_series_forecaster(
+            history=[pending['history'][idx] for idx in item_ids],
+            llm_embedding_input=pending['llm_embedding_input'][item_indices],
+            llm_embedding_mask=pending['llm_embedding_mask'][item_indices],
+            ts_encoder_embedding_input=pending['ts_encoder_embedding'][item_indices],
+            ts_encoder_embedding_mask=pending['ts_encoder_embedding_mask'][item_indices],
+            override_horizon=override_horizon,
+        )
+        return [to_payload(forecast, idx) for idx in range(len(item_ids))]
+
+    def update_multimodal_outputs(
+        self,
+        model_outputs: dict[str, Any],
+        next_token_ids: torch.Tensor,
+        output_token_ids: torch.Tensor | None = None,
+        stopped: torch.Tensor | None = None,
+    ):
+        # Forecast is triggered only when prefill saved TS context and LLM emits <TS_GEN>.
+        pending = model_outputs.get('pending_ts_forecast')
+        if pending is None:
+            return output_token_ids, stopped, None
+
+        ts_gen_token_id = self.config.ts_gen_token_id
+        ts_batch_indices = pending['ts_batch_indices'].to(device=next_token_ids.device)
+        token_ids = next_token_ids.view(-1)
+        item_indices = (token_ids[ts_batch_indices] == ts_gen_token_id).nonzero().flatten()
+        if item_indices.numel() == 0:
+            return output_token_ids, stopped, None
+
+        batch_size = token_ids.numel()
+        multimodal_outputs = [None] * batch_size
+        payloads = self._run_ts_forecaster(pending, item_indices)
+
+        output_token_ids = output_token_ids.clone()
+        stopped = stopped.clone()
+        batch_indices = ts_batch_indices[item_indices]
+
+        # Hide the <TS_GEN> control token and finish these forecast-only responses.
+        output_token_ids.view(-1)[batch_indices] = -1
+        stopped.view(-1)[batch_indices] = True
+
+        for batch_idx, payload in zip(batch_indices.tolist(), payloads):
+            multimodal_outputs[int(batch_idx)] = dict(time_series_forecast=payload)
+
+        return output_token_ids, stopped, multimodal_outputs
 
     def prepare_inputs_for_generation(
         self,
@@ -245,13 +345,34 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         model_inputs = super().prepare_inputs_for_generation(past_key_values, inputs_embeds, context)
 
         ts_channels = None
+        ts_forecast_meta = None
         if context.input_multimodals is not None:
-            mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
-            mm_inputs = [item for sublist in mm_inputs for item in sublist]
-            if len(mm_inputs) > 0 and mm_inputs[0].modality == Modality.TIME_SERIES:
+            mm_inputs = []
+            batch_indices = []
+            for batch_idx, input_mm in enumerate(context.input_multimodals):
+                if input_mm is None:
+                    continue
+                for item in input_mm.get('mm_data', []):
+                    if item.modality == Modality.TIME_SERIES:
+                        mm_inputs.append(item)
+                        batch_indices.append(batch_idx)
+            if mm_inputs:
                 ts_channels = torch.cat([inp.meta['ts_channels'] for inp in mm_inputs])
+                ts_batch_indices = torch.tensor(batch_indices, dtype=torch.long, device=context.input_ids.device)
+                if not context.is_decoding and not self.is_spec_decoding:
+                    forecast_horizon = None
+                    if context.forecast_horizons is not None:
+                        forecast_horizon = [context.forecast_horizons[idx] for idx in batch_indices]
+                        if not any(horizon is not None for horizon in forecast_horizon):
+                            forecast_horizon = None
+                    ts_forecast_meta = dict(
+                        q_seqlens=context.q_seqlens,
+                        ts_batch_indices=ts_batch_indices,
+                        forecast_horizon=forecast_horizon,
+                    )
 
         model_inputs['ts_channels'] = ts_channels
+        model_inputs['ts_forecast_meta'] = ts_forecast_meta
         return model_inputs
 
     def _load_forecaster_in_proj(self, name: str, loaded_weight: torch.Tensor,

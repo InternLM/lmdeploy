@@ -53,6 +53,7 @@ class InputsMakerConfig:
     is_ssm: bool = False
     dp: int = 1
     spec_decoding: bool = False
+    model_paradigm: str = 'ar'
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
@@ -75,6 +76,7 @@ class InputsMakerConfig:
             role=cache_config.role,
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
+            model_paradigm=model_config.model_paradigm,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
             **kwargs,
@@ -401,6 +403,12 @@ class InputsMakerAsync:
         # model_metas
         model_metas = [msg.model_meta for msg in messages]
 
+        # forecast horizons
+        forecast_horizons = [msg.sampling_param.forecast_horizon for msg in messages]
+        if (not any(horizon is not None for horizon in forecast_horizons) or self.config.spec_decoding
+                or self.config.model_paradigm != 'ar'):
+            forecast_horizons = None
+
         # create model inputs for all required fields
         model_inputs = ModelInputs(
             input_ids=input_ids,
@@ -413,6 +421,7 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
+            forecast_horizons=forecast_horizons,
         )
 
         # adapters
@@ -457,6 +466,11 @@ class InputsMakerAsync:
         # model_metas
         model_metas = [seq.model_meta]
 
+        # forecast horizons
+        forecast_horizons = [seq.sampling_param.forecast_horizon]
+        if forecast_horizons[0] is None or self.config.spec_decoding or self.config.model_paradigm != 'ar':
+            forecast_horizons = None
+
         kv_seqlens = q_seqlens + history_lens
         max_kv_seqlen = kv_seqlens.item()
         sum_kv_seqlen = max_kv_seqlen
@@ -472,6 +486,7 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
+            forecast_horizons=forecast_horizons,
             is_chunk=True,
         )
 

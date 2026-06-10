@@ -45,6 +45,10 @@ class SchedulerSequenceDefault(SchedulerSequence):
 
         token_ids = _to_ndarray(token_ids)
 
+        if mode != UpdateTokenMode.INPUTS:
+            # drop -1 placeholders used to hide <TS_GEN> from generated history.
+            token_ids = token_ids[token_ids >= 0]
+
         num_valid = len(token_ids)
         # record cached expert ids
         self.append_routed_experts(routed_experts)
