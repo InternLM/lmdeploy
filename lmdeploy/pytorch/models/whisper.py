@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # adpated from https://github.com/huggingface/transformers/blob/main/src/transformers/models/whisper/modeling_whisper.py
 
+from collections.abc import Iterable
+
 import torch
 from torch import nn
 from transformers.activations import ACT2FN
@@ -8,6 +10,19 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_qkv_proj, build_rowwise_linear
+
+
+def _create_fake_bias_for_whisper_k_proj(weights: Iterable[tuple[str, torch.Tensor]],
+                                         fake_bias_key_name: str) -> Iterable[tuple[str, torch.Tensor]]:
+    """Create zero K bias for Whisper QKV packed loading.
+
+    Transformers Whisper has Q/V projection bias but no K projection bias. We synthesize a zero K bias to keep
+    LMDeploy's packed QKV behavior aligned.
+    """
+    for name, loaded_weight in weights:
+        yield name, loaded_weight
+        if 'time_series.' in name and name.endswith(fake_bias_key_name):
+            yield name.replace('weight', 'bias'), torch.zeros(loaded_weight.size(0))
 
 
 class WhisperAttention(nn.Module):
@@ -36,7 +51,6 @@ class WhisperAttention(nn.Module):
         self.scaling = self.head_dim**-0.5
 
         # packed qkv
-        # TODO, zhouxinyu, hf whisper hard-code k_proj bias = False, may double check
         self.qkv_proj = build_qkv_proj(self.embed_dim,
                                        num_q_heads=self.num_heads,
                                        num_kv_heads=self.num_heads,

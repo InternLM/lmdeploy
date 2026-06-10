@@ -34,6 +34,7 @@ from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, vlm_model
+from .whisper import _create_fake_bias_for_whisper_k_proj
 
 
 class Qwen3_5VisionPatchEmbed(nn.Module):
@@ -1302,6 +1303,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
 
         params_dict = dict(self.named_parameters())
+        weights = _create_fake_bias_for_whisper_k_proj(weights, '.self_attn.k_proj.weight')
         for name, loaded_weight in weights:
 
             if __skip_layers(name):

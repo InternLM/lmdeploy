@@ -18,6 +18,7 @@ from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLVisionModel
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1
+from .whisper import _create_fake_bias_for_whisper_k_proj
 
 
 class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
@@ -306,6 +307,7 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
 
         params_dict = dict(self.named_parameters())
         buffers_dict = dict(self.named_buffers())
+        weights = _create_fake_bias_for_whisper_k_proj(weights, '.self_attn.k_proj.weight')
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue

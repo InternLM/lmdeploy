@@ -27,6 +27,7 @@ from .qwen3_5 import (
 )
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
+from .whisper import _create_fake_bias_for_whisper_k_proj
 
 
 class Qwen3_5MoeTopKRouter(nn.Module):
@@ -356,6 +357,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
 
         params_dict = dict(self.named_parameters())
         buffers_dict = dict(self.named_buffers())
+        weights = _create_fake_bias_for_whisper_k_proj(weights, '.self_attn.k_proj.weight')
         for name, loaded_weight in weights:
 
             if __skip_layers(name):
