@@ -50,11 +50,28 @@ class ModelList(BaseModel):
     data: list[ModelCard] = []
 
 
+class PromptTokensDetails(BaseModel):
+    """Prompt token usage details."""
+
+    cached_tokens: int = 0
+
+
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: int | None = 0
+    prompt_tokens_details: PromptTokensDetails | None = None
+
+
+def build_usage_info(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> UsageInfo:
+    """Build OpenAI-compatible usage with prefix-cache details."""
+    return UsageInfo(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+    )
 
 
 class Function(BaseModel):

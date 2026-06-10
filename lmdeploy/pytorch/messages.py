@@ -657,6 +657,9 @@ class SchedulerSequence:
     # mrope
     history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
 
+    # prefix caching
+    prefix_cache_hit_tokens: int = 0
+
     def __post_init__(self):
         """Post init."""
         self._seq_meta: SequenceMeta = self.session.seq_meta

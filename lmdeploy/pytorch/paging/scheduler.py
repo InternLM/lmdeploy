@@ -159,7 +159,7 @@ class Scheduler:
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
         while len(migration_waiting) > 0 and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
-            self.block_trie.match(migration_waiting)
+            self.block_trie.match(seq)
             if not __evict_for_seq(seq, migration_waiting):
                 break
 

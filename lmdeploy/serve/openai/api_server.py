@@ -79,6 +79,7 @@ from lmdeploy.serve.openai.protocol import (
     TopLogprob,
     UpdateParamsRequest,
     UsageInfo,
+    build_usage_info,
 )
 from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
@@ -584,11 +585,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_logprob:
                 output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
-                total_tokens = sum([res.input_token_len, res.generate_token_len])
-                final_usage = UsageInfo(
+                final_usage = build_usage_info(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
-                    total_tokens=total_tokens,
+                    cached_tokens=res.cached_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
             stream_deltas = response_parser.stream_chunk(
@@ -722,11 +722,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-    usage = UsageInfo(
+    usage = build_usage_info(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
+        cached_tokens=final_res.cached_tokens,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -894,18 +893,20 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
-        final_usage = UsageInfo() if include_usage else None
+        prompt_tokens_acc = 0
+        completion_tokens_acc = 0
+        cached_tokens_acc = 0
+        final_usage = None
         for generator in generators:
             async for res in generator:
                 logprobs = None
                 if request.logprobs and res.logprobs:
                     raise ValueError('logprobs is removed')
-                if res.finish_reason and final_usage is not None:
+                if res.finish_reason and include_usage:
                     final_res = res
-                    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-                    final_usage.prompt_tokens += final_res.input_token_len
-                    final_usage.completion_tokens += final_res.generate_token_len
-                    final_usage.total_tokens += total_tokens
+                    prompt_tokens_acc += final_res.input_token_len
+                    completion_tokens_acc += final_res.generate_token_len
+                    cached_tokens_acc += final_res.cached_tokens
                 response_json = create_stream_response_json(index=0,
                                                             text=res.response,
                                                             finish_reason=res.finish_reason,
@@ -914,7 +915,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
-        if final_usage is not None:
+        if include_usage:
+            final_usage = build_usage_info(
+                prompt_tokens=prompt_tokens_acc,
+                completion_tokens=completion_tokens_acc,
+                cached_tokens=cached_tokens_acc,
+            )
             yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -924,13 +930,15 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
-    usage = UsageInfo()
+    prompt_tokens_acc = 0
+    completion_tokens_acc = 0
+    cached_tokens_acc = 0
     choices = [None] * len(generators)
     cache_block_ids = []
     remote_token_ids = []
 
     async def _inner_call(i, generator, session):
-        nonlocal cache_block_ids, remote_token_ids
+        nonlocal cache_block_ids, remote_token_ids, prompt_tokens_acc, completion_tokens_acc, cached_tokens_acc
         final_logprobs = []
         final_token_ids = []
         final_res = None
@@ -962,12 +970,16 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             cache_block_ids = cache_block_ids[0]
             remote_token_ids = [remote_token_ids[0][-1]]
 
-        total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-        usage.prompt_tokens += final_res.input_token_len
-        usage.completion_tokens += final_res.generate_token_len
-        usage.total_tokens += total_tokens
+        prompt_tokens_acc += final_res.input_token_len
+        completion_tokens_acc += final_res.generate_token_len
+        cached_tokens_acc += final_res.cached_tokens
 
     await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
+    usage = build_usage_info(
+        prompt_tokens=prompt_tokens_acc,
+        completion_tokens=completion_tokens_acc,
+        cached_tokens=cached_tokens_acc,
+    )
 
     response = CompletionResponse(
         id=request_id,
@@ -1184,7 +1196,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
-    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    usage = build_usage_info(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
 
     data = []
     for i, score in enumerate(batch_scores):

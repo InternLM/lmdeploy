@@ -83,6 +83,7 @@ class BlockTrie:
     def match(self, seq: SchedulerSequence):
         """Match sequence and cache."""
         if not self.enable:
+            seq.prefix_cache_hit_tokens = 0
             return
 
         block_size = self.block_size
@@ -124,6 +125,7 @@ class BlockTrie:
         # record prefix hit
         self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
         self.stats.num_hit_tokens += num_matched - init_num_matched
+        seq.prefix_cache_hit_tokens = num_matched - init_num_matched
 
         seq.logical_blocks.last_shared_node = curr
 
