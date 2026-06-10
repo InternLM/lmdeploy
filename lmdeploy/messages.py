@@ -368,8 +368,13 @@ class PytorchEngineConfig:
             prefix-cache checkpoints. 0 adds no extra slots, but SSM
             checkpoints may still borrow idle runtime state slots.
         prefix_cache_decode_state_interval: Token interval for SSM decode
-            state checkpoints. 0 disables decode-state checkpoint saves.
-            Positive values must be multiples of the cache block size.
+            state checkpoints. 0 disables decode-state checkpoint saves; prefill
+            and chunk checkpoints may still be saved. Keep 0 unless the workload
+            has long SSM decoding and repeated continuations that can reuse
+            decode checkpoints. Smaller positive values create more hit points
+            but use more checkpoint memory and copy work; larger values reduce
+            overhead but make decode-prefix hits less likely. Positive values
+            must be multiples of the cache block size.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
