@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -285,4 +286,32 @@ class TestResetGraphRunner:
             'enter_draft_context',
             'reset',
             'exit_draft_context',
+        ]
+
+
+class TestModelAgentWakeup:
+
+    def test_dp_kv_cache_wakeup_warms_before_releasing_forward_task(self):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
+
+        events = []
+
+        model_agent = BaseModelAgent.__new__(BaseModelAgent)
+        model_agent.state = SleepWakeupState()
+        model_agent.state.is_sleeping = True
+        model_agent.dist_config = SimpleNamespace(dp=2)
+        model_agent.build_cache_engine = lambda: events.append('build_cache_engine')
+
+        def _warmup():
+            events.append(('warmup', model_agent.state.is_sleeping, model_agent.state.to_wakeup.is_set()))
+
+        model_agent.warmup = _warmup
+
+        model_agent.wakeup(['kv_cache'])
+
+        assert model_agent.state.is_sleeping is False
+        assert model_agent.state.to_wakeup.is_set()
+        assert events == [
+            'build_cache_engine',
+            ('warmup', True, False),
         ]

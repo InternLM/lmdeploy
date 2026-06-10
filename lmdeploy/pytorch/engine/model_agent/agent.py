@@ -351,8 +351,10 @@ class BaseModelAgent:
             if self.rank == 0:
                 logger.warning('Engine warmup is skipped. Set LMDEPLOY_SKIP_WARMUP=0 to enable warmup.')
             return
+        warmup_start = time.perf_counter()
         if self.rank == 0:
             logger.info('Starting engine warmup. This may take a while...')
+
         with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
             world_size = self.dist_config.world_size
@@ -401,6 +403,9 @@ class BaseModelAgent:
 
             # warmup draft model
             self.spec_agent.warmup(max_batches, self.model_config)
+        elapsed_seconds = time.perf_counter() - warmup_start
+        if self.rank == 0:
+            logger.info(f'Engine warmup completed in {elapsed_seconds:.2f} seconds.')
 
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
         """Slice outputs."""
@@ -1244,8 +1249,9 @@ class BaseModelAgent:
 
         if 'kv_cache' in tags:
             self.build_cache_engine()
-            # wake up signal
+            self.warmup()
             self.state.is_sleeping = False
+            # wake up signal
             if self.dist_config.dp > 1:
                 self.state.to_wakeup.set()
 
