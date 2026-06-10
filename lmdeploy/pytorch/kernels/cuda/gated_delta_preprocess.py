@@ -53,6 +53,7 @@ def _gated_delta_preprocess_kernel(
     BATCH_SIZE: tl.constexpr,
     HEAD_DIM: tl.constexpr,
     KV_RATIO: tl.constexpr,
+    BLOCK_KV_RATIO: tl.constexpr,
     BLOCK_T: tl.constexpr,
     BLOCK_D: tl.constexpr,
     EPS: tl.constexpr,
@@ -89,9 +90,10 @@ def _gated_delta_preprocess_kernel(
         q_vals = q_vals * q_rstd[:, None]
         k_vals = k_vals * k_rstd[:, None]
 
-    reps = tl.arange(0, KV_RATIO)
+    reps = tl.arange(0, BLOCK_KV_RATIO)
     dst_heads = src_head_id * KV_RATIO + reps
-    mask_t_rep = mask_t[:, None] & (reps[None, :] < KV_RATIO)
+    mask_rep = reps < KV_RATIO
+    mask_t_rep = mask_t[:, None] & mask_rep[None, :]
     beta = tl.load(
         b + b_batch_offset + offs_t[:, None] * b_stride_t + src_head_id * b_stride_src_h
         + reps[None, :] * b_stride_rep,
@@ -105,8 +107,8 @@ def _gated_delta_preprocess_kernel(
         mask=mask_t_rep,
         other=0.0,
     ).to(tl.float32)
-    dt = tl.load(dt_bias + dst_heads).to(tl.float32)
-    a_scale = tl.load(a_log_exp + dst_heads).to(tl.float32)
+    dt = tl.load(dt_bias + dst_heads, mask=mask_rep, other=0.0).to(tl.float32)
+    a_scale = tl.load(a_log_exp + dst_heads, mask=mask_rep, other=0.0).to(tl.float32)
 
     x = a_val + dt[None, :]
     softplus = tl.where(x > 20.0, x, libdevice.log1p(libdevice.exp(x)))
@@ -207,6 +209,7 @@ def gated_delta_preprocess(
     g_out = torch.empty((batch_size, num_tokens, num_v_heads), dtype=torch.float32, device=a.device)
 
     block_d = triton.next_power_of_2(head_dim)
+    block_kv_ratio = triton.next_power_of_2(kv_ratio)
     block_t = 8
     grid = (batch_size, num_k_heads, triton.cdiv(num_tokens, block_t))
     _gated_delta_preprocess_kernel[grid](
@@ -239,6 +242,7 @@ def gated_delta_preprocess(
         BATCH_SIZE=batch_size,
         HEAD_DIM=head_dim,
         KV_RATIO=kv_ratio,
+        BLOCK_KV_RATIO=block_kv_ratio,
         BLOCK_T=block_t,
         BLOCK_D=block_d,
         EPS=1e-6,
