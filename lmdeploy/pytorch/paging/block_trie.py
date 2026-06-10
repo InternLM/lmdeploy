@@ -372,6 +372,8 @@ class BlockTrie:
                 logger.debug(f'Replace SSM prefix-cache checkpoint: adapter={node.adapter_name} '
                              f'step={node.num_matched} state_idx={node.state_idx}')
             self._unindex_state_checkpoint(node)
+        elif node.state_idx >= 0:
+            return -1
         if node.state_idx < 0:
             if self.state_manager.get_num_free_checkpoint() == 0:
                 self.evict_state_checkpoints(1)
@@ -472,6 +474,8 @@ class BlockTrie:
         except RuntimeError as e:
             if 'No free states' not in str(e):
                 raise
+            return -1
+        if state_idx < 0:
             return -1
 
         prefix_cache = seq.prefix_cache

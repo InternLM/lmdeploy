@@ -1210,6 +1210,35 @@ class TestBlockTire:
         assert block_trie.reserve_state_checkpoint_for_seq(seq) == -1
         assert seq.prefix_cache.save_state == -1
 
+    def test_ssm_checkpoint_save_skips_duplicate_unready_node(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size * 2
+
+        seq_a = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(seq_a)
+        block_trie.allocate(seq_a)
+
+        seq_b = ssm_scheduler.add_session(1).add_sequence(token_ids)
+        block_mgr.allocate(seq_b)
+        block_trie.allocate(seq_b)
+
+        node = seq_a.prefix_cache.last_shared_node
+        assert node is seq_b.prefix_cache.last_shared_node
+
+        state_idx_a = block_trie.reserve_state_checkpoint_for_seq(seq_a)
+        state_idx_b = block_trie.reserve_state_checkpoint_for_seq(seq_b)
+
+        assert state_idx_a >= 0
+        assert state_idx_b == -1
+        assert node.state_idx == state_idx_a
+        assert not node.state_ready
+        assert seq_a.prefix_cache.save_state == state_idx_a
+        assert seq_a.prefix_cache.save_node is node
+        assert seq_b.prefix_cache.save_state == -1
+        assert seq_b.prefix_cache.save_node is None
+
     def test_ssm_checkpoint_save_evicts_unpinned_state_only(self, ssm_cache_config, scheduler_config, seq_meta):
         cache_config = ssm_cache_config
         cache_config.prefix_cache_state_budget = 0
