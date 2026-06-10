@@ -1,9 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import inspect
 from collections.abc import Sequence
 
 import tilelang
 import tilelang.language as T
 import torch
+
+_TL_SHFL_SYNC_VALUE_FIRST = next(iter(inspect.signature(T.shfl_sync).parameters)) == 'value'
+
+
+def _shfl_sync(value, src_lane: int, mask: int = 0xFFFFFFFF):
+    """TileLang 0.1.8 and 0.1.9+ use different Python shfl_sync signatures."""
+    if _TL_SHFL_SYNC_VALUE_FIRST:
+        return T.shfl_sync(value, src_lane, mask=mask)
+    return T.shfl_sync(mask, value, src_lane)
 
 
 @T.macro
@@ -368,7 +378,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                 g_exp = T.exp(g)
                             else:
                                 g_exp = 0.0
-                            g_exp = T.shfl_sync(0xFFFFFFFF, g_exp, 0)
+                            g_exp = _shfl_sync(g_exp, 0)
                         else:
                             g_exp = 1.0
                         if use_beta:
@@ -376,7 +386,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                 beta = T.cast(Beta[b_id, seq_id, hv_id], T.float32)
                             else:
                                 beta = 0.0
-                            beta = T.shfl_sync(0xFFFFFFFF, beta, 0)
+                            beta = _shfl_sync(beta, 0)
                         else:
                             beta = 1.0
 
@@ -495,7 +505,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                     g_exp = T.exp(g)
                                 else:
                                     g_exp = 0.0
-                                g_exp = T.shfl_sync(0xFFFFFFFF, g_exp, 0)
+                                g_exp = _shfl_sync(g_exp, 0)
                             else:
                                 g_exp = 1.0
                             if use_beta:
@@ -503,7 +513,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                     beta = T.cast(Beta[b_id, seq_id, hv_id], T.float32)
                                 else:
                                     beta = 0.0
-                                beta = T.shfl_sync(0xFFFFFFFF, beta, 0)
+                                beta = _shfl_sync(beta, 0)
                             else:
                                 beta = 1.0
 

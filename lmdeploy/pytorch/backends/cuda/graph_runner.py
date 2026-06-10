@@ -67,6 +67,7 @@ class CUDASingleGraphRunner:
         max_tokens: int,
         num_blocks: int,
         is_decoding: bool,
+        decode_query_len: int,
         pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
@@ -92,6 +93,7 @@ class CUDASingleGraphRunner:
             is_ssm=len(model_config.states_shapes) > 0,
             use_mrope=model_config.use_mrope,
             block_size=model_config.block_size,
+            decode_query_len=decode_query_len,
         )
         self.device = device
         self.max_batches = max_batches
@@ -228,15 +230,12 @@ class CUDAGraphRunner(GraphRunner):
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
-        # for draft model to distinguish inputs from target model and itself
-        target_hidden_size = None
-        if context.target_hidden_states is not None:
-            target_hidden_size = context.target_hidden_states.size(-1)
+        query_len = input_ids.size(1) // batch_size
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch, target_hidden_size)
+        return (batch_size, is_decoding, enable_microbatch, query_len)
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
@@ -271,6 +270,7 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
+        decode_query_len = graph_key[3]
         if graph_key not in self._runner_map:
             max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
             runner = CUDASingleGraphRunner(
@@ -279,6 +279,7 @@ class CUDAGraphRunner(GraphRunner):
                 max_tokens=max_tokens,
                 num_blocks=self.num_blocks,
                 is_decoding=is_decoding,
+                decode_query_len=decode_query_len,
                 pool=self.graph_pool_handle,
                 model_config=self.model_config,
                 device=self.device,
