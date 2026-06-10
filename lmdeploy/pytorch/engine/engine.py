@@ -22,7 +22,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
-from ..messages import SchedulerSequence, UpdateTokenMode
+from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
 from ..strategies import build_strategy_factory
@@ -318,11 +318,18 @@ class Engine(EngineBase):
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                self.scheduler.stop_session(session_id)
                 session = self.scheduler.sessions[session_id]
+                stopped_resp_ids = set()
                 for seq in session.sequences.values():
+                    if seq.status not in (MessageStatus.STOPPED, MessageStatus.TO_BE_MIGRATED):
+                        continue
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
+                        stopped_resp_ids.add(id(_resp))
+                self.scheduler.stop_session(session_id)
+                for seq in session.sequences.values():
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None and id(_resp) not in stopped_resp_ids:
                         self.req_manager.reject_request(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:

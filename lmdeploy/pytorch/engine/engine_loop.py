@@ -198,10 +198,12 @@ class EngineLoop:
     def _send_resp(self, out: InferOutput):
         """Send response."""
         logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
-        if out.resp.is_done:
+        if out.finish:
+            resp_type = ResponseType.FINISH
+        elif out.resp.is_done:
             resp_type = out.resp.type
         else:
-            resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
+            resp_type = ResponseType.SUCCESS
         response_reqs(self.req_manager,
                       out.resp,
                       resp_type,
