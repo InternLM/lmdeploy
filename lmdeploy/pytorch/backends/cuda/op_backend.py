@@ -253,7 +253,8 @@ class CudaOpsBackend(DefaultOpsBackend):
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
             elif requires_flash_attn3_decoding:
                 raise RuntimeError(
-                    'Speculative decoding on CUDA requires FA3 attention. Please ensure FA3 is available and the '
+                    'Speculative decoding on CUDA requires FA3 attention. Please ensure FlashAttention-3 is '
+                    'installed, the GPU supports SM80+, CUDA >= 12.3 is available, head_dim <= 256, and the '
                     'attention configuration supports FA3, or disable speculative decoding.')
 
         # update chunk gated delta indices

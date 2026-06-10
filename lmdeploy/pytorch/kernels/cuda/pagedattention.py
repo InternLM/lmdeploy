@@ -679,7 +679,7 @@ def _cap_split_k_by_page_table(split_k: int, page_table: Tensor):
     Keep the cap power-of-two so the Triton reduction shape remains valid.
     """
     max_pages = max(int(page_table.size(1)), 1)
-    max_useful_split = max(4, triton.next_power_of_2(max_pages))
+    max_useful_split = 1 << (max_pages.bit_length() - 1)
     return min(split_k, max_useful_split)
 
 

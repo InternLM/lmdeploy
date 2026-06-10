@@ -38,9 +38,10 @@ def _set_env_before_cuda_init(name: str, value: str):
     current = os.environ.get(name)
     if current == value:
         return
-    if current is not None and _cuda_initialized():
+    if _cuda_initialized():
+        found = current if current is not None else '<unset>'
         raise RuntimeError(
-            f'enable_batch_invariant requires {name}={value}, but found {name}={current} '
+            f'enable_batch_invariant requires {name}={value}, but found {name}={found} '
             'after CUDA was already initialized. Set the environment before importing/running LMDeploy, '
             'or create the engine before any CUDA work in this process.')
     if current is not None:
