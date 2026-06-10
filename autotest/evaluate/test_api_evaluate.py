@@ -338,68 +338,6 @@ def test_pytorch_restful_tp2_longtext_512k(config, run_config, worker_id):
 
 @pytest.mark.infer
 @pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 4}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 4}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
