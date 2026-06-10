@@ -202,17 +202,6 @@ class CausalConv1dFunc:
         return self.conv1d_func(x, weight, bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
-def repeat_and_l2norm(q: torch.Tensor, k: torch.Tensor, kv_ratio: int, do_norm: bool = True):
-    # repeat interleave would enlarge shape of kv, do l2norm first.
-    if do_norm:
-        q = torch.nn.functional.normalize(q, p=2, dim=-1)
-        k = torch.nn.functional.normalize(k, p=2, dim=-1)
-    if kv_ratio > 1:
-        q = q.repeat_interleave(kv_ratio, dim=-2)
-        k = k.repeat_interleave(kv_ratio, dim=-2)
-    return q, k
-
-
 class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
