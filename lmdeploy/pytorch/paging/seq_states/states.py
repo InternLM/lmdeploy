@@ -9,9 +9,10 @@ if TYPE_CHECKING:
 
 def _free_seq(seq: SchedulerSequence, scheduler: 'Scheduler'):
     """Free the sequence."""
-    scheduler.block_trie.discard_state_checkpoint_for_seq(seq)
-    scheduler.block_trie.release_state_checkpoint_restore_for_seq(seq)
-    seq.prefix_cache.last_shared_node = None
+    if scheduler.block_trie.enable:
+        scheduler.block_trie.discard_state_checkpoint_for_seq(seq)
+        scheduler.block_trie.release_state_checkpoint_restore_for_seq(seq)
+        seq.prefix_cache.last_shared_node = None
     if seq.num_blocks > 0:
         scheduler.block_manager.free(seq)
     if seq.logical_state >= 0:

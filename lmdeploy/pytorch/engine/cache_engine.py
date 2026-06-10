@@ -643,23 +643,3 @@ class StateCacheEngine:
                 self.mem_pool[dst].copy_(self.mem_pool[src], non_blocking=True)
             else:
                 self.mem_pool[dst:dst + length].copy_(self.mem_pool[src:src + length], non_blocking=True)
-
-    def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
-        """Initialize state caches.
-
-        idx: indices of caches to be initialized.
-        mask: mask to indicate which idx to be initialized.
-        """
-        if idx is None:
-            return
-
-        if len(self._state_caches) <= 0:
-            return
-
-        num_caches = self.cache_config.num_state_caches
-
-        # get mask of all caches so we can perform inplace mask fill
-        cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
-        cache_masks.index_copy_(0, idx, mask)
-        reshaped_mask = cache_masks.view((-1, ) + (1, ) * (self.mem_pool.dim() - 1))
-        self.mem_pool.masked_fill_(reshaped_mask, 0)

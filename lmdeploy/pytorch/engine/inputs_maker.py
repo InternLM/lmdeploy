@@ -466,7 +466,8 @@ class InputsMakerAsync:
         if self.config.is_ssm:
             state_offsets = torch.tensor([msg.logical_state for msg in messages])
             model_inputs.state_offsets = state_offsets
-            if any(msg.prefix_cache.restore_state >= 0 for msg in messages):
+            if (self.cache_config.enable_prefix_caching
+                    and any(msg.prefix_cache.restore_state >= 0 for msg in messages)):
                 # Pin restore checkpoints while the forward copies them into
                 # runtime state slots; otherwise checkpoint eviction could race
                 # with input prefetching for the next batch.
@@ -477,7 +478,7 @@ class InputsMakerAsync:
                 restore_src_offsets, restore_dst_offsets = _compact_state_prefix_cache_restore_offsets(messages)
                 model_inputs.state_prefix_cache_offsets = restore_src_offsets
                 model_inputs.state_prefix_cache_dst_offsets = restore_dst_offsets
-            if not is_decoding:
+            if self.cache_config.enable_prefix_caching and not is_decoding:
                 # Prefill saves publish only after model_forward has copied the
                 # runtime state to these reserved checkpoint offsets.
                 save_state_offsets = [
@@ -550,7 +551,7 @@ class InputsMakerAsync:
         # ssm
         if self.config.is_ssm:
             model_inputs.state_offsets = torch.tensor([seq.logical_state])
-            if seq.prefix_cache.restore_state >= 0:
+            if self.cache_config.enable_prefix_caching and seq.prefix_cache.restore_state >= 0:
                 # Long-context chunks use the same restore pinning contract as
                 # normal prefill batches.
                 self.scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
@@ -558,12 +559,13 @@ class InputsMakerAsync:
                     raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
                 model_inputs.state_prefix_cache_offsets = (seq.prefix_cache.restore_state, )
                 model_inputs.state_prefix_cache_dst_offsets = (seq.logical_state, )
-            # Save at the exact state step produced by this chunk forward.
-            checkpoint_step = seq.num_history_ids + chunk_size
-            save_state = self.scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)
-            if save_state >= 0:
-                model_inputs.state_prefix_cache_save_src_offsets = (seq.logical_state, )
-                model_inputs.state_prefix_cache_save_offsets = (save_state, )
+            if self.cache_config.enable_prefix_caching:
+                # Save at the exact state step produced by this chunk forward.
+                checkpoint_step = seq.num_history_ids + chunk_size
+                save_state = self.scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)
+                if save_state >= 0:
+                    model_inputs.state_prefix_cache_save_src_offsets = (seq.logical_state, )
+                    model_inputs.state_prefix_cache_save_offsets = (save_state, )
 
         # mrope
         if self.config.use_mrope:
@@ -619,7 +621,8 @@ class InputsMakerAsync:
             num_ignored_history=num_ignored_history,
         )
         decode_state_interval = self.cache_config.prefix_cache_decode_state_interval
-        if self.config.is_ssm and decode_state_interval > 0 and not self.spec_decoding and num_decode_tokens == 1:
+        if (self.cache_config.enable_prefix_caching and self.config.is_ssm and decode_state_interval > 0
+                and not self.spec_decoding and num_decode_tokens == 1):
             save_state_offsets = [
                 self.scheduler.block_trie.reserve_decode_state_checkpoint_for_seq(seq, decode_state_interval)
                 for seq in valid_seqs

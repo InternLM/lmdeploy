@@ -303,50 +303,55 @@ class Scheduler:
             if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
                 break
 
-            stats_snapshot = self.block_trie.snapshot_stats()
-            rolled_back_match = False
+            if self.block_trie.enable:
+                stats_snapshot = self.block_trie.snapshot_stats()
+                rolled_back_match = False
 
-            def __rollback_prefix_match(reason: str):
-                nonlocal rolled_back_match
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
-                                 f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                                 f'restore_state={seq.prefix_cache.restore_state}')
-                self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
-                rolled_back_match = True
+                def __rollback_prefix_match(reason: str):
+                    nonlocal rolled_back_match
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
+                                     f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
+                                     f'restore_state={seq.prefix_cache.restore_state}')
+                    self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
+                    rolled_back_match = True
 
-            self.block_trie.match(seq)
-            if self._prefix_hit_starts_middle_long_context_chunk(seq):
-                __rollback_prefix_match('long-context chunk starts after prefix hit')
+                self.block_trie.match(seq)
+                if self._prefix_hit_starts_middle_long_context_chunk(seq):
+                    __rollback_prefix_match('long-context chunk starts after prefix hit')
 
-            had_ssm_restore = self.is_ssm and seq.prefix_cache.restore_state >= 0
-            if not self._acquire_ssm_restore_if_needed(seq):
-                __rollback_prefix_match('failed to acquire SSM restore checkpoint')
+                had_ssm_restore = self.is_ssm and seq.prefix_cache.restore_state >= 0
+                if not self._acquire_ssm_restore_if_needed(seq):
+                    __rollback_prefix_match('failed to acquire SSM restore checkpoint')
 
-            if not __evict_for_seq(seq, waiting):
-                if not had_ssm_restore:
-                    __rollback_prefix_match('eviction failed')
-                    break
-                # A matched SSM restore may be pinning the only checkpoint
-                # state that eviction would otherwise free.  Roll it back once
-                # and retry eviction before declaring the sequence unschedulable.
-                __rollback_prefix_match('eviction failed with pinned SSM restore')
+                if not __evict_for_seq(seq, waiting):
+                    if not had_ssm_restore:
+                        __rollback_prefix_match('eviction failed')
+                        break
+                    # A matched SSM restore may be pinning the only checkpoint
+                    # state that eviction would otherwise free.  Roll it back once
+                    # and retry eviction before declaring the sequence unschedulable.
+                    __rollback_prefix_match('eviction failed with pinned SSM restore')
+                    if not __evict_for_seq(seq, waiting):
+                        break
+
+                # allocate session memory
+                if self.is_ssm and not self._ensure_runtime_state_available():
+                    __rollback_prefix_match('no runtime SSM state available')
+                    if not __evict_for_seq(seq, waiting):
+                        break
+                    if not self._ensure_runtime_state_available():
+                        break
+                if rolled_back_match:
+                    # The tentative hit was not used, but the request still queried
+                    # the cache and will recompute from token 0 after rollback.
+                    self.block_trie.record_recompute_after_rollback(seq, stats_snapshot)
+            else:
                 if not __evict_for_seq(seq, waiting):
                     break
-
-            # allocate session memory
-            if self.is_ssm and not self._ensure_runtime_state_available():
-                __rollback_prefix_match('no runtime SSM state available')
-                if not __evict_for_seq(seq, waiting):
-                    break
-                if not self._ensure_runtime_state_available():
-                    break
-            if rolled_back_match:
-                # The tentative hit was not used, but the request still queried
-                # the cache and will recompute from token 0 after rollback.
-                self.block_trie.record_recompute_after_rollback(seq, stats_snapshot)
             self.block_manager.allocate(seq, prealloc_size)
-            self.block_trie.allocate(seq)
+            if self.block_trie.enable:
+                self.block_trie.allocate(seq)
             if self.is_ssm:
                 self.state_manager.allocate(seq)
             _to_running(seq)

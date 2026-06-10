@@ -288,6 +288,8 @@ class BlockTrie:
 
     def cache_routed_experts(self, seqs: list[SchedulerSequence]):
         """Enrich trie nodes with routed experts from multiple sequences."""
+        if not self.enable:
+            return
         for seq in seqs:
             self.cache_routed_experts_for_seq(seq)
 
@@ -638,6 +640,8 @@ class BlockTrie:
 
     def commit_state_checkpoints(self, seqs: list[SchedulerSequence]):
         """Publish pending sequence state checkpoints."""
+        if not self.enable:
+            return
         for seq in seqs:
             self.commit_state_checkpoint_for_seq(seq)
 
@@ -684,6 +688,8 @@ class BlockTrie:
 
     def release_state_checkpoint_restores(self, seqs: list[SchedulerSequence]):
         """Release state checkpoints pinned for a batch restore."""
+        if not self.enable:
+            return
         for seq in seqs:
             self.release_state_checkpoint_restore_for_seq(seq)
 

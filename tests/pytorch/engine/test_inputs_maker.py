@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.engine.engine_loop import EngineLoop
 from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
     LongContextChunker,
@@ -64,6 +65,23 @@ class _FakeModelAgentStrategy:
 
     def make_stopping_criteria(self, running):
         return None
+
+
+def test_engine_loop_skips_prefix_cache_publish_when_disabled():
+
+    class _DisabledBlockTrie:
+        enable = False
+
+        def commit_state_checkpoints(self, seqs):
+            raise AssertionError('disabled prefix cache must not commit state checkpoints')
+
+        def release_state_checkpoint_restores(self, seqs):
+            raise AssertionError('disabled prefix cache must not release state checkpoint restores')
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = SimpleNamespace(block_trie=_DisabledBlockTrie())
+
+    loop._publish_forward_prefix_cache([object()], has_state_checkpoint_save=True)
 
 
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():

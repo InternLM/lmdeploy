@@ -393,6 +393,8 @@ class EngineLoop:
 
     def _publish_forward_prefix_cache(self, running: 'SeqList', has_state_checkpoint_save: bool):
         """Publish per-forward prefix-cache ownership before prefetching."""
+        if not self.scheduler.block_trie.enable:
+            return
         if has_state_checkpoint_save:
             self.scheduler.block_trie.commit_state_checkpoints(running)
         self.scheduler.block_trie.release_state_checkpoint_restores(running)
