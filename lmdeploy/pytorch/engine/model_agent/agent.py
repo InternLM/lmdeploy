@@ -748,6 +748,8 @@ class BaseModelAgent:
                     self.state.to_sleep.set()
                     await self.state.to_wakeup.wait()
                     self.state.to_wakeup.clear()
+                    # sync after wakeup
+                    dist.barrier()
                 logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
                 await asyncio.sleep(0.01)
                 return
@@ -1246,9 +1248,6 @@ class BaseModelAgent:
             self.state.is_sleeping = False
             if self.dist_config.dp > 1:
                 self.state.to_wakeup.set()
-                # Keep the post-wakeup DP sync ordered inside the collective
-                # wakeup RPC so it cannot race with the following warmup RPC.
-                dist.barrier(group=self.dist_ctx.cpu_group)
 
     def release(self):
         """release."""
