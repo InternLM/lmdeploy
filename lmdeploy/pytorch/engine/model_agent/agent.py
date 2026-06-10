@@ -502,7 +502,7 @@ class BaseModelAgent:
         batch size for decoding.
         """
         world_size = self.dist_config.world_size
-        local_is_decoding = is_decoding = inputs.is_decoding
+        is_decoding = inputs.is_decoding
         num_tokens = inputs.input_ids.numel()
         is_dummy = inputs.is_dummy
         is_spec_enabled = self.spec_agent.is_enabled()
@@ -556,8 +556,7 @@ class BaseModelAgent:
 
         # check is_decoding
         # if any one of the rank is prefill, then all ranks are prefill
-        is_decoding = gathered_meta.global_is_decoding
-        inputs.is_decoding = is_decoding
+        global_is_decoding = gathered_meta.global_is_decoding
 
         # check if all inputs are dummy inputs
         is_all_dummy = gathered_meta.is_all_dummy
@@ -568,7 +567,7 @@ class BaseModelAgent:
 
         # pad batch size for decoding
         all_num_tokens = gathered_meta.all_num_tokens
-        if is_decoding:
+        if global_is_decoding:
             padding_batch_size = max(all_num_tokens)
             padding_batch_size = self.spec_agent.get_padding_batch_size(padding_batch_size)
             meta = self.patched_model.get_meta()
@@ -582,8 +581,7 @@ class BaseModelAgent:
         # update dp meta
         inputs.build_dp_meta(all_num_tokens)
         inputs.dp_meta.dp_batches = all_batch_sizes
-        inputs.dp_meta.is_decoding = local_is_decoding
-        inputs.dp_meta.dp_is_decoding = is_decoding
+        inputs.dp_meta.dp_is_decoding = global_is_decoding
         if is_spec_enabled:
             inputs.dp_meta.dp_draft_num_tokens = gathered_meta.all_draft_num_tokens
         inputs = self.patched_model.update_inputs(inputs)
@@ -768,8 +766,6 @@ class BaseModelAgent:
                 delta,
             )
 
-        # dp might change is_decoding in inputs
-        is_decoding = inputs.is_decoding
         if dp > 1:
             # update inputs for dp
             inputs, is_all_sleeping = await self._prepare_dp_v1(inputs)
@@ -797,14 +793,11 @@ class BaseModelAgent:
                      f'is_first_chunk={inputs.is_first_chunk} '
                      f'is_last_chunk={inputs.is_last_chunk} '
                      f'dp_meta={inputs.dp_meta} '
-                     f'is_decoding={is_decoding}')
+                     f'is_decoding={inputs.is_decoding}')
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits,
             )
-
-        # recovery is_decoding
-        inputs.is_decoding = is_decoding
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output

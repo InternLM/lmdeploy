@@ -65,9 +65,14 @@ struct FastRoPE {
     typedef void (*Func)(Array<float, N / 2>&, int, RopeKernelParam&);
     Func fill_func_;
 
+    struct MropeCoord {
+        int t;
+        int h;
+        int w;
+    };
+
     __device__ FastRoPE(const RopeKernelParam& param, int batch_idx, std::integral_constant<int, N>): param_(param)
     {
-
         if (param_.type == RopeType::kDynamic) {
             float base          = param_.base[batch_idx];
             param_.scale_factor = -log2f(base) / param_.dim;
@@ -75,7 +80,8 @@ struct FastRoPE {
         else if (param_.type == RopeType::kYarn) {
             attention_scaling_ = param_.yarn.attention_factor;
         }
-        else if (param_.type == RopeType::kMrope) {
+        // mrope is an operation applied on top of any base rope type
+        if (param_.mrope_mode != MropeMode::kNone) {
             param_.mrope.position_ids += batch_idx * param_.mrope.stride;
             param_.mrope.position_delta += batch_idx;
             param_.mrope.length += batch_idx;
@@ -90,7 +96,6 @@ struct FastRoPE {
             case RopeType::kDefault:
             case RopeType::kLinear:
             case RopeType::kDynamic:
-            case RopeType::kMrope:
                 init_default<N>(inv_freq_, idx, param_);
                 break;
             case RopeType::kYarn:
@@ -99,65 +104,90 @@ struct FastRoPE {
             case RopeType::kLlama3:
                 init_llama3<N>(inv_freq_, idx, param_);
                 break;
+            case RopeType::kNull:
+                break;
         }
     }
 
     template<typename T>
     __device__ void apply(Array<T, N>& x, float timestep)
     {
-        if (param_.type == RopeType::kMrope) {
-            return apply_mrope(x, timestep);
-        }
-        // Most models apply rotary embedding in half precision
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            float c, s;
-            sincosf(timestep * inv_freq_[i / 2], &s, &c);
-            s *= attention_scaling_;
-            c *= attention_scaling_;
-            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
-            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
-            if (is_valid_) {
-                x[i]     = tmp0;
-                x[i + 1] = tmp1;
+        if (param_.mrope_mode == MropeMode::kNone) {
+            // Most models apply rotary embedding in half precision
+            PRAGMA_UNROLL
+            for (int i = 0; i < N; i += 2) {
+                rotate_pair(x, i, timestep);
             }
+        }
+        else if (param_.mrope_mode == MropeMode::kChunked) {
+            apply_mrope_impl<MropeMode::kChunked>(x, timestep);
+        }
+        else if (param_.mrope_mode == MropeMode::kInterleaved) {
+            apply_mrope_impl<MropeMode::kInterleaved>(x, timestep);
+        }
+    }
+
+    __device__ __forceinline__ MropeCoord get_mrope_coord(float timestep) const
+    {
+        if (timestep < *param_.mrope.length) {
+            const int* t = param_.mrope.position_ids + 3 * (int)timestep;
+            return {t[0], t[1], t[2]};
+        }
+        const int pos = (int)timestep + (*param_.mrope.position_delta);
+        return {pos, pos, pos};
+    }
+
+    template<MropeMode mode>
+    __device__ __forceinline__ int select_mrope_timestep(int pair_idx, MropeCoord coord) const
+    {
+        const int3 sec = param_.mrope.section;  // raw (T,H,W) freq-pair counts
+
+        if constexpr (mode == MropeMode::kChunked) {
+            if (pair_idx < sec.x) {
+                return coord.t;
+            }
+            if (pair_idx < sec.x + sec.y) {
+                return coord.h;
+            }
+            return coord.w;
+        }
+        else {
+            const int cycle = pair_idx / 3;
+            const int axis  = pair_idx - cycle * 3;
+            if (axis == 1 && cycle < sec.y) {
+                return coord.h;
+            }
+            if (axis == 2 && cycle < sec.z) {
+                return coord.w;
+            }
+            return coord.t;
         }
     }
 
     template<typename T>
-    __device__ void apply_mrope(Array<T, N>& x, float timestep)
+    __device__ __forceinline__ void rotate_pair(Array<T, N>& x, int i, float timestep) const
     {
-        int  tt, th, tw;
-        int3 section = param_.mrope.section;
-        if (timestep < *param_.mrope.length) {
-            const int* t = param_.mrope.position_ids + 3 * (int)timestep;
-            tt           = t[0];
-            th           = t[1];
-            tw           = t[2];
+        float c, s;
+        sincosf(timestep * inv_freq_[i / 2], &s, &c);
+        s *= attention_scaling_;
+        c *= attention_scaling_;
+        T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
+        T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
+        if (is_valid_) {
+            x[i]     = tmp0;
+            x[i + 1] = tmp1;
         }
-        else {
-            tt = th = tw = (int)timestep + (*param_.mrope.position_delta);
-        }
+    }
 
+    template<MropeMode mode, typename T>
+    __device__ __forceinline__ void apply_mrope_impl(Array<T, N>& x, float timestep) const
+    {
+        const MropeCoord coord = get_mrope_coord(timestep);
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            if (i + idx_ < section.x) {
-                timestep = (float)tt;
-            }
-            else if (i + idx_ < section.y) {
-                timestep = (float)th;
-            }
-            else {
-                timestep = (float)tw;
-            }
-            float c, s;
-            sincosf(timestep * inv_freq_[i / 2], &s, &c);
-            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
-            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
-            if (is_valid_) {
-                x[i]     = tmp0;
-                x[i + 1] = tmp1;
-            }
+            const int pair_idx = (i + idx_) >> 1;
+            const int ts       = select_mrope_timestep<mode>(pair_idx, coord);
+            rotate_pair(x, i, (float)ts);
         }
     }
 };

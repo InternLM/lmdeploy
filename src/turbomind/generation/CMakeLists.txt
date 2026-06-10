@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(guided_decoding STATIC guided_decoding.cc)
 target_link_libraries(guided_decoding PRIVATE
