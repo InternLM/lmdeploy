@@ -59,8 +59,6 @@ h:
   - mllm_evaluate
   - quantization
   quantization:
-    turbomind:
-    - awq
     pytorch:
     - fp8
   gen_config:
