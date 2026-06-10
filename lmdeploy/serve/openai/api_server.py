@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from functools import partial
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Literal
@@ -654,19 +654,20 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     text = ''
     cache_block_ids = []
     remote_token_ids = []
-    async for res in _with_request_cleanup(result_generator, [result_generator], [session]):
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            await session.async_abort()
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-        final_res = res
-        text += res.response
-        if res.token_ids:
-            final_token_ids.extend(res.token_ids)
-        if res.logprobs:
-            final_logprobs.extend(res.logprobs)
-        cache_block_ids.append(res.cache_block_ids)
-        remote_token_ids.append(res.token_ids)
+    async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+        async for res in generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                await session.async_abort()
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+            final_res = res
+            text += res.response
+            if res.token_ids:
+                final_token_ids.extend(res.token_ids)
+            if res.logprobs:
+                final_logprobs.extend(res.logprobs)
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
 
     tool_calls = None
     reasoning_content = None
@@ -930,19 +931,20 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         final_token_ids = []
         final_res = None
         text = ''
-        async for res in _with_request_cleanup(generator, [generator], [session]):
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            final_res = res
-            text += res.response
-            cache_block_ids.append(res.cache_block_ids)
-            remote_token_ids.append(res.token_ids)
-            if res.token_ids:
-                final_token_ids.extend(res.token_ids)
-            if res.logprobs:
-                final_logprobs.extend(res.logprobs)
+        async with aclosing(_with_request_cleanup(generator, [generator], [session])) as cleanup_generator:
+            async for res in cleanup_generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await VariableInterface.async_engine.stop_session(request.session_id)
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                final_res = res
+                text += res.response
+                cache_block_ids.append(res.cache_block_ids)
+                remote_token_ids.append(res.token_ids)
+                if res.token_ids:
+                    final_token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    final_logprobs.extend(res.logprobs)
 
         logprobs = None
         assert final_res is not None
@@ -1075,14 +1077,15 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''
         output_ids = []
         logprobs = []
-        async for res in _with_request_cleanup(result_generator, [result_generator], [session]):
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await session.async_abort()
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            text += res.response or ''
-            output_ids.extend(res.token_ids or [])
-            logprobs.extend(res.logprobs or [])
+        async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+            async for res in generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await session.async_abort()
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                text += res.response or ''
+                output_ids.extend(res.token_ids or [])
+                logprobs.extend(res.logprobs or [])
 
         output_token_logprobs = []
         if len(logprobs) and len(output_ids):

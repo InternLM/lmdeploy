@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from http import HTTPStatus
 
 import shortuuid
@@ -209,16 +210,18 @@ def register(router: APIRouter, server_context) -> None:
         final_token_ids: list[int] = []
         final_logprobs: list[dict[int, float]] = []
         final_res = None
-        async for res in with_request_cleanup(result_generator, [result_generator], [session], session_mgr):
-            if await raw_request.is_disconnected():
-                await session.async_abort()
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            final_res = res
-            text += res.response or ''
-            if res.token_ids:
-                final_token_ids.extend(res.token_ids)
-            if res.logprobs:
-                final_logprobs.extend(res.logprobs)
+        async with aclosing(with_request_cleanup(result_generator, [result_generator], [session],
+                                                 session_mgr)) as generator:
+            async for res in generator:
+                if await raw_request.is_disconnected():
+                    await session.async_abort()
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                final_res = res
+                text += res.response or ''
+                if res.token_ids:
+                    final_token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    final_logprobs.extend(res.logprobs)
 
         if final_res is None:
             return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')

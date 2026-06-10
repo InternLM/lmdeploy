@@ -1,5 +1,5 @@
 import asyncio
-from contextlib import suppress
+from contextlib import aclosing, suppress
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.exceptions import SafeRunException
@@ -135,6 +135,36 @@ async def _run_request_cleanup_removes_unstarted_generator_session():
 
 def test_request_cleanup_removes_session_when_engine_generator_never_started():
     asyncio.run(_run_request_cleanup_removes_unstarted_generator_session())
+
+
+async def _run_request_cleanup_runs_on_return_inside_loop():
+    from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
+
+    session_mgr = SessionManager()
+    session = session_mgr.get(260607)
+    closed = asyncio.Event()
+
+    async def result_generator():
+        try:
+            yield 'engine'
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    async def endpoint_like_return_inside_async_for():
+        result = result_generator()
+        async with aclosing(with_request_cleanup(result, [result], [session], session_mgr)) as generator:
+            async for _ in generator:
+                return 'Client disconnected'
+
+    assert await endpoint_like_return_inside_async_for() == 'Client disconnected'
+
+    assert session_mgr.sessions == {}
+    assert closed.is_set()
+
+
+def test_request_cleanup_runs_on_return_inside_loop():
+    asyncio.run(_run_request_cleanup_runs_on_return_inside_loop())
 
 
 async def _run_prompt_cancel_updates_metrics():
