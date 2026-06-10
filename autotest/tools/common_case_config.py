@@ -247,7 +247,6 @@ PYTORCH_PR_TEST_LLM_GPU2 = [{
         'tp': 2
     },
     'extra_params': {
-        'reasoning-parser': 'qwen-qwq',
         'speculative-algorithm': 'qwen3_5_mtp',
         'speculative-num-draft-tokens': 4,
         'max-batch-size': 256
