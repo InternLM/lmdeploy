@@ -110,7 +110,8 @@ class GenerationConfig:
             Must be non-negative; values below 0 are treated as 0.
         repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
             Must be non-negative; values below 0 are treated as 0.
-        forecast_horizon: Forecast horizon for time series forecast outputs. It does not trigger forecasting.
+        forecast_horizon: Forecast horizon for time series forecast outputs. It does not trigger forecasting;
+            forecasting is selected only when the first generated token is <TS_GEN>.
     """
 
     n: int = 1
@@ -148,7 +149,7 @@ class GenerationConfig:
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
-    forecast_horizon: int | list[int] | None = None
+    forecast_horizon: int | None = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -199,6 +200,8 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        assert self.forecast_horizon is None or type(self.forecast_horizon) is int, \
+            'forecast_horizon must be an integer'
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0

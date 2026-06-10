@@ -169,9 +169,10 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
     min_p: float = 0.0
-    forecast_horizon: int | list[int] | None = Field(
+    forecast_horizon: int | None = Field(
         default=None,
-        description='Forecast horizon for time-series forecast outputs. This does not trigger forecasting.',
+        description=('Forecast horizon for time-series forecast outputs. This does not trigger forecasting; '
+                     'forecasting is selected only when the first generated token is <TS_GEN>.'),
     )
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False

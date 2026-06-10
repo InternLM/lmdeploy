@@ -192,6 +192,8 @@ class VisionModel(ABC):
                 'time series processor is not defined for time series input'
             assert not raw_images and not raw_videos and not raw_audios, \
                 'time series is not compatible with image/video/audio input'
+            if len(raw_time_series) != 1:
+                raise ValueError('Only one time-series input is supported per request.')
             self.tokenizer = self.processor.tokenizer
             time_series_processor = self.time_series_processor
             kwargs['time_series'] = raw_time_series

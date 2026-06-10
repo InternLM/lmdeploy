@@ -190,7 +190,7 @@ class ModelInputs:
     local_adapter_ids: torch.Tensor | None = None
     vision_inputs: VisionModelInputs | None = None
     model_metas: list[dict[str, Any]] | None = None
-    forecast_horizons: list[int | list[int] | None] | None = None
+    forecast_horizons: list[int | None] | None = None
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
@@ -292,7 +292,7 @@ class StepContext:
     attn_metadata: Any = None
     kv_quant_policy: QuantPolicy = QuantPolicy.NONE
     model_metas: list[dict[str, Any]] | None = None
-    forecast_horizons: list[int | list[int] | None] | None = None
+    forecast_horizons: list[int | None] | None = None
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     # for draft model

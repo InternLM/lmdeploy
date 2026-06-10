@@ -69,7 +69,7 @@ class SamplingParam:
     repetition_ngram_threshold: int = 0
 
     # time series forecast
-    forecast_horizon: int | list[int] | None = None
+    forecast_horizon: int | None = None
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
