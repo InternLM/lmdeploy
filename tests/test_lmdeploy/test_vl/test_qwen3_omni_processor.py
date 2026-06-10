@@ -76,7 +76,6 @@ def _fake_model():
     model.image_token_id = model.processor.image_token_id
     model.audio_token_id = model.processor.audio_token_id
     model.video_token_id = model.processor.video_token_id
-    model.mm_feature_dtype = None
     model.mm_tokens = MultimodalSpecialTokens(image_token=model.image_token,
                                               audio_token=model.audio_token,
                                               video_token=model.video_token,
