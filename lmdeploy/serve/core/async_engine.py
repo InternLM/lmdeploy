@@ -592,6 +592,9 @@ class AsyncEngine:
 
                     # router replay
                     routed_experts = outputs.routed_experts
+                    if routed_experts is not None and not isinstance(routed_experts, str) and (
+                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
+                        routed_experts = routed_experts[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '

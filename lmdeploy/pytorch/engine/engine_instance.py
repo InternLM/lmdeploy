@@ -137,54 +137,24 @@ class EngineInstance(EngineInstanceBase):
         """Destructor."""
         self.engine.req_manager.senders.pop(self.req_sender.sender_id)
 
-    def _get_extra_outputs(self, resp: Response, num_all_ids: int, gen_config: GenerationConfig = None):
+    def _get_extra_outputs(self, resp: Response, num_all_ids: int):
         """Get extra outputs."""
         outputs = dict(routed_experts=None)
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
         if routed_experts is not None and resp.type in [ResponseType.FINISH, ResponseType.CANCEL]:
-            # The engine records one routed_experts entry per forwarded token except
-            # the last one, i.e. ``num_all_ids - 1`` entries.
-            num_expected_experts = num_all_ids - 1
-            if routed_experts.shape[0] != num_expected_experts:
-                logger.warning(f'Expected number of routed_experts: {num_expected_experts}, '
-                               f'but got {routed_experts.shape[0]}')
-            # When the last generated token is a stop token that gets excluded from the
-            # reported completion tokens (an aborted request that just sampled EOS, or a
-            # normal stop with include_stop_str_in_output=False), its entry must be
-            # dropped too so that consumers keep
-            # ``len(routed_experts) == prompt_tokens + completion_tokens - 1``.
-            gen_token_ids = resp.data.get('token_ids', None)
-            if self._is_trailing_stop_token_excluded(resp, gen_config, gen_token_ids):
-                num_expected_experts -= 1
-            if routed_experts.shape[0] > num_expected_experts:
-                routed_experts = routed_experts[:num_expected_experts]
             if self._enable_transfer_obj_ref:
                 import ray
+                # validate experts
+                num_expected_experts = num_all_ids - 1
+                if routed_experts.shape[0] != num_expected_experts:
+                    logger.warning(f'Expected number of routed_experts: {num_expected_experts}, '
+                                   f'but got {routed_experts.shape[0]}')
+                    routed_experts = routed_experts[:num_expected_experts]
                 key = ray.get(_SHARED_STORE.put.remote(routed_experts))
                 outputs['routed_experts'] = key
             else:
                 outputs['routed_experts'] = routed_experts
         return outputs
-
-    @staticmethod
-    def _is_trailing_stop_token_excluded(resp: Response, gen_config: GenerationConfig, gen_token_ids) -> bool:
-        """Whether the last generated token is a stop token excluded from output.
-
-        The engine keeps a routed_experts entry for every forwarded token, including a
-        trailing stop token. ``AsyncEngine.generate`` drops such a stop token from the
-        reported completion tokens when the request is aborted, or for a normal stop
-        when ``include_stop_str_in_output`` is False. In those cases the extra
-        routed_experts entry must be dropped as well; this mirrors that decision so the
-        routed_experts length stays consistent with the reported completion tokens.
-        """
-        if gen_token_ids is None or len(gen_token_ids) == 0:
-            return False
-        if gen_config is None or gen_config.ignore_eos:
-            return False
-        stop_ids = gen_config.stop_token_ids or []
-        if not stop_ids or int(gen_token_ids[-1]) not in stop_ids:
-            return False
-        return resp.type == ResponseType.CANCEL or not gen_config.include_stop_str_in_output
 
     async def _async_try_add_session(self, session_id: int):
         """Add new session.
@@ -279,7 +249,7 @@ class EngineInstance(EngineInstanceBase):
 
                 num_ids = len(token_ids)
                 num_all_ids = prompt_ids_len + output_offset + num_ids
-                extra_outputs = self._get_extra_outputs(resp, num_all_ids, gen_config)
+                extra_outputs = self._get_extra_outputs(resp, num_all_ids)
                 routed_experts = extra_outputs.get('routed_experts', None)
 
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
