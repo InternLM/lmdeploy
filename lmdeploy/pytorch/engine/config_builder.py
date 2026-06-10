@@ -35,6 +35,14 @@ class ConfigBuilder:
             engine_config.enable_batch_invariant = True
 
         if engine_config.enable_batch_invariant:
+            unsupported = []
+            if engine_config.ep > 1:
+                unsupported.append('expert parallelism (ep > 1)')
+            if engine_config.enable_eplb:
+                unsupported.append('EPLB')
+            if unsupported:
+                unsupported_features = ', '.join(unsupported)
+                raise ValueError(f'enable_batch_invariant currently does not support {unsupported_features}.')
             backend_config = ConfigBuilder.build_backend_config(engine_config)
             apply_backend_policy(engine_config.device_type, backend_config)
         if engine_config.max_batch_size is None:

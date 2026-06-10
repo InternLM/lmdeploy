@@ -369,7 +369,9 @@ class PytorchEngineConfig:
         enable_batch_invariant: Enable batch-invariant greedy inference on
             supported CUDA backends. The initial implementation is Hopper-only.
             It can also be enabled process-wide with
-            `LMDEPLOY_ENABLE_BATCH_INVARIANT=1`.
+            `LMDEPLOY_ENABLE_BATCH_INVARIANT=1`. Warning: expert
+            parallelism/DeepEP is unsupported, and active eviction/recompute
+            may break batch-invariant behavior.
         custom_module_map: nn module map customized by users. Once
             provided, the original nn modules of the model will be
             substituted by the mapping ones
