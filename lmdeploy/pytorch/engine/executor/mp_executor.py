@@ -382,7 +382,8 @@ class MPExecutor(ExecutorBase):
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
-        self.collective_rpc('wakeup', args=(tags, ), return_mask=0)
+        return_mask = 0xff if tags is None or 'kv_cache' in tags else 0
+        self.collective_rpc('wakeup', args=(tags, ), return_mask=return_mask)
 
     async def _prefetch_outputs(self):
         while True:

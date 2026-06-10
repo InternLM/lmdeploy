@@ -1,0 +1,44 @@
+# HF model id: OpenGVLab/InternVL3_5-30B-A3B
+
+a100:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - mllm_evaluate
+  gen_config:
+    repetition-penalty: 1.0
+    top-p: 0.8
+    top-k: 20
+    temperature: 0.7
+  deps:
+    transformers: 5.6.0
+h:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  deps:
+    transformers: 5.6.0

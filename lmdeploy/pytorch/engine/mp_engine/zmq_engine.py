@@ -43,7 +43,12 @@ class ZMQMPEngine(MPEngine):
         self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config,
                             trust_remote_code=trust_remote_code, **kwargs)
 
-        self.rpc_client = AsyncRPCClient(port=self.port)
+        self.rpc_client = AsyncRPCClient(
+            port=self.port,
+            server_alive_callback=self._is_proc_alive,
+            server_sentinel=self.proc.sentinel if self.proc is not None else None,
+            server_dead_callback=self._mark_backend_dead,
+        )
 
         super().__init__()
         atexit.register(self.close)
@@ -78,8 +83,10 @@ class ZMQMPEngine(MPEngine):
             self.proc.start()
             logger.debug('Receiving rpc server port from mp process.')
             with condition:
-                if 'rpc_server_port' not in self.shared_dict:
-                    condition.wait()
+                while 'rpc_server_port' not in self.shared_dict:
+                    if not self.proc.is_alive():
+                        raise RuntimeError('PyTorch ZMQ engine process exited before publishing RPC server port.')
+                    condition.wait(timeout=1)
             self.port = self.shared_dict['rpc_server_port']
 
     @staticmethod
@@ -96,6 +103,13 @@ class ZMQMPEngine(MPEngine):
         from lmdeploy.pytorch.engine import Engine
 
         from .zmq_rpc import AsyncRPCServer
+
+        # try rename the process
+        try:
+            import ctypes
+            ctypes.CDLL(None).prctl(15, b'ZMQMPEngine', 0, 0, 0)
+        except Exception as e:
+            logger.debug(f'Failed to rename MPEngine process: {e}')
 
         logger.setLevel(log_level)
 
@@ -154,8 +168,8 @@ class ZMQMPEngine(MPEngine):
             await server.run()
         except asyncio.CancelledError:
             logger.info('RPC Server stopping due to cancellation.')
-        except Exception as e:
-            logger.error(f'RPC Server stopped with exception: {e}')
+        except Exception:
+            logger.exception('RPC Server stopped with exception.')
         finally:
             server.stop()
             engine.close()
@@ -163,8 +177,8 @@ class ZMQMPEngine(MPEngine):
                 await engine.wait_tasks()
             except asyncio.CancelledError:
                 logger.info('Engine wait_tasks cancelled during shutdown.')
-            except Exception as e:
-                logger.debug(f'Engine wait_tasks failed during shutdown: {e}')
+            except Exception:
+                logger.exception('Engine wait_tasks failed during shutdown.')
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""
@@ -176,8 +190,23 @@ class ZMQMPEngine(MPEngine):
 
     async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event,  *args, **kwargs):
         """Collective rpc call."""
-        async for out in self.rpc_client.async_stream_call(func, sess_event, *args, **kwargs):
+        startup_notify_kwarg = 'notify_add_msg_func' if func == 'instance_async_stream_infer' else None
+        async for out in self.rpc_client.async_stream_call(
+                func,
+                sess_event,
+                *args,
+                streaming_startup_notify_kwarg=startup_notify_kwarg,
+                **kwargs,
+        ):
             yield out
+
+    async def get_health_status(self):
+        """Get backend health status."""
+        if self.proc is None or not self.proc.is_alive():
+            return dict(alive=False,
+                        message='PyTorch ZMQ engine process is not alive.',
+                        schedule_metrics=None)
+        return await super().get_health_status()
 
     def close(self) -> None:
         """Close mp engine."""
@@ -193,6 +222,18 @@ class ZMQMPEngine(MPEngine):
             logger.warning('MP process did not terminate in time, force killing.')
             self.proc.kill()
         self.proc = None
+
+    def _is_proc_alive(self):
+        """Return whether MP process is alive."""
+        try:
+            return self.proc is not None and self.proc.is_alive()
+        except ValueError:
+            return False
+
+    def _mark_backend_dead(self):
+        """Wake local waiters when the MP backend process dies."""
+        for state in getattr(self, 'session_states', {}).values():
+            state.init_done.set()
 
     def start_loop(self) -> None:
         """Start mp engine loop."""

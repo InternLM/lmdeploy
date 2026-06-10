@@ -84,6 +84,10 @@ class EngineWorkerBase:
         """Get schedule metrics."""
         return self.engine.get_schedule_metrics()
 
+    async def get_health_status(self):
+        """Get engine health status."""
+        return await self.engine.get_health_status()
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self.engine.p2p_initialize(conn_request)
@@ -169,3 +173,7 @@ class EngineOutputGather:
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
         return result
+
+    def discard(self, stream_id):
+        """Discard gathered output for a stream."""
+        self._output.pop(stream_id, None)

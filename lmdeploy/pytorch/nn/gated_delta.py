@@ -55,6 +55,13 @@ class GatedDeltaMeta:
         # TODO: fix last chunk with less conv kernel tokens
         self.conv_idx = self.conv_idx.clamp_min(0)
 
+        self.is_init = None
+        self.is_init_token = None
+        if not self.is_decoding:
+            self.is_init = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens) == 0
+            self.is_init_token = self.is_init.new_zeros(num_tokens, dtype=torch.bool)
+            self.is_init_token.scatter_(0, self.cu_seqlens[:-1].long(), self.is_init)
+
         # for spec decoding
         if self.num_spec_tokens > 0:
             self.cache_seqlens = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).to(torch.int32)
@@ -126,6 +133,9 @@ class CausalConv1dFunc:
             # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
             all_inits = conv_state[state_ids, :, 1:]
             conv_state = conv_state.index_copy_(0, state_ids, final_state)
+
+        is_init = gated_delta_meta.is_init
+        all_inits.masked_fill_(is_init[:, None, None], 0.0)
 
         x = x.transpose(-2, -1)
         out = self.causal_conv1d_fn(
@@ -205,10 +215,13 @@ class GatedDelta:
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        g: torch.Tensor,
-        beta: torch.Tensor,
+        b: torch.Tensor,
+        a: torch.Tensor,
+        dt_bias: torch.Tensor,
+        a_log_exp: torch.Tensor,
         recurrent_state: torch.Tensor,
         gated_delta_meta: GatedDeltaMeta,
+        kv_ratio: int = 1,
     ):
         """call."""
         is_decoding = gated_delta_meta.is_decoding
@@ -216,6 +229,19 @@ class GatedDelta:
         state_ids = gated_delta_meta.state_ids
         spec_state_offsets = gated_delta_meta.spec_state_offsets
         cache_seqlens = gated_delta_meta.cache_seqlens
+
+        query, key, g, beta, qk_l2norm_done = self.impl.prepare_inputs(
+            query,
+            key,
+            b,
+            a,
+            dt_bias,
+            a_log_exp,
+            kv_ratio,
+            use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+            is_decoding=is_decoding,
+            init_token_mask=gated_delta_meta.is_init_token,
+        )
 
         if not is_decoding:
             core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
@@ -227,9 +253,10 @@ class GatedDelta:
                 initial_state=recurrent_state,
                 state_indices=state_ids,
                 output_final_state=True,
-                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
                 cu_seqlens=cu_seqlens,
                 spec_state_offsets=spec_state_offsets,
+                transpose_state_layout=True,
             )
         else:
             # qkvgb (1, seqlen, ...) -> (B, seqlen, ...)
@@ -242,9 +269,10 @@ class GatedDelta:
                 beta=beta[0].unflatten(0, (batch_size, -1)).contiguous(),
                 initial_state=recurrent_state,
                 output_final_state=True,
-                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
                 state_indices=gated_delta_meta.origin_state_ids,
                 cache_seqlens=cache_seqlens,
+                transpose_state_layout=True,
             )
             # out (seqlen, B, ...) -> (1, seqlen * B, ...)
             core_attn_out = core_attn_out.flatten(0, 1).unsqueeze(0)

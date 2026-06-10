@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(cuda_ipc_comm STATIC
         cuda_ipc_comm.cu

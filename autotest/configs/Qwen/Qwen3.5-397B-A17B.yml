@@ -1,0 +1,119 @@
+# HF model id: Qwen/Qwen3.5-397B-A17B
+
+h:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    dp: 4
+    ep: 8
+    extra:
+      max-batch-size: 256
+      cache-max-entry-count: 0.7
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  quantization:
+    pytorch:
+    - fp8
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    dp: 4
+    ep: 8
+    extra:
+      speculative-algorithm: qwen3_5_mtp
+      speculative-num-draft-tokens: 4
+      max-batch-size: 256
+      cache-max-entry-count: 0.7
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  - mtp_evaluate
+  quantization:
+    pytorch:
+    - fp8
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+ascend:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 16
+    extra:
+      max-batch-size: 32
+      cache-max-entry-count: 0.9
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - mllm_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    dp: 8
+    ep: 8
+    extra:
+      max-batch-size: 64
+      cache-max-entry-count: 0.9
+      cache-block-seq-len: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - mllm_evaluate
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true

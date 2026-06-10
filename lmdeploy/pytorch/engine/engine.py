@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import ctypes
 import gc
 import os
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ import numpy as np
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, RequestMetrics, ResponseType, SpeculativeConfig
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.conn.protocol import (
@@ -20,7 +22,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
-from ..messages import SchedulerSequence, UpdateTokenMode
+from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..paging import Scheduler
 from ..strategies import build_strategy_factory
 from .base import EngineBase
@@ -134,8 +136,13 @@ class Engine(EngineBase):
         dist_config = ConfigBuilder.build_dist_config(engine_config)
         misc_config = ConfigBuilder.build_misc_config(engine_config)
         # spec decode
-        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path, speculative_config, engine_config,
-                                                                       cache_config, trust_remote_code)
+        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path,
+                                                                       speculative_config,
+                                                                       engine_config,
+                                                                       cache_config,
+                                                                       dist_config,
+                                                                       trust_remote_code=trust_remote_code,
+                                                                       )
 
         # build model agent
         self.executor = build_executor(
@@ -188,6 +195,8 @@ class Engine(EngineBase):
         # infer sleeping from empty_init: empty_init still builds runtime
         # resources and has its own weight-update workflow.
         self._sleeping_tags = set()
+        self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
+        self._multimodal_session_end_count = 0
 
         # create main thread
         self.req_manager.set_main_loop_func(self.async_loop)
@@ -308,15 +317,53 @@ class Engine(EngineBase):
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                self.scheduler.stop_session(session_id)
                 session = self.scheduler.sessions[session_id]
+                stopped_resp_ids = set()
                 for seq in session.sequences.values():
+                    if seq.status not in (MessageStatus.STOPPED, MessageStatus.TO_BE_MIGRATED):
+                        continue
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
+                        stopped_resp_ids.add(id(_resp))
+                self.scheduler.stop_session(session_id)
+                for seq in session.sequences.values():
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None and id(_resp) not in stopped_resp_ids:
                         self.req_manager.reject_request(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
+
+    @staticmethod
+    def _try_mem_trim():
+        """Try to trim memory."""
+        try:
+            gc.collect()
+            ctypes.CDLL('libc.so.6').malloc_trim(0)
+        except Exception as e:
+            logger.debug(f'Memory trim failed: {e}')
+
+    @staticmethod
+    def _has_multimodal_session(session) -> bool:
+        """Check whether session has multimodal history."""
+        for seq in session.sequences.values():
+            history_multimodals = getattr(seq, 'history_multimodals', None)
+            if history_multimodals is not None and not history_multimodals.empty():
+                return True
+        return False
+
+    def _maybe_trim_multimodal_session(self, has_multimodal: bool):
+        """Trim host memory after enough multimodal sessions have ended."""
+        trim_count = getattr(self, '_multimodal_session_trim_count', max(0, _envs.multimodal_session_trim_count))
+        if not has_multimodal or trim_count <= 0:
+            return
+
+        self._multimodal_session_end_count = getattr(self, '_multimodal_session_end_count', 0) + 1
+        if self._multimodal_session_end_count < trim_count:
+            return
+
+        self._multimodal_session_end_count = 0
+        self._try_mem_trim()
 
     def _on_end_session(self, reqs: list[Request], **kwargs):
         """On end session callback."""
@@ -511,6 +558,8 @@ class Engine(EngineBase):
         logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
                     wakeup_tags, sorted(self._sleeping_tags))
         self.executor.wakeup(wakeup_tags)
+        if wakeup_tags is None or 'kv_cache' in wakeup_tags:
+            self.executor.warmup()
         if wakeup_tags is None:
             self._sleeping_tags.clear()
         else:
@@ -610,7 +659,9 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
+            has_multimodal = self._has_multimodal_session(self.scheduler.sessions[session_id])
             self.scheduler.end_session(session_id)
+            self._maybe_trim_multimodal_session(has_multimodal)
             return True
         return False
 
@@ -619,3 +670,39 @@ class Engine(EngineBase):
 
     def get_schedule_metrics(self):
         return self.scheduler.schedule_metrics
+
+    @staticmethod
+    def _health_check_tasks(tasks):
+        done_tasks = []
+        for task in list(tasks):
+            if task.done():
+                done_tasks.append(task.get_name())
+        return len(done_tasks) == 0, done_tasks
+
+    async def get_health_status(self) -> dict:
+        """Get lightweight health status.
+
+        Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
+        before returning metrics.
+        """
+        if not self.req_manager.is_loop_alive():
+            return dict(alive=False,
+                        message='PyTorch engine request loop is not alive.',
+                        schedule_metrics=None)
+
+        if self._loop_main is not None:
+            if self._loop_main.done():
+                return dict(alive=False,
+                            message='PyTorch engine main loop has stopped.',
+                            schedule_metrics=None)
+
+        if self._engine_loop is not None:
+            engine_loop_ok, done_tasks = self._health_check_tasks(self._engine_loop.tasks)
+            if not engine_loop_ok:
+                return dict(alive=False,
+                            message=f'PyTorch engine loop task has stopped: {done_tasks}.',
+                            schedule_metrics=None)
+
+        return dict(alive=True,
+                    message='PyTorch engine is healthy.',
+                    schedule_metrics=self.get_schedule_metrics())
