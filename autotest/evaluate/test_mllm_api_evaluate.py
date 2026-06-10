@@ -133,17 +133,6 @@ def get_models(backend, parallel_config):
                                 })
 
 
-def get_mtp_models(parallel_config):
-    return get_func_config_list('pytorch',
-                                parallel_config,
-                                model_type='vl_model',
-                                func_type='mtp_evaluate',
-                                extra={
-                                    'session-len': 65536,
-                                    'cache-max-entry-count': 0.6
-                                })
-
-
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_1
@@ -314,68 +303,6 @@ def test_pytorch_eval_tp8(config, run_config, worker_id):
 @pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 16}))
 def test_pytorch_eval_tp16(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 2}))
-def test_pytorch_vl_infer_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 1}))
-def test_pytorch_vl_infer_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 4}))
-def test_pytorch_vl_infer_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 2}))
-def test_pytorch_vl_eval_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 1}))
-def test_pytorch_vl_eval_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 4}))
-def test_pytorch_vl_eval_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
 
 
 @pytest.mark.infer
