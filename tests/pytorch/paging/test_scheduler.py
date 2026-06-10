@@ -3,6 +3,7 @@ import torch
 
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
+from lmdeploy.pytorch.engine.inputs_maker import _compact_state_prefix_cache_save_offsets
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
@@ -298,6 +299,34 @@ def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     assert seq.logical_state == -1
     assert node.state_idx == state_idx
     assert node.state_ready
+
+
+def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
+    scheduler = _make_ssm_scheduler(max_batch_size=2, prefix_cache_state_budget=2)
+    block_size = scheduler.seq_meta.block_size
+    token_ids = [1] * block_size * 2
+
+    seq_a = scheduler.add_session(100).add_sequence(token_ids)
+    seq_b = scheduler.add_session(101).add_sequence(token_ids)
+
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [seq_a, seq_b]
+    assert seq_a.logical_state >= 0
+    assert seq_b.logical_state >= 0
+    assert seq_a.logical_state != seq_b.logical_state
+    assert seq_a.prefix_cache.last_shared_node is seq_b.prefix_cache.last_shared_node
+
+    save_state_offsets = [
+        scheduler.block_trie.reserve_state_checkpoint_for_seq(seq) for seq in output.running
+    ]
+    save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(output.running,
+                                                                                  save_state_offsets)
+
+    assert save_src_offsets == (seq_a.logical_state, )
+    assert save_dst_offsets == (save_state_offsets[0], )
+    assert save_state_offsets[0] >= 0
+    assert save_state_offsets[1] == -1
+    assert len(save_dst_offsets) == len(set(save_dst_offsets))
 
 
 def test_ssm_end_session_discards_pending_checkpoint_reservation():

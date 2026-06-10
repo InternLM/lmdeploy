@@ -514,6 +514,8 @@ class BlockTrie:
         node = self._get_state_checkpoint_node_for_seq(seq, step)
         if node is None or node.state_ready:
             return -1
+        if node.state_idx >= 0:
+            return -1
 
         prefix_cache = seq.prefix_cache
         old_node = prefix_cache.decode_state_node
