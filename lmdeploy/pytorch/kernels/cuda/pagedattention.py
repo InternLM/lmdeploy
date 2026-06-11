@@ -672,6 +672,17 @@ def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: in
     return SPLIT_K
 
 
+def _cap_split_k_by_page_table(split_k: int, page_table: Tensor):
+    """Cap split-K by the number of available KV pages.
+
+    Empty split partitions do no useful work but still allocate accumulator memory and participate in the reduction.
+    Keep the cap power-of-two so the Triton reduction shape remains valid.
+    """
+    max_pages = max(int(page_table.size(1)), 1)
+    max_useful_split = 1 << (max_pages.bit_length() - 1)
+    return min(split_k, max_useful_split)
+
+
 @triton.jit
 def _bar_sync():
     """CTA-internal barrier (__syncthreads equivalent via PTX bar.sync 0)."""
@@ -892,6 +903,7 @@ def flash_attn_with_kvcache(
 
     is_fp8_scalar = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
+    SPLIT_K = _cap_split_k_by_page_table(SPLIT_K, page_table)
 
     if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
         acc = q.new_empty(num_tokens, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)

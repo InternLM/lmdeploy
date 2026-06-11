@@ -3,6 +3,8 @@ import copy
 import os
 
 from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
+from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.backends.selector import apply_backend_policy
 from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
@@ -27,6 +29,22 @@ class ConfigBuilder:
         else:
             engine_config = copy.deepcopy(engine_config)
 
+        if _envs.enable_batch_invariant:
+            if engine_config.device_type != 'cuda':
+                raise ValueError('LMDEPLOY_ENABLE_BATCH_INVARIANT is currently supported only for CUDA backend.')
+            engine_config.enable_batch_invariant = True
+
+        if engine_config.enable_batch_invariant:
+            unsupported = []
+            if engine_config.ep > 1:
+                unsupported.append('expert parallelism (ep > 1)')
+            if engine_config.enable_eplb:
+                unsupported.append('EPLB')
+            if unsupported:
+                unsupported_features = ', '.join(unsupported)
+                raise ValueError(f'enable_batch_invariant currently does not support {unsupported_features}.')
+            backend_config = ConfigBuilder.build_backend_config(engine_config)
+            apply_backend_policy(engine_config.device_type, backend_config)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
@@ -82,6 +100,7 @@ class ConfigBuilder:
         backend_config = BackendConfig(
             eager_mode=engine_config.eager_mode,
             device_type=engine_config.device_type,
+            enable_batch_invariant=engine_config.enable_batch_invariant,
         )
         return backend_config
 

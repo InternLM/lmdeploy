@@ -647,6 +647,18 @@ class ArgumentHelper:
                                    'If True, cuda graph would be disabled')
 
     @staticmethod
+    def enable_batch_invariant(parser):
+        """Add argument enable_batch_invariant to parser."""
+
+        return parser.add_argument('--enable-batch-invariant',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable batch-invariant greedy inference for supported PyTorch CUDA Hopper '
+                                   'runtime shapes. Warning: expert parallelism/DeepEP is unsupported, and active '
+                                   'eviction/recompute may break batch-invariant behavior. Can also be enabled with '
+                                   'LMDEPLOY_ENABLE_BATCH_INVARIANT=1.')
+
+    @staticmethod
     def communicator(parser):
         return parser.add_argument('--communicator',
                                    type=str,

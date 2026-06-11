@@ -19,7 +19,7 @@ class FA3Impl(TritonAttentionImpl):
     Key features:
     - Optimized prefill using flash_attn_varlen_func
     - Speculative decoding support with multi-token queries
-    - Standard single-token decoding with paged attention
+    - Standard single-token decoding with flash_attn_with_kvcache
     """
 
     def __init__(
@@ -79,6 +79,28 @@ class FA3Impl(TritonAttentionImpl):
             return (sliding_window, sliding_window)
         return sliding_window
 
+    @staticmethod
+    def _decode_num_splits() -> int:
+        """Get FA3 decode split policy."""
+        from lmdeploy.pytorch.backends.cuda.batch_invariant import get_fa3_decode_num_splits
+
+        return get_fa3_decode_num_splits()
+
+    def _raise_if_batch_invariant_quantized_decode(self, quant_policy: QuantPolicy):
+        """Reject quantized KV decode in batch-invariant mode."""
+        if quant_policy == QuantPolicy.NONE or self._decode_num_splits() != 1:
+            return
+        raise RuntimeError(
+            'enable_batch_invariant does not support quantized KV cache with FA3 attention. '
+            'Quantized KV decode would fall back to Triton paged attention or raw FA3 cache access.')
+
+    @staticmethod
+    def _get_fa3_cache_seqlens(attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+        """Get FA3-compatible cache sequence lengths."""
+        if attn_metadata.kv_seqlens.dtype != torch.int32:
+            attn_metadata.kv_seqlens = attn_metadata.kv_seqlens.to(torch.int32)
+        return attn_metadata.kv_seqlens
+
     def _decoding_speculative(
         self,
         query: torch.Tensor,
@@ -104,6 +126,7 @@ class FA3Impl(TritonAttentionImpl):
             Attention output tensor.
         """
         quant_policy = attn_metadata.quant_policy
+        self._raise_if_batch_invariant_quantized_decode(quant_policy)
 
         # TurboQuant stores packed uint8 data in cache, which FA3's native
         # flash_attn_with_kvcache cannot dequantize directly.
@@ -126,7 +149,7 @@ class FA3Impl(TritonAttentionImpl):
             query,
             k_cache,
             v_cache,
-            cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+            cache_seqlens=self._get_fa3_cache_seqlens(attn_metadata),
             max_seqlen_q=max_q_seqlen,
             scheduler_metadata=attn_metadata.scheduler_metadata,
             page_table=block_offsets,
@@ -134,6 +157,7 @@ class FA3Impl(TritonAttentionImpl):
             causal=self.causal,
             window_size=sliding_window,
             softcap=self.logit_softcapping,
+            num_splits=self._decode_num_splits(),
         )
         return attn_output
 
@@ -150,7 +174,8 @@ class FA3Impl(TritonAttentionImpl):
         """Standard single-token decoding.
 
         This path handles standard decoding where only one token is generated
-        per request (max_q_seqlen = 1). Uses paged attention for memory efficiency.
+        per request (max_q_seqlen = 1). Uses FA3's flash_attn_with_kvcache unless
+        the KV cache is quantized.
 
         Args:
             query: Query tensor (single token per request).
@@ -166,26 +191,47 @@ class FA3Impl(TritonAttentionImpl):
         """
         block_offsets = attn_metadata.block_offsets
         quant_policy = attn_metadata.quant_policy
+        self._raise_if_batch_invariant_quantized_decode(quant_policy)
+        sliding_window = self._normalize_sliding_window(self.sliding_window)
 
-        attn_output = self.paged_attention_fwd(
+        if quant_policy != QuantPolicy.NONE:
+            attn_output = self.paged_attention_fwd(
+                query,
+                k_cache,
+                v_cache,
+                cache_seqlens=attn_metadata.kv_seqlens,
+                page_table=block_offsets,
+                cu_seqlens_q=attn_metadata.cu_seqlens_q,
+                max_seqlen_q=max_q_seqlen,
+                scheduler_metadata=attn_metadata.scheduler_metadata,
+                softmax_scale=self.scale,
+                causal=self.causal,
+                softcap=self.logit_softcapping,
+                window_size=self.sliding_window,
+                # custom args
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
+            )
+            return attn_output
+
+        query_shape = query.shape
+        query = query.unflatten(0, (-1, max_q_seqlen))
+        attn_output = self.flash_attn_with_kvcache_v3(
             query,
             k_cache,
             v_cache,
-            cache_seqlens=attn_metadata.kv_seqlens,
-            page_table=block_offsets,
-            cu_seqlens_q=attn_metadata.cu_seqlens_q,
+            cache_seqlens=self._get_fa3_cache_seqlens(attn_metadata),
             max_seqlen_q=max_q_seqlen,
             scheduler_metadata=attn_metadata.scheduler_metadata,
+            page_table=block_offsets,
             softmax_scale=self.scale,
             causal=self.causal,
+            window_size=sliding_window,
             softcap=self.logit_softcapping,
-            window_size=self.sliding_window,
-            # custom args
-            k_scales_zeros=k_scales_zeros,
-            v_scales_zeros=v_scales_zeros,
-            quant_policy=quant_policy,
+            num_splits=self._decode_num_splits(),
         )
-        return attn_output
+        return attn_output.reshape(query_shape)
 
     def _forward_decoding(
         self,

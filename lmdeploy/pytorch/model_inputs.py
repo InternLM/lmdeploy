@@ -440,6 +440,7 @@ class BuildModelContext:
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
+    enable_batch_invariant: bool = False
     quant_config: QuantizationConfig = field(default_factory=QuantizationConfig)
     fp32_lm_head: bool = False
     tie_word_embeddings: bool = False

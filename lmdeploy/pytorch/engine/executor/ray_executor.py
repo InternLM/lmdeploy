@@ -12,7 +12,7 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.backends.selector import init_backend
+from lmdeploy.pytorch.backends.selector import apply_backend_policy, init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
@@ -170,6 +170,8 @@ class RayWorkerWrapper(WorkerWrapperBase):
         specdecode_config: SpecDecodeConfig = None,
         trust_remote_code: bool = False
     ):
+        if backend_config.enable_batch_invariant:
+            apply_backend_policy(device_type, backend_config, validate_device=True)
         init_backend(device_type)
         try_import_deeplink(device_type)
 
