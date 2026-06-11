@@ -280,7 +280,7 @@ class AsyncEngine:
     def _make_health_result(status: str, message: str) -> dict:
         return dict(status=status, message=message)
 
-    async def health_probe(self, timeout: float = 2.0, scheduler_stall_timeout: float = 15.0) -> dict:
+    async def health_probe(self, timeout: float, scheduler_stall_timeout: float) -> dict:
         """Probe backend health with a bounded, non-overlapping call."""
         if self.is_sleeping:
             return self._make_health_result(
