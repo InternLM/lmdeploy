@@ -146,6 +146,7 @@ class Scheduler:
         prefix_cache.restore_state = -1
         prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
+        prefix_cache.match_start_step = -1
 
     def _prefix_hit_starts_middle_long_context_chunk(self, seq: SchedulerSequence):
         """Check whether a prefix hit would start chunking from the middle."""
@@ -153,9 +154,7 @@ class Scheduler:
             return False
 
         max_prefill_num = self.cache_config.max_prefill_token_num
-        input_mm = seq.get_input_multimodals()
-        history_multimodals = getattr(seq, 'history_multimodals', None)
-        mm_for_chunk_limit = getattr(history_multimodals, 'multimodals', input_mm) or {}
+        mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
         for value in mm_for_chunk_limit.values():
             max_mm_size = max([v.end - v.start for v in value], default=0)
             max_prefill_num = max(max_prefill_num, max_mm_size)

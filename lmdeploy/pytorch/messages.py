@@ -70,7 +70,9 @@ class PrefixCacheState:
     model has copied runtime state into them.  ``last_shared_node`` is the
     deepest trie node already shared by this sequence; ``BlockTrie.match()``
     writes it and ``BlockTrie.allocate()`` continues inserting new full blocks
-    from it.
+    from it.  ``match_start_step`` remembers the sequence step before a
+    tentative prefix-cache match so long-context chunking can distinguish
+    current-turn cached multimodal spans from older session history.
     """
 
     metas: list[PrefixCacheMeta] = field(default_factory=list)
@@ -88,6 +90,7 @@ class PrefixCacheState:
     save_acquired_state: int = -1
     save_acquired_node: Any = field(default=None, repr=False)
     decode_state_node: Any = field(default=None, repr=False)
+    match_start_step: int = -1
 
 
 @dataclass
@@ -867,6 +870,14 @@ class SchedulerSequence:
         start = self.num_history_ids
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
+
+    def get_chunk_limit_multimodals(self):
+        """Get multimodals that should affect long-context chunk size."""
+        input_multimodals = self.get_input_multimodals()
+        match_start = self.prefix_cache.match_start_step
+        if match_start >= 0 and self.num_history_ids > match_start:
+            return self.history_multimodals.get_datas(match_start, self.num_all_ids)
+        return input_multimodals
 
     def get_prefix_cache_extra_hashes(self, start: int, end: int):
         """Get canonical multimodal identity entries for a token range.

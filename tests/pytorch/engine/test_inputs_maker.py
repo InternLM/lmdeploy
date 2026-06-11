@@ -21,16 +21,32 @@ class _DummyMultiModal:
 
 class _DummySeq:
 
-    def __init__(self, history_ids: int, token_ids: int, all_multimodals: dict, input_multimodals: dict):
+    def __init__(self,
+                 history_ids: int,
+                 token_ids: int,
+                 all_multimodals: dict,
+                 input_multimodals: dict,
+                 match_start_step: int = -1):
         self.num_history_ids = history_ids
         self.num_token_ids = token_ids
         self.history_multimodals = SimpleNamespace(multimodals=all_multimodals)
         self._input_multimodals = input_multimodals
+        self.prefix_cache = SimpleNamespace(match_start_step=match_start_step)
         self.return_logits = False
         self.return_routed_experts = False
 
     def get_input_multimodals(self):
         return self._input_multimodals
+
+    def get_chunk_limit_multimodals(self):
+        match_start = self.prefix_cache.match_start_step
+        if match_start >= 0 and self.num_history_ids > match_start:
+            end = self.num_history_ids + self.num_token_ids
+            return {
+                key: [mm for mm in value if match_start <= mm.start and mm.end <= end]
+                for key, value in self.history_multimodals.multimodals.items()
+            }
+        return self.get_input_multimodals()
 
 
 def _state_seq(logical_state: int, restore_state: int = -1):
@@ -155,6 +171,7 @@ def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():
         token_ids=1056,
         all_multimodals={'image': [image]},
         input_multimodals={},
+        match_start_step=0,
     )
 
     chunker = LongContextChunker(max_prefill_token_num=512)
@@ -177,6 +194,7 @@ def test_long_context_chunker_only_tracks_remaining_multimodals():
         token_ids=2000,
         all_multimodals={'image': [cached_image, remaining_image]},
         input_multimodals={'image': [remaining_image]},
+        match_start_step=0,
     )
 
     chunker = LongContextChunker(max_prefill_token_num=512)
@@ -221,6 +239,39 @@ def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_de
     assert not model_inputs.is_chunk
     assert not model_inputs.is_first_chunk
     assert not model_inputs.is_last_chunk
+    assert not model_inputs.is_chunk_multimodal
+
+
+def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():
+    previous_image = _DummyMultiModal(start=512, end=5888)
+    seq = _DummySeq(
+        history_ids=5888,
+        token_ids=1056,
+        all_multimodals={'image': [previous_image]},
+        input_multimodals={},
+    )
+    model_inputs = SimpleNamespace(is_decoding=False,
+                                   is_chunk=False,
+                                   is_first_chunk=False,
+                                   is_last_chunk=False,
+                                   is_chunk_multimodal=False)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode)
+    maker.spec_decoding = True
+    maker.scheduler = _FakeScheduler([seq])
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs_long_context = lambda seq, chunk_size, multimodals: model_inputs
+
+    forward_inputs = maker._make_forward_inputs(prefill=True)
+
+    assert forward_inputs['inputs'] is model_inputs
+    assert model_inputs.is_first_chunk
     assert not model_inputs.is_chunk_multimodal
 
 

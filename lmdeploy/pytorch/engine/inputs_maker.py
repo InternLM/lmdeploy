@@ -137,13 +137,9 @@ class LongContextChunker:
         self.seq = seq
         self.next_step = seq.num_history_ids
 
-        # Use all historical multimodal spans for the chunk-size limit.  The
-        # actual vision payloads below are still limited to remaining spans, so
-        # cached image/video data is not sent through the vision path again.
         max_prefill_num = self.max_prefill_token_num
         input_mm = seq.get_input_multimodals()
-        history_multimodals = getattr(seq, 'history_multimodals', None)
-        mm_for_chunk_limit = getattr(history_multimodals, 'multimodals', input_mm) or {}
+        mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
         self.multimodals = defaultdict(list)
 
         for value in mm_for_chunk_limit.values():

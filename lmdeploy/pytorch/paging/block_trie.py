@@ -982,6 +982,7 @@ class BlockTrie:
         """
         if not self.enable:
             return
+        seq.prefix_cache.match_start_step = seq.num_history_ids
         seq.prefix_cache.restore_state = -1
         seq.prefix_cache.restore_node = None
         if self.requires_state_checkpoint:
