@@ -120,10 +120,10 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
         mask = num_appendable_ids_exp <= 0
         mask[~valid_tokens] = False
         if stop_words is not None:
-            token_ids_rsp = token_ids.unsqueeze(-1).repeat(1, 1, stop_words.numel())
-            stop_words_rsp = stop_words.reshape(1, 1, -1)
-            assert stop_words_rsp.ndim == token_ids_rsp.ndim == 3
-            stop_mask = (token_ids_rsp == stop_words_rsp).any(-1)
+            # stop_words is batched and may contain negative padding -1
+            valid_stop_words = stop_words >= 0
+            # compare per row only for valid stop words
+            stop_mask = ((token_ids.unsqueeze(-1) == stop_words.unsqueeze(1)) & valid_stop_words.unsqueeze(1)).any(-1)
             mask = torch.logical_or(mask, stop_mask)
         # find the index of first `1`,  if not found, would be 0
         index = torch.argmax(mask.int(), dim=-1, keepdim=True)
