@@ -425,27 +425,43 @@ class AsyncEngine:
     @asynccontextmanager
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
-        try:
-            metrics_processor.increase_api_routed_requests()
-            yield generator
-        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
-            metrics_processor.increase_failed_requests('cancel')
+
+        async def cleanup_after_exception():
             # Use asyncio.shield to protect cleanup coroutines from being cancelled.
             # When a task is in cancelling state, bare `await` raises CancelledError
             # immediately. shield ensures the inner coroutine runs to completion.
-            # The outer `except (asyncio.CancelledError, Exception)` catches the
-            # CancelledError that shield itself re-raises at the await point.
             try:
                 await asyncio.shield(handle.async_cancel(session.session_id))
-            except (asyncio.CancelledError, Exception) as cancel_e:
-                logger.debug(f'[safe_run] session {session.session_id} async_cancel exception caught: {cancel_e}')
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(f'[safe_run] session {session.session_id} async_cancel failed.')
             if self.backend == 'pytorch':
                 logger.info(f'[safe_run] session {session.session_id} ending session')
                 try:
                     await asyncio.shield(handle.async_end(session.session_id))
-                except (asyncio.CancelledError, Exception) as end_e:
-                    logger.debug(f'[safe_run] session {session.session_id} async_end exception caught: {end_e}')
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception(f'[safe_run] session {session.session_id} async_end failed.')
+
+        try:
+            metrics_processor.increase_api_routed_requests()
+            yield generator
+        except (asyncio.CancelledError, GeneratorExit) as e:
+            logger.info(f'[safe_run] session {session.session_id} cancelled: {type(e).__name__}')
+            metrics_processor.increase_failed_requests('cancel')
+            await cleanup_after_exception()
+            # Wrap as SafeRunException so that the outer `request_handle` context
+            # manager in `session_manager.py` can distinguish a handled cancellation (caught by
+            # `except SafeRunException: pass`) from an unexpected CancelledError.
+            # Without this, the suppressed exception leaves the task in cancelling
+            # state, causing a second CancelledError at the next await point.
+            raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
+        except Exception as e:
+            logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
+            metrics_processor.increase_failed_requests('cancel')
+            await cleanup_after_exception()
             # Wrap as SafeRunException so that the outer `request_handle` context
             # manager in `session_manager.py` can distinguish a handled cancellation (caught by
             # `except SafeRunException: pass`) from an unexpected CancelledError.
@@ -501,6 +517,14 @@ class AsyncEngine:
         else:
             raise ValueError(f'Invalid session_id: {session_id}. It should be an instance of Session or an integer.')
         session_id = session.session_id
+        session_removed = False
+
+        def remove_session_once():
+            nonlocal session_removed
+            if sequence_end and not session_removed:
+                self.session_mgr.remove(session)
+                session_removed = True
+
         chat_template_kwargs = chat_template_kwargs or {}
         if enable_thinking is not None:
             logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
@@ -526,13 +550,18 @@ class AsyncEngine:
                 prompt = prompt_input.get('prompt')
                 input_ids = prompt_input.get('input_ids')
                 self.request_logger.log_inputs(session,
-                                            prompt=prompt,
-                                            prompt_token_ids=input_ids,
-                                            gen_config=gen_config,
-                                            adapter_name=adapter_name)
+                                                prompt=prompt,
+                                                prompt_token_ids=input_ids,
+                                                gen_config=gen_config,
+                                                adapter_name=adapter_name)
+            except (asyncio.CancelledError, GeneratorExit):
+                metrics_processor.increase_failed_requests('cancel')
+                remove_session_once()
+                raise
             except Exception:
                 logger.exception('[generate] error in prompt processing')
                 metrics_processor.increase_failed_requests('error')
+                remove_session_once()
                 yield GenOut(response='in prompt processing error',
                              history_token_len=session.step,
                              input_token_len=len(input_ids) if input_ids is not None else 0,
@@ -550,14 +579,16 @@ class AsyncEngine:
         if gen_config.max_new_tokens == 0:
             logger.info(f'run out of tokens. session={session_id}.')
             metrics_processor.increase_failed_requests('error')
+            history_len = session.step
+            if sequence_end is True and sequence_start is False:
+                await session.async_close()
+            remove_session_once()
             yield GenOut(response='',
-                         history_token_len=session.step,
+                         history_token_len=history_len,
                          input_token_len=len(input_ids),
                          generate_token_len=0,
                          finish_reason='length',
                          token_ids=[])
-            if sequence_end is True and sequence_start is False:
-                await session.async_close()
             return
 
         if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
@@ -565,6 +596,7 @@ class AsyncEngine:
             errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
                       'when prefix caching is ON')
             metrics_processor.increase_failed_requests('error')
+            remove_session_once()
             yield GenOut(response=errmsg,
                          history_token_len=session.step,
                          input_token_len=len(input_ids),
@@ -590,23 +622,22 @@ class AsyncEngine:
         stale = self._if_session_stale(session, len(prompt_input['input_ids']))
         if stale is not None:
             metrics_processor.increase_failed_requests('abort')
+            remove_session_once()
             yield stale
-            if sequence_end:
-                self.session_mgr.remove(session)
             return
+        session._remove_on_request_exit = sequence_end
         async with session.request_handle() as handle:
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
                                f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
                 metrics_processor.increase_failed_requests('abort')
+                remove_session_once()
                 yield GenOut(response='',
                              history_token_len=0,
                              input_token_len=len(input_ids),
                              generate_token_len=0,
                              finish_reason='abort',
                              token_ids=[])
-                if sequence_end:
-                    self.session_mgr.remove(session)
                 return
             token_ids = input_ids.copy()
             history_len = session.step
@@ -741,7 +772,7 @@ class AsyncEngine:
                     # because it waits for session's _active event to be set, but the event won't be set
                     # until the session is finished, i.e., session.request_handle() context exits.
                     await handle.async_end(session.session_id)
-                self.session_mgr.remove(session)
+                remove_session_once()
         # if sequence_end:
         #     if self.backend == 'pytorch':
         #         # manually end pytorch session. session cannot be ended until session.request_handle()

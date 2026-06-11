@@ -157,7 +157,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
         topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.is_decoding and self.use_deep_gemm
+        low_latency_mode = step_ctx.global_is_decoding() and self.use_deep_gemm
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
                                  down_scale, expert_list)

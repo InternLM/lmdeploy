@@ -56,3 +56,17 @@ h:
     - kvint4
     - kvint8
     - w8a8
+- model_type: chat
+  engine_config:
+    tp: 1
+    extra:
+      speculative-algorithm: eagle3
+      speculative-num-draft-tokens: 3
+      speculative-draft-model: yuhuili/EAGLE3-LLaMA3.1-Instruct-8B
+      max-batch-size: 128
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
