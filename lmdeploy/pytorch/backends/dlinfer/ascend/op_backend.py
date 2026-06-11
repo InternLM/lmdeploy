@@ -288,14 +288,13 @@ class AscendOpsBackend(DlinferOpsBackend):
             # get padded_tokens_current_rank
             is_graph = cls.enable_graph and (is_decoding or is_multi_token_decoding)
             if is_graph:
+                from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
+                actual_tokens_current_rank = step_context.q_seqlens.shape[0]
+                padded_tokens_current_rank = min(get_ascend_compatible_size(actual_tokens_current_rank),
+                                                    cls.max_batches)
                 if is_multi_token_decoding:
-                    actual_tokens_current_rank = step_context.q_seqlens.sum().item()
-                    padded_tokens_current_rank = actual_tokens_current_rank
-                else:
-                    from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
-                    actual_tokens_current_rank = step_context.q_seqlens.shape[0]
-                    padded_tokens_current_rank = min(get_ascend_compatible_size(actual_tokens_current_rank),
-                                                        cls.max_batches)
+                    actual_tokens_current_rank = actual_tokens_current_rank * (num_spec_tokens + 1)
+                    padded_tokens_current_rank = padded_tokens_current_rank * (num_spec_tokens + 1)
             else:
                 actual_tokens_current_rank = step_context.q_seqlens.sum().item()
                 padded_tokens_current_rank = actual_tokens_current_rank
