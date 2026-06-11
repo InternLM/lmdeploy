@@ -895,6 +895,7 @@ class InputsMakerAsync:
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
         await self.executor.forward_async(forward_inputs)
+        self.scheduler.tick()
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running
 

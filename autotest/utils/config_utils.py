@@ -393,6 +393,16 @@ def _is_kvint_enabled_in_entry(
     return False
 
 
+def _is_fp8_enabled_in_entry(
+    backend: str,
+    quant_cfg: dict[str, list[str]],
+) -> bool:
+    """True when per-model ``quantization.<backend>`` includes runtime
+    ``fp8``."""
+    enabled = set(quant_cfg.get(backend) or [])
+    return 'fp8' in enabled
+
+
 def _extend_quant_models_from_entry(
     backend: str,
     base_models: list[str],
@@ -497,22 +507,37 @@ def _get_func_config_list_per_model(
                 if not _is_kvint_enabled_in_entry(backend, _base_model_name(model), quant_policy, qcfg):
                     continue
                 for communicator in backend_map[backend]:
-                    sig = (model, communicator, quant_policy, launch_extra_sig)
+                    sig = (model, communicator, quant_policy, launch_extra_sig, '')
                     if sig in seen:
                         continue
                     seen.add(sig)
-                    run_configs.append(
-                        _build_run_config_entry(
-                            model,
-                            entry,
-                            backend,
-                            communicator,
-                            parallel_config,
-                            quant_policy,
-                            config,
-                            func_type,
-                            extra,
-                        ))
+                    run_config = _build_run_config_entry(
+                        model,
+                        entry,
+                        backend,
+                        communicator,
+                        parallel_config,
+                        quant_policy,
+                        config,
+                        func_type,
+                        extra,
+                    )
+                    run_configs.append(run_config)
+
+                    # Runtime fp8 (--model-format fp8) is a separate case at
+                    # quant_policy 0, mirroring legacy flat-yaml fp8_model_list.
+                    if (
+                        quant_policy == 0
+                        and _is_fp8_enabled_in_entry(backend, qcfg)
+                        and 'fp8' not in model.lower()
+                        and run_config.get('extra_params', {}).get('model-format') is None
+                    ):
+                        fp8_sig = (model, communicator, quant_policy, launch_extra_sig, 'fp8')
+                        if fp8_sig not in seen:
+                            seen.add(fp8_sig)
+                            fp8_config = copy.deepcopy(run_config)
+                            fp8_config['extra_params']['model-format'] = 'fp8'
+                            run_configs.append(fp8_config)
     return run_configs
 
 
@@ -972,12 +997,12 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
     # Get last section of model name, compatible with model name contains '/'
     pure_model_name = model_name.split('/')[-1].replace('_', '-')
     extra_params_case = ''
-    model_format = extra_params.get('model-format')
-    if model_format:
-        extra_params_case += f'_{model_format}'
     spec_algo = extra_params.get('speculative-algorithm')
     if spec_algo:
         extra_params_case += f'_{spec_algo}'.replace('_', '-')
+    model_format = extra_params.get('model-format')
+    if model_format:
+        extra_params_case += f'_{model_format}'
     if not is_simple:
         for k, v in extra_params.items():
             if len(v) > 10:
@@ -989,8 +1014,7 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
 
 
 def parse_config_by_case(case_str: str) -> dict[str, Any]:
-    """Parse run config dict from case name string (fix split & type convert
-    bug)"""
+    """Parse run config dict from case name string."""
     case_parts = case_str.split('_')
     if len(case_parts) < 4:
         raise ValueError(f'Invalid case string: {case_str}')
