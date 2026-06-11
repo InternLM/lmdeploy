@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import logging
 import time
+from contextlib import aclosing
 from http import HTTPStatus
 
 from fastapi import APIRouter, Depends, Request
@@ -13,19 +13,18 @@ from fastapi.responses import StreamingResponse
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
 from lmdeploy.serve.openai.responses.request import (
-    _error_response,
-    _messages_from_input,
-    _openai_tools_from_responses,
-    _to_generation_config,
-    _tool_choice_from_responses,
-    _validate_text_v1_request,
-    _warn_ignored_request_fields,
+    error_response,
+    messages_from_input,
+    openai_tools_from_responses,
+    to_generation_config,
+    tool_choice_from_responses,
+    validate_text_v1_request,
+    warn_ignored_request_fields,
 )
-from lmdeploy.serve.openai.responses.response import _make_response
-from lmdeploy.serve.openai.responses.streaming import _stream_response
+from lmdeploy.serve.openai.responses.response import make_response
+from lmdeploy.serve.openai.responses.streaming import stream_response
+from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
-
-logger = logging.getLogger(__name__)
 
 
 class OpenAIServingResponses:
@@ -40,15 +39,11 @@ class OpenAIServingResponses:
         model_names += getattr(cfg, 'adapters', None) or []
         return model_names
 
-    def _get_tokenizer(self):
-        tokenizer_holder = self.server_context.async_engine.tokenizer
-        return getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
-
     def _build_parser(self, request: ResponsesRequest, model_name: str, messages: list[dict], tools, tool_choice):
         parser_cls = self.server_context.response_parser_cls
         tools_enabled = bool(tools and tool_choice != 'none')
         if tools_enabled and parser_cls.tool_parser_cls is None:
-            return None, _error_response(
+            return None, error_response(
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool calling.',
                 param='tools',
@@ -66,9 +61,9 @@ class OpenAIServingResponses:
             tool_choice=tool_choice,
         )
         try:
-            response_parser = parser_cls(request=openai_request, tokenizer=self._get_tokenizer())
+            response_parser = parser_cls(request=openai_request)
         except ValueError as err:
-            return None, _error_response(HTTPStatus.BAD_REQUEST, str(err))
+            return None, error_response(HTTPStatus.BAD_REQUEST, str(err))
         return response_parser, None
 
     def _generate(self, model_name: str, parsed_request, gen_config):
@@ -88,31 +83,31 @@ class OpenAIServingResponses:
         return session, result_generator
 
     async def create_response(self, request: ResponsesRequest, raw_request: Request):
-        validation_error = _validate_text_v1_request(request)
+        validation_error = validate_text_v1_request(request)
         if validation_error is not None:
             return validation_error
-        _warn_ignored_request_fields(request)
+        warn_ignored_request_fields(request)
 
         model_name = request.model or self.server_context.async_engine.model_name
         if model_name not in self._get_model_list():
-            return _error_response(HTTPStatus.NOT_FOUND, f'The model {model_name!r} does not exist.', param='model')
+            return error_response(HTTPStatus.NOT_FOUND, f'The model {model_name!r} does not exist.', param='model')
 
         try:
-            messages = _messages_from_input(request)
+            messages = messages_from_input(request)
         except ValueError as err:
-            return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='input')
+            return error_response(HTTPStatus.BAD_REQUEST, str(err), param='input')
         try:
-            gen_config = _to_generation_config(request)
+            gen_config = to_generation_config(request)
         except ValueError as err:
-            return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='text')
+            return error_response(HTTPStatus.BAD_REQUEST, str(err), param='text')
         try:
-            tools = _openai_tools_from_responses(request)
+            tools = openai_tools_from_responses(request)
         except ValueError as err:
-            return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='tools')
+            return error_response(HTTPStatus.BAD_REQUEST, str(err), param='tools')
         try:
-            tool_choice = _tool_choice_from_responses(request.tool_choice, tools)
+            tool_choice = tool_choice_from_responses(request.tool_choice, tools)
         except ValueError as err:
-            return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='tool_choice')
+            return error_response(HTTPStatus.BAD_REQUEST, str(err), param='tool_choice')
 
         response_parser, parser_error = self._build_parser(request, model_name, messages, tools, tool_choice)
         if parser_error is not None:
@@ -121,43 +116,47 @@ class OpenAIServingResponses:
 
         session, result_generator = self._generate(model_name, parsed_request, gen_config)
         created_time = int(time.time())
+        session_mgr = self.server_context.async_engine.session_mgr
 
         if request.stream:
+            stream_generator = stream_response(
+                result_generator,
+                request=request,
+                model_name=model_name,
+                created_time=created_time,
+                response_parser=response_parser,
+            )
             return StreamingResponse(
-                _stream_response(
-                    result_generator,
-                    request=request,
-                    model_name=model_name,
-                    created_time=created_time,
-                    response_parser=response_parser,
-                ),
+                with_request_cleanup(stream_generator, [result_generator], [session], session_mgr),
                 media_type='text/event-stream',
             )
 
         text = ''
         final_token_ids: list[int] = []
         final_res = None
-        async for res in result_generator:
-            if await raw_request.is_disconnected():
-                await session.async_abort()
-                return _error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            final_res = res
-            text += res.response or ''
-            if getattr(res, 'token_ids', None):
-                final_token_ids.extend(res.token_ids)
+        cleanup_generator = with_request_cleanup(result_generator, [result_generator], [session], session_mgr)
+        async with aclosing(cleanup_generator) as generator:
+            async for res in generator:
+                if await raw_request.is_disconnected():
+                    await session.async_abort()
+                    return error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                final_res = res
+                text += res.response or ''
+                if getattr(res, 'token_ids', None):
+                    final_token_ids.extend(res.token_ids)
 
         if final_res is None:
-            return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')
+            return error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')
 
         tool_calls = None
         try:
             text, tool_calls, _reasoning_content = response_parser.parse_complete(text, final_token_ids)
         except Exception as err:
-            return _error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
+            return error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
         if tool_calls and final_res.finish_reason == 'stop':
             final_res.finish_reason = 'tool_calls'
 
-        response = _make_response(
+        response = make_response(
             request=request,
             model_name=model_name,
             created_time=created_time,

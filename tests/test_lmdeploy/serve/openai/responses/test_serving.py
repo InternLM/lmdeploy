@@ -72,6 +72,52 @@ def test_responses_tool_choice_none_does_not_require_tool_parser(
     assert context.async_engine.generate_kwargs['tools'] is None
 
 
+def test_responses_non_streaming_cleans_up_session(
+        responses_endpoint, fake_raw_request):
+    endpoint, context = responses_endpoint
+
+    response = asyncio.run(
+        endpoint(ResponsesRequest(model='fake-model', input='Hi'),
+                 fake_raw_request))
+
+    assert response['output_text'] == 'ok'
+    assert context.async_engine.session_mgr.removed == context.sessions
+
+
+def test_responses_non_streaming_disconnect_cleans_up_session(
+        responses_endpoint):
+    class _DisconnectedRawRequest:
+
+        async def is_disconnected(self):
+            return True
+
+    endpoint, context = responses_endpoint
+
+    response = asyncio.run(
+        endpoint(ResponsesRequest(model='fake-model', input='Hi'),
+                 _DisconnectedRawRequest()))
+
+    assert response.status_code == 400
+    assert context.sessions[0].aborted is True
+    assert context.async_engine.session_mgr.removed == context.sessions
+
+
+def test_responses_streaming_cleans_up_session(responses_endpoint,
+                                               fake_raw_request):
+    endpoint, context = responses_endpoint
+
+    async def _collect_stream():
+        response = await endpoint(
+            ResponsesRequest(model='fake-model', input='Hi', stream=True),
+            fake_raw_request)
+        return [event async for event in response.body_iterator]
+
+    events = asyncio.run(_collect_stream())
+
+    assert any('event: response.completed' in event for event in events)
+    assert context.async_engine.session_mgr.removed == context.sessions
+
+
 def test_responses_uses_parser_adjusted_messages_for_generation(
         responses_endpoint, fake_raw_request, passthrough_response_parser_cls):
 
@@ -79,8 +125,8 @@ def test_responses_uses_parser_adjusted_messages_for_generation(
 
         adjusted_messages = [{'role': 'user', 'content': 'adjusted'}]
 
-        def __init__(self, request, tokenizer=None):
-            super().__init__(request, tokenizer)
+        def __init__(self, request):
+            super().__init__(request)
             self.request.messages = self.adjusted_messages
 
     endpoint, context = responses_endpoint

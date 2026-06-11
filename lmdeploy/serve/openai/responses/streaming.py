@@ -19,7 +19,7 @@ from lmdeploy.serve.openai.responses.protocol import (
     ResponsesRequest,
     ResponsesResponse,
 )
-from lmdeploy.serve.openai.responses.response import _make_response, _response_metadata_kwargs
+from lmdeploy.serve.openai.responses.response import make_response, response_metadata_kwargs
 from lmdeploy.serve.openai.utils import filter_parallel_tool_call_deltas
 
 
@@ -27,18 +27,18 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
 
 
-async def _stream_response(result_generator,
-                           *,
-                           request: ResponsesRequest,
-                           model_name: str,
-                           created_time: int,
-                           response_parser) -> AsyncGenerator[str, None]:
+async def stream_response(result_generator,
+                          *,
+                          request: ResponsesRequest,
+                          model_name: str,
+                          created_time: int,
+                          response_parser) -> AsyncGenerator[str, None]:
     initial_response = ResponsesResponse(
         id=request.request_id,
         created_at=created_time,
         model=model_name,
         status='in_progress',
-        **_response_metadata_kwargs(request),
+        **response_metadata_kwargs(request),
     ).model_dump(exclude_none=True)
     yield _sse('response.created', {'type': 'response.created', 'sequence_number': 0, 'response': initial_response})
     yield _sse('response.in_progress', {
@@ -219,7 +219,7 @@ async def _stream_response(result_generator,
             status='completed',
         ) for _, state in sorted(tool_states.items(), key=lambda item: item[1]['output_index'])
     ]
-    final_response = _make_response(
+    final_response = make_response(
         request=request,
         model_name=model_name,
         created_time=created_time,

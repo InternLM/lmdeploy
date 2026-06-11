@@ -9,11 +9,11 @@ from openai.types.responses import ResponseFunctionToolCall
 from lmdeploy.serve.openai.responses import ResponsesRequest
 from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem
 from lmdeploy.serve.openai.responses.request import (
-    _messages_from_input,
-    _openai_tools_from_responses,
-    _to_generation_config,
-    _tool_choice_from_responses,
-    _validate_text_v1_request,
+    messages_from_input,
+    openai_tools_from_responses,
+    to_generation_config,
+    tool_choice_from_responses,
+    validate_text_v1_request,
 )
 
 
@@ -27,7 +27,7 @@ def test_responses_request_uses_structured_input_item_alias():
     )
     request = ResponsesRequest(model='fake-model', input=[item])
 
-    assert _messages_from_input(request) == [{
+    assert messages_from_input(request) == [{
         'role': 'assistant',
         'content': None,
         'tool_calls': [{
@@ -44,7 +44,7 @@ def test_responses_request_uses_structured_input_item_alias():
 def test_responses_string_input_maps_to_user_message():
     request = ResponsesRequest(model='fake-model', input='Hi there')
 
-    assert _messages_from_input(request) == [{'role': 'user', 'content': 'Hi there'}]
+    assert messages_from_input(request) == [{'role': 'user', 'content': 'Hi there'}]
 
 
 def test_responses_maps_instructions_and_typed_message_input():
@@ -61,7 +61,7 @@ def test_responses_maps_instructions_and_typed_message_input():
         }],
     )
 
-    assert _messages_from_input(request) == [
+    assert messages_from_input(request) == [
         {
             'role': 'system',
             'content': 'You are concise.',
@@ -96,7 +96,7 @@ def test_responses_merges_multiple_system_messages():
         ],
     )
 
-    assert _messages_from_input(request) == [
+    assert messages_from_input(request) == [
         {
             'role': 'system',
             'content': 'You are concise.\n\nFollow the repo instructions.\n\nUse plain text.',
@@ -125,7 +125,7 @@ def test_responses_moves_developer_messages_before_conversation():
         ],
     )
 
-    assert _messages_from_input(request) == [
+    assert messages_from_input(request) == [
         {
             'role': 'system',
             'content': 'Follow the repo instructions.',
@@ -160,7 +160,7 @@ def test_responses_maps_function_call_history_to_chat_messages():
         ],
     )
 
-    assert _messages_from_input(request) == [
+    assert messages_from_input(request) == [
         {
             'role': 'user',
             'content': 'Search for lmdeploy.',
@@ -199,7 +199,7 @@ def test_responses_rejects_non_string_function_call_arguments():
     )
 
     try:
-        _messages_from_input(request)
+        messages_from_input(request)
     except ValueError as err:
         assert 'Unsupported `arguments` in function_call item' in str(err)
     else:
@@ -220,7 +220,7 @@ def test_responses_maps_function_call_output_text_parts():
         }],
     )
 
-    assert _messages_from_input(request) == [{
+    assert messages_from_input(request) == [{
         'role': 'tool',
         'tool_call_id': 'call_123',
         'content': '{"result":"ok"}',
@@ -243,7 +243,7 @@ def test_responses_maps_function_tools_to_openai_tools():
         }],
     )
 
-    tools = _openai_tools_from_responses(request)
+    tools = openai_tools_from_responses(request)
 
     assert tools is not None
     assert len(tools) == 1
@@ -253,12 +253,12 @@ def test_responses_maps_function_tools_to_openai_tools():
 
 
 def test_responses_tool_choice_without_function_tools_validation():
-    assert _tool_choice_from_responses('auto', None) == 'none'
-    assert _tool_choice_from_responses('none', None) == 'none'
+    assert tool_choice_from_responses('auto', None) == 'none'
+    assert tool_choice_from_responses('none', None) == 'none'
 
     for tool_choice in ('required', {'type': 'function', 'name': 'search'}):
         try:
-            _tool_choice_from_responses(tool_choice, None)
+            tool_choice_from_responses(tool_choice, None)
         except ValueError as err:
             assert 'tools' in str(err)
         else:
@@ -279,10 +279,10 @@ def test_responses_named_tool_choice_must_match_function_tools():
             'name': 'missing',
         },
     )
-    tools = _openai_tools_from_responses(request)
+    tools = openai_tools_from_responses(request)
 
     try:
-        _tool_choice_from_responses(request.tool_choice, tools)
+        tool_choice_from_responses(request.tool_choice, tools)
     except ValueError as err:
         assert 'not found' in str(err)
     else:
@@ -292,7 +292,7 @@ def test_responses_named_tool_choice_must_match_function_tools():
 
 def test_responses_explicit_unsupported_tool_choice_is_rejected():
     try:
-        _tool_choice_from_responses({'type': 'web_search_preview'}, None)
+        tool_choice_from_responses({'type': 'web_search_preview'}, None)
     except ValueError as err:
         assert 'Unsupported tool_choice type' in str(err)
     else:
@@ -322,7 +322,7 @@ def test_responses_generation_config_mapping():
         },
     )
 
-    gen_config = _to_generation_config(request)
+    gen_config = to_generation_config(request)
 
     assert gen_config.max_new_tokens == 32
     assert gen_config.temperature == 0.2
@@ -347,7 +347,7 @@ def test_responses_rejects_unsupported_agentic_fields_for_text_v1():
                                input='Hi',
                                previous_response_id='resp_123')
 
-    response = _validate_text_v1_request(request)
+    response = validate_text_v1_request(request)
 
     assert response is not None
     assert response.status_code == 400
@@ -360,7 +360,7 @@ def test_responses_rejects_unsupported_conversation_for_text_v1():
                                input='Hi',
                                conversation={'id': 'conv_123'})
 
-    response = _validate_text_v1_request(request)
+    response = validate_text_v1_request(request)
 
     assert response is not None
     assert response.status_code == 400
@@ -372,7 +372,7 @@ def test_responses_rejects_unsupported_prompt():
                                input='Hi',
                                prompt={'id': 'pmpt_123'})
 
-    response = _validate_text_v1_request(request)
+    response = validate_text_v1_request(request)
 
     assert response is not None
     assert response.status_code == 400
@@ -382,7 +382,7 @@ def test_responses_rejects_unsupported_prompt():
 def test_responses_rejects_missing_input_for_text_v1():
     request = ResponsesRequest(model='fake-model')
 
-    response = _validate_text_v1_request(request)
+    response = validate_text_v1_request(request)
 
     assert response is not None
     assert response.status_code == 400
@@ -403,7 +403,7 @@ def test_responses_rejects_unsupported_input_items():
     )
 
     try:
-        _messages_from_input(request)
+        messages_from_input(request)
     except ValueError as err:
         assert 'input_image' in str(err)
     else:
@@ -420,7 +420,7 @@ def test_responses_rejects_reasoning_input_items():
     )
 
     try:
-        _messages_from_input(request)
+        messages_from_input(request)
     except ValueError as err:
         assert 'reasoning' in str(err)
     else:

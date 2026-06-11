@@ -26,7 +26,7 @@ from lmdeploy.serve.openai.responses.protocol import (
 from lmdeploy.serve.openai.utils import filter_parallel_tool_calls
 
 
-def _response_metadata_kwargs(request: ResponsesRequest) -> dict[str, Any]:
+def response_metadata_kwargs(request: ResponsesRequest) -> dict[str, Any]:
     return dict(
         instructions=request.instructions,
         metadata=request.metadata,
@@ -73,16 +73,16 @@ def _response_error_from_finish_reason(finish_reason: str | None) -> ResponseErr
     return None
 
 
-def _make_response(*,
-                   request: ResponsesRequest,
-                   model_name: str,
-                   created_time: int,
-                   text: str | None,
-                   tool_calls: list[Any] | None = None,
-                   input_tokens: int,
-                   output_tokens: int,
-                   finish_reason: str | None,
-                   message_id: str | None = None) -> ResponsesResponse:
+def make_response(*,
+                  request: ResponsesRequest,
+                  model_name: str,
+                  created_time: int,
+                  text: str | None,
+                  tool_calls: list[Any] | None = None,
+                  input_tokens: int,
+                  output_tokens: int,
+                  finish_reason: str | None,
+                  message_id: str | None = None) -> ResponsesResponse:
     text = text or ''
     tool_calls = filter_parallel_tool_calls(tool_calls, request.parallel_tool_calls)
     status = _response_status_from_finish_reason(finish_reason)
@@ -141,5 +141,5 @@ def _make_response(*,
         ),
         error=_response_error_from_finish_reason(finish_reason),
         incomplete_details=incomplete_details,
-        **_response_metadata_kwargs(request),
+        **response_metadata_kwargs(request),
     )

@@ -15,11 +15,11 @@ class FakeAsyncEngine:
 
     model_name = 'fake-model'
     backend_config = SimpleNamespace(adapters=[])
-    tokenizer = SimpleNamespace(model=SimpleNamespace(model=None))
 
     def __init__(self):
         self.generate_kwargs = None
         self.prompt = None
+        self.session_mgr = FakeSessionManager()
 
     def generate(self, prompt, session, **kwargs):
         self.prompt = prompt
@@ -42,7 +42,7 @@ class PassthroughResponseParser:
     tool_parser_cls = None
     last_request = None
 
-    def __init__(self, request, tokenizer=None):
+    def __init__(self, request):
         self.request = request
         type(self).last_request = request
 
@@ -64,18 +64,31 @@ class FakeServerContext:
 
     def __init__(self):
         self.async_engine = FakeAsyncEngine()
+        self.sessions = []
 
     def create_session(self, session_id):
-        return FakeSession(session_id)
+        session = FakeSession(session_id)
+        self.sessions.append(session)
+        return session
+
+
+class FakeSessionManager:
+
+    def __init__(self):
+        self.removed = []
+
+    def remove(self, session):
+        self.removed.append(session)
 
 
 class FakeSession:
 
     def __init__(self, session_id):
         self.session_id = session_id
+        self.aborted = False
 
     async def async_abort(self):
-        pass
+        self.aborted = True
 
 
 class FakeRawRequest:

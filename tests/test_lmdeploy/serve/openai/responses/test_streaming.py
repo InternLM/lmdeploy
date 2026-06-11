@@ -9,7 +9,7 @@ import pytest
 
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall
 from lmdeploy.serve.openai.responses import ResponsesRequest
-from lmdeploy.serve.openai.responses.streaming import _stream_response
+from lmdeploy.serve.openai.responses.streaming import stream_response
 
 
 def test_responses_streaming_sse_shape(sse_payloads,
@@ -34,7 +34,7 @@ def test_responses_streaming_sse_shape(sse_payloads,
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
@@ -80,7 +80,7 @@ def test_responses_streaming_length_finish_reason_emits_incomplete_event(
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
@@ -114,7 +114,7 @@ def test_responses_streaming_error_finish_reason_emits_failed_event(
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
@@ -146,7 +146,7 @@ def test_responses_streaming_empty_output_announces_message_item(
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
@@ -225,7 +225,7 @@ def test_responses_streaming_tool_call_events(sse_payloads):
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
@@ -305,7 +305,7 @@ def test_responses_streaming_parallel_tool_calls_filtering(
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
@@ -370,7 +370,7 @@ def test_responses_streaming_text_indices_follow_text_item_order(sse_payloads):
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
@@ -438,7 +438,7 @@ def test_responses_streaming_accepts_parser_delta_list(sse_payloads):
 
     async def _collect_events():
         return [
-            event async for event in _stream_response(
+            event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',

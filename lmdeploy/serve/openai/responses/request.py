@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import logging
 from http import HTTPStatus
 from typing import Any, Literal
 
@@ -12,11 +11,12 @@ from fastapi.responses import JSONResponse
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
+from lmdeploy.utils import get_logger
 
-logger = logging.getLogger('lmdeploy.serve.openai.responses.serving')
+logger = get_logger('lmdeploy')
 
 
-def _error_response(status: HTTPStatus, message: str, *, param: str | None = None) -> JSONResponse:
+def error_response(status: HTTPStatus, message: str, *, param: str | None = None) -> JSONResponse:
     payload = {
         'error': {
             'message': message,
@@ -28,30 +28,27 @@ def _error_response(status: HTTPStatus, message: str, *, param: str | None = Non
     return JSONResponse(payload, status_code=status.value)
 
 
-def _validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:
+def validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:
     if request.background:
-        return _error_response(HTTPStatus.BAD_REQUEST, 'background mode is not supported by Responses Text V1.',
-                               param='background')
+        return error_response(HTTPStatus.BAD_REQUEST, 'background mode is not supported by Responses Text V1.',
+                              param='background')
     if request.context_management is not None:
-        return _error_response(HTTPStatus.BAD_REQUEST,
-                               'context_management is not supported by Responses Text V1.',
-                               param='context_management')
+        return error_response(HTTPStatus.BAD_REQUEST, 'context_management is not supported by Responses Text V1.',
+                              param='context_management')
     if request.conversation is not None:
-        return _error_response(HTTPStatus.BAD_REQUEST, 'conversation is not supported by Responses Text V1.',
-                               param='conversation')
+        return error_response(HTTPStatus.BAD_REQUEST, 'conversation is not supported by Responses Text V1.',
+                              param='conversation')
     if request.previous_response_id is not None:
-        return _error_response(HTTPStatus.BAD_REQUEST,
-                               'previous_response_id is not supported by Responses Text V1.',
-                               param='previous_response_id')
+        return error_response(HTTPStatus.BAD_REQUEST, 'previous_response_id is not supported by Responses Text V1.',
+                              param='previous_response_id')
     if request.prompt is not None:
-        return _error_response(HTTPStatus.BAD_REQUEST, 'prompt is not supported by Responses Text V1.',
-                               param='prompt')
+        return error_response(HTTPStatus.BAD_REQUEST, 'prompt is not supported by Responses Text V1.', param='prompt')
     if request.input is None:
-        return _error_response(HTTPStatus.BAD_REQUEST, 'input is required by Responses Text V1.', param='input')
+        return error_response(HTTPStatus.BAD_REQUEST, 'input is required by Responses Text V1.', param='input')
     return None
 
 
-def _warn_ignored_request_fields(request: ResponsesRequest) -> None:
+def warn_ignored_request_fields(request: ResponsesRequest) -> None:
     ignored_fields: list[str] = []
     for field_name in (
             'include',
@@ -117,7 +114,7 @@ def _text_from_content(content: Any, field_name: str) -> str:
     return ''.join(text_parts)
 
 
-def _messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
+def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
     if request.instructions:
@@ -184,7 +181,7 @@ def _messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
     return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages
 
 
-def _openai_tools_from_responses(request: ResponsesRequest) -> list[Tool] | None:
+def openai_tools_from_responses(request: ResponsesRequest) -> list[Tool] | None:
     """Convert Responses function tools into LMDeploy/OpenAI tool entries."""
 
     if not request.tools:
@@ -210,8 +207,8 @@ def _openai_tools_from_responses(request: ResponsesRequest) -> list[Tool] | None
     return tools or None
 
 
-def _tool_choice_from_responses(tool_choice: Any,
-                                tools: list[Tool] | None = None) -> ToolChoice | Literal['auto', 'required', 'none']:
+def tool_choice_from_responses(tool_choice: Any,
+                               tools: list[Tool] | None = None) -> ToolChoice | Literal['auto', 'required', 'none']:
     """Map Responses tool_choice to the OpenAI chat tool_choice shape used
     internally."""
 
@@ -267,7 +264,7 @@ def _response_format_from_text(text: Any) -> dict[str, Any] | None:
     raise ValueError(f'Unsupported text.format type: {format_type!r}.')
 
 
-def _to_generation_config(request: ResponsesRequest) -> GenerationConfig:
+def to_generation_config(request: ResponsesRequest) -> GenerationConfig:
     stop_words = [request.stop] if isinstance(request.stop, str) else request.stop
     return GenerationConfig(
         max_new_tokens=request.max_output_tokens,

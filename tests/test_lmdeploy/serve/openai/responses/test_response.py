@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from lmdeploy.serve.openai.protocol import FunctionCall, ToolCall
 from lmdeploy.serve.openai.responses import ResponsesRequest
-from lmdeploy.serve.openai.responses.response import _make_response
+from lmdeploy.serve.openai.responses.response import make_response
 
 
 def test_responses_non_stream_response_shape():
@@ -13,7 +13,7 @@ def test_responses_non_stream_response_shape():
         input='Hi there',
     )
 
-    response = _make_response(
+    response = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
@@ -36,7 +36,7 @@ def test_responses_non_stream_response_shape():
 def test_responses_length_finish_reason_sets_incomplete_details():
     request = ResponsesRequest(model='fake-model', input='Hi there')
 
-    response = _make_response(
+    response = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
@@ -54,7 +54,7 @@ def test_responses_length_finish_reason_sets_incomplete_details():
 def test_responses_error_finish_reasons_do_not_complete_successfully():
     request = ResponsesRequest(model='fake-model', input='Hi there')
 
-    error_response = _make_response(
+    error_response = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
@@ -63,7 +63,7 @@ def test_responses_error_finish_reasons_do_not_complete_successfully():
         output_tokens=0,
         finish_reason='error',
     ).model_dump(exclude_none=True)
-    abort_response = _make_response(
+    abort_response = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
@@ -85,7 +85,7 @@ def test_responses_tool_call_response_shape():
         input='Hi',
     )
 
-    response = _make_response(
+    response = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
@@ -118,7 +118,7 @@ def test_responses_parallel_tool_calls_false_keeps_first_tool_call():
                                input='Hi',
                                parallel_tool_calls=False)
 
-    response = _make_response(
+    response = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
@@ -150,7 +150,7 @@ def test_responses_parallel_tool_calls_none_keeps_all_tool_calls():
                                input='Hi',
                                parallel_tool_calls=None)
 
-    response_model = _make_response(
+    response_model = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
@@ -181,7 +181,7 @@ def test_responses_parallel_tool_calls_none_keeps_all_tool_calls():
 def test_responses_tool_call_response_accepts_no_visible_text():
     request = ResponsesRequest(model='fake-model', input='Hi')
 
-    response = _make_response(
+    response = make_response(
         request=request,
         model_name='fake-model',
         created_time=123,
