@@ -115,6 +115,9 @@ MODULE_MAP.update({'DeepseekV3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deep
 # deepseek-v32
 MODULE_MAP.update({'DeepseekV32ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
 
+# deepseek-v4
+MODULE_MAP.update({'DeepseekV4ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v4.DeepseekV4ForCausalLM'})
+
 # deepseek-vl2
 MODULE_MAP.update({'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_vl2.DeepseekVLV2ForCausalLM'})
 

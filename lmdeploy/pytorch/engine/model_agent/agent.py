@@ -167,6 +167,10 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
+        # Attach named cache views for models that declare block_cache_specs / state_cache_specs.
+        context.block_caches = cache_engine.block_caches
+        context.named_state_caches = state_cache_engine.named_state_caches
+
         with ctx_mgr.context(context):
 
             model_metas = model.update_model_metas(
@@ -1062,7 +1066,7 @@ class BaseModelAgent:
                                             tp_rank=dist_ctx.attn_tp_group.rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
-            self.state_cache_engine = StateCacheEngine(self.cache_config)
+            self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
 

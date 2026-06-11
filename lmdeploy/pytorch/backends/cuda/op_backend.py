@@ -61,12 +61,27 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoEBlockedF8:
             from .moe import TritonFusedMoEBlockedF8Builder
             return TritonFusedMoEBlockedF8Builder
+        elif layer_type == OpType.FusedMoEV4FP4:
+            from .moe import TritonFusedMoEV4FP4Builder
+            return TritonFusedMoEV4FP4Builder
         elif layer_type == OpType.LinearBlockedF8:
             from .blockedf8_modules import TritonLinearBlockedF8Builder
             return TritonLinearBlockedF8Builder
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
+        elif layer_type == OpType.V4Attention:
+            from .attention import TritonV4AttentionBuilder
+            return TritonV4AttentionBuilder
+        elif layer_type == OpType.V4Indexer:
+            from .v4_indexer import TritonV4IndexerBuilder
+            return TritonV4IndexerBuilder
+        elif layer_type == OpType.V4Compressor:
+            from .v4_compressor import TritonV4CompressorBuilder
+            return TritonV4CompressorBuilder
+        elif layer_type == OpType.HcSplitSinkhorn:
+            from .hc_split_sinkhorn import TritonHcSplitSinkhornBuilder
+            return TritonHcSplitSinkhornBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder
@@ -85,6 +100,12 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Get attention metadata class."""
         from .attention import TritonAttentionMetadata
         return TritonAttentionMetadata
+
+    @staticmethod
+    def get_v4_attention_metadata_cls():
+        """Get V4 attention metadata class."""
+        from .attention.v4 import CudaV4AttentionMetadata
+        return CudaV4AttentionMetadata
 
     @staticmethod
     def get_k_block_shape(
