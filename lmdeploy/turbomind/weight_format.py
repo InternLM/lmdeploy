@@ -332,10 +332,10 @@ class CompressedTensorFormat(WeightFormat):
     def dequant(self, tensors, data_type):
         weight = tensors['weight']
         scales = tensors['scales']
-        zeros  = tensors['zeros']
+        zeros = tensors['zeros']
 
         out_size = weight.shape[-1]
-        zeros  = zeros[..., :out_size]
+        zeros = zeros[..., :out_size]
 
         scales = scales.repeat_interleave(self.block_in, dim=0)[:weight.shape[0]]
         zeros = zeros.repeat_interleave(self.block_in, dim=0)[:weight.shape[0]]
