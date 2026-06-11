@@ -14,6 +14,24 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 logger = get_logger('lmdeploy')
 
 
+def normalize_cudagraph_capture_batch_sizes(capture_sizes: list[int] | None, max_batches: int) -> list[int] | None:
+    """Normalize configured cudagraph capture batch sizes."""
+    if capture_sizes is None:
+        return None
+
+    assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
+    assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
+        'cudagraph_capture_batch_sizes should be positive integers')
+
+    capture_sizes = sorted({size for size in capture_sizes if size <= max_batches})
+    assert len(capture_sizes) > 0, (
+        'cudagraph_capture_batch_sizes should contain at least one value '
+        f'<= max_batch_size ({max_batches})')
+    if capture_sizes[-1] != max_batches:
+        capture_sizes.append(max_batches)
+    return capture_sizes
+
+
 def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'auto'):
     """Update the torch dtype from the model config.
 
@@ -98,6 +116,7 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
@@ -118,6 +137,8 @@ class CacheConfig:
             self.enable_prefix_caching = False
         if self.kernel_block_size == -1:
             self.kernel_block_size = self.block_size
+        self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+            self.cudagraph_capture_batch_sizes, self.max_batches)
 
 
 class TPMode(enum.Enum):
@@ -611,6 +632,7 @@ class SpecDecodeConfig:
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
+                                       cudagraph_capture_batch_sizes=target_cache_cfg.cudagraph_capture_batch_sizes,
                                        device_type=target_cache_cfg.device_type,
                                        quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)
