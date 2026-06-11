@@ -22,8 +22,9 @@ Pipeline summary:
    verifies the full ancestor chain, then asks ``ModelAgent`` to copy the
    frozen checkpoint state into the request runtime state on the forward stream.
 5. SSM checkpoint saves are reserved here, copied by ``ModelAgent`` after
-   forward, and published by ``EngineLoop`` only after the copy is enqueued.
-   Restore refcounts pin checkpoint source slots across that async window.
+   forward, and published by ``EngineLoop`` once the producer forward is queued.
+   Producer/restore refcounts pin checkpoint slots across async stream-ordering
+   windows.
 
 SSM checkpoint detail:
 
@@ -44,7 +45,10 @@ SSM checkpoint detail:
   the model forward stream after the model has produced the new SSM state.
   ``EngineLoop`` calls ``commit_state_checkpoint_for_seq()`` after the forward
   is queued; only then does ``state_ready`` become true and the sparse
-  checkpoint index become matchable.  Abandoned reservations are discarded.
+  checkpoint index become matchable.  The producing forward holds a producer ref
+  until the output/event boundary, so this early visibility cannot make the
+  destination slot evictable before the save copy reaches the forward stream.
+  Abandoned reservations are discarded.
 * Matching a SSM prefix never walks KV blocks as the source of truth.
   ``_match_state_checkpoint()`` searches ready checkpoint steps, filters by
   ``(adapter, step, last_block_hash)``, then verifies every ancestor block's
@@ -112,8 +116,9 @@ class Node:
     state-checkpoint ownership fields; they are meaningful only when the cache
     config has state shapes.  ``state_ready`` controls whether the checkpoint
     has been published and may be matched.  ``state_ref_count`` pins a ready
-    checkpoint while a restore copy may still read it, so LRU eviction or
-    checkpoint reuse cannot overwrite the source slot too early.
+    checkpoint while a restore copy may still read it or a producer save copy
+    may still write it, so LRU eviction or checkpoint reuse cannot overwrite
+    the slot too early.
     """
 
     def __init__(self,
@@ -375,8 +380,8 @@ class BlockTrie:
         elif node.state_idx >= 0:
             return -1
         if node.state_idx < 0:
-            if self.state_manager.get_num_free_checkpoint() == 0:
-                self.evict_state_checkpoints(1)
+            if self.state_manager.get_num_free_checkpoint() == 0 and self.evict_state_checkpoints(1) == 0:
+                return -1
             node.state_idx = self.state_manager.allocate_checkpoint_state()
         node.state_ready = False
         return node.state_idx
@@ -388,6 +393,14 @@ class BlockTrie:
         prefix_cache.save_step = 0
         prefix_cache.save_is_decode = False
         prefix_cache.save_node = None
+
+    @staticmethod
+    def _clear_save_checkpoint_ref(seq: SchedulerSequence):
+        """Clear an in-flight producer checkpoint ref from a sequence."""
+        prefix_cache = seq.prefix_cache
+        prefix_cache.save_state_acquired = False
+        prefix_cache.save_acquired_state = -1
+        prefix_cache.save_acquired_node = None
 
     def discard_state_checkpoint_for_seq(self, seq: SchedulerSequence):
         """Discard an unpublished state checkpoint reservation for a sequence.
@@ -585,8 +598,8 @@ class BlockTrie:
         return node.state_idx >= 0 and node.state_ready
 
     @staticmethod
-    def _has_restore_checkpoint_ref(node: Node | None, state_idx: int):
-        """Check whether a sequence still owns a restore ref on this node."""
+    def _has_state_checkpoint_ref(node: Node | None, state_idx: int):
+        """Check whether a sequence still owns a checkpoint ref on this node."""
         return node is not None and node.state_idx == state_idx and node.state_ref_count > 0
 
     @staticmethod
@@ -611,9 +624,30 @@ class BlockTrie:
             seq.prefix_cache.decode_state_node = None
         self.release_state_checkpoint(node)
 
-    def commit_state_checkpoint_for_seq(self, seq: SchedulerSequence):
-        """Publish a sequence state checkpoint after its state copy is
-        enqueued.
+    def _acquire_state_checkpoint_save_for_seq(self, seq: SchedulerSequence, node: Node, state_idx: int):
+        """Pin a just-published checkpoint until its producer forward completes."""
+        prefix_cache = seq.prefix_cache
+        if prefix_cache.save_state_acquired:
+            raise RuntimeError('SSM prefix-cache save checkpoint already has an in-flight producer ref.')
+        if not self._is_ready_state_checkpoint(node, state_idx):
+            return False
+        node.state_ref_count += 1
+        node.state_access_time = time.perf_counter()
+        prefix_cache.save_state_acquired = True
+        prefix_cache.save_acquired_state = state_idx
+        prefix_cache.save_acquired_node = node
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f'Acquire SSM prefix-cache save checkpoint: session_id={seq.session_id} '
+                         f'seq_id={seq.seq_id} step={node.num_matched} state_idx={state_idx} '
+                         f'ref_count={node.state_ref_count}')
+        return True
+
+    def commit_state_checkpoint_for_seq(self, seq: SchedulerSequence, acquire_save_ref: bool = False):
+        """Publish a sequence state checkpoint.
+
+        When ``acquire_save_ref`` is true, the checkpoint becomes matchable as
+        soon as the producer forward is queued, but remains pinned until the
+        output/event boundary confirms the stream has passed the save copy.
 
         Commit validates the remembered node directly.  This matters for decode saves because the sequence may have
         advanced by one sampled token before the output boundary publishes the checkpoint.
@@ -639,17 +673,19 @@ class BlockTrie:
         self.mark_state_checkpoint_ready(node)
         if is_decode:
             prefix_cache.decode_state_node = node
+        if acquire_save_ref:
+            self._acquire_state_checkpoint_save_for_seq(seq, node, state_idx)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Commit SSM prefix-cache checkpoint: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} step={save_step} state_idx={state_idx} is_decode={is_decode}')
         return True
 
-    def commit_state_checkpoints(self, seqs: list[SchedulerSequence]):
+    def commit_state_checkpoints(self, seqs: list[SchedulerSequence], acquire_save_ref: bool = False):
         """Publish pending sequence state checkpoints."""
         if not self.enable:
             return
         for seq in seqs:
-            self.commit_state_checkpoint_for_seq(seq)
+            self.commit_state_checkpoint_for_seq(seq, acquire_save_ref=acquire_save_ref)
 
     def acquire_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
         """Pin a matched state checkpoint until its restore copy has
@@ -674,15 +710,24 @@ class BlockTrie:
         for seq in seqs:
             self.acquire_state_checkpoint_restore_for_seq(seq)
 
+    @staticmethod
+    def _release_state_checkpoint_ref(node: Node | None, state_idx: int, err_msg: str):
+        """Release one checkpoint ref held by a sequence."""
+        if not BlockTrie._has_state_checkpoint_ref(node, state_idx):
+            raise RuntimeError(err_msg)
+        node.state_ref_count -= 1
+        return node
+
     def release_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
         """Release a state checkpoint pinned for restore."""
         prefix_cache = seq.prefix_cache
         if not prefix_cache.restore_state_acquired:
             return False
-        node = prefix_cache.restore_node
-        if not self._has_restore_checkpoint_ref(node, prefix_cache.restore_state):
-            raise RuntimeError('Acquired SSM prefix-cache restore checkpoint lost its node reference.')
-        node.state_ref_count -= 1
+        node = self._release_state_checkpoint_ref(
+            prefix_cache.restore_node,
+            prefix_cache.restore_state,
+            'Acquired SSM prefix-cache restore checkpoint lost its node reference.',
+        )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Release SSM prefix-cache restore checkpoint: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} step={node.num_matched} state_idx={node.state_idx} '
@@ -698,6 +743,28 @@ class BlockTrie:
             return
         for seq in seqs:
             self.release_state_checkpoint_restore_for_seq(seq)
+
+    def release_state_checkpoint_save_for_seq(self, seq: SchedulerSequence):
+        """Release a checkpoint pinned for its producer save copy."""
+        prefix_cache = seq.prefix_cache
+        if not prefix_cache.save_state_acquired:
+            return False
+        node = self._release_state_checkpoint_ref(
+            prefix_cache.save_acquired_node, prefix_cache.save_acquired_state,
+            'Acquired SSM prefix-cache save checkpoint lost its node reference.')
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f'Release SSM prefix-cache save checkpoint: session_id={seq.session_id} '
+                         f'seq_id={seq.seq_id} step={node.num_matched} state_idx={node.state_idx} '
+                         f'ref_count={node.state_ref_count}')
+        self._clear_save_checkpoint_ref(seq)
+        return True
+
+    def release_state_checkpoint_saves(self, seqs: list[SchedulerSequence]):
+        """Release producer refs held by a batch of saved checkpoints."""
+        if not self.enable:
+            return
+        for seq in seqs:
+            self.release_state_checkpoint_save_for_seq(seq)
 
     def release_state_checkpoint(self, node: Node):
         """Release a node-owned state checkpoint while keeping KV ownership."""

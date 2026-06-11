@@ -84,6 +84,9 @@ class PrefixCacheState:
     save_step: int = 0
     save_is_decode: bool = False
     save_node: Any = field(default=None, repr=False)
+    save_state_acquired: bool = False
+    save_acquired_state: int = -1
+    save_acquired_node: Any = field(default=None, repr=False)
     decode_state_node: Any = field(default=None, repr=False)
 
 

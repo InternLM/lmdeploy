@@ -6,6 +6,7 @@ import torch
 
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
@@ -17,7 +18,7 @@ class _RecordingExecutor(ExecutorBase):
         super().__init__(
             model_path='',
             model_config=SimpleNamespace(sliding_window=None, states_shapes=None),
-            cache_config=SimpleNamespace(),
+            cache_config=SimpleNamespace(role=EngineRole.Hybrid),
             backend_config=SimpleNamespace(),
             dist_config=SimpleNamespace(dp=1, world_size=1),
             misc_config=SimpleNamespace(empty_init=empty_init),
@@ -126,6 +127,25 @@ def test_executor_disables_prefix_cache_with_spec_decode():
                  dist_config=SimpleNamespace(dp=1, world_size=1),
                  misc_config=SimpleNamespace(),
                  specdecode_config=SimpleNamespace())
+
+    assert not cache_config.enable_prefix_caching
+
+
+def test_executor_disables_prefix_cache_with_pd_role():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True,
+                               role=EngineRole.Prefill)
+    model_config = SimpleNamespace(sliding_window=None)
+
+    ExecutorBase(model_path='',
+                 model_config=model_config,
+                 cache_config=cache_config,
+                 backend_config=SimpleNamespace(),
+                 dist_config=SimpleNamespace(dp=1, world_size=1),
+                 misc_config=SimpleNamespace())
 
     assert not cache_config.enable_prefix_caching
 

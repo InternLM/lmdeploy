@@ -5,6 +5,7 @@ import contextlib
 from typing import Any, NamedTuple
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
@@ -47,6 +48,9 @@ class ExecutorBase:
             cache_config.enable_prefix_caching = False
         if specdecode_config is not None and cache_config.enable_prefix_caching:
             logger.warning('Speculative decoding prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
+        if cache_config.role != EngineRole.Hybrid and cache_config.enable_prefix_caching:
+            logger.warning('PD prefix caching is not supported.')
             cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config

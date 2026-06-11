@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -82,6 +83,69 @@ def test_engine_loop_skips_prefix_cache_publish_when_disabled():
     loop.scheduler = SimpleNamespace(block_trie=_DisabledBlockTrie())
 
     loop._publish_forward_prefix_cache([object()], has_state_checkpoint_save=True)
+
+
+def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
+    events = []
+
+    class _BlockTrie:
+        enable = True
+        pinned = False
+
+        def commit_state_checkpoints(self, seqs, acquire_save_ref=False):
+            events.append(('commit', acquire_save_ref))
+            assert acquire_save_ref
+            self.pinned = True
+
+        def release_state_checkpoint_restores(self, seqs):
+            events.append(('release_restore', self.pinned))
+
+        def release_state_checkpoint_saves(self, seqs):
+            events.append(('release_save', self.pinned))
+            self.pinned = False
+
+    class _InputsMaker:
+
+        def __init__(self, block_trie):
+            self.block_trie = block_trie
+
+        def update_running_seqs(self, running, model_inputs):
+            events.append('update_running')
+
+        async def prefetch_next_inputs(self):
+            events.append(('prefetch', self.block_trie.pinned))
+            return None, None
+
+    class _Executor:
+
+        def __init__(self, block_trie):
+            self.block_trie = block_trie
+
+        async def get_output_async(self):
+            events.append(('get_output', self.block_trie.pinned))
+            return None
+
+    block_trie = _BlockTrie()
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.inputs_maker = _InputsMaker(block_trie)
+    loop.executor = _Executor(block_trie)
+    model_inputs = SimpleNamespace(state_prefix_cache_save_offsets=[1])
+    forward_inputs = dict(inputs=model_inputs, delta=None)
+
+    forward_inputs, next_running = asyncio.run(loop._main_loop_get_outputs([object()], forward_inputs))
+
+    assert forward_inputs is None
+    assert next_running is None
+    assert events == [
+        'update_running',
+        ('commit', True),
+        ('release_restore', True),
+        ('prefetch', True),
+        ('get_output', True),
+        ('release_save', True),
+    ]
+    assert not block_trie.pinned
 
 
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():

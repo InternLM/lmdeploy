@@ -1317,6 +1317,48 @@ class TestBlockTire:
         scheduler.block_trie.match(seq_b)
         assert seq_b.prefix_cache.restore_state == state_idx_b
 
+    def test_ssm_checkpoint_save_producer_pin_blocks_eviction_until_release(self, ssm_cache_config, scheduler_config,
+                                                                            seq_meta):
+        cache_config = ssm_cache_config
+        cache_config.prefix_cache_state_budget = 0
+        cache_config.num_state_caches = 2
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+        block_size = scheduler.seq_meta.block_size
+        token_ids_a = [1] * block_size * 2
+        token_ids_b = [2] * block_size * 2
+
+        seq_a = scheduler.add_session(0).add_sequence(token_ids_a)
+        scheduler.block_manager.allocate(seq_a)
+        scheduler.block_trie.allocate(seq_a)
+        state_idx_a = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq_a)
+        node_a = seq_a.prefix_cache.save_node
+
+        assert state_idx_a >= 0
+        assert scheduler.block_trie.commit_state_checkpoint_for_seq(seq_a, acquire_save_ref=True)
+        assert node_a.state_ready
+        assert node_a.state_ref_count == 1
+
+        matched = scheduler.add_session(1).add_sequence(token_ids_a + [3])
+        scheduler.block_trie.match(matched)
+        assert matched.prefix_cache.restore_state == state_idx_a
+
+        seq_b = scheduler.add_session(2).add_sequence(token_ids_b)
+        scheduler.block_manager.allocate(seq_b)
+        scheduler.block_trie.allocate(seq_b)
+
+        assert scheduler.block_trie.reserve_state_checkpoint_for_seq(seq_b) == -1
+        assert node_a.state_idx == state_idx_a
+        assert node_a.state_ready
+        assert node_a.state_ref_count == 1
+
+        assert scheduler.block_trie.release_state_checkpoint_save_for_seq(seq_a)
+        assert node_a.state_ref_count == 0
+
+        state_idx_b = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq_b)
+        assert state_idx_b == state_idx_a
+        assert node_a.state_idx == -1
+        assert not node_a.state_ready
+
     def test_ssm_checkpoint_state_eviction_skips_pinned_restore(self, ssm_cache_config, scheduler_config, seq_meta):
         cache_config = ssm_cache_config
         cache_config.prefix_cache_state_budget = 0
