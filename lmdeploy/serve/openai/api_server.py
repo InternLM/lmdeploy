@@ -80,6 +80,8 @@ from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
     UsageInfo,
 )
+from lmdeploy.serve.openai.responses import create_responses_router
+from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
@@ -548,6 +550,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                          output_token_logprobs=output_token_logprobs,
                                                          output_ids=output_ids,
                                                          routed_experts=routed_experts)
+        choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
@@ -712,6 +715,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         output_ids=final_token_ids if request.return_token_ids else None,
         routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     )
+    choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
     choices.append(choice_data)
 
     if with_cache:
@@ -1558,6 +1562,7 @@ def serve(model_path: str,
 
     app.include_router(router)
     app.include_router(create_anthropic_router(VariableInterface))
+    app.include_router(create_responses_router(VariableInterface))
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     mount_metrics(app, backend_config)
 

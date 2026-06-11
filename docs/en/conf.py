@@ -22,6 +22,7 @@ from yaml import safe_dump
 sys.path.insert(0, os.path.abspath('../..'))
 
 from lmdeploy.serve.openai.api_server import router  # noqa: E402
+from lmdeploy.serve.openai.responses import create_responses_router  # noqa: E402
 from lmdeploy.serve.proxy.proxy import app as proxy_server  # noqa: E402
 
 version_file = '../../lmdeploy/version.py'
@@ -44,6 +45,7 @@ release = __version__
 
 openai_server = FastAPI()
 openai_server.include_router(router)
+openai_server.include_router(create_responses_router(None))
 
 
 @openai_server.get('/metrics',
