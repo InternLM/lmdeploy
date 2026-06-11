@@ -338,8 +338,7 @@ class CompressedTensorFormat(WeightFormat):
         zeros  = zeros[..., :out_size]
 
         scales = scales.repeat_interleave(self.block_in, dim=0)[:weight.shape[0]]
-        zeros  = zeros.repeat_interleave(self.block_in, dim=0)[:weight.shape[0]]
-
+        zeros = zeros.repeat_interleave(self.block_in, dim=0)[:weight.shape[0]]
         w = (weight.to(scales.dtype) - zeros.to(scales.dtype)) * scales
         result: dict[str, Tensor] = {'weight': w}
         if 'bias' in tensors:
