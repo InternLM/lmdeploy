@@ -35,6 +35,7 @@ from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_l
 from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
 from .profiler import AgentProfiler
+from .scoring import compute_input_ce_loss
 
 logger = get_logger('lmdeploy')
 
@@ -83,6 +84,7 @@ class BatchedOutputs:
     new_token_timestamp: int = 0
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
+    ce_loss: torch.Tensor | None = None
 
     def to_cpu(self):
         """To cpu."""
@@ -315,6 +317,8 @@ class BaseModelAgent:
 
         # long context
         self._prev_chunk_output: dict = None
+        # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
+        self._prev_chunk_last_logit: torch.Tensor | None = None
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
@@ -618,6 +622,8 @@ class BaseModelAgent:
                                             model_metas: Any,
                                             need_broadcast_next: bool,
                                             return_logits: bool = False,
+                                            return_ce_loss: bool = False,
+                                            seq_length: torch.Tensor = None,
                                             all_routed_experts: Any = None,
                                             extra_inputs: ExtraInputs = None):
         """Step postprocess with output."""
@@ -648,6 +654,14 @@ class BaseModelAgent:
             extra_inputs=extra_inputs,
         )
 
+        # compute summed, unnormalized prompt cross-entropy
+        ce_loss = None
+        if return_ce_loss and logits is not None:
+            prev_last_logit = self._prev_chunk_last_logit if (inputs.is_chunk and not inputs.is_first_chunk) else None
+            ce_loss = compute_input_ce_loss(logits, inputs.input_ids, seq_length, prev_last_logit=prev_last_logit)
+            if inputs.is_chunk:
+                self._prev_chunk_last_logit = None if inputs.is_last_chunk else logits[-1:].clone()
+
         # send output
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
@@ -660,7 +674,8 @@ class BaseModelAgent:
                            model_metas=model_metas,
                            logprobs=logprobs,
                            all_routed_experts=all_routed_experts,
-                           extra_outputs=extra_outputs))
+                           extra_outputs=extra_outputs,
+                           ce_loss=ce_loss))
 
         return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
 
@@ -707,6 +722,7 @@ class BaseModelAgent:
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
         return_routed_experts: bool = False,
+        return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
     ):
         """Asyc forward task."""
@@ -769,7 +785,7 @@ class BaseModelAgent:
                      f'is_decoding={inputs.is_decoding}')
         output = await self._async_model_forward(
             inputs,
-            return_logits=return_logits,
+            return_logits=return_logits or return_ce_loss,
             )
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
@@ -806,6 +822,8 @@ class BaseModelAgent:
                     model_metas,
                     need_broadcast_next,
                     return_logits=return_logits,
+                    return_ce_loss=return_ce_loss,
+                    seq_length=seq_length,
                     all_routed_experts=all_routed_experts,
                     extra_inputs=extra_inputs,
                 ))

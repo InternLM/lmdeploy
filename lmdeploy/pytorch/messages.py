@@ -61,6 +61,7 @@ class SamplingParam:
     logits_processors: None | list[LogitsProcessor] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
+    out_ce_loss: bool = False
     num_logprobs: int = -1
     return_routed_experts: bool = False
 
@@ -157,6 +158,7 @@ class SamplingParam:
             min_new_tokens=min_new_tokens,
             logits_processors=gen_config.logits_processors,
             out_logits=(output_logits is not None),
+            out_ce_loss=gen_config.return_ppl,
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
@@ -654,6 +656,9 @@ class SchedulerSequence:
     # logits
     all_logits: HistoryLogits = field(default_factory=HistoryLogits)
 
+    # accumulated, unnormalized cross-entropy (NLL) of the input prompt
+    ce_loss: float = 0.0
+
     # mrope
     history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
 
@@ -813,6 +818,20 @@ class SchedulerSequence:
             self.all_logits.set_torch_dtype(logits.dtype)
             logits = logits.view(torch.int16).numpy()
         self.all_logits.append(logits)
+
+    @property
+    def return_ce_loss(self):
+        return self.sampling_param.out_ce_loss
+
+    def append_ce_loss(self, ce_loss):
+        """Accumulate the summed cross-entropy (NLL) of the input prompt."""
+        if not self.return_ce_loss:
+            return
+        if ce_loss is None:
+            return
+        if isinstance(ce_loss, Tensor):
+            ce_loss = ce_loss.item()
+        self.ce_loss += float(ce_loss)
 
     def get_input_multimodals(self):
         """Get input multimodals."""

@@ -852,3 +852,50 @@ class AsyncEngine:
             for session in sessions:
                 self.session_mgr.remove(session)
         return logits
+
+    async def async_get_ppl(self, input_ids: list[int]) -> float:
+        """Get the perplexity (mean cross-entropy loss) of a single input
+        prompt.
+
+        The cross-entropy is reduced inside the engine during prefill, so only a
+        scalar is returned -- the full ``[seq, vocab]`` logits are never
+        transferred off device (unlike :meth:`async_get_logits`). Pytorch
+        backend only.
+
+        Args:
+            input_ids (list[int]): the input token ids to score.
+
+        Returns:
+            float: the mean cross-entropy loss of the input, matching
+                ``Pipeline.get_ppl``.
+        """
+        if self.backend != 'pytorch':
+            raise ValueError('async_get_ppl is only supported by the pytorch backend.')
+        # position i predicts token i+1, so the last position has no target
+        num_scored = len(input_ids) - 1
+        if num_scored < 1:
+            raise ValueError('input must have at least 2 tokens to compute ppl.')
+
+        session = self.session_mgr.get()
+        try:
+            async with session.request_handle() as handle:
+                # max_new_tokens=0: prefill only, no generation. top_k=1 avoids a
+                # pt-engine top_k sampling crash on the (unused) sampled token.
+                gen_config = GenerationConfig(max_new_tokens=0, return_ppl=True, top_k=1)
+                ce_loss = None
+                async with self.safe_run(handle,
+                                         session=session,
+                                         input_ids=input_ids,
+                                         gen_config=gen_config,
+                                         stream_output=False,
+                                         sequence_start=True,
+                                         sequence_end=True,
+                                         step=session.step) as gen:
+                    async for outputs in gen:
+                        pass
+                    ce_loss = outputs.ce_loss
+                await handle.async_end(session.session_id)
+        finally:
+            self.session_mgr.remove(session)
+        # normalize the summed NLL by the number of scored tokens
+        return ce_loss / num_scored

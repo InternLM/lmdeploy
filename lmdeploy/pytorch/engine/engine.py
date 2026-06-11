@@ -60,6 +60,9 @@ class InferOutput:
     # expert ids
     routed_experts: torch.Tensor = None
 
+    # summed, unnormalized cross-entropy (NLL) of the input prompt
+    ce_loss: float = None
+
 
 def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
     from lmdeploy.pytorch.messages import SequenceMeta
