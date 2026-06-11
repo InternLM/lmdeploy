@@ -28,7 +28,12 @@ class RayEngineWorker(EngineWorkerBase):
         # create engine
         if engine_config is not None:
             engine_config.enable_mp_engine = False
-        engine = Engine.from_pretrained(model_path, engine_config=engine_config, **kwargs)
+        engine = Engine.from_pretrained(
+            model_path,
+            engine_config=engine_config,
+            launched_by_mp_engine=True,
+            **kwargs,
+        )
         super().__init__(engine)
 
         self._stream_id = 0

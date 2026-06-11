@@ -67,17 +67,17 @@ class MPEngine(EngineBase):
         """Update params."""
         return self._collective_rpc('update_params', request)
 
-    def init_weights_update_group(self, request: Any):
+    async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
-        return self._collective_rpc('init_weights_update_group', request)
+        return await self._collective_rpc_async('init_weights_update_group', request)
 
-    def update_weights_from_distributed(self, request: Any):
+    async def update_weights_from_distributed(self, request: Any):
         """Receive weights through the disaggregated process group."""
-        return self._collective_rpc('update_weights_from_distributed', request)
+        return await self._collective_rpc_async('update_weights_from_distributed', request)
 
-    def destroy_weights_update_group(self, request: Any):
+    async def destroy_weights_update_group(self, request: Any):
         """Tear down a previously initialized weights-update process group."""
-        return self._collective_rpc('destroy_weights_update_group', request)
+        return await self._collective_rpc_async('destroy_weights_update_group', request)
 
     async def get_schedule_metrics(self):
         """Get schedule metrics."""

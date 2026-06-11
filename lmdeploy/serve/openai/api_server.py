@@ -1216,36 +1216,36 @@ def _check_pytorch_backend_for_disagg_weight_update():
 
 
 @router.post('/init_weights_update_group', dependencies=[Depends(validate_json_request)])
-def init_weights_update_group(request: InitWeightsUpdateGroupRequest, raw_request: Request = None):
+async def init_weights_update_group(request: InitWeightsUpdateGroupRequest, raw_request: Request = None):
     """Initialize the torch.distributed process group used by an external
     trainer to broadcast weights into this rollout engine."""
     err = _check_pytorch_backend_for_disagg_weight_update()
     if err is not None:
         return err
-    success, message = VariableInterface.async_engine.engine.init_weights_update_group(request)
+    success, message = await VariableInterface.async_engine.engine.init_weights_update_group(request)
     content = {'success': success, 'message': message}
     return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
 
 @router.post('/update_weights_from_distributed', dependencies=[Depends(validate_json_request)])
-def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest, raw_request: Request = None):
+async def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest, raw_request: Request = None):
     """Receive a bucket of weights through a previously initialized weights-
     update group and load them into the running model."""
     err = _check_pytorch_backend_for_disagg_weight_update()
     if err is not None:
         return err
-    success, message = VariableInterface.async_engine.engine.update_weights_from_distributed(request)
+    success, message = await VariableInterface.async_engine.engine.update_weights_from_distributed(request)
     content = {'success': success, 'message': message}
     return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
 
 @router.post('/destroy_weights_update_group', dependencies=[Depends(validate_json_request)])
-def destroy_weights_update_group(request: DestroyWeightsUpdateGroupRequest, raw_request: Request = None):
+async def destroy_weights_update_group(request: DestroyWeightsUpdateGroupRequest, raw_request: Request = None):
     """Tear down a previously initialized weights-update group."""
     err = _check_pytorch_backend_for_disagg_weight_update()
     if err is not None:
         return err
-    success, message = VariableInterface.async_engine.engine.destroy_weights_update_group(request)
+    success, message = await VariableInterface.async_engine.engine.destroy_weights_update_group(request)
     content = {'success': success, 'message': message}
     return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
