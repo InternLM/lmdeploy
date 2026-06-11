@@ -15,7 +15,7 @@ def _build_parser():
         stream=True,
         tool_choice='auto',
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 def test_stream_chunk_handles_split_internlm_open_tag():

@@ -154,6 +154,49 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         self.chunk_func = chunk_gated_delta_rule
         self.recurrent_func = fused_recurrent_gated_delta_rule
 
+    def prepare_inputs(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        b: torch.Tensor,
+        a: torch.Tensor,
+        dt_bias: torch.Tensor,
+        a_log_exp: torch.Tensor,
+        kv_ratio: int,
+        use_qk_l2norm_in_kernel: bool = False,
+        is_decoding: bool = False,
+        init_token_mask: torch.Tensor | None = None,
+    ):
+        """Prepare q/k/g/beta for gated delta rule."""
+        if use_qk_l2norm_in_kernel:
+            from lmdeploy.pytorch.kernels.cuda.gated_delta_preprocess import gated_delta_preprocess
+            init_token_mask = None if is_decoding else init_token_mask
+            apply_qk_l2norm = not is_decoding
+            q, k, beta, g = gated_delta_preprocess(
+                q,
+                k,
+                b,
+                a,
+                dt_bias,
+                a_log_exp,
+                kv_ratio,
+                init_token_mask=init_token_mask,
+                apply_qk_l2norm=apply_qk_l2norm,
+            )
+            return q, k, g, beta, apply_qk_l2norm
+        return super().prepare_inputs(
+            q,
+            k,
+            b,
+            a,
+            dt_bias,
+            a_log_exp,
+            kv_ratio,
+            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+            is_decoding=is_decoding,
+            init_token_mask=init_token_mask,
+        )
+
     def chunk_gated_delta_rule(
         self,
         q: torch.Tensor,
@@ -168,6 +211,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         cu_seqlens: torch.Tensor | None = None,
         output_final_state: bool = False,
         spec_state_offsets: torch.Tensor | None = None,
+        transpose_state_layout: bool = False,
     ):
 
         assert initial_state is not None
@@ -195,6 +239,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             output_final_state=output_final_state,
             use_qk_l2norm_in_kernel=False,
             cu_seqlens=cu_seqlens,
+            transpose_state_layout=transpose_state_layout,
         )
         if spec_state_offsets is not None:
             # write to next slots
@@ -219,6 +264,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         use_qk_l2norm_in_kernel: bool = False,
         output_final_state: bool = False,
         cache_seqlens: torch.Tensor | None = None,
+        transpose_state_layout: bool = False,
     ):
         return self.recurrent_func(
             q,
@@ -232,6 +278,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
             output_final_state=output_final_state,
             cache_seqlens=cache_seqlens,
+            transpose_state_layout=transpose_state_layout,
         )
 
 

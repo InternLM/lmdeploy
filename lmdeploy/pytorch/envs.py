@@ -169,6 +169,10 @@ with set_envs():
     # qwen3.5 recurrent_state dtype
     fp32_mamba_ssm_dtype = env_to_bool('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
 
+    # cudagraph
+    # fake capture flag for debug cudagraph padding behavior
+    fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)
+
 
 def get_all_envs():
     """Get all environment variables."""

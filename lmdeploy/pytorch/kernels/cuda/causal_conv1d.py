@@ -8,6 +8,7 @@ import torch
 
 @tilelang.jit(pass_configs={
     tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
+    tilelang.PassConfigKey.TL_DISABLE_DATA_RACE_CHECK: True,
 }, )
 def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x, has_init_states, num_warps,
                       ChunkSizeL=64):
