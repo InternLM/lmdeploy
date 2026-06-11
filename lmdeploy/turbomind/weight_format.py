@@ -234,13 +234,13 @@ class AWQFormat(WeightFormat):
         return PackedTensor(tensor, None, None)
 
     def dequant(self, tensors, data_type):
-        from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
-
         qweight = tensors['weight']
         scales  = tensors['scales']
         qzeros  = tensors['zeros']
         group_size = qweight.shape[0] // scales.shape[0]
-        w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
+        w = qweight.unflatten(0, (-1, group_size))
+        w = (w - qzeros[:, None]) * scales[:, None]
+        w = w.flatten(0, 1)
         result: dict[str, Tensor] = {'weight': w}
         if 'bias' in tensors:
             result['bias'] = tensors['bias']
