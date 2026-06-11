@@ -200,8 +200,9 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
-        assert self.forecast_horizon is None or type(self.forecast_horizon) is int, \
-            'forecast_horizon must be an integer'
+        assert (self.forecast_horizon is None
+                or (type(self.forecast_horizon) is int and self.forecast_horizon > 0)), \
+            'forecast_horizon must be a positive integer'
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0

@@ -171,6 +171,7 @@ class ChatCompletionRequest(BaseModel):
     min_p: float = 0.0
     forecast_horizon: int | None = Field(
         default=None,
+        ge=1,
         description=('Forecast horizon for time-series forecast outputs. This does not trigger forecasting; '
                      'forecasting is selected only when the first generated token is <TS_GEN>.'),
     )
