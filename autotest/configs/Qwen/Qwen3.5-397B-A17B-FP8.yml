@@ -50,7 +50,6 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  - mtp_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20

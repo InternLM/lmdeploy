@@ -91,7 +91,6 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  - mtp_evaluate
   quantization:
     pytorch:
     - fp8
@@ -119,6 +118,7 @@ ascend:
   - evaluate
   - func
   - longtext_benchmark
+  - mllm_evaluate
   - prefix_cache
   - mllm_evaluate
   gen_config:
@@ -145,10 +145,10 @@ ascend:
     - nccl
   test_coverage:
   - benchmark
-  - longtext_benchmark
+  - evaluate
   - func
+  - longtext_benchmark
   - mllm_evaluate
-  - mtp_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20

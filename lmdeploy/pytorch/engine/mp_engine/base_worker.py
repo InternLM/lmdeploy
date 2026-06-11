@@ -161,3 +161,7 @@ class EngineOutputGather:
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
         return result
+
+    def discard(self, stream_id):
+        """Discard gathered output for a stream."""
+        self._output.pop(stream_id, None)

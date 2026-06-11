@@ -79,13 +79,16 @@ class RayEngineWorker(EngineWorkerBase):
 
     async def get_stream_task_result(self, stream_id: int):
         """Get the result of a stream task."""
-        assert stream_id in self._stream_aiter, f'Stream id {stream_id} not found.'
-        stopped = False
-
-        event = self._stream_aiter[stream_id][0]
+        stream_out = self._stream_aiter.get(stream_id)
+        if stream_out is None:
+            return None, True
+        event = stream_out[0]
         await event.wait()
-        result, stopped = self._stream_aiter[stream_id][1]
+        stream_result = stream_out[1]
         event.clear()
+        if stream_result is None:
+            return None, True
+        result, stopped = stream_result
 
         result = self._engine_output_gather.pop(stream_id, result)
 
@@ -93,6 +96,39 @@ class RayEngineWorker(EngineWorkerBase):
             self._stream_aiter.pop(stream_id, None)
             self._stream_task.pop(stream_id, None)
         return result, stopped
+
+    async def drop_stream_task(self, stream_id: int):
+        """Drop an abandoned stream task."""
+        stream_out = self._stream_aiter.get(stream_id, None)
+        task = self._stream_task.get(stream_id, None)
+        if task is not None and task.done():
+            try:
+                exc = task.exception()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(f'Ray MP abandoned stream task state check failed: stream_id={stream_id}.')
+            else:
+                if exc is not None:
+                    logger.error(
+                        f'Ray MP abandoned stream task finished with exception: stream_id={stream_id}.',
+                        exc_info=(type(exc), exc, exc.__traceback__))
+        elif task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(f'Ray MP abandoned stream task failed during drop: stream_id={stream_id}.')
+        if stream_out is not None:
+            event = stream_out[0]
+            if stream_out[1] is None:
+                stream_out[1] = (None, True)
+            event.set()
+        self._stream_aiter.pop(stream_id, None)
+        self._stream_task.pop(stream_id, None)
+        self._engine_output_gather.discard(stream_id)
 
 
 def _update_runtime_envs(runtime_env: dict):
@@ -161,15 +197,64 @@ class RayMPEngine(MPEngine):
         method = getattr(self.worker, func)
         return await method.remote(*args, **kwargs)
 
-    async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event, *args, **kwargs):
+    async def _collective_rpc_streaming_async(self, func: str, init_done: asyncio.Event, *args, **kwargs):
         """Collective rpc call."""
         # ray generator would try cache every result, which is too verbose.
-        stream_id = await self._collective_rpc_async('create_stream_task', func, *args, **kwargs)
-        sess_event.set()
+        stream_task = asyncio.create_task(self._collective_rpc_async('create_stream_task', func, *args, **kwargs))
+
+        def _mark_init_done(task: asyncio.Task):
+            init_done.set()
+            if task.cancelled():
+                return
+            try:
+                exc = task.exception()
+            except Exception:
+                logger.exception(f'Ray MP stream startup task exception check failed: func={func}.')
+                return
+            if exc is not None:
+                logger.error(f'Ray MP stream startup failed before init: func={func}.',
+                             exc_info=(type(exc), exc, exc.__traceback__))
+
+        async def _drop_remote_stream(_stream_id: int):
+            try:
+                await self._collective_rpc_async('drop_stream_task', _stream_id)
+            except Exception:
+                logger.exception(f'Ray MP abandoned stream drop failed: stream_id={_stream_id}, func={func}.')
+
+        async def _drop_abandoned_stream(task: asyncio.Task):
+            try:
+                _stream_id = await task
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception(f'Ray MP stream startup task failed before abandoned drop: func={func}.')
+                return
+
+            await _drop_remote_stream(_stream_id)
+
+        stream_task.add_done_callback(_mark_init_done)
+        stream_id = None
         stopped = False
-        while not stopped:
-            result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
-            yield result
+        try:
+            stream_id = await asyncio.shield(stream_task)
+            while not stopped:
+                result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
+                if result is not None:
+                    yield result
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(f'Ray MP stream call failed: func={func}, stream_id={stream_id}.')
+            raise
+        finally:
+            if stream_id is not None and not stopped:
+                drop_task = asyncio.create_task(_drop_remote_stream(stream_id), name='RayMPEngine.drop_stream_task')
+                try:
+                    await asyncio.shield(drop_task)
+                except asyncio.CancelledError:
+                    pass
+            elif stream_id is None:
+                asyncio.create_task(_drop_abandoned_stream(stream_task), name='RayMPEngine.drop_stream_task')
 
     def close(self) -> None:
         """Close mp engine."""

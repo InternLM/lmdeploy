@@ -93,13 +93,12 @@ Available keys:
 - `longtext_benchmark`
 - `longtext_evaluate`
 - `mllm_evaluate`
-- `mtp_evaluate`
 - `prefix_cache`
 - `quantization`
 
 Rules:
 
-- Keep `mtp_evaluate` on its own row.
+- Keep MTP (speculative decoding) on its own row with `speculative-algorithm` in `engine_config.extra`; use `func` and/or `evaluate` in `test_coverage`.
 - Use `prefix_cache` in `test_coverage`; do not add `enable-prefix-caching` manually to `engine_config.extra`.
 - Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`, `w8a8`).
 

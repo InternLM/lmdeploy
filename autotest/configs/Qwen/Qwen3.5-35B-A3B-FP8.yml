@@ -31,7 +31,7 @@ h:
   - chat
   - vl
   engine_config:
-    tp: 1
+    tp: 2
     extra:
       speculative-algorithm: qwen3_5_mtp
       speculative-num-draft-tokens: 4
@@ -47,7 +47,6 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  - mtp_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20
