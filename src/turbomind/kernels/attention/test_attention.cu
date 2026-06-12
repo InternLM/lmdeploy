@@ -221,10 +221,11 @@ double get_memory_bandwidth()  // -> GB/s
 
 #define SINK 5
 
-template<class T>
+template<class T, bool Causal>
 int test_attention()
 {
     AttentionParams<T> params{};
+    params.causal = Causal;
 
     constexpr size_t kHeadDim    = 128;
     constexpr int    kWindowSize = 128 << 20;
@@ -461,7 +462,7 @@ int test_attention()
     params.pr = pr_buf.data().get();
 
     Reference<T> reference({});
-    reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize, kWindowSize);
+    reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize, kWindowSize, Causal);
 
     for (int i = 0; i < 1; ++i) {
         reference.Execute(params.out,  //
@@ -580,9 +581,9 @@ int test_attention()
                                      kQuantPolicy));
     cudaDeviceSynchronize();
 
-    const size_t nbytes = blocks.size() / kContextLen * std::min(kContextLen, (size_t)params.window_size);
-    const size_t ops =
-        2 * kInputLen * std::min(kContextLen, (size_t)params.window_size) * kHeadDim * kHeadNum * kBatchSize;
+    const size_t effective_context_len = Causal ? std::min(kContextLen, (size_t)params.window_size) : kContextLen;
+    const size_t nbytes                = blocks.size() / kContextLen * effective_context_len;
+    const size_t ops                   = 2 * kInputLen * effective_context_len * kHeadDim * kHeadNum * kBatchSize;
 
     const float peak_bw = get_memory_bandwidth();
 
@@ -632,7 +633,10 @@ int test_attention()
 
 int main(int argc, char* argv[])
 {
-    test_attention<half>();
+    test_attention<half, true>();
+#if !DECODING
+    test_attention<half, false>();
+#endif
 
     // test_attention<nv_bfloat16>();
 }

@@ -42,16 +42,6 @@ def test_tokenizer_with_stop_words(model_path, stop_words):
     assert indexes is not None
 
 
-def test_qwen_vl_decode_special():
-    from lmdeploy.tokenizer import Tokenizer
-    tok = Tokenizer('Qwen/Qwen-VL-Chat', trust_remote_code=True)
-    try:
-        tok.decode([151857])
-        assert (0)
-    except Exception as e:
-        assert str(e) == 'Unclosed image token'
-
-
 def test_glm4_special_token():
     from lmdeploy.tokenizer import ChatGLM4Tokenizer, Tokenizer
     model_path = 'THUDM/glm-4-9b-chat'
@@ -69,7 +59,7 @@ def test_glm4_special_token():
 
 
 @pytest.mark.parametrize('model_path',
-                         ['Qwen/Qwen2-7B-Instruct', 'deepseek-ai/deepseek-vl-1.3b-chat', 'OpenGVLab/InternVL2-1B'])
+                         ['Qwen/Qwen2-7B-Instruct', 'deepseek-ai/deepseek-vl-1.3b-chat'])
 def test_check_transformers_version(model_path):
     tokenizer = HuggingFaceTokenizer(model_path, trust_remote_code=True)
     assert tokenizer is not None

@@ -1,10 +1,28 @@
 import pytest
-from utils.benchmark_utils import restful_test
+import utils.constant as constant
+from utils.benchmark_utils import restful_profile, restful_test
 from utils.config_utils import get_func_config_list
+from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 
 
 def get_models(backend, parallel_config):
     return get_func_config_list(backend, parallel_config, func_type='benchmark')
+
+
+def _run_proxy_distributed_benchmark_test(config, run_config, manager=None):
+    assert manager is not None, 'Manager instance must be provided'
+
+    api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
+    api_server.start()
+    try:
+        if manager.is_master:
+            api_server.wait_until_ready()
+            result, msg = restful_profile(config, run_config, port=constant.PROXY_PORT)
+            assert result, msg
+        else:
+            proxy_worker_node_wait(manager, timeout_minutes=4880)
+    finally:
+        api_server.cleanup()
 
 
 @pytest.mark.turbomind
@@ -132,3 +150,11 @@ def test_restful_func_tp2(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id, is_smoke=True)
 
     assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'dp': 8, 'ep': 8}))
+def test_pytorch_apiserver_distributed_dpep8(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_benchmark_test(config=config, run_config=run_config, manager=shared_proxy_manager)

@@ -132,6 +132,7 @@ class ChatCompletionRequest(BaseModel):
     tools: list[Tool] | None = Field(default=None, examples=[None])
     tool_choice: ToolChoice | AllowedToolChoice | Literal[
         'auto', 'required', 'none'] = Field(default='auto', examples=['none'])
+    parallel_tool_calls: bool | None = True
     logprobs: bool | None = False
     top_logprobs: int | None = None
     n: int | None = 1

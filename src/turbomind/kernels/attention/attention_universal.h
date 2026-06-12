@@ -20,7 +20,7 @@ namespace attention {
 struct DecodingCtaMap;
 }  // namespace attention
 
-template<class Arch_, class Mainloop, class CacheIteratorFactory_, class CtaMap_>
+template<class Arch_, class Mainloop, class CacheIteratorFactory_, class CtaMap_, bool Causal_ = true>
 struct AttentionUniversal {
 
     using T   = typename Mainloop::T;
@@ -33,7 +33,8 @@ struct AttentionUniversal {
 
     using Arch = Arch_;
 
-    static constexpr int kWarpCount = Impl::kWarpCount;
+    static constexpr int  kWarpCount = Impl::kWarpCount;
+    static constexpr bool kCausal    = Causal_;
 
     using ParamType = AttentionParams<T>;
 
@@ -394,11 +395,15 @@ struct AttentionUniversal {
             return (local_ti + (local_ti_rank > rank ? 1 : 0));
         };
 
-        const int last_K = history_len + min(query_idx + CTA_Q, input_len);
+        int first_K = 0;
+        int last_K  = context_len;
+        if constexpr (kCausal) {
+            last_K  = history_len + min(query_idx + CTA_Q, input_len);
+            first_K = max(history_len + query_idx - (params.window_size - 1), 0);
+        }
         const int last_K_tile =
             (get_cp_len(last_K, 0) - 1) / CTA_S + 1;  // past-the-end index to past-the-end tile index conversion
 
-        const int first_K      = max(history_len + query_idx - (params.window_size - 1), 0);
         const int first_K_tile = get_cp_len(first_K, 0) / CTA_S;
 
         const int tile_count = last_K_tile - first_K_tile;
@@ -445,22 +450,28 @@ struct AttentionUniversal {
 
         int tile_iter = iter_end - iter_begin;
 
-        //    min(Q) >= max(K)
-        // -> offset_Q >= offset_K + CTA_S - x * CTA_S
-        // -> x * CTA_S >= offset_K - offset_Q + CTA_S
-        int mask_iter_back = cdiv(max(0, offset_K - offset_Q + CTA_S), CTA_S);
-        //    max(Q) < min(K) + w
-        // -> offset_Q + CTA_Q - 1 < offset_K - tile_iter * CTA_S + x * CTA_S + w
-        // -> x * CTA_S >= offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - w
-        int mask_iter_front = cdiv(max(0, offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - params.window_size), CTA_S);
+        // The highest K tile may be partial in non-causal mode. It still needs
+        // masking so zero-filled OOB lanes do not enter softmax as valid scores.
+        int mask_iter_back  = 1;
+        int mask_iter_front = 0;
+        if constexpr (kCausal) {
+            //    min(Q) >= max(K)
+            // -> offset_Q >= offset_K + CTA_S - x * CTA_S
+            // -> x * CTA_S >= offset_K - offset_Q + CTA_S
+            mask_iter_back = cdiv(max(0, offset_K - offset_Q + CTA_S), CTA_S);
+            //    max(Q) < min(K) + w
+            // -> offset_Q + CTA_Q - 1 < offset_K - tile_iter * CTA_S + x * CTA_S + w
+            // -> x * CTA_S >= offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - w
+            mask_iter_front = cdiv(max(0, offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - params.window_size), CTA_S);
 
-        if (params.cp_size > 1) {
-            mask_iter_back =
-                cdiv(max(0, params.cp_size * (offset_K + CTA_S) - offset_Q + params.cp_rank), params.cp_size * CTA_S);
-            mask_iter_front = cdiv(max(0,
-                                       offset_Q + CTA_Q - params.window_size - params.cp_rank
-                                           - params.cp_size * (offset_K - tile_iter * CTA_S)),
-                                   params.cp_size * CTA_S);
+            if (params.cp_size > 1) {
+                mask_iter_back  = cdiv(max(0, params.cp_size * (offset_K + CTA_S) - offset_Q + params.cp_rank),
+                                      params.cp_size * CTA_S);
+                mask_iter_front = cdiv(max(0,
+                                           offset_Q + CTA_Q - params.window_size - params.cp_rank
+                                               - params.cp_size * (offset_K - tile_iter * CTA_S)),
+                                       params.cp_size * CTA_S);
+            }
         }
 
 #if 0
@@ -487,7 +498,8 @@ struct AttentionUniversal {
 
         Mainloop mainloop;
         mainloop.SetCpInfo(params.cp_size, params.cp_rank);
-        mainloop(frag_Q,
+        mainloop(std::integral_constant<bool, kCausal>{},
+                 frag_Q,
                  cache_iter,
                  frag_O,
                  frag_M,

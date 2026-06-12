@@ -17,7 +17,7 @@ def _make_parser(enable_thinking):
         stream=True,
         chat_template_kwargs={'enable_thinking': enable_thinking},
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 class TestDeepSeekV3ReasoningParser:

@@ -31,7 +31,8 @@ void invokeAttention(const typename Kernel::ParamType& params, int sm_count, int
     static const auto kernel_func = &attention_kernel<Kernel>;
 
     const int max_cp_k_len    = cdiv(params.max_k_len, (int)params.cp_size);
-    const int tile_count      = cdiv(std::min(max_cp_k_len, params.window_size), Kernel::CTA_S);
+    const int effective_k_len = Kernel::kCausal ? std::min(max_cp_k_len, params.window_size) : max_cp_k_len;
+    const int tile_count      = cdiv(effective_k_len, Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
     typename Kernel::CtaMap cta_map{

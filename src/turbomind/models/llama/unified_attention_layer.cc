@@ -135,8 +135,9 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant
     if (rope_param_.type == RopeType::kDynamic) {
         rope_base_buf_ = {bsz + 1, kCPUpinned};
     }
-    else if (rope_param_.type == RopeType::kMrope) {
-        // `mrope_position_ids` is not buffered
+    if (rope_param_.mrope_mode != MropeMode::kNone) {
+        // mrope device buffers are allocated lazily — borrowed from env when the vision encoder
+        // produced them, or owned (allocated in legacy_mrope_setup) when only r.inputs supplies them.
         mrope_position_delta_buf_ = {bsz, kCPUpinned};
         mrope_length_buf_         = {bsz, kCPUpinned};
     }
@@ -147,13 +148,6 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant
         d->block_ptrs_offsets = {bsz + 1, kDEVICE};
         if (rope_param_.type == RopeType::kDynamic) {
             d->rope_base = empty_like(rope_base_buf_, kDEVICE);
-        }
-        else if (rope_param_.type == RopeType::kMrope) {
-            /// TODO: total space for `mrope_position_ids` can be reduced to (max_fwd_tokens, 3)
-            d->mrope_position_ids    = {{bsz, engine.session_len, 3}, kDEVICE};
-            d->mrope_position_delta  = empty_like(mrope_position_delta_buf_, kDEVICE);
-            d->mrope_length          = empty_like(mrope_length_buf_, kDEVICE);
-            rope_param_.mrope.stride = d->mrope_position_ids.stride(0);
         }
     }
 
@@ -282,27 +276,47 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         }
         copy(rope_base_buf_, bsz, d.rope_base);
     }
-    else if (rope_param_.type == RopeType::kMrope) {
-        const auto stride = d.mrope_position_ids.stride(0);
-        for (int i = 0; i < rc.size(); ++i) {
-            auto& c = *rc[i];
-            auto& r = *c.req;
-            if (auto pos_ids = r.inputs.try_("mrope_position_ids")) {
-                int length                   = pos_ids->shape(0);
-                mrope_length_buf_[i]         = length;
-                mrope_position_delta_buf_[i] = *r.inputs.at("mrope_position_delta").data<int>();
-                if (auto o = Interval{0, length} & Interval{c.history_len + c.alpha, Interval::Size{c.input_len}}) {
-                    copy(pos_ids->data<int>() + o.begin() * 3,
-                         (int)o.size() * 3,
-                         d.mrope_position_ids.data() + i * stride + o.begin() * 3);
+    if (rope_param_.mrope_mode != MropeMode::kNone) {
+        // mrope tensors can come from two sources:
+        //   1. env: the C++ vision encoder produced device tensors in the exact layout
+        //      FastRoPE expects — borrow them with no copy.
+        //   2. r.inputs: legacy Python-preprocessor path, per-request shaped (length, 3) +
+        //      scalar delta. Falls back here when env did not produce mrope.
+        if (env.try_("mrope_length")) {
+            d.mrope_length         = env.at("mrope_length").buffer().borrow();
+            d.mrope_position_delta = env.at("mrope_position_delta").buffer().borrow();
+            d.mrope_position_ids   = env.at("mrope_position_ids").borrow();
+        }
+        else {
+            // Legacy r.inputs path. Lazily allocate owned device buffers on first hit.
+            if (!d.mrope_position_ids) {
+                /// TODO: total space for `mrope_position_ids` can be reduced to (max_fwd_tokens, 3)
+                d.mrope_position_ids =
+                    Tensor_<int>{{engine_param_.max_batch_size, engine_param_.session_len, 3}, kDEVICE};
+                d.mrope_position_delta = Buffer_<int>{engine_param_.max_batch_size, kDEVICE};
+                d.mrope_length         = Buffer_<int>{engine_param_.max_batch_size, kDEVICE};
+            }
+            const auto stride = d.mrope_position_ids.stride(0);
+            for (int i = 0; i < rc.size(); ++i) {
+                auto& c = *rc[i];
+                auto& r = *c.req;
+                if (auto pos_ids = r.inputs.try_("mrope_position_ids")) {
+                    int length                   = pos_ids->shape(0);
+                    mrope_length_buf_[i]         = length;
+                    mrope_position_delta_buf_[i] = *r.inputs.at("mrope_position_delta").data<int>();
+                    if (auto o = Interval{0, length} & Interval{c.history_len + c.alpha, Interval::Size{c.input_len}}) {
+                        copy(pos_ids->data<int>() + o.begin() * 3,
+                             (int)o.size() * 3,
+                             d.mrope_position_ids.data() + i * stride + o.begin() * 3);
+                    }
+                }
+                else {
+                    mrope_length_buf_[i] = mrope_position_delta_buf_[i] = 0;
                 }
             }
-            else {
-                mrope_length_buf_[i] = mrope_position_delta_buf_[i] = 0;
-            }
+            copy(mrope_length_buf_, rc.size(), d.mrope_length);
+            copy(mrope_position_delta_buf_, rc.size(), d.mrope_position_delta);
         }
-        copy(mrope_length_buf_, rc.size(), d.mrope_length);
-        copy(mrope_position_delta_buf_, rc.size(), d.mrope_position_delta);
     }
 }
 
@@ -507,10 +521,12 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         if (rope_param_.type == RopeType::kDynamic) {
             params.rope_param.base = d.rope_base.data() + offset;
         }
-        else if (rope_param_.type == RopeType::kMrope) {
-            params.rope_param.mrope.position_ids   = d.mrope_position_ids.data() + offset * rope_param_.mrope.stride;
+        if (rope_param_.mrope_mode != MropeMode::kNone) {
             params.rope_param.mrope.position_delta = d.mrope_position_delta.data() + offset;
             params.rope_param.mrope.length         = d.mrope_length.data() + offset;
+            params.rope_param.mrope.stride         = d.mrope_position_ids.stride(0);
+            params.rope_param.mrope.position_ids =
+                d.mrope_position_ids.data() + offset * params.rope_param.mrope.stride;
         }
 
         // logn attn

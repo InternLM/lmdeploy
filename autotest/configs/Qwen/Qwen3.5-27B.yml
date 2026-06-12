@@ -1,7 +1,9 @@
 # HF model id: Qwen/Qwen3.5-27B
 
 a100:
-- model_type: chat
+- model_type:
+  - chat
+  - vl
   engine_config:
     tp: 2
   backends:
@@ -19,20 +21,10 @@ a100:
     - kvint8
     pytorch:
     - kvint8
-- model_type: vl
-  engine_config:
-    tp: 2
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func
-  quantization:
-    pytorch:
-    - kvint8
 h:
-- model_type: chat
+- model_type:
+  - chat
+  - vl
   engine_config:
     tp: 2
   backends:
@@ -53,26 +45,6 @@ h:
   quantization:
     turbomind:
     - awq
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
-- model_type: vl
-  engine_config:
-    tp: 2
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - benchmark
-  - evaluate
-  - func
-  - longtext_benchmark
-  - mllm_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20

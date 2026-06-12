@@ -28,6 +28,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
     desc.data_type      = data_type_v<T>;
     desc.kv_quant       = kv_quant;
     desc.query_group_sz = query_group_sz;
+    desc.causal         = true;
 
     auto& reg    = Registry::instance();
     auto* kernel = reg.Find(desc);

@@ -93,10 +93,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         }
     }
 
-    template<int head_dim, class CacheIter, class StoreS, int Stages_>
+    template<int head_dim, class CacheIter, class StoreS, int Stages_, bool Causal>
     __device__ void Run(Sm80_CpAsync<Stages_>,
                         std::integral_constant<int, head_dim>,
                         std::false_type,  // is MLA
+                        std::integral_constant<bool, Causal>,
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
@@ -183,7 +184,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             });
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
+                ApplyMask<Causal>(frag_S, offset_Q, offset_K, max_step, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -220,10 +221,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     }
 
     // #if 1
-    template<class CacheIter, class StoreS>
+    template<class CacheIter, class StoreS, bool Causal>
     __device__ void Run(Sm80_CpAsync<2>,
                         std::integral_constant<int, 192>,
                         std::false_type,  // is MLA
+                        std::integral_constant<bool, Causal>,
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
@@ -288,7 +290,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             prefetch_K(0);
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
+                ApplyMask<Causal>(frag_S, offset_Q, offset_K, max_step, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -326,10 +328,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     // - more register consumption
     // - more interleaved HMMA and FMA
     // - slight performance gain
-    template<int head_dim, class CacheIter, class StoreS>
+    template<int head_dim, class CacheIter, class StoreS, bool Causal>
     __device__ void Run(Sm80_CpAsync<2>,
                         std::integral_constant<int, head_dim>,
                         std::false_type,  // is MLA
+                        std::integral_constant<bool, Causal>,
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter_,
                         FragO&         frag_O,
@@ -382,7 +385,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         auto loop = [&](auto is_residue, auto is_mask, auto is_last) {
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
+                ApplyMask<Causal>(frag_S, offset_Q, offset_K, max_step, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -449,10 +452,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 #endif
 
     // Simplified MLA implementation
-    template<int head_dim, class CacheIter, class StoreS, int Stages_>
+    template<int head_dim, class CacheIter, class StoreS, int Stages_, bool Causal>
     __device__ void Run(Sm80_CpAsync<Stages_>,
                         std::integral_constant<int, head_dim>,
                         std::true_type,  // is MLA
+                        std::integral_constant<bool, Causal>,
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
@@ -510,7 +514,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 state_QK, frag_S, pipe_iter.r, [](int) {}, [] {});
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
+                ApplyMask<Causal>(frag_S, offset_Q, offset_K, max_step, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -550,12 +554,17 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         Impl::Sync();
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int window_size)
+    template<bool Causal>
+    __device__ void ApplyMask(FragS& frag_S, int offset_Q, int offset_K, int max_step, int window_size)
     {
         Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
-            int w = (offset_Q + qi) - ((offset_K + si) * cp_size_ + cp_rank_);
-            if (0 <= w && w < window_size) {}
-            else {
+            const int local_k = offset_K + si;
+            bool      valid   = local_k < max_step;
+            if constexpr (Causal) {
+                const int w = (offset_Q + qi) - (local_k * cp_size_ + cp_rank_);
+                valid       = valid && 0 <= w && w < window_size;
+            }
+            if (!valid) {
                 score -= std::numeric_limits<float>::infinity();
             }
         });

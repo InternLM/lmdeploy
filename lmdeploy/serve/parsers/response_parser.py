@@ -138,7 +138,7 @@ class ResponseParser:
     ) -> None:
         pass
 
-    def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
+    def __init__(self, request: ChatCompletionRequest):
         self.request = request
 
     @abstractmethod
@@ -262,11 +262,7 @@ class BaseResponseParser(ResponseParser):
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.')
         return chat_template_kwargs
 
-    def __init__(
-        self,
-        request: ChatCompletionRequest,
-        tokenizer: PreTrainedTokenizerBase,
-    ):
+    def __init__(self, request: ChatCompletionRequest):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
         self._kwargs = type(self).chat_template_kwargs_from_request(request)

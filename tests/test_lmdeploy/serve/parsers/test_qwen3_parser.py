@@ -26,7 +26,7 @@ def response_parser():
         # Explicitly enable thinking mode to exercise reasoning parsing.
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 # Reference streaming sequence
@@ -244,7 +244,7 @@ class TestQwenResponseParserStreaming:
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': False},
             )
-            parser = cls(request=request, tokenizer=object())
+            parser = cls(request=request)
 
             chunks = [
                 'prefix ',
@@ -332,7 +332,7 @@ class TestQwenResponseParserStreaming:
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': True},
             )
-            parser = cls(request=request, tokenizer=object())
+            parser = cls(request=request)
 
             delta_text = 'content-xxx <think> reasoning-yyy </think> content-zzz <tool_call> '
 
@@ -368,7 +368,7 @@ class TestQwenResponseParserComplete:
                 tool_choice='none',
                 chat_template_kwargs={'enable_thinking': True},
             )
-            parser = cls(request=request, tokenizer=object())
+            parser = cls(request=request)
             content, tool_calls, reasoning = parser.parse_complete('<think>\nabc\n</think>\n\nHello')
             assert reasoning == '\nabc\n'
             assert content == '\n\nHello'

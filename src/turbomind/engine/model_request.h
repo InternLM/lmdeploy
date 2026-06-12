@@ -6,6 +6,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/engine/multimodal_input.h"
 
 namespace xgrammar {
 class CompiledGrammar;
@@ -26,7 +27,8 @@ public:
     void End(std::function<void(int)> cb, uint64_t session_id);
 
     struct InputParam {
-        std::shared_ptr<TensorMap> tensors;
+        std::shared_ptr<TensorMap>         tensors;
+        std::shared_ptr<multimodal::Input> mm_inputs;
 
         SessionParam     session;
         GenerationConfig gen_cfg;

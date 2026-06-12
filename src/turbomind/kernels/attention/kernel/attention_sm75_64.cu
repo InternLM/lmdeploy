@@ -16,15 +16,19 @@ constexpr int kCTA_S   = 64;
 constexpr int kWARP_Q  = 16;
 constexpr int kStages  = 2;
 
-template<class T>
+template<class T, bool Causal = true>
 using KT = AttentionUniversal<
     arch::Sm75,
     Mainloop<arch::Sm70, Impl<MMA_1688, T, T, 1, kCTA_Q, kCTA_S, 1, kWARP_Q, kCTA_S, kHeadDim, kStages>>,
     LinearIteratorFactory<T, kCTA_S, kHeadDim>,
-    AttentionCtaMap>;
+    AttentionCtaMap,
+    Causal>;
 
 namespace {
-Registrar reg([](Collector& c) { c.add<KT<half>>(); });
+Registrar reg([](Collector& c) {
+    c.add<KT<half>>();
+    c.add<KT<half, false>>();
+});
 }
 
 }  // namespace turbomind::attention

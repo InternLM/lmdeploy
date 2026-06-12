@@ -415,7 +415,7 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
 
         topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.is_decoding
+        low_latency_mode = step_ctx.global_is_decoding()
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, expert_list)
 

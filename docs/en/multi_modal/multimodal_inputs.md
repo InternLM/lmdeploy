@@ -134,7 +134,7 @@ ______________________________________________________________________
 
 ## Single Video
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, and **InternS1-Pro** models only.
+> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -177,7 +177,7 @@ ______________________________________________________________________
 
 ## Multiple Videos
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, and **InternS1-Pro** models only.
+> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -223,7 +223,7 @@ ______________________________________________________________________
 
 ## Mixed Image and Video
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, and **InternS1-Pro** models only.
+> **Note:** Native mixed image/video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -493,6 +493,37 @@ print(response.choices[0].message.content)
 </details>
 
 <details>
+<summary>Base64 encoding example (audio)</summary>
+
+```python
+from openai import OpenAI
+from lmdeploy.vl.utils import encode_audio_base64
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+b64 = encode_audio_base64('/path/to/your/audio.wav')
+audio_url = f'data:audio/wav;base64,{b64}'
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {
+                'type': 'audio_url',
+                'audio_url': {'url': audio_url},
+            },
+            {'type': 'text', 'text': 'Describe this audio.'},
+        ],
+    }],
+)
+print(response.choices[0].message.content)
+```
+
+</details>
+
+<details>
 <summary>Base64 encoding example (time series)</summary>
 
 ```python
@@ -533,7 +564,7 @@ ______________________________________________________________________
 Two optional parameters let you control media processing:
 
 - **`mm_processor_kwargs`**: controls vision token resolution (min/max pixels per image or video frame)
-- **`media_io_kwargs`**: controls how media is loaded (e.g. video frame sampling rate and count)
+- **`media_io_kwargs`**: controls how media is loaded (e.g. video frame sampling rate/count and audio sampling rate)
 
 Both are passed as extra fields in the API request body via `extra_body`, or directly to `pipe()` when using the pipeline API.
 

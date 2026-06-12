@@ -106,6 +106,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     for (const auto& [k, v] : *outputs_) {
         r->outputs.emplace(k, v);
     }
+    r->mm_inputs = param.mm_inputs;
 
     auto state = std::make_shared<AtomicRequestState>();
 
