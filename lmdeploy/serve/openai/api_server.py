@@ -79,7 +79,6 @@ from lmdeploy.serve.openai.protocol import (
     TopLogprob,
     UpdateParamsRequest,
     UsageInfo,
-    build_usage_info,
 )
 from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
@@ -585,7 +584,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_logprob:
                 output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
-                final_usage = build_usage_info(
+                final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
                     cached_tokens=res.cached_tokens,
@@ -722,7 +721,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    usage = build_usage_info(
+    usage = UsageInfo.build(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
         cached_tokens=final_res.cached_tokens,
@@ -916,7 +915,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                     response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
         if include_usage:
-            final_usage = build_usage_info(
+            final_usage = UsageInfo.build(
                 prompt_tokens=prompt_tokens_acc,
                 completion_tokens=completion_tokens_acc,
                 cached_tokens=cached_tokens_acc,
@@ -975,7 +974,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         cached_tokens_acc += final_res.cached_tokens
 
     await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
-    usage = build_usage_info(
+    usage = UsageInfo.build(
         prompt_tokens=prompt_tokens_acc,
         completion_tokens=completion_tokens_acc,
         cached_tokens=cached_tokens_acc,
@@ -1196,7 +1195,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
-    usage = build_usage_info(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
+    usage = UsageInfo.build(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
 
     data = []
     for i, score in enumerate(batch_scores):

@@ -63,15 +63,15 @@ class UsageInfo(BaseModel):
     completion_tokens: int | None = 0
     prompt_tokens_details: PromptTokensDetails | None = None
 
-
-def build_usage_info(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> UsageInfo:
-    """Build OpenAI-compatible usage with prefix-cache details."""
-    return UsageInfo(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
-        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
-    )
+    @classmethod
+    def build(cls, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> 'UsageInfo':
+        """Build OpenAI-compatible usage with prefix-cache details."""
+        return cls(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+        )
 
 
 class Function(BaseModel):
