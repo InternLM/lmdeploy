@@ -27,6 +27,7 @@ struct EngineConfig {
     X(int, num_tokens_per_iter, 0)                                                                                     \
     X(int, max_prefill_iters, 1)                                                                                       \
     X(int, async_, 0)                                                                                                  \
+    X(std::string, schedule_policy, "fifo")                                                                            \
     X(int, outer_dp_size)                                                                                              \
     X(int, attn_dp_size)                                                                                               \
     X(int, attn_tp_size)                                                                                               \

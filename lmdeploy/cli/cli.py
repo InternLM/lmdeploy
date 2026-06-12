@@ -76,6 +76,7 @@ class CLI:
         ArgumentHelper.communicator(tb_group)
         ArgumentHelper.cp(tb_group)
         ArgumentHelper.async_(tb_group)
+        ArgumentHelper.schedule_policy(tb_group)
 
         # speculative decoding
         ArgumentHelper.add_spec_group(parser)

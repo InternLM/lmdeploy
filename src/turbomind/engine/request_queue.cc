@@ -7,4 +7,12 @@
 
 namespace turbomind {
 
+std::unique_ptr<RequestQueue> RequestQueue::create(SchedulePolicy schedule_policy)
+{
+    if (schedule_policy == SchedulePolicy::kFifo) {
+        return std::make_unique<FifoRequestQueue>();
+    }
+    return std::make_unique<PriorityRequestQueue>();
+}
+
 }  // namespace turbomind
