@@ -251,7 +251,7 @@ class Engine(EngineBase):
             model_path=pretrained_model_name_or_path,
             engine_config=engine_config,
             speculative_config=speculative_config,
-            trust_remote_code=trust_remote_code,
+            trust_remote_code=trust_remote_code
         )
 
     def _download_adapters(self, adapters: dict[str, str], engine_config: PytorchEngineConfig):
