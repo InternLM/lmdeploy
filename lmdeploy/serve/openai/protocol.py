@@ -503,7 +503,6 @@ class DestroyWeightsUpdateGroupRequest(BaseModel):
     group_name: str
 
 
-
 # /generate input
 class GenerateReqInput(BaseModel):
     session_id: int | None = -1
