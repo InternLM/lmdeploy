@@ -9,7 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager
-from lmdeploy.pytorch.nn import RMSNorm
+from lmdeploy.pytorch.nn import RMSNorm, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -23,7 +23,6 @@ from .qwen3_5 import (
     Qwen3_5MLP,
     Qwen3_5Model,
     Qwen3_5TextModel,
-    Qwen3_5TextRotaryEmbedding,
 )
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
@@ -212,7 +211,7 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
 
 class Qwen3_5MoeModel(Qwen3_5Model):
