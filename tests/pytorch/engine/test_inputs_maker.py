@@ -11,6 +11,7 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     _compact_state_prefix_cache_restore_offsets,
     _compact_state_prefix_cache_save_offsets,
 )
+from lmdeploy.pytorch.messages import MessageStatus
 
 
 @dataclass
@@ -273,6 +274,47 @@ def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():
     assert forward_inputs['inputs'] is model_inputs
     assert model_inputs.is_first_chunk
     assert not model_inputs.is_chunk_multimodal
+
+
+def test_long_context_final_chunk_preserves_multimodal_flag_for_spec_decoding():
+    image = _DummyMultiModal(start=0, end=1024)
+    seq = _DummySeq(
+        history_ids=512,
+        token_ids=512,
+        all_multimodals={'image': [image]},
+        input_multimodals={},
+    )
+    model_inputs = SimpleNamespace(is_decoding=False,
+                                   is_chunk=False,
+                                   is_first_chunk=False,
+                                   is_last_chunk=False,
+                                   is_chunk_multimodal=False)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode)
+    maker.spec_decoding = True
+    maker.scheduler = _FakeScheduler([])
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    seq.status = MessageStatus.RUNNING
+    maker.long_context_chunker.seq = seq
+    maker.long_context_chunker.has_multimodal = True
+    maker.long_context_chunker.max_prefill_num = 512
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [seq], [])
+
+    forward_inputs = maker._make_forward_inputs(prefill=True)
+
+    assert forward_inputs['inputs'] is model_inputs
+    assert model_inputs.is_chunk
+    assert not model_inputs.is_first_chunk
+    assert model_inputs.is_last_chunk
+    assert model_inputs.is_chunk_multimodal
+    assert not maker.long_context_chunker.enabled()
 
 
 def test_state_prefix_cache_restore_offsets_are_compact():

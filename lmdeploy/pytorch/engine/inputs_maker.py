@@ -731,6 +731,7 @@ class InputsMakerAsync:
         def __create_inputs_long_context_chunk():
             seq = self.long_context_chunker.seq
             running = [seq]
+            has_multimodal = self.long_context_chunker.has_multimodal
             if self.long_context_chunker.is_last_chunk():
                 inputs, delta, extra_inputs = __create_model_inputs(running)
                 inputs.is_chunk = True
@@ -740,7 +741,7 @@ class InputsMakerAsync:
                 inputs, extra_inputs = __create_inputs_chunk(running)
                 delta = None
             inputs.is_first_chunk = False
-            inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
+            inputs.is_chunk_multimodal = has_multimodal
             return running, inputs, delta, extra_inputs
 
         def __create_inputs_prefill():
