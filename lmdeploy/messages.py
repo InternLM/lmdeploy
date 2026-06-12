@@ -676,7 +676,6 @@ class EngineOutput:
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
-    cached_tokens: int = 0
 
 
 @dataclass
