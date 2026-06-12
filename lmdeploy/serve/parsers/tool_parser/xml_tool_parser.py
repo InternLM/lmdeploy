@@ -82,7 +82,6 @@ class XmlToolParser(ToolParser):
         func_name, raw_args_dict, is_closed = self._extract_incremental_state(
             self._tool_payload,
             final=final,
-            added_text=added_text,
         )
         args_dict = self._get_coerced_args(func_name, raw_args_dict)
 
@@ -260,6 +259,5 @@ class XmlToolParser(ToolParser):
 
     def _extract_incremental_state(self,
                                  payload: str,
-                                 final: bool = False,
-                                 added_text: str = '') -> tuple[str | None, dict[str, Any], bool]:
+                                 final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
         raise NotImplementedError

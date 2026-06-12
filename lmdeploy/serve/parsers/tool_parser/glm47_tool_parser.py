@@ -54,8 +54,7 @@ class Glm47ToolParser(XmlToolParser):
 
     def _extract_incremental_state(self,
                                    payload: str,
-                                   final: bool = False,
-                                   added_text: str = '') -> tuple[str | None, dict[str, str], bool]:
+                                   final: bool = False) -> tuple[str | None, dict[str, str], bool]:
         payload = payload.strip()
         if not payload:
             return None, {}, False

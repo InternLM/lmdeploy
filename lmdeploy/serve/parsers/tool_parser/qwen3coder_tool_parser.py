@@ -34,7 +34,6 @@ class Qwen3CoderToolParser(XmlToolParser):
         self._qwen_func_name: str | None = None
         self._qwen_args: dict[str, Any] = {}
         self._qwen_param_scan_pos = 0
-        self._qwen_open_tag_stripped = False
         self._qwen_func_closed = False
         self._qwen_open_param_name: str | None = None
         self._qwen_value_start = -1
@@ -58,20 +57,10 @@ class Qwen3CoderToolParser(XmlToolParser):
     def get_tool_payload_format(cls) -> str:
         return 'xml'
 
-    def _strip_outer_open_tag_once(self, payload: str) -> str:
-        if self._qwen_open_tag_stripped:
-            return payload
-        open_tag = self.get_tool_open_tag()
-        if open_tag and payload.startswith(open_tag):
-            self._qwen_open_tag_stripped = True
-            return payload[len(open_tag):]
-        return payload
-
     def _extract_incremental_state(self,
                                    payload: str,
-                                   final: bool = False,
-                                   added_text: str = '') -> tuple[str | None, dict[str, Any], bool]:
-        content = self._strip_outer_open_tag_once(payload).strip()
+                                   final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
+        content = payload.strip()
         if not content:
             return self._qwen_func_name, dict(self._qwen_args), self._qwen_func_closed
 
@@ -170,12 +159,6 @@ class Qwen3CoderToolParser(XmlToolParser):
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""
-        open_tag = self.get_tool_open_tag()
-        close_tag = self.get_tool_close_tag()
-        if open_tag and content.startswith(open_tag):
-            content = content[len(open_tag):]
-        if close_tag and content.endswith(close_tag):
-            content = content[:-len(close_tag)]
         content = content.strip()
 
         func_name = None
