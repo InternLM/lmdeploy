@@ -50,37 +50,24 @@ class XmlToolParser(ToolParser):
         self._payload_parts.clear()
         self._coerced_args.clear()
         self._in_progress_value = False
-        self._tool_payload = ''
         self._reset_incremental_state()
 
     def _reset_incremental_state(self) -> None:
         """Reset subclass-specific incremental parse state."""
 
-    def _payload_text(self) -> str:
-        if not self._payload_parts:
-            return self._tool_payload
-        return ''.join(self._payload_parts)
-
-    def _value_close_token(self) -> str:
-        return ''
-
     def _should_buffer_value_chunk(self, added_text: str, final: bool) -> bool:
         """Fast-path plain value fragments that cannot close an XML tag."""
         if final or not self._in_progress_value:
             return False
-        if any(ch in added_text for ch in '<>/'):
-            return False
-        close = self._value_close_token()
-        return not close or close not in added_text
+        return not any(ch in added_text for ch in '<>/')
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._payload_parts.append(added_text)
         if self._should_buffer_value_chunk(added_text, final):
             return []
 
-        self._tool_payload = self._payload_text()
         func_name, raw_args_dict, is_closed = self._extract_incremental_state(
-            self._tool_payload,
+            ''.join(self._payload_parts),
             final=final,
         )
         args_dict = self._get_coerced_args(func_name, raw_args_dict)
@@ -126,19 +113,12 @@ class XmlToolParser(ToolParser):
 
     def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
         """Build function->parameter schema map from request tools."""
-        tools = request.tools
-        if not isinstance(tools, list):
+        if not request.tools:
             return {}
 
         out: dict[str, dict[str, dict[str, Any]]] = {}
-        for tool in tools:
-            function = getattr(tool, 'function', None)
-            if function is None:
-                continue
-            function_name = getattr(function, 'name', None)
-            parameters = getattr(function, 'parameters', None)
-            if not isinstance(function_name, str) or not function_name:
-                continue
+        for tool in request.tools:
+            parameters = tool.function.parameters
             if not isinstance(parameters, dict):
                 continue
             properties = parameters.get('properties')
@@ -147,7 +127,7 @@ class XmlToolParser(ToolParser):
 
             param_schemas = {name: schema for name, schema in properties.items() if isinstance(schema, dict)}
             if param_schemas:
-                out[function_name] = param_schemas
+                out[tool.function.name] = param_schemas
         return out
 
     @staticmethod
@@ -228,7 +208,7 @@ class XmlToolParser(ToolParser):
     def _get_coerced_args(self, func_name: str | None, raw_args_dict: dict[str, Any]) -> dict[str, Any]:
         if not func_name or not raw_args_dict:
             return raw_args_dict
-        param_schemas = getattr(self, '_function_param_schemas', {}).get(func_name, {})
+        param_schemas = self._function_param_schemas.get(func_name, {})
         if not param_schemas:
             return raw_args_dict
 
@@ -251,13 +231,16 @@ class XmlToolParser(ToolParser):
             coerced[key] = coerced_value
         return coerced
 
-    def _coerce_args_by_schema(self, func_name: str | None, args_dict: dict[str, Any]) -> dict[str, Any]:
-        return self._get_coerced_args(func_name, args_dict)
-
     def _close_json_on_final(self) -> bool:
         return True
 
     def _extract_incremental_state(self,
                                  payload: str,
                                  final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
+        """Parse accumulated inner tool payload and return the current
+        snapshot.
+
+        Subclasses update their incremental state from ``payload`` and return
+        ``(func_name, raw_args_dict, is_closed)`` for delta emission.
+        """
         raise NotImplementedError

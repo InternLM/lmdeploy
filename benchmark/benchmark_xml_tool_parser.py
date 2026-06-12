@@ -167,9 +167,9 @@ class LegacyGlm47ToolParser(LegacyXmlToolParser):
 
 class LegacyQwen3CoderToolParser(LegacyXmlToolParser):
     func_prefix = '<function='
-    func_end_token = '</function>'
+    func_suffix = '</function>'
     param_prefix = '<parameter='
-    param_end_token = '</parameter>'
+    param_suffix = '</parameter>'
 
     def _extract_incremental_state(self, payload: str, final: bool = False):
         return self._extract_params(payload)
@@ -197,7 +197,7 @@ class LegacyQwen3CoderToolParser(LegacyXmlToolParser):
             name_end = min(terminators)
             param_name = content[name_start:name_end].strip()
             val_start = name_end + 1
-            val_end = content.find(self.param_end_token, val_start)
+            val_end = content.find(self.param_suffix, val_start)
             if val_end == -1:
                 break
             param_val_str = content[val_start:val_end].strip()
@@ -207,8 +207,8 @@ class LegacyQwen3CoderToolParser(LegacyXmlToolParser):
             except json.JSONDecodeError:
                 val = param_val_str
             args_dict[param_name] = val
-            search_idx = val_end + len(self.param_end_token)
-        is_func_closed = self.func_end_token in content
+            search_idx = val_end + len(self.param_suffix)
+        is_func_closed = self.func_suffix in content
         return func_name, args_dict, is_func_closed
 
 
