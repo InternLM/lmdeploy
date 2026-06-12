@@ -667,7 +667,8 @@ class AsyncEngine:
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
 
                 async for outputs in gen:
-                    cached_tokens = outputs.cached_tokens
+                    req_metrics = outputs.req_metrics
+                    cached_tokens = req_metrics.cached_tokens if req_metrics is not None else 0
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
