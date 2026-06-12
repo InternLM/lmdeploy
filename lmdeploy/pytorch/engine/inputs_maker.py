@@ -1,4 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+"""Engine-loop input construction for the LMDeploy PyTorch backend.
+
+This module converts scheduler decisions into model-agent inputs.  Most helpers
+build tensor fields for full-batch ``ModelInputs``; ``InputsMakerAsync`` is the
+coordinator that chooses prefill/chunk/decode work, attaches per-forward
+metadata, dispatches it to the executor, and updates local running state.
+"""
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
@@ -39,6 +46,33 @@ def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
         off_len = len(off)
         out[idx, :off_len] = off
     return torch.as_tensor(out, dtype=dtype)
+
+
+def _compact_state_prefix_cache_restore_offsets(messages: list['SchedulerSequence']):
+    """Build compact SSM restore src/dst index tensors."""
+    src_offsets = []
+    dst_offsets = []
+    for msg in messages:
+        state_idx = msg.prefix_cache.restore_state
+        if state_idx >= 0:
+            src_offsets.append(state_idx)
+            dst_offsets.append(msg.logical_state)
+    if len(src_offsets) == 0:
+        return None, None
+    return tuple(src_offsets), tuple(dst_offsets)
+
+
+def _compact_state_prefix_cache_save_offsets(messages: list['SchedulerSequence'], save_state_offsets: list[int]):
+    """Build compact SSM save src/dst index tensors."""
+    src_offsets = []
+    dst_offsets = []
+    for msg, state_idx in zip(messages, save_state_offsets):
+        if state_idx >= 0:
+            src_offsets.append(msg.logical_state)
+            dst_offsets.append(state_idx)
+    if len(src_offsets) == 0:
+        return None, None
+    return tuple(src_offsets), tuple(dst_offsets)
 
 
 @dataclass
@@ -82,7 +116,14 @@ class InputsMakerConfig:
 
 
 class LongContextChunker:
-    """Long context chunker."""
+    """Split a single long prefill into model-safe chunks.
+
+    Multimodal spans are indivisible, so a span larger than
+    ``max_prefill_token_num`` temporarily raises the chunk limit.  Prefix-cache
+    restore can skip over the span itself, but the enlarged limit still needs
+    to be derived from the whole request history so the remaining text tail is
+    chunked the same way as the no-cache path.
+    """
 
     def __init__(self, max_prefill_token_num: int):
         self.max_prefill_token_num = max_prefill_token_num
@@ -99,23 +140,24 @@ class LongContextChunker:
         return seq.num_token_ids > self.max_prefill_token_num
 
     def set_seq(self, seq: 'SchedulerSequence'):
-        """Set seq."""
+        """Set the sequence currently being chunked."""
         self.seq = seq
         self.next_step = seq.num_history_ids
 
-        # fill multimodals
-        # if image size exceeds max_prefill_token_num, enlarge it
         max_prefill_num = self.max_prefill_token_num
-        mm = seq.get_input_multimodals()
+        input_mm = seq.get_input_multimodals()
+        mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
         self.multimodals = defaultdict(list)
 
-        has_multimodal = False
-        for key, value in mm.items():
-            # sorted by start
-            value = sorted(value, key=lambda x: x.start)
-            self.multimodals[key] = value
+        for value in mm_for_chunk_limit.values():
             max_mm_size = max([v.end - v.start for v in value], default=0)
             max_prefill_num = max(max_prefill_num, max_mm_size)
+
+        has_multimodal = False
+        for key, value in input_mm.items():
+            # Only remaining multimodals are emitted by next_chunk_size().
+            value = sorted(value, key=lambda x: x.start)
+            self.multimodals[key] = value
 
             has_multimodal = has_multimodal or len(value) > 0
 
@@ -135,7 +177,7 @@ class LongContextChunker:
             yield modal_type, data
 
     def next_chunk_size(self):
-        """Get chunk size."""
+        """Get the next chunk size and its remaining multimodal payloads."""
         seq = self.seq
         if seq is None:
             return 0, None
@@ -158,7 +200,8 @@ class LongContextChunker:
 
             if mm.end > end:
                 # | start ... mm.start ... end ... mm.end |
-                # assume multimodals not overlap
+                # Do not split a multimodal span; recompute from its start in
+                # the next chunk instead.
                 end = mm.start
                 break
 
@@ -207,6 +250,39 @@ class LongContextChunker:
 
 
 class InputsMakerAsync:
+    """Coordinate prefill, decode, and long-context input dispatch.
+
+    ``Scheduler`` owns admission, ordering, and cache/KV resources.  This class
+    consumes the scheduler result and builds tensors only after resources have
+    been granted.  Prefill-like work is represented by full ``ModelInputs``:
+    prompt prefill, final long-context chunks, and eager non-final long chunks.
+    Decode is represented by ``ModelInputsDelta`` and reuses persistent
+    model-agent/strategy ``StepInputs`` that were created by earlier prefill and
+    decode forwards.
+
+    ``running_seqs`` is local engine-loop state, not the scheduler's source of
+    truth.  It tracks sequences already sent to the executor so this class can
+    build decode deltas, evict invalid decode requests, and update the local
+    view after outputs return.  Every dispatched forward also carries the
+    strategy-specific ``extra_inputs``, sampling inputs, and stopping criteria
+    expected by the model agent.
+
+    Long-context chunking is coordinated here because it spans scheduling
+    policy and input construction.  ``LongContextChunker`` tracks one active
+    long prefill and selects model-safe chunk boundaries, including indivisible
+    multimodal spans.  Before tensors are created for each chunk, the scheduler
+    reserves the chunk's KV ownership.  Non-final chunks are eager chunk
+    forwards with no user-visible output; the final chunk is treated as normal
+    prefill so it can merge into persistent decode state.
+
+    The current first-slice chunked-prefill policy intentionally uses separate
+    forwards instead of one mixed decode+prefill tensor batch.  After a
+    non-final chunk, runnable decode is preferred and remains on the existing
+    delta/CUDAGraph path; at most one eager non-final long chunk is sent after
+    decode gets a chance to run.  Preserve chunk flags such as
+    ``is_chunk_multimodal`` and ``is_last_chunk`` because VLM and speculative
+    decoding paths interpret them downstream.
+    """
 
     def __init__(
         self,
@@ -236,6 +312,7 @@ class InputsMakerAsync:
 
         # consecutive decode counter for prefill starvation prevention
         self._decode_count = 0
+        self._last_forward_kind = None
 
         # record for next forward.
         self.next_is_prefill = True
@@ -256,6 +333,38 @@ class InputsMakerAsync:
             self.do_prefill = self.do_prefill_chunked
         else:
             self.do_prefill = self.do_prefill_default
+
+    def _has_pending_last_long_context_chunk(self):
+        """Check whether a running long context has only its final chunk
+        left."""
+        return self.long_context_chunker.enabled() and self.long_context_chunker.is_last_chunk()
+
+    def _should_decode_before_long_context_chunk(self, prefill: bool):
+        """Prefer decode when a long-context chunk should not monopolize the
+        loop."""
+        if self.config.role == EngineRole.Prefill:
+            return False
+        if len(self.running_seqs) == 0:
+            return False
+        if not self.long_context_chunker.enabled():
+            return False
+        if self.long_context_chunker.is_last_chunk():
+            return not prefill
+        return getattr(self, '_last_forward_kind', None) == 'long_context_chunk'
+
+    def _forward_kind(self, inputs: 'ModelInputs|None', delta: 'ModelInputsDelta|None'):
+        """Classify a queued forward for long-context interleaving policy."""
+        if inputs is None:
+            if delta is not None:
+                return 'decode'
+            return None
+        if inputs.is_chunk and not inputs.is_last_chunk:
+            return 'long_context_chunk'
+        if inputs.is_chunk:
+            return 'last_long_context_chunk'
+        if inputs.is_decoding:
+            return 'decode'
+        return 'prefill'
 
     def _create_vision_model_inputs(self, messages: 'SeqList', model_inputs: ModelInputs):
         """Create vision model inputs."""
@@ -426,6 +535,28 @@ class InputsMakerAsync:
         if self.config.is_ssm:
             state_offsets = torch.tensor([msg.logical_state for msg in messages])
             model_inputs.state_offsets = state_offsets
+            if (self.cache_config.enable_prefix_caching
+                    and any(msg.prefix_cache.restore_state >= 0 for msg in messages)):
+                # Pin restore checkpoints while the forward copies them into
+                # runtime state slots; otherwise checkpoint eviction could race
+                # with input prefetching for the next batch.
+                self.scheduler.block_trie.acquire_state_checkpoint_restores(messages)
+                if any(msg.prefix_cache.restore_state >= 0 and not msg.prefix_cache.restore_state_acquired
+                       for msg in messages):
+                    raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+                restore_src_offsets, restore_dst_offsets = _compact_state_prefix_cache_restore_offsets(messages)
+                model_inputs.state_prefix_cache_offsets = restore_src_offsets
+                model_inputs.state_prefix_cache_dst_offsets = restore_dst_offsets
+            if self.cache_config.enable_prefix_caching and not is_decoding:
+                # Prefill saves publish only after model_forward has copied the
+                # runtime state to these reserved checkpoint offsets.
+                save_state_offsets = [
+                    self.scheduler.block_trie.reserve_state_checkpoint_for_seq(msg) for msg in messages
+                ]
+                save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(messages,
+                                                                                              save_state_offsets)
+                model_inputs.state_prefix_cache_save_src_offsets = save_src_offsets
+                model_inputs.state_prefix_cache_save_offsets = save_dst_offsets
 
         if self.config.use_mrope:
             mrope_pos_ids = [msg.mrope_pos_ids for msg in messages]
@@ -489,6 +620,21 @@ class InputsMakerAsync:
         # ssm
         if self.config.is_ssm:
             model_inputs.state_offsets = torch.tensor([seq.logical_state])
+            if self.cache_config.enable_prefix_caching and seq.prefix_cache.restore_state >= 0:
+                # Long-context chunks use the same restore pinning contract as
+                # normal prefill batches.
+                self.scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+                if not seq.prefix_cache.restore_state_acquired:
+                    raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+                model_inputs.state_prefix_cache_offsets = (seq.prefix_cache.restore_state, )
+                model_inputs.state_prefix_cache_dst_offsets = (seq.logical_state, )
+            if self.cache_config.enable_prefix_caching:
+                # Save at the exact state step produced by this chunk forward.
+                checkpoint_step = seq.num_history_ids + chunk_size
+                save_state = self.scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)
+                if save_state >= 0:
+                    model_inputs.state_prefix_cache_save_src_offsets = (seq.logical_state, )
+                    model_inputs.state_prefix_cache_save_offsets = (save_state, )
 
         # mrope
         if self.config.use_mrope:
@@ -543,6 +689,18 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             num_ignored_history=num_ignored_history,
         )
+        decode_state_interval = self.cache_config.prefix_cache_decode_state_interval
+        if (self.cache_config.enable_prefix_caching and self.config.is_ssm and decode_state_interval > 0
+                and not self.spec_decoding and num_decode_tokens == 1):
+            save_state_offsets = [
+                self.scheduler.block_trie.reserve_decode_state_checkpoint_for_seq(seq, decode_state_interval)
+                for seq in valid_seqs
+            ]
+            if any(state_idx >= 0 for state_idx in save_state_offsets):
+                save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(valid_seqs,
+                                                                                              save_state_offsets)
+                output.state_prefix_cache_save_src_offsets = save_src_offsets
+                output.state_prefix_cache_save_offsets = save_dst_offsets
 
         return output, valid_seqs, invalid_seqs
 
@@ -637,25 +795,41 @@ class InputsMakerAsync:
             extra_inputs = self.model_agent_strategy.make_extra_inputs(seqs, inputs)
             return inputs, delta, extra_inputs
 
-        def __create_inputs_chunk(running: 'SeqList'):
-            chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+        def __create_inputs_chunk(running: 'SeqList', chunk_size: int, multimodals: 'MultiModalInputs|None'):
             inputs = self.create_model_inputs_long_context(running[0], chunk_size, multimodals)
             extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
             return inputs, extra_inputs
 
+        def __reserve_long_context_chunk(seq: 'SchedulerSequence', chunk_size: int, is_last_chunk: bool):
+            if self.config.role == EngineRole.Prefill:
+                prealloc_size = 0
+            elif is_last_chunk:
+                prealloc_size = self.engine_strategy.get_prealloc_size(True)
+            else:
+                prealloc_size = 0
+            return scheduler.reserve_long_context_chunk(seq,
+                                                        chunk_size,
+                                                        prealloc_size=prealloc_size,
+                                                        is_last_chunk=is_last_chunk)
+
         def __create_inputs_long_context_chunk():
             seq = self.long_context_chunker.seq
+            chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+            is_last_chunk = self.long_context_chunker.is_last_chunk()
+            is_chunk_multimodal = self.long_context_chunker.has_multimodal
+            if not __reserve_long_context_chunk(seq, chunk_size, is_last_chunk):
+                return [], None, None, None
             running = [seq]
-            if self.long_context_chunker.is_last_chunk():
+            if is_last_chunk:
                 inputs, delta, extra_inputs = __create_model_inputs(running)
                 inputs.is_chunk = True
                 inputs.is_last_chunk = True
                 self.long_context_chunker.clear()
             else:
-                inputs, extra_inputs = __create_inputs_chunk(running)
+                inputs, extra_inputs = __create_inputs_chunk(running, chunk_size, multimodals)
                 delta = None
             inputs.is_first_chunk = False
-            inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
+            inputs.is_chunk_multimodal = is_chunk_multimodal
             return running, inputs, delta, extra_inputs
 
         def __create_inputs_prefill():
@@ -674,9 +848,20 @@ class InputsMakerAsync:
             if len(running) == 1 and self.long_context_chunker.is_long_context(running[0]):
                 # set long context chunker
                 self.long_context_chunker.set_seq(running[0])
-                inputs, extra_inputs = __create_inputs_chunk(running)
-                inputs.is_first_chunk = True
-                inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
+                if self.long_context_chunker.is_last_chunk():
+                    # A prefix-cache restore can skip past a large multimodal
+                    # span, leaving a tail that fits the multimodal-expanded
+                    # chunk limit.  Treat it as normal prefill so the model sees
+                    # the same single tail chunk as the no-cache path.  Do not
+                    # set chunk flags here: spec decoding uses them as a
+                    # cross-chunk carry protocol.
+                    self.long_context_chunker.clear()
+                    inputs, delta, extra_inputs = __create_model_inputs(running)
+                else:
+                    chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+                    inputs, extra_inputs = __create_inputs_chunk(running, chunk_size, multimodals)
+                    inputs.is_first_chunk = True
+                    inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
             elif len(running) > 0:
                 # create inputs
                 inputs, delta, extra_inputs = __create_model_inputs(running)
@@ -687,13 +872,19 @@ class InputsMakerAsync:
 
         inputs = None
         delta = None
+        running = []
+        extra_inputs = None
         swap_in_map = {}
         swap_out_map = {}
+        deferred_long_context_chunk = False
 
         self.long_context_chunker.check_enable()
         if self.long_context_chunker.enabled():
             # long context chunking
-            running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
+            if self._should_decode_before_long_context_chunk(prefill):
+                deferred_long_context_chunk = True
+            else:
+                running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
         elif prefill:
             # prefill
             (
@@ -705,16 +896,19 @@ class InputsMakerAsync:
                 swap_out_map,
             ) = __create_inputs_prefill()
 
-        # reset decode count when non-decoding inputs are produced
-        if inputs is not None and not inputs.is_decoding:
-            self._decode_count = 0
-
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
             prefill = False
             delta, running, invalid_seqs = self.create_model_inputs_delta()
             self.to_evict_seqs = invalid_seqs
             extra_inputs = None
+
+        if inputs is None and delta is None and deferred_long_context_chunk and self.long_context_chunker.enabled():
+            running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
+
+        # reset decode count when non-decoding inputs are produced
+        if inputs is not None and not inputs.is_decoding:
+            self._decode_count = 0
 
         # skip if enable empty
         if inputs is None and delta is None:
@@ -748,9 +942,10 @@ class InputsMakerAsync:
     def do_prefill_default(self):
         # decoding if no waiting
         scheduler = self.scheduler
+        pending_last_chunk = self._has_pending_last_long_context_chunk()
 
         # do decoding if not waiting
-        if not scheduler.has_waiting():
+        if not scheduler.has_waiting() and not pending_last_chunk:
             self._decode_count = 0
             return False
 
@@ -763,6 +958,10 @@ class InputsMakerAsync:
         token_count = 0
         for seq in waiting:
             token_count += seq.num_token_ids
+            if token_count >= self.config.max_prefill_token_num:
+                return True
+        if pending_last_chunk:
+            token_count += self.long_context_chunker.seq.num_token_ids
             if token_count >= self.config.max_prefill_token_num:
                 return True
 
@@ -796,6 +995,7 @@ class InputsMakerAsync:
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
         await self.executor.forward_async(forward_inputs)
+        self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running
