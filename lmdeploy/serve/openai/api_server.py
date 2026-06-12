@@ -895,20 +895,18 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
-        prompt_tokens_acc = 0
-        completion_tokens_acc = 0
-        cached_tokens_acc = 0
-        final_usage = None
+        final_usage = UsageInfo() if include_usage else None
         for generator in generators:
             async for res in generator:
                 logprobs = None
                 if request.logprobs and res.logprobs:
                     raise ValueError('logprobs is removed')
-                if res.finish_reason and include_usage:
+                if res.finish_reason and final_usage is not None:
                     final_res = res
-                    prompt_tokens_acc += final_res.input_token_len
-                    completion_tokens_acc += final_res.generate_token_len
-                    cached_tokens_acc += final_res.cached_tokens
+                    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
+                    final_usage.prompt_tokens += final_res.input_token_len
+                    final_usage.completion_tokens += final_res.generate_token_len
+                    final_usage.total_tokens += total_tokens
                 response_json = create_stream_response_json(index=0,
                                                             text=res.response,
                                                             finish_reason=res.finish_reason,
@@ -917,12 +915,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
-        if include_usage:
-            final_usage = UsageInfo.build(
-                prompt_tokens=prompt_tokens_acc,
-                completion_tokens=completion_tokens_acc,
-                cached_tokens=cached_tokens_acc,
-            )
+        if final_usage is not None:
             yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -932,15 +925,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
-    prompt_tokens_acc = 0
-    completion_tokens_acc = 0
-    cached_tokens_acc = 0
+    usage = UsageInfo()
     choices = [None] * len(generators)
     cache_block_ids = []
     remote_token_ids = []
 
     async def _inner_call(i, generator, session):
-        nonlocal cache_block_ids, remote_token_ids, prompt_tokens_acc, completion_tokens_acc, cached_tokens_acc
+        nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
@@ -972,16 +963,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             cache_block_ids = cache_block_ids[0]
             remote_token_ids = [remote_token_ids[0][-1]]
 
-        prompt_tokens_acc += final_res.input_token_len
-        completion_tokens_acc += final_res.generate_token_len
-        cached_tokens_acc += final_res.cached_tokens
+        total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
+        usage.prompt_tokens += final_res.input_token_len
+        usage.completion_tokens += final_res.generate_token_len
+        usage.total_tokens += total_tokens
 
     await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
-    usage = UsageInfo.build(
-        prompt_tokens=prompt_tokens_acc,
-        completion_tokens=completion_tokens_acc,
-        cached_tokens=cached_tokens_acc,
-    )
 
     response = CompletionResponse(
         id=request_id,
