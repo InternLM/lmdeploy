@@ -100,7 +100,6 @@ def smooth_quant(model: str,
 
     patterns = []
     skipped_modules = []
-    arch = model.config.architectures[0]
     rebuilder = MODELS.get(arch)
     if rebuilder:
         patterns = rebuilder.skipped_modules()
