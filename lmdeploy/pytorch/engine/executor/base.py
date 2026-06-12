@@ -5,6 +5,7 @@ import contextlib
 from typing import Any, NamedTuple
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
@@ -44,6 +45,12 @@ class ExecutorBase:
         if cache_config.window_size is not None and cache_config.window_size > 0:
             # do not support sliding window prefix caching
             logger.warning('Sliding window prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
+        if specdecode_config is not None and cache_config.enable_prefix_caching:
+            logger.warning('Speculative decoding prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
+        if cache_config.role != EngineRole.Hybrid and cache_config.enable_prefix_caching:
+            logger.warning('PD prefix caching is not supported.')
             cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
@@ -238,17 +245,15 @@ class ExecutorBase:
 
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
-            # add more caches for eviction
+            # One state slot is reserved for system use. Active sequences need
+            # max_batches runtime slots; prefix-cache checkpoints use an
+            # explicitly configured extra budget.
             # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 1)
+            num_state_caches = int(cache_config.max_batches + 1 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
         mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
         mems *= num_state_caches
-
-        if cache_config.enable_prefix_caching:
-            cache_config.enable_prefix_caching = False
-            logger.warning('Prefix caching has not been support for state space model.')
 
         return mems
 

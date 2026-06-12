@@ -305,6 +305,7 @@ class EngineLoop:
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
+            self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -318,6 +319,7 @@ class EngineLoop:
                                          batched_outputs=batched_outputs,
                                          model_inputs=model_inputs,
                                          delta=delta)
+        self.scheduler.block_trie.cache_routed_experts(running)
 
         # generate output
         outputs: dict[int, InferOutput] = dict()
@@ -378,6 +380,42 @@ class EngineLoop:
         scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
 
+    @staticmethod
+    def _has_state_checkpoint_save(model_inputs: 'ModelInputs | None', delta: 'ModelInputsDelta | None'):
+        """Check whether the current forward reserved SSM checkpoints."""
+        return ((model_inputs is not None and model_inputs.state_prefix_cache_save_offsets is not None)
+                or (delta is not None and delta.state_prefix_cache_save_offsets is not None))
+
+    async def _prefetch_next_inputs(self):
+        """Collect migration completions before prefetching the next batch."""
+        self.scheduler.collect_migration_done()
+        return await self.inputs_maker.prefetch_next_inputs()
+
+    def _publish_forward_prefix_cache(self, running: 'SeqList', has_state_checkpoint_save: bool):
+        """Publish per-forward prefix-cache ownership before prefetching."""
+        if not self.scheduler.block_trie.enable:
+            return
+        if has_state_checkpoint_save:
+            self.scheduler.block_trie.commit_state_checkpoints(running, acquire_save_ref=True)
+        self.scheduler.block_trie.release_state_checkpoint_restores(running)
+
+    def _release_forward_prefix_cache_saves(self, running: 'SeqList'):
+        """Release producer refs after the forward output/event boundary."""
+        if not self.scheduler.block_trie.enable:
+            return
+        self.scheduler.block_trie.release_state_checkpoint_saves(running)
+
+    def _finish_forward_output(self,
+                               out: 'BatchedOutputs | None',
+                               running: 'SeqList',
+                               model_inputs: 'ModelInputs | None',
+                               delta: 'ModelInputsDelta | None'):
+        """Publish outputs."""
+        if out is None:
+            return
+        step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
+        self.resp_queue.put_nowait(step_outputs)
+
     async def _main_loop_get_outputs(
         self,
         running: 'SeqList',
@@ -387,18 +425,19 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         self.inputs_maker.update_running_seqs(running, model_inputs)
+        has_state_checkpoint_save = self._has_state_checkpoint_save(model_inputs, delta)
 
-        # try prefetch inputs
-        self.scheduler.collect_migration_done()
-        forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
-
-        # send output
+        # ModelAgent executes queued forwards in send order.  Once the current
+        # input is queued, matched checkpoints can be published before waiting
+        # for GPU output; save checkpoints keep a producer ref until the output
+        # event boundary so prefetch cannot evict/reuse their destination slots.
+        self._publish_forward_prefix_cache(running, has_state_checkpoint_save)
+        forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        if out is not None:
-            step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
-            self.resp_queue.put_nowait(step_outputs)
-            # out might come from shared memory, need to explicitly delete to release memory in time
-            del out
+        self._release_forward_prefix_cache_saves(running)
+        self._finish_forward_output(out, running, model_inputs, delta)
+        # out might come from shared memory, need to explicitly delete to release memory in time
+        del out
 
         return forward_inputs, next_running
 
