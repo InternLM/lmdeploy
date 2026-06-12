@@ -366,6 +366,29 @@ class RayExecutor(ExecutorBase):
         """Update params."""
         self.collective_rpc('update_params', (request, ))
 
+    def _reduce_worker_status(self, results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
+        """Reduce worker status results."""
+        successes, messages = zip(*results)
+        if all(successes):
+            return True, messages[0]
+        message = ' | '.join(f'rank{idx}: {message}' for idx, message in enumerate(messages))
+        return False, f'{op_name}: {message}'
+
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        results = self.collective_rpc('init_weights_update_group', (request, ))
+        return self._reduce_worker_status(results, 'init_weights_update_group')
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        results = self.collective_rpc('update_weights_from_distributed', (request, ))
+        return self._reduce_worker_status(results, 'update_weights_from_distributed')
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        results = self.collective_rpc('destroy_weights_update_group', (request, ))
+        return self._reduce_worker_status(results, 'destroy_weights_update_group')
+
     def warmup(self):
         """Build cache engine."""
         self.collective_rpc('warmup')
