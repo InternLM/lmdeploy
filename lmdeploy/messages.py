@@ -536,6 +536,7 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
+    cached_tokens: int = 0
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -651,6 +652,7 @@ class RequestMetrics:
     token_timestamp: float = 0.0
     engine_events: list[EngineEvent] = field(default_factory=list)
     spec_info: dict[str, Any] | None = None
+    cached_tokens: int = 0
 
 
 @dataclass
