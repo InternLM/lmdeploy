@@ -126,7 +126,6 @@ class ZMQMPEngine(MPEngine):
             model_path,
             engine_config=engine_config,
             speculative_config=speculative_config,
-            launched_by_mp_engine=True,
             **kwargs,
         )
 

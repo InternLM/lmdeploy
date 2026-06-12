@@ -100,7 +100,6 @@ class Engine(EngineBase):
         engine_config: PytorchEngineConfig = None,
         trust_remote_code: bool = False,
         speculative_config: SpeculativeConfig = None,
-        launched_by_mp_engine: bool = False,
     ) -> None:
         # make sure engine config exist
         engine_config = ConfigBuilder.update_engine_config(engine_config)
@@ -196,7 +195,6 @@ class Engine(EngineBase):
         # infer sleeping from empty_init: empty_init still builds runtime
         # resources and has its own weight-update workflow.
         self._sleeping_tags = set()
-        self._launched_by_mp_engine = launched_by_mp_engine
         self._weights_update_lock: asyncio.Lock | None = None
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
@@ -220,7 +218,6 @@ class Engine(EngineBase):
                         engine_config: PytorchEngineConfig = None,
                         speculative_config: SpeculativeConfig = None,
                         trust_remote_code: bool = False,
-                        launched_by_mp_engine: bool = False,
                         **kwargs):
         """Lmdeploy python inference engine.
 
@@ -255,7 +252,6 @@ class Engine(EngineBase):
             engine_config=engine_config,
             speculative_config=speculative_config,
             trust_remote_code=trust_remote_code,
-            launched_by_mp_engine=launched_by_mp_engine,
         )
 
     def _download_adapters(self, adapters: dict[str, str], engine_config: PytorchEngineConfig):
@@ -510,9 +506,6 @@ class Engine(EngineBase):
     async def _run_weights_update(self, func, request: Any):
         """Run one serialized disaggregated weights-update operation."""
         async with self._get_weights_update_lock():
-            if self._launched_by_mp_engine:
-                return func(request)
-
             return await asyncio.to_thread(func, request)
 
     async def init_weights_update_group(self, request: Any):

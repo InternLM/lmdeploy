@@ -31,7 +31,6 @@ class RayEngineWorker(EngineWorkerBase):
         engine = Engine.from_pretrained(
             model_path,
             engine_config=engine_config,
-            launched_by_mp_engine=True,
             **kwargs,
         )
         super().__init__(engine)
