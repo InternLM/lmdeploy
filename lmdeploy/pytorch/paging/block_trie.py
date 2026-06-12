@@ -599,7 +599,8 @@ class BlockTrie:
 
     @staticmethod
     def _has_state_checkpoint_ref(node: Node | None, state_idx: int):
-        """Check whether a sequence still owns a checkpoint ref on this node."""
+        """Check whether a sequence still owns a checkpoint ref on this
+        node."""
         return node is not None and node.state_idx == state_idx and node.state_ref_count > 0
 
     @staticmethod
@@ -625,7 +626,8 @@ class BlockTrie:
         self.release_state_checkpoint(node)
 
     def _acquire_state_checkpoint_save_for_seq(self, seq: SchedulerSequence, node: Node, state_idx: int):
-        """Pin a just-published checkpoint until its producer forward completes."""
+        """Pin a just-published checkpoint until its producer forward
+        completes."""
         prefix_cache = seq.prefix_cache
         if prefix_cache.save_state_acquired:
             raise RuntimeError('SSM prefix-cache save checkpoint already has an in-flight producer ref.')
