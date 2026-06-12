@@ -83,7 +83,6 @@ class BlockTrie:
     def match(self, seq: SchedulerSequence):
         """Match sequence and cache."""
         if not self.enable:
-            seq.cached_tokens = 0
             return
 
         block_size = self.block_size

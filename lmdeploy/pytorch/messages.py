@@ -657,7 +657,7 @@ class SchedulerSequence:
     # mrope
     history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
 
-    # prefix caching
+    # Prompt tokens reused from prefix cache; set by BlockTrie.match().
     cached_tokens: int = 0
 
     def __post_init__(self):
