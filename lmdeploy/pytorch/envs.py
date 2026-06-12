@@ -102,7 +102,6 @@ with set_envs():
 
     # ascend
     ascend_set_rt_visable_devices_by_ray = env_to_bool('ASCEND_SET_RT_VISIBLE_DEVICES_BY_RAY', False)
-    ascend_rank_table_file = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
 
     # dp
     dp_master_addr = os.getenv('LMDEPLOY_DP_MASTER_ADDR', None)
