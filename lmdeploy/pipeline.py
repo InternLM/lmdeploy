@@ -283,8 +283,10 @@ class Pipeline:
             input_ids = [input_ids]
         assert all(len(_) > 1 for _ in input_ids)
 
-        # TODO: a better way to determine `max_input_len`, at most allocate
-        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
+        # NOTE: Current approach estimates max_input_len based on available GPU memory (2GB),
+        # which may not be optimal for all scenarios. Future improvements could use more
+        # sophisticated memory estimation based on actual model configuration and available
+        # memory to better handle varying input lengths and model sizes.
         vocab_size = self.async_engine.hf_cfg.vocab_size
         max_input_len = 2 * 1024**3 // (vocab_size * 4)
         sizes = [len(_) for _ in input_ids]

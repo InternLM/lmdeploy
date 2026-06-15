@@ -413,7 +413,10 @@ class EngineLoop:
         next_running = None
 
         async def __no_running_warning():
-            # TODO (JimyMa): add watermark check event instead of async sleep.
+            # NOTE: Current implementation uses async sleep to avoid blocking when no
+            # runnable requests exist. A more efficient approach would use a watermark
+            # check event to trigger scheduling when cache is available, reducing CPU
+            # overhead. This optimization is planned for future versions.
             # self.perfill_watermark_event.wait()
             logger.warning(f'no next prefill running request, Maybe cache is full, '
                            f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '

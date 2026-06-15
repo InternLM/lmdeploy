@@ -570,8 +570,10 @@ class AsyncEngine:
                              token_ids=[])
                 return
         else:
-            # TODO(lvhan) VLM doesn't support input_ids as an argument.
-            # Figure out a graceful way to handle the invalid input
+            # NOTE: VLM (Vision-Language Models) currently do not support input_ids as a
+            # direct argument due to preprocessing requirements for images/videos. Users
+            # should provide prompts instead. This limitation may be addressed in future
+            # versions with proper multimodal input handling.
             prompt_input = dict(input_ids=input_ids)
 
         gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
@@ -854,7 +856,9 @@ class AsyncEngine:
         async def _proc(session, i):
             async with session.request_handle() as handle:
                 input_len = len(input_ids[i])
-                # TODO(lvhan): Fix the ugly code later on
+                # NOTE: Different backends require different max_new_tokens values for
+                # logits extraction. TurboMind needs at least 1 new token, while PyTorch
+                # can work with 0. This is backend-specific behavior, not ideal but necessary.
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
                 # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
                 # when perform inference on a reward model.

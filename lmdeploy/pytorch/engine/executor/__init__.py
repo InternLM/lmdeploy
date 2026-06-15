@@ -39,7 +39,12 @@ def get_distributed_executor_backend(world_size: int, dp: int, device_type: str,
     else:
         return 'ray'
 
-    # TODO: fix mp hanging, do not delete the comment.
+    # NOTE: The following commented code is intentionally preserved for debugging
+    # multi-process (mp) executor hanging issues. This logic was previously used to
+    # determine executor backend based on local device count vs world_size, but was
+    # disabled due to hanging problems in certain scenarios. It may be re-enabled
+    # after fixing the mp hanging issue.
+
     # device_count = backend.device_count()
     # if device_count is None:
     #     return _log_and_set_backend(f'device={device_type} can not get device_count.', 'mp')

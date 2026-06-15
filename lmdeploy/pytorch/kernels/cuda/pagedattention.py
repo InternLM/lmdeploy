@@ -31,7 +31,9 @@ VERSION_300 = version.parse('3.0.0')
 
 assert TRITON_VERSION >= version.parse('2.2.0')
 
-# TODO: fast op might not work on non-nv device
+# WARNING: Fast operations (tanh, fast_dividef, etc.) use NVIDIA-specific CUDA libdevice
+# functions which may not be available or may have different behavior on non-NVIDIA devices.
+# For non-NVIDIA GPUs (AMD, Intel, etc.), ensure Triton runtime compatibility is verified.
 if TRITON_VERSION >= VERSION_300:
     tanh = tl.extra.cuda.libdevice.tanh
     fast_dividef = tl.extra.cuda.libdevice.fast_dividef

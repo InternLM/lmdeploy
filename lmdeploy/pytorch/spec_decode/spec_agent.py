@@ -396,7 +396,11 @@ class SpecModelAgent(BaseSpecModelAgent):
         )
 
         if model_inputs.is_decoding:
-            # TODO: guided decoding not supported yet for spec decoding
+            # NOTE: Guided decoding (structured output with grammar/json constraints) is
+            # currently not supported for speculative decoding. This is because guided
+            # decoding requires deterministic token selection, which conflicts with the
+            # speculative decoding's rejection sampling mechanism. Future versions may
+            # address this with specialized guided decoding integration for spec decoding.
             processed_logits, raw_logprobs = await logits_processor(target_logits)
             # Slice bonus (last) position logits for each batch element
             bonus_logits = processed_logits[num_expand_sampling - 1::num_expand_sampling]  # [batch_size, vocab]

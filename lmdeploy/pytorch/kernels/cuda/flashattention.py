@@ -17,7 +17,9 @@ VERSION_300 = version.parse('3.0.0')
 VERSION_320 = version.parse('3.2.0')
 assert TRITON_VERSION >= VERSION_300
 
-# TODO: fast op might not work on non-nv device
+# WARNING: Fast operations (tanh, tl_log2, tl_exp2) use NVIDIA-specific CUDA libdevice
+# functions which may not be available or may have different behavior on non-NVIDIA devices.
+# For non-NVIDIA GPUs (AMD, Intel, etc.), ensure Triton runtime compatibility is verified.
 tanh = tl.extra.cuda.libdevice.tanh
 tl_log2 = tl.log2
 tl_exp2 = tl.exp2

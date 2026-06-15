@@ -442,7 +442,9 @@ class Engine(EngineBase):
             if sess is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
-            # TODO: support 1 session n sequence
+            # NOTE: Currently each session supports only one active sequence at a time.
+            # Supporting multiple concurrent sequences per session (1:n) would require
+            # additional scheduling logic and is planned for future implementation.
             sampling_param = req.data['sampling_param']
             if len(sess.sequences) == 0:
                 migration_request = req.data.get('migration_request')

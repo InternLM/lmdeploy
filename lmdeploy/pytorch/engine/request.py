@@ -387,7 +387,7 @@ class RequestManager:
         if func is not None:
             func(reqs, **kwargs)
         else:
-            # TODO: send error message
+            # Send error response when handler callback is not registered
             for req in reqs:
                 resp = req.resp
                 resp.type = ResponseType.HANDLER_NOT_EXIST
