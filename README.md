@@ -265,7 +265,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
   - [Customize chat templates](docs/en/advance/chat_template.md)
   - [Add a new model](docs/en/advance/pytorch_new_model.md)
-  - gemm tuning
+  - [GEMM tuning](docs/en/advance/gemm_tuning.md)
   - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/llm/proxy_server.md)
 

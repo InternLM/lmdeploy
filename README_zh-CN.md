@@ -267,7 +267,7 @@ with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
   - [推理引擎 - PyTorch](./docs/zh_cn/inference/pytorch.md)
   - [自定义对话模板](./docs/zh_cn/advance/chat_template.md)
   - [支持新模型](./docs/zh_cn/advance/pytorch_new_model.md)
-  - gemm tuning
+  - [GEMM tuning](./docs/zh_cn/advance/gemm_tuning.md)
   - [长文本推理](./docs/zh_cn/advance/long_context.md)
   - [多模型推理服务](docs/zh_cn/llm/proxy_server.md)
 
