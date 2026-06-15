@@ -522,8 +522,11 @@ class RayExecutor(ExecutorBase):
 
         if self._prev_out is not None:
             try:
-                ray.get(self._prev_out)
-            except SystemExit:
+                # Await (instead of blocking ray.get) so the engine event loop is yielded while the
+                # previous forward runs. Blocking here stalls the whole loop, starving co-located
+                # async tasks such as the health probe.
+                await asyncio.gather(*self._prev_out)
+            except (SystemExit, ray.exceptions.RayActorError):
                 logger.error('Ray worker exited.')
                 raise
             finally:
