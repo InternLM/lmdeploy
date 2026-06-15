@@ -130,6 +130,7 @@ class RequestStats:
         self.lastest_token_time: float = 0.0
         self.finish_time: float = 0.0
         self.finish_reason: ResponseType = None
+        self.num_preemptions: int = 0  # Number of times request was preempted
 
     def __repr__(self):
         return ('RequestStats(\n'
@@ -140,6 +141,7 @@ class RequestStats:
                 f'  scheduled_time={self.scheduled_time:.6f},\n'
                 f'  first_token_time={self.first_token_time:.6f},\n'
                 f'  latest_token_time={self.lastest_token_time:.6f},\n'
+                f'  num_preemptions={self.num_preemptions},\n'
                 ')')
 
     def update_from_events(self, engine_events: list[EngineEvent]):
@@ -150,11 +152,13 @@ class RequestStats:
             if event.type == EventType.QUEUED:
                 self.queued_time = event.timestamp
             elif event.type == EventType.SCHEDULED:
-                if self.scheduled_time == 0.0:  # ignore preemptions
+                if self.scheduled_time == 0.0:  # record first schedule time
                     self.scheduled_time = event.timestamp
-            # FIXME: deal with preempted case
-            # elif event.type == EventType.PREEMPTED:
-            #     self.num_preempted_reqs += 1
+            elif event.type == EventType.PREEMPTED:
+                # Track preemption events for monitoring and debugging
+                self.num_preemptions += 1
+                # Reset scheduled_time to track re-scheduling latency
+                self.scheduled_time = 0.0
 
     @property
     def e2e_latency(self) -> float:

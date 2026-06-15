@@ -601,11 +601,12 @@ class EventType(enum.IntEnum):
     QUEUED - when the request was enqued by the engine
     SCHEDULED - when the request was first scheduled for execution
     PREEMPTED - the request has been put back in the waiting queue in order to make room for other requests to complete.
-                It will be re-scheduled in future and re-start its prefill phase
+                It will be re-scheduled in future and re-start its prefill phase.
+                Tracked in RequestStats.num_preemptions for monitoring.
     """
     QUEUED = 1
     SCHEDULED = 2
-    PREEMPTED = 3  # FIXME, currently ignored for simplicity
+    PREEMPTED = 3
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
