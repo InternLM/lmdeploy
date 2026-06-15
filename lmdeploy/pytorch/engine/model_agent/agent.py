@@ -1310,11 +1310,12 @@ class BaseModelAgent:
     def destroy_weights_update_group(self, request: DestroyWeightsUpdateGroupRequest):
         """Destroy a previously initialized weights-update process group."""
         group_name = request.group_name
-        pg = self._model_update_group.pop(group_name, None)
+        pg = self._model_update_group.get(group_name)
         if pg is None:
             return False, f'group {group_name!r} not initialized'
         try:
             dist.destroy_process_group(pg)
+            self._model_update_group.pop(group_name)
             return True, f'Succeeded to destroy group {group_name!r}.'
         except Exception as e:
             msg = f'Failed to destroy weights update group {group_name!r}: {e}'

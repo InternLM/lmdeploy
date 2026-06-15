@@ -99,6 +99,18 @@ class ExecutorBase:
         """Update params."""
         raise NotImplementedError('Not Implemented.')
 
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        raise NotImplementedError('Not Implemented.')
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        raise NotImplementedError('Not Implemented.')
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        raise NotImplementedError('Not Implemented.')
+
     def get_input_processor(self):
         """Get input processor."""
         raise NotImplementedError('Not Implemented.')
