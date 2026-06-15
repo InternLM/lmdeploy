@@ -147,6 +147,20 @@ class Scheduler:
         prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
         prefix_cache.match_start_step = -1
+        seq.cached_tokens = 0
+
+    @staticmethod
+    def _finalize_prefix_cache_match(seq: SchedulerSequence):
+        """Publish accepted cached-token count within the current prompt."""
+        match_start = seq.prefix_cache.match_start_step
+        if match_start < 0:
+            seq.cached_tokens = 0
+            return
+        cached_start = match_start
+        cached_end = seq.num_history_ids
+        prompt_start = seq.input_start_pos
+        prompt_end = seq.input_end_pos
+        seq.cached_tokens = max(0, min(cached_end, prompt_end) - max(cached_start, prompt_start))
 
     def _prefix_hit_starts_middle_long_context_chunk(self, seq: SchedulerSequence):
         """Check whether a prefix hit would start chunking from the middle."""
@@ -256,6 +270,7 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq)
+            self._finalize_prefix_cache_match(seq)
             _to_running(seq)
 
         return migration_ready
@@ -353,6 +368,8 @@ class Scheduler:
                 self.block_trie.allocate(seq)
             if self.is_ssm:
                 self.state_manager.allocate(seq)
+            if self.block_trie.enable:
+                self._finalize_prefix_cache_match(seq)
             _to_running(seq)
 
             seq.record_event(EventType.SCHEDULED)

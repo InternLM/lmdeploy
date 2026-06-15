@@ -4,7 +4,7 @@ import torch
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.engine.inputs_maker import _compact_state_prefix_cache_save_offsets
-from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
+from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
 
@@ -385,6 +385,7 @@ def test_ssm_failed_restore_schedule_rolls_back_match():
     assert seq.status == MessageStatus.WAITING
     assert seq.num_history_ids == 0
     assert len(seq.logical_blocks) == 0
+    assert seq.cached_tokens == 0
     assert seq.prefix_cache.last_shared_node is None
     assert seq.prefix_cache.restore_state == -1
     assert seq.prefix_cache.restore_node is None
@@ -418,6 +419,7 @@ def test_ssm_scheduler_preserves_matched_checkpoint_when_evicting_for_runtime_st
 
     assert output.running == [seq]
     assert seq.num_history_ids == block_size * 2
+    assert seq.cached_tokens == block_size * 2
     assert seq.prefix_cache.restore_state == state_idx_a
     assert seq.prefix_cache.restore_node is node_a
     assert seq.prefix_cache.restore_state_acquired
@@ -481,6 +483,99 @@ def test_schedule_migration_matches_current_sequence():
     assert seq.status == MessageStatus.MIGRATION_READY
 
 
+def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit():
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size + [2] * block_size + [3])
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    seq = scheduler.add_session(1).add_sequence([1] * block_size + [2] * block_size + [4])
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.num_history_ids == block_size * 2
+    assert seq.cached_tokens == block_size * 2
+
+    seq.update_token_ids(torch.tensor([5]))
+
+    assert seq.cached_tokens == 0
+    assert seq.prefix_cache.match_start_step == -1
+
+
+def test_scheduler_reports_zero_cached_tokens_for_prefix_miss():
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size + [2])
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    seq = scheduler.add_session(1).add_sequence([3] * block_size + [4])
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.num_history_ids == 0
+    assert seq.cached_tokens == 0
+
+
+def test_scheduler_cached_tokens_only_count_current_prompt_after_session_eviction():
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    session = scheduler.add_session(0)
+    seq = session.add_sequence([1] * block_size + [2] * block_size + [3])
+    scheduler.schedule(is_prefill=True)
+    seq.update_token_ids(torch.tensor([9]), mode=UpdateTokenMode.PREFILL)
+    seq.state.stop()
+    seq.state.free()
+
+    seq.update_token_ids(torch.tensor([4] * 4))
+    assert seq.input_start_pos == block_size * 2 + 2
+    assert seq.input_end_pos == block_size * 2 + 6
+    seq.state.activate()
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.num_history_ids == block_size * 2
+    assert seq.cached_tokens == 0
+
+
 def test_scheduler_rolls_back_prefix_hit_that_would_start_long_context_chunk_from_middle():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
@@ -511,5 +606,6 @@ def test_scheduler_rolls_back_prefix_hit_that_would_start_long_context_chunk_fro
     assert output.running == [seq]
     assert seq.num_history_ids == 0
     assert seq.num_token_ids == len(token_ids)
+    assert seq.cached_tokens == 0
     assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
     assert scheduler.block_trie.stats.num_hit_tokens == 0

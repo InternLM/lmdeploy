@@ -686,6 +686,8 @@ class SchedulerSequence:
     logical_state: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
+    input_start_pos: int = 0
+    input_end_pos: int = 0
     output_start_pos: int = 0
     meta: Any = None
     num_ignored_history: int = 0
@@ -707,6 +709,9 @@ class SchedulerSequence:
 
     # mrope
     history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
+
+    # Prefix-cache tokens accepted by the scheduler that are present in the current request prompt.
+    cached_tokens: int = 0
 
     def __post_init__(self):
         """Post init."""
