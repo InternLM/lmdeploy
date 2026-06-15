@@ -136,6 +136,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             draft_token_ids = _to_ndarray(draft_token_ids)
         if mode == UpdateTokenMode.INPUTS:
             self.cached_tokens = 0
+            self.prefix_cache.suppress_match_stats = False
             self.prefix_cache.match_start_step = -1
             self._update_token_ids_inputs(token_ids)
         elif mode == UpdateTokenMode.PREFILL:

@@ -73,6 +73,9 @@ class PrefixCacheState:
     from it.  ``match_start_step`` remembers the sequence step before a
     tentative prefix-cache match so long-context chunking can distinguish
     current-turn cached multimodal spans from older session history.
+    ``suppress_match_stats`` is set while replaying work after recompute
+    eviction; cache reuse may still happen, but it should not affect the public
+    prefix-cache hit-rate metric.
     """
 
     metas: list[PrefixCacheMeta] = field(default_factory=list)
@@ -91,6 +94,7 @@ class PrefixCacheState:
     save_acquired_node: Any = field(default=None, repr=False)
     decode_state_node: Any = field(default=None, repr=False)
     match_start_step: int = -1
+    suppress_match_stats: bool = False
 
 
 @dataclass

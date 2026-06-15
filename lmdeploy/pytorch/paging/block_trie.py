@@ -214,11 +214,12 @@ class BlockTrie:
         self.stats.num_query_tokens = snapshot.num_query_tokens
         self.stats.num_hit_tokens = snapshot.num_hit_tokens
 
-    def record_recompute_after_rollback(self, seq: SchedulerSequence, snapshot):
-        """Record a recompute after a tentative match was rolled back."""
-        if snapshot is None:
+    def _record_match_stats(self, seq: SchedulerSequence, query_tokens: int, hit_tokens: int = 0):
+        """Record a user-visible prefix-cache match attempt."""
+        if seq.prefix_cache.suppress_match_stats:
             return
-        self.stats.num_query_tokens += seq.num_all_ids
+        self.stats.num_query_tokens += query_tokens
+        self.stats.num_hit_tokens += hit_tokens
 
     def get_root(self, adapter_name: str):
         """Get root by adapter name."""
@@ -962,8 +963,9 @@ class BlockTrie:
                 seq.prefix_cache.restore_state = node.state_idx
                 seq.prefix_cache.restore_node = node
                 seq.prefix_cache.last_shared_node = node
-                self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
-                self.stats.num_hit_tokens += step - init_num_matched
+                self._record_match_stats(seq,
+                                         query_tokens=seq.num_all_ids - init_num_matched,
+                                         hit_tokens=step - init_num_matched)
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f'SSM prefix-cache hit: session_id={seq.session_id} seq_id={seq.seq_id} '
                                  f'init_step={init_num_matched} matched_step={step} '
@@ -971,7 +973,7 @@ class BlockTrie:
                 return
 
         seq.prefix_cache.last_shared_node = init_curr
-        self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
+        self._record_match_stats(seq, query_tokens=seq.num_all_ids - init_num_matched)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'SSM prefix-cache miss: session_id={seq.session_id} seq_id={seq.seq_id} '
                          f'init_step={init_num_matched} max_step={max_step} ready_steps={len(steps)}')
@@ -1058,8 +1060,9 @@ class BlockTrie:
                 seq.prefix_cache.restore_state = curr.state_idx
 
         # record prefix hit
-        self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
-        self.stats.num_hit_tokens += num_matched - init_num_matched
+        self._record_match_stats(seq,
+                                 query_tokens=seq.num_all_ids - init_num_matched,
+                                 hit_tokens=num_matched - init_num_matched)
 
         seq.prefix_cache.last_shared_node = curr
         if logger.isEnabledFor(logging.DEBUG):

@@ -404,7 +404,7 @@ def test_ssm_failed_restore_schedule_rolls_back_match():
     assert seq.logical_state == state_idx
     assert node.state_idx == -1
     assert not node.state_ready
-    assert scheduler.block_trie.stats.num_query_tokens == len(seq.all_ids)
+    assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
 
@@ -576,6 +576,43 @@ def test_scheduler_cached_tokens_only_count_current_prompt_after_session_evictio
     assert seq.cached_tokens == 0
 
 
+def test_scheduler_excludes_recompute_eviction_prefix_hits_from_stats():
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=4,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    seq = scheduler.add_session(0).add_sequence([1] * block_size + [2] * block_size + [3])
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [seq]
+
+    seq.state.evict()
+    pressure = scheduler.add_session(1).add_sequence([9] * block_size * 3)
+    scheduler.block_trie.stats.reset()
+
+    assert scheduler.eviction_helper.evict_for_seq(pressure, [seq], 0)
+    assert seq.prefix_cache.suppress_match_stats
+    pressure.session.remove_sequence(pressure)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.num_history_ids >= block_size
+    assert seq.cached_tokens == 0
+    assert not seq.prefix_cache.suppress_match_stats
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
 def test_scheduler_rolls_back_prefix_hit_that_would_start_long_context_chunk_from_middle():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
@@ -607,5 +644,5 @@ def test_scheduler_rolls_back_prefix_hit_that_would_start_long_context_chunk_fro
     assert seq.num_history_ids == 0
     assert seq.num_token_ids == len(token_ids)
     assert seq.cached_tokens == 0
-    assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
+    assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0

@@ -162,6 +162,16 @@ class Scheduler:
         prompt_end = seq.input_end_pos
         seq.cached_tokens = max(0, min(cached_end, prompt_end) - max(cached_start, prompt_start))
 
+    @staticmethod
+    def _finish_prefix_cache_schedule(seq: SchedulerSequence):
+        """Publish match side effects after the sequence is accepted to run."""
+        prefix_cache = seq.prefix_cache
+        if prefix_cache.suppress_match_stats:
+            seq.cached_tokens = 0
+            prefix_cache.suppress_match_stats = False
+            return
+        Scheduler._finalize_prefix_cache_match(seq)
+
     def _prefix_hit_starts_middle_long_context_chunk(self, seq: SchedulerSequence):
         """Check whether a prefix hit would start chunking from the middle."""
         if seq.num_history_ids <= 0:
@@ -270,7 +280,7 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq)
-            self._finalize_prefix_cache_match(seq)
+            self._finish_prefix_cache_schedule(seq)
             _to_running(seq)
 
         return migration_ready
@@ -319,16 +329,13 @@ class Scheduler:
 
             if self.block_trie.enable:
                 stats_snapshot = self.block_trie.snapshot_stats()
-                rolled_back_match = False
 
                 def __rollback_prefix_match(reason: str):
-                    nonlocal rolled_back_match
                     if logger.isEnabledFor(logging.DEBUG):
                         logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
                                      f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
                                      f'restore_state={seq.prefix_cache.restore_state}')
                     self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
-                    rolled_back_match = True
 
                 self.block_trie.match(seq)
                 if self._prefix_hit_starts_middle_long_context_chunk(seq):
@@ -356,10 +363,6 @@ class Scheduler:
                         break
                     if not self._ensure_runtime_state_available():
                         break
-                if rolled_back_match:
-                    # The tentative hit was not used, but the request still queried
-                    # the cache and will recompute from token 0 after rollback.
-                    self.block_trie.record_recompute_after_rollback(seq, stats_snapshot)
             else:
                 if not __evict_for_seq(seq, waiting):
                     break
@@ -369,7 +372,7 @@ class Scheduler:
             if self.is_ssm:
                 self.state_manager.allocate(seq)
             if self.block_trie.enable:
-                self._finalize_prefix_cache_match(seq)
+                self._finish_prefix_cache_schedule(seq)
             _to_running(seq)
 
             seq.record_event(EventType.SCHEDULED)

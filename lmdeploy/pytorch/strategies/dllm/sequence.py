@@ -194,6 +194,7 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
 
         if mode == UpdateTokenMode.INPUTS:
             self.cached_tokens = 0
+            self.prefix_cache.suppress_match_stats = False
             self.prefix_cache.match_start_step = -1
             self.input_start_pos = self.num_valid_ids
             self.input_end_pos = self.input_start_pos + len(token_ids)
