@@ -158,6 +158,7 @@ def model_forward(
     inputs: ModelInputs,
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
+    memory_cache_engine: CacheEngine = None,
     stream: torch.cuda.Stream = None,
 ):
     """Perform model forward."""
@@ -170,6 +171,7 @@ def model_forward(
             model_config=cache_engine.model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=cache_engine.gpu_cache,
+            memory_kv_caches=memory_cache_engine.gpu_cache if memory_cache_engine is not None else None,
             state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
@@ -294,6 +296,7 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.memory_cache_engine = None
         self.state_cache_engine = None
         self.profiler: AgentProfiler = None
         try:
@@ -800,6 +803,8 @@ class BaseModelAgent:
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        if self.memory_cache_engine is not None:
+            cache_swapping(self.memory_cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
@@ -1070,6 +1075,8 @@ class BaseModelAgent:
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)
+            if hasattr(patched_model, 'load_auxiliary_weights'):
+                patched_model.load_auxiliary_weights(self.model_config.memory_model_path, device=device)
         if adapters is not None:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
@@ -1108,6 +1115,17 @@ class BaseModelAgent:
                                             tp_rank=dist_ctx.attn_tp_group.rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
+            if self.model_config.memory_model_config is not None:
+                self.memory_cache_engine = CacheEngine(
+                    self.cache_config,
+                    self.model_config.memory_model_config,
+                    rank=self.rank,
+                    tp_rank=dist_ctx.attn_tp_group.rank,
+                    world_size=tp,
+                    cache_stream=self.cache_stream,
+                )
+            else:
+                self.memory_cache_engine = None
             self.state_cache_engine = StateCacheEngine(self.cache_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
@@ -1117,6 +1135,7 @@ class BaseModelAgent:
             self.patched_model,
             inputs,
             self.cache_engine,
+            memory_cache_engine=self.memory_cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
         )
@@ -1368,6 +1387,7 @@ class BaseModelAgent:
             await self.state.to_sleep.wait()
         device = 'cpu' if level == 1 else 'meta'
         self.cache_engine = None
+        self.memory_cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
         self.patched_model.get_model().to(device=device, non_blocking=True)
@@ -1421,5 +1441,6 @@ class BaseModelAgent:
         self.reset_graph_runner()
         self.patched_model = None
         self.cache_engine = None
+        self.memory_cache_engine = None
         self.state_cache_engine = None
         torch.cuda.empty_cache()

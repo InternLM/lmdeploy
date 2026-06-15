@@ -145,6 +145,8 @@ MODULE_MAP.update({
     'Qwen3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3.Qwen3ForCausalLM',
 })
 
+MODULE_MAP.update({'MemDecodeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.memdecode.MemDecodeForCausalLM'})
+
 # qwen3 moe
 MODULE_MAP.update({
     'Qwen3MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_moe.Qwen3MoeForCausalLM',

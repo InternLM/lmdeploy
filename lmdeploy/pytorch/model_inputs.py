@@ -300,6 +300,7 @@ class StepContext:
     is_decoding: bool
     sum_kv_seqlen: int
     max_kv_seqlen: int | None = None
+    memory_kv_caches: list | None = None
     local_adapter_ids: torch.LongTensor | None = None
     input_embeddings: torch.Tensor | None = None
     input_embedding_indexing: torch.Tensor | None = None
@@ -333,6 +334,7 @@ class StepContext:
         model_config: ModelConfig,
         cache_config: CacheConfig,
         kv_caches: list | None = None,
+        memory_kv_caches: list | None = None,
         state_caches: list | None = None,
         kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
     ):
@@ -377,6 +379,7 @@ class StepContext:
             kv_seqlens=kv_seqlens,
             q_start_loc=q_start_loc,
             kv_caches=kv_caches,
+            memory_kv_caches=memory_kv_caches,
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
             max_kv_seqlen=inputs.max_kv_seqlen,
@@ -477,6 +480,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         model_config: ModelConfig,
         cache_config: CacheConfig,
         kv_caches: list | None = None,
+        memory_kv_caches: list | None = None,
         state_caches: list | None = None,
         kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
     ):
@@ -486,6 +490,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
             model_config,
             cache_config,
             kv_caches,
+            memory_kv_caches,
             state_caches,
             kv_quant_policy,
         )

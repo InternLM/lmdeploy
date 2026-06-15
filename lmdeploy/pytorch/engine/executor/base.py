@@ -19,11 +19,12 @@ class _CacheBlockSize(NamedTuple):
 
     target: int
     spec: int = 0
+    memory: int = 0
 
     @property
     def total(self) -> int:
         """Total cache block size when target and spec caches coexist."""
-        return self.target + self.spec
+        return self.target + self.spec + self.memory
 
 
 class ExecutorBase:
@@ -195,7 +196,7 @@ class ExecutorBase:
     def _get_rank_cache_block_sizes(self, num_ranks: int, cache_block_size: _CacheBlockSize) -> list[int]:
         """Get per-rank KV cache block sizes."""
         if cache_block_size.spec == 0:
-            return [cache_block_size.target] * num_ranks
+            return [cache_block_size.target + cache_block_size.memory] * num_ranks
 
         attn_tp = self.dist_config.attn_tp
         draft_tp = self._get_spec_attn_tp()
@@ -208,7 +209,7 @@ class ExecutorBase:
         # attention-TP group. Other ranks can use the memory that would have
         # gone to spec cache for additional target KV blocks.
         return [
-            cache_block_size.total if rank % attn_tp == 0 else cache_block_size.target
+            cache_block_size.total if rank % attn_tp == 0 else cache_block_size.target + cache_block_size.memory
             for rank in range(num_ranks)
         ]
 
@@ -318,13 +319,24 @@ class ExecutorBase:
         """Get per-block KV cache memory for target and spec models."""
         cache_block_size = CacheEngine.get_cache_block_size(self.cache_config, self.model_config,
                                                             self.dist_config.attn_tp)
+        memory_cache_block_size = 0
+        if self.model_config.memory_model_config is not None:
+            memory_cache_block_size = CacheEngine.get_cache_block_size(
+                self.cache_config,
+                self.model_config.memory_model_config,
+                self.dist_config.attn_tp,
+            )
 
         spec_cache_block_size = 0
         if spec_cache_config is not None:
             draft_tp = self._get_spec_attn_tp()
             spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, draft_tp)
 
-        return _CacheBlockSize(target=cache_block_size, spec=spec_cache_block_size)
+        return _CacheBlockSize(
+            target=cache_block_size,
+            spec=spec_cache_block_size,
+            memory=memory_cache_block_size,
+        )
 
     def _reserve_runtime_mem(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
                              spec_cache_config: CacheConfig | None) -> list[int]:

@@ -389,6 +389,15 @@ class ModelConfig:
     # flags mark if this model use mrope
     use_mrope: bool = False
 
+    # memdecode
+    base_model_path: str = None
+    memory_model_path: str = None
+    memory_model_config: 'ModelConfig | None' = None
+    lambda_value: float = 1.0
+    adaptive_router: bool = False
+    router_path: str = None
+    lambda_base_only_threshold: float = -1.0
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
@@ -444,6 +453,27 @@ class ModelConfig:
         # update quantization config
         hf_config = _patch_quantization_config(hf_config, model_format=model_format)
 
+        hf_overrides = dict(hf_overrides or {})
+        base_model_path = hf_overrides.pop('base_model_path', pretrained_model_name_or_path)
+        memory_model_path = hf_overrides.pop('memory_model_path', None)
+        lambda_value = hf_overrides.pop('lambda_value', 1.0)
+        adaptive_router = hf_overrides.pop('adaptive_router', False)
+        router_path = hf_overrides.pop('router_path', None)
+        lambda_base_only_threshold = hf_overrides.pop('lambda_base_only_threshold', -1.0)
+
+        if memory_model_path is not None:
+            memory_model_config = cls.from_pretrained(
+                memory_model_path,
+                trust_remote_code=trust_remote_code,
+                dtype=dtype,
+                dist_config=dist_config,
+                model_format=model_format,
+                device_type=device_type,
+                block_size=block_size,
+            )
+        else:
+            memory_model_config = None
+
         model_config = cls.from_hf_config(
             hf_config,
             pretrained_model_name_or_path,
@@ -454,8 +484,28 @@ class ModelConfig:
             num_spec_tokens=num_spec_tokens,
             device_type=device_type,
         )
+        model_config.base_model_path = base_model_path
+        model_config.memory_model_path = memory_model_path
+        model_config.memory_model_config = memory_model_config
+        model_config.lambda_value = float(lambda_value)
+        model_config.adaptive_router = adaptive_router
+        model_config.router_path = router_path
+        model_config.lambda_base_only_threshold = float(lambda_base_only_threshold)
+
+        # keep memdecode settings on the HF config object for model-side
+        # initialization in patched model classes
+        hf_config.base_model_path = base_model_path
+        hf_config.memory_model_path = memory_model_path
+        hf_config.lambda_value = model_config.lambda_value
+        hf_config.adaptive_router = adaptive_router
+        hf_config.router_path = router_path
+        hf_config.lambda_base_only_threshold = model_config.lambda_base_only_threshold
+        hf_config.trust_remote_code = trust_remote_code
+        if memory_model_config is not None:
+            model_config.vocab_size = max(model_config.vocab_size, memory_model_config.vocab_size)
+
         fp32_lm_head = False
-        if hf_overrides is not None:
+        if hf_overrides:
             logger.warning(f'Overriding HF config with {hf_overrides}')
             fp32_lm_head = hf_overrides.get('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
