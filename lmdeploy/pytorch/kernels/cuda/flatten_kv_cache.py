@@ -17,6 +17,14 @@ Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
 Q_POLICY_TURBO = tl.constexpr(42)
 
+# MLA (Multi-head Latent Attention) FP8 quantization constants
+# These are architecture-specific parameters for DeepSeek-style MLA models
+MLA_K_HEAD_DIM = 576          # Total K head dimension (nope + pe + scale)
+MLA_BLOCK_NOPE = 512          # Non-positional embedding dimension
+MLA_BLOCK_PE = 64             # Positional embedding dimension
+MLA_BLOCK_SCALE = 16          # Scale factors dimension (for FP8 dequantization)
+MLA_GROUP_SIZE = 128          # Group size for FP8 per-channel quantization
+
 
 @triton.jit
 def _flatten_kv_cache(
@@ -729,19 +737,20 @@ def flatten_kv_cache_mla_fp8(k_caches: Tensor,
     if out_size is None or out_size <= 0:
         out_size = k_caches.size(b_dim) * k_caches.size(s_dim)
 
-    # TODO: DIRTY magic number
-    k_caches_nope = k_caches[..., :512]
-    k_caches_scale = k_caches[..., 512:512 + 16].view(torch.float32)
-    k_caches_pe = k_caches[..., 512 + 16:].view(out_dtype)
+    # Split MLA FP8 cache into components: nope, scale, and positional embedding
+    # Layout: [nope(512) | scale(16) | pe(64)] = total 576 dimensions
+    k_caches_nope = k_caches[..., :MLA_BLOCK_NOPE]
+    k_caches_scale = k_caches[..., MLA_BLOCK_NOPE:MLA_BLOCK_NOPE + MLA_BLOCK_SCALE].view(torch.float32)
+    k_caches_pe = k_caches[..., MLA_BLOCK_NOPE + MLA_BLOCK_SCALE:].view(out_dtype)
 
     if start_loc is None:
         start_loc = seqlens.cumsum(0) - seqlens
 
     batch_size, num_blocks = block_offsets.size()
     num_heads = k_caches.size(h_dim)
-    k_head_dim = 576
-    BLOCK_NOPE = 512
-    BLOCK_PE = 64
+    k_head_dim = MLA_K_HEAD_DIM
+    BLOCK_NOPE = MLA_BLOCK_NOPE
+    BLOCK_PE = MLA_BLOCK_PE
     BLOCK_BS = k_caches.size(s_dim)
     if flatten_kv_layout == 'hsd':
         k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
