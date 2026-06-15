@@ -1,6 +1,101 @@
 # 支持的模型
 
-以下列表分别为 LMDeploy TurboMind 引擎和 PyTorch 引擎在不同软硬件平台下支持的模型
+以下列表分别为 LMDeploy TurboMind 引擎和 PyTorch 引擎在不同软硬件平台下支持的模型。
+
+## 引擎支持矩阵
+
+此表提供了每个模型系列支持的推理引擎的快速参考。使用此表选择适合您部署的引擎。
+
+**图例：**
+- ✅ = 完全支持
+- ⚠️ = 部分支持（见注释）
+- ❌ = 不支持
+- - = 未验证/测试
+
+### 模型系列支持概览
+
+| 模型系列 | TurboMind (CUDA) | PyTorch (CUDA) | PyTorch (昇腾) | PyTorch (Maca) | PyTorch (寒武纪) | 推荐引擎 |
+|:------------:|:----------------:|:--------------:|:----------------:|:--------------:|:-------------------:|:------------------:|
+| Llama 1/2/3/3.1/3.2 | ✅ | ✅ | ✅ | ✅ | ✅ | TurboMind（更快） |
+| Llama 4 | ❌ | ✅ | - | - | - | 仅 PyTorch |
+| InternLM 1/2/2.5/3 | ✅ | ✅ | ✅ | ✅ | ✅ | TurboMind（更快） |
+| Intern-S1/S2 | ✅ | ✅ | - | - | - | 两者都支持 |
+| Qwen 1/1.5/2/2.5 | ✅ | ✅ | ✅ | ✅ | ✅ | TurboMind（更快） |
+| Qwen 3/3.5 | ✅* | ✅ | ✅ | ✅ | ✅ | PyTorch（完整功能） |
+| Mistral/Mixtral | ⚠️¹ | ✅ | ✅ | ✅ | ✅ | PyTorch（窗口注意力） |
+| DeepSeek V2/V2.5 | ✅ | ✅ | ⚠️ | - | - | TurboMind (CUDA) |
+| DeepSeek V3/V3.2 | ❌ | ✅ | ❌ | - | - | 仅 PyTorch |
+| DeepSeek-VL/VL2 | ✅ / ❌ | ✅ | - | - | - | VL2 用 PyTorch |
+| Baichuan 1/2 | ✅ | ✅ | - | - | - | TurboMind（更快） |
+| Yi | ✅ | ✅ | - | - | - | TurboMind（更快） |
+| Code Llama | ✅ | ✅ | - | - | - | TurboMind（更快） |
+| GLM-4/4V/4.5/5 | ✅ | ✅ | - | ✅ | - | 两者都支持 |
+| Gemma 2/3 | ❌ | ✅ | - | ✅ | - | 仅 PyTorch |
+| Phi-3/4 | ❌ | ✅ | - | - | - | 仅 PyTorch |
+| LLaVA 1.5/1.6 | ✅ | ⚠️² | - | - | - | TurboMind 或 PyTorch |
+| Qwen-VL 系列 | ✅ | ✅ | ✅ | ✅ | ❌ | TurboMind (VL), PyTorch (VL2+) |
+| InternVL 1/2/2.5/3/3.5 | ✅ | ✅ | ✅ | ✅ | - | TurboMind（更快） |
+| MiniCPM-V | ✅ | ✅ | - | - | - | 两者都支持 |
+| Molmo | ✅ | ✅ | - | - | - | 两者都支持 |
+| CogVLM 1/2 | ❌ | ✅ | ✅ | ✅ | - | 仅 PyTorch |
+| StarCoder2 | ❌ | ✅ | - | - | - | 仅 PyTorch |
+| gpt-oss | ✅ | ✅ | - | - | - | TurboMind（更快） |
+
+**注释：**
+1. **Mistral/Qwen1.5**: TurboMind 不支持窗口注意力。如果启用了 `use_sliding_window`，请使用 PyTorch 引擎。
+2. **LLaVA**: PyTorch 引擎在 v0.6.4 之后移除了对原始 LLaVA 模型的支持。使用来自 https://huggingface.co/llava-hf 的 transformers 模型
+3. **Qwen3.5**: TurboMind 目前不支持视觉编码器。使用 PyTorch 获得完整的 VLM 功能。
+4. **DeepSeek V3**: 由于模型架构复杂性，需要 PyTorch 引擎。
+5. 从版本 0.11.1 开始，PyTorchEngine 不再提供对 mllama 的支持。
+
+### 量化支持对比
+
+| 量化类型 | TurboMind | PyTorch 引擎 | 说明 |
+|:-----------------:|:---------:|:--------------:|:------|
+| FP16/BF16 | ✅ 所有模型 | ✅ 所有模型 | 基础精度 |
+| W4A16 (AWQ/GPTQ) | ✅ 大多数 LLM | ✅ 选定模型 | 4 位权重 |
+| W8A8 | ❌ 有限 | ✅ 选定模型 | 8 位权重和激活值 |
+| KV Cache INT8 | ✅ 大多数模型 | ✅ 大多数模型 | 需要 head_dim=128* |
+| KV Cache INT4 | ✅ 大多数模型 | ✅ 选定模型 | 需要 head_dim=128* |
+
+*\* 当模型的 head_dim 不为 128 时（例如 llama3.2-1B、qwen2-0.5B），TurboMind 不支持 KV cache 4/8 位量化。*
+
+### 功能支持矩阵
+
+| 功能 | TurboMind | PyTorch 引擎 |
+|:-------:|:---------:|:--------------:|
+| 连续批处理 | ✅ | ✅ |
+| 分页注意力 | ✅ | ✅ |
+| 张量并行 | ✅ | ✅ |
+| 前缀缓存 | ✅ | ✅ |
+| LoRA | ✅ | ✅ |
+| 推测解码 | ✅ | ✅ |
+| 结构化输出 | ✅ | ✅ |
+| 多 GPU (TP) | ✅ | ✅ |
+| 多节点 | ✅ | ✅ (Ray) |
+| 视觉语言 | ✅ 有限 | ✅ 完整 |
+| MoE 模型 | ✅ 选定 | ✅ 完整 |
+| 动态形状 | ⚠️ 有限 | ✅ 完整 |
+| 自定义内核 | ✅ CUDA | ✅ Triton/CUDA |
+| 易于添加模型 | ❌ 复杂 | ✅ 简单 |
+
+**何时选择哪个引擎：**
+
+**选择 TurboMind 当：**
+- 您需要在 CUDA GPU 上获得最大性能
+- 使用标准 LLM 架构（Llama、Qwen、InternLM）
+- 在高吞吐量要求的生产环境中部署
+- 使用 4 位量化（W4A16）
+
+**选择 PyTorch 引擎当：**
+- 使用 VLM（视觉语言模型）
+- 使用 TurboMind 尚未支持的新模型
+- 需要动态形状支持
+- 在非 CUDA 平台上开发（昇腾、Maca、寒武纪）
+- 添加自定义模型支持（更容易集成）
+- 使用窗口注意力模型（Mistral、某些 Qwen 变体）
+
+---
 
 ## TurboMind CUDA 平台
 

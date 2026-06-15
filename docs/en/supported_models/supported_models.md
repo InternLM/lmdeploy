@@ -2,6 +2,101 @@
 
 The following tables detail the models supported by LMDeploy's TurboMind engine and PyTorch engine across different platforms.
 
+## Engine Support Matrix
+
+This table provides a quick reference for which inference engine supports each model family. Use this to choose the appropriate engine for your deployment.
+
+**Legend:**
+- ✅ = Fully supported
+- ⚠️ = Partial support (see notes)
+- ❌ = Not supported
+- - = Not verified/tested
+
+### Model Family Support Overview
+
+| Model Family | TurboMind (CUDA) | PyTorch (CUDA) | PyTorch (Ascend) | PyTorch (Maca) | PyTorch (Cambricon) | Recommended Engine |
+|:------------:|:----------------:|:--------------:|:----------------:|:--------------:|:-------------------:|:------------------:|
+| Llama 1/2/3/3.1/3.2 | ✅ | ✅ | ✅ | ✅ | ✅ | TurboMind (faster) |
+| Llama 4 | ❌ | ✅ | - | - | - | PyTorch only |
+| InternLM 1/2/2.5/3 | ✅ | ✅ | ✅ | ✅ | ✅ | TurboMind (faster) |
+| Intern-S1/S2 | ✅ | ✅ | - | - | - | Both supported |
+| Qwen 1/1.5/2/2.5 | ✅ | ✅ | ✅ | ✅ | ✅ | TurboMind (faster) |
+| Qwen 3/3.5 | ✅* | ✅ | ✅ | ✅ | ✅ | PyTorch (full features) |
+| Mistral/Mixtral | ⚠️¹ | ✅ | ✅ | ✅ | ✅ | PyTorch (window attention) |
+| DeepSeek V2/V2.5 | ✅ | ✅ | ⚠️ | - | - | TurboMind (CUDA) |
+| DeepSeek V3/V3.2 | ❌ | ✅ | ❌ | - | - | PyTorch only |
+| DeepSeek-VL/VL2 | ✅ / ❌ | ✅ | - | - | - | PyTorch for VL2 |
+| Baichuan 1/2 | ✅ | ✅ | - | - | - | TurboMind (faster) |
+| Yi | ✅ | ✅ | - | - | - | TurboMind (faster) |
+| Code Llama | ✅ | ✅ | - | - | - | TurboMind (faster) |
+| GLM-4/4V/4.5/5 | ✅ | ✅ | - | ✅ | - | Both supported |
+| Gemma 2/3 | ❌ | ✅ | - | ✅ | - | PyTorch only |
+| Phi-3/4 | ❌ | ✅ | - | - | - | PyTorch only |
+| LLaVA 1.5/1.6 | ✅ | ⚠️² | - | - | - | TurboMind or PyTorch |
+| Qwen-VL series | ✅ | ✅ | ✅ | ✅ | ❌ | TurboMind (VL), PyTorch (VL2+) |
+| InternVL 1/2/2.5/3/3.5 | ✅ | ✅ | ✅ | ✅ | - | TurboMind (faster) |
+| MiniCPM-V | ✅ | ✅ | - | - | - | Both supported |
+| Molmo | ✅ | ✅ | - | - | - | Both supported |
+| CogVLM 1/2 | ❌ | ✅ | ✅ | ✅ | - | PyTorch only |
+| StarCoder2 | ❌ | ✅ | - | - | - | PyTorch only |
+| gpt-oss | ✅ | ✅ | - | - | - | TurboMind (faster) |
+
+**Notes:**
+1. **Mistral/Qwen1.5**: TurboMind doesn't support window attention. Use PyTorch engine if `use_sliding_window` is enabled.
+2. **LLaVA**: PyTorch engine removed support for original LLaVA models after v0.6.4. Use transformers models from https://huggingface.co/llava-hf
+3. **Qwen3.5**: TurboMind does not currently support the vision encoder. Use PyTorch for full VLM capabilities.
+4. **DeepSeek V3**: Requires PyTorch engine due to model architecture complexity.
+5. Starting from version 0.11.1, PyTorchEngine no longer provides support for mllama.
+
+### Quantization Support Comparison
+
+| Quantization Type | TurboMind | PyTorch Engine | Notes |
+|:-----------------:|:---------:|:--------------:|:------|
+| FP16/BF16 | ✅ All models | ✅ All models | Base precision |
+| W4A16 (AWQ/GPTQ) | ✅ Most LLMs | ✅ Selected models | 4-bit weights |
+| W8A8 | ❌ Limited | ✅ Selected models | 8-bit weights & activations |
+| KV Cache INT8 | ✅ Most models | ✅ Most models | Requires head_dim=128* |
+| KV Cache INT4 | ✅ Most models | ✅ Selected models | Requires head_dim=128* |
+
+*\* When model's head_dim is not 128 (e.g., llama3.2-1B, qwen2-0.5B), TurboMind doesn't support KV cache 4/8 bit quantization.*
+
+### Feature Support Matrix
+
+| Feature | TurboMind | PyTorch Engine |
+|:-------:|:---------:|:--------------:|
+| Continuous Batching | ✅ | ✅ |
+| Paged Attention | ✅ | ✅ |
+| Tensor Parallelism | ✅ | ✅ |
+| Prefix Caching | ✅ | ✅ |
+| LoRA | ✅ | ✅ |
+| Speculative Decoding | ✅ | ✅ |
+| Structured Output | ✅ | ✅ |
+| Multi-GPU (TP) | ✅ | ✅ |
+| Multi-Node | ✅ | ✅ (Ray) |
+| Vision-Language | ✅ Limited | ✅ Full |
+| MoE Models | ✅ Selected | ✅ Full |
+| Dynamic Shape | ⚠️ Limited | ✅ Full |
+| Custom Kernels | ✅ CUDA | ✅ Triton/CUDA |
+| Easy Model Addition | ❌ Complex | ✅ Simple |
+
+**When to choose which engine:**
+
+**Choose TurboMind when:**
+- You need maximum performance on CUDA GPUs
+- Working with standard LLM architectures (Llama, Qwen, InternLM)
+- Deploying in production with high throughput requirements
+- Using 4-bit quantization (W4A16)
+
+**Choose PyTorch Engine when:**
+- Working with VLMs (Vision-Language Models)
+- Using newer models not yet supported in TurboMind
+- Need dynamic shape support
+- Developing on non-CUDA platforms (Ascend, Maca, Cambricon)
+- Adding custom model support (easier integration)
+- Using window attention models (Mistral, some Qwen variants)
+
+---
+
 ## TurboMind on CUDA Platform
 
 |              Model               |       Size       | Type | FP16/BF16 | KV INT8 | KV INT4 | W4A16 |
