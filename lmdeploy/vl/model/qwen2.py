@@ -23,7 +23,7 @@ def check_qwen_vl_deps_install():
 class Qwen2VLModel(VisionModel):
     """Qwen2VL model."""
 
-    _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
+    _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration', 'Qwen3VLForConditionalGeneration']
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         check_qwen_vl_deps_install()
@@ -59,6 +59,8 @@ class Qwen2VLModel(VisionModel):
             from transformers import Qwen2VLForConditionalGeneration as AutoModelCls
         elif arch == 'Qwen2_5_VLForConditionalGeneration':
             from transformers import Qwen2_5_VLForConditionalGeneration as AutoModelCls
+        elif arch == 'Qwen3VLForConditionalGeneration':
+            from transformers import Qwen3VLForConditionalGeneration as AutoModelCls
         else:
             raise ValueError(f'Unsupported arch={arch}')
 
@@ -85,7 +87,7 @@ class Qwen2VLModel(VisionModel):
                                              checkpoint=self.model_path,
                                              device_map='auto' if not self.with_llm else {'': 'cpu'},
                                              max_memory=self.max_memory,
-                                             no_split_module_classes=['Qwen2VLVisionBlock', 'Qwen2_5_VLVisionBlock'],
+                                             no_split_module_classes=['Qwen2VLVisionBlock', 'Qwen2_5_VLVisionBlock', 'Qwen3VLVisionBlock'],
                                              dtype=torch.half)
             self.model = model.eval()
 
