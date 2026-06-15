@@ -4,7 +4,7 @@
 #include <functional>
 
 #include "src/turbomind/engine/request.h"
-#include "src/turbomind/kernels/logprob_kernels.h"
+#include "src/turbomind/kernels/cross_entropy_kernels.h"
 
 // #include "dbg.h"
 

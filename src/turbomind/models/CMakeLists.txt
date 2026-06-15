@@ -53,7 +53,7 @@ target_link_libraries(models PUBLIC
         attention
         decoding_kernels
         quantization_kernels
-        logprob_kernels
+        cross_entropy_kernels
         unfused_attention_kernels
         gpt_kernels
         memory_utils
