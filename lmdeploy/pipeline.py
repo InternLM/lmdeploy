@@ -269,8 +269,7 @@ class Pipeline:
         return scores
 
     def get_ppl(self, input_ids: list[int] | list[list[int]]) -> list[float]:
-        """Get perplexity scores given a list of input tokens that have to be
-        of the same length.
+        """Get perplexity scores given a list of input tokens.
 
         Args:
             input_ids: the batch of input token ids.
@@ -278,10 +277,12 @@ class Pipeline:
         Returns:
             list[float]: A list of perplexity scores.
         """
-        engine = self.async_engine
+        assert isinstance(input_ids, list)
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
+        assert all(len(_) > 1 for _ in input_ids)
 
+        engine = self.async_engine
         async def _gather():
             return await asyncio.gather(*[engine.async_get_ppl(ids) for ids in input_ids])
 
