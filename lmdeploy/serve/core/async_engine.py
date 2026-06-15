@@ -144,6 +144,7 @@ class AsyncEngine:
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
+        self.speculative_config = speculative_config
         self.is_sleeping = backend_config.empty_init
         self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
         logger.info(f'updated backend_config={self.backend_config}')
@@ -857,11 +858,6 @@ class AsyncEngine:
         """Get the perplexity (mean cross-entropy loss) of a single input
         prompt.
 
-        The cross-entropy is reduced inside the engine during prefill, so only a
-        scalar is returned -- the full ``[seq, vocab]`` logits are never
-        transferred off device (unlike :meth:`async_get_logits`). Pytorch
-        backend only.
-
         Args:
             input_ids (list[int]): the input token ids to score.
 
@@ -869,8 +865,10 @@ class AsyncEngine:
             float: the mean cross-entropy loss of the input, matching
                 ``Pipeline.get_ppl``.
         """
-        if self.backend != 'pytorch':
-            raise ValueError('async_get_ppl is only supported by the pytorch backend.')
+        if self.backend_config.enable_prefix_caching:
+            raise ValueError('async_get_ppl is not supported when prefix caching is on.')
+        if self.speculative_config is not None:
+            raise ValueError('async_get_ppl is not supported when speculative decoding is on.')
         # position i predicts token i+1, so the last position has no target
         num_scored = len(input_ids) - 1
         if num_scored < 1:
@@ -879,9 +877,13 @@ class AsyncEngine:
         session = self.session_mgr.get()
         try:
             async with session.request_handle() as handle:
-                # max_new_tokens=0: prefill only, no generation. top_k=1 avoids a
-                # pt-engine top_k sampling crash on the (unused) sampled token.
-                gen_config = GenerationConfig(max_new_tokens=0, return_ppl=True, top_k=1)
+                # TurboMind needs one decode token to drive the request to
+                # FINISH. The in-engine CE reduction still scores prompt tokens
+                # only.
+                max_new_tokens = 1 if self.backend == 'turbomind' else 0
+                # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
+                # when perform inference on a reward model.
+                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, return_ppl=True, top_k=1)
                 ce_loss = None
                 async with self.safe_run(handle,
                                          session=session,
@@ -894,8 +896,11 @@ class AsyncEngine:
                     async for outputs in gen:
                         pass
                     ce_loss = outputs.ce_loss
-                await handle.async_end(session.session_id)
+                if self.backend == 'pytorch':
+                    await handle.async_end(session.session_id)
         finally:
             self.session_mgr.remove(session)
+        if ce_loss is None:
+            raise ValueError('async_get_ppl failed to compute ce_loss.')
         # normalize the summed NLL by the number of scored tokens
         return ce_loss / num_scored
