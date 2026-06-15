@@ -188,7 +188,12 @@ class ZMQMPEngine(MPEngine):
         """Collective rpc call."""
         return await self.rpc_client.async_call(func, *args, **kwargs)
 
-    async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event,  *args, **kwargs):
+    async def _collective_rpc_streaming_async(self,
+                                              func: str,
+                                              sess_event: asyncio.Event,
+                                              *args,
+                                              local_stream_started_callback=None,
+                                              **kwargs):
         """Collective rpc call."""
         startup_notify_kwarg = 'notify_add_msg_func' if func == 'instance_async_stream_infer' else None
         async for out in self.rpc_client.async_stream_call(
@@ -196,6 +201,7 @@ class ZMQMPEngine(MPEngine):
                 sess_event,
                 *args,
                 streaming_startup_notify_kwarg=startup_notify_kwarg,
+                local_stream_started_callback=local_stream_started_callback,
                 **kwargs,
         ):
             yield out

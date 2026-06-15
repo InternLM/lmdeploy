@@ -684,11 +684,15 @@ class VisionConfig:
         max_batch_size: the max image size passed to the model, since
             some models will use image patch, the actual running batch could
             be larger than this value.
+        max_mm_preprocess_concurrency: the max number of multimodal requests
+            allowed in media decode / preprocessing at the same time. 0 means
+            no limit.
         thread_safe: Specifies whether the engine instance is
             thread-safe. Please set it to True when using the pipeline
             in a multi-threaded environment.
     """
     max_batch_size: int = 1
+    max_mm_preprocess_concurrency: int = 0
     thread_safe: bool = False
 
 

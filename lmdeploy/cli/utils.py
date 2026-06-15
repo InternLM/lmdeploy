@@ -621,6 +621,14 @@ class ArgumentHelper:
         return parser.add_argument('--vision-max-batch-size', type=int, default=1, help='the vision model batch size')
 
     @staticmethod
+    def max_mm_preprocess_concurrency(parser):
+        return parser.add_argument('--max-mm-preprocess-concurrency',
+                                   type=int,
+                                   default=0,
+                                   help='the max number of multimodal requests allowed in media decode and '
+                                   'preprocessing at the same time. 0 means no limit')
+
+    @staticmethod
     def max_log_len(parser):
         return parser.add_argument('--max-log-len',
                                    type=int,

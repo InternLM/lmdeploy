@@ -32,6 +32,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
 )
 from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
+from lmdeploy.serve.utils.mm_preprocess import has_multimodal_input
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
@@ -491,6 +492,7 @@ class AsyncEngine:
             chat_template_kwargs: dict | None = None,
             media_io_kwargs: dict[str, Any] | None = None,
             mm_processor_kwargs: dict[str, Any] | None = None,
+            mm_preprocess_gate: Any | None = None,
             **kwargs):
         """Generate responses.
 
@@ -533,8 +535,16 @@ class AsyncEngine:
             else:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
+        mm_preprocess_lease = None
+
+        def release_mm_preprocess_lease():
+            if mm_preprocess_lease is not None:
+                mm_preprocess_lease.release()
+
         if messages:
             try:
+                if mm_preprocess_gate is not None and has_multimodal_input(messages):
+                    mm_preprocess_lease = await mm_preprocess_gate.acquire()
                 prompt = messages
                 self.request_logger.log_prompt(session, prompt=prompt)
                 prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
@@ -547,6 +557,8 @@ class AsyncEngine:
                                                                             media_io_kwargs=media_io_kwargs,
                                                                             mm_processor_kwargs=mm_processor_kwargs,
                                                                             **kwargs)
+                if self.backend != 'pytorch':
+                    release_mm_preprocess_lease()
                 prompt = prompt_input.get('prompt')
                 input_ids = prompt_input.get('input_ids')
                 self.request_logger.log_inputs(session,
@@ -555,10 +567,12 @@ class AsyncEngine:
                                                 gen_config=gen_config,
                                                 adapter_name=adapter_name)
             except (asyncio.CancelledError, GeneratorExit):
+                release_mm_preprocess_lease()
                 metrics_processor.increase_failed_requests('cancel')
                 remove_session_once()
                 raise
             except Exception:
+                release_mm_preprocess_lease()
                 logger.exception('[generate] error in prompt processing')
                 metrics_processor.increase_failed_requests('error')
                 remove_session_once()
@@ -577,6 +591,7 @@ class AsyncEngine:
         gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
 
         if gen_config.max_new_tokens == 0:
+            release_mm_preprocess_lease()
             logger.info(f'run out of tokens. session={session_id}.')
             metrics_processor.increase_failed_requests('error')
             history_len = session.step
@@ -595,6 +610,7 @@ class AsyncEngine:
                                                           or gen_config.output_logits == 'all'):
             errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
                       'when prefix caching is ON')
+            release_mm_preprocess_lease()
             metrics_processor.increase_failed_requests('error')
             remove_session_once()
             yield GenOut(response=errmsg,
@@ -618,18 +634,27 @@ class AsyncEngine:
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
-
         stale = self._if_session_stale(session, len(prompt_input['input_ids']))
         if stale is not None:
+            release_mm_preprocess_lease()
             metrics_processor.increase_failed_requests('abort')
             remove_session_once()
             yield stale
             return
+
+        @asynccontextmanager
+        async def mm_preprocess_lease_scope():
+            try:
+                yield
+            finally:
+                release_mm_preprocess_lease()
+
         session._remove_on_request_exit = sequence_end
-        async with session.request_handle() as handle:
+        async with mm_preprocess_lease_scope(), session.request_handle() as handle:
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
                                f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
+                release_mm_preprocess_lease()
                 metrics_processor.increase_failed_requests('abort')
                 remove_session_once()
                 yield GenOut(response='',
@@ -647,6 +672,9 @@ class AsyncEngine:
             response = ''
             response_chunks = []
             finish_reason = None
+            handoff_kwargs = {}
+            if self.backend == 'pytorch':
+                handoff_kwargs['local_stream_started_callback'] = release_mm_preprocess_lease
             async with self.safe_run(handle,
                                      session=session,
                                      **prompt_input,
@@ -655,7 +683,8 @@ class AsyncEngine:
                                      stream_output=stream_response,
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
-                                     step=history_len) as gen:
+                                     step=history_len,
+                                     **handoff_kwargs) as gen:
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
