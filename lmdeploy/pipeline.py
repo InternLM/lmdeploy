@@ -278,45 +278,15 @@ class Pipeline:
         Returns:
             list[float]: A list of perplexity scores.
         """
-        assert isinstance(input_ids, list)
+        engine = self.async_engine
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
-        assert all(len(_) > 1 for _ in input_ids)
 
-        # TODO: a better way to determine `max_input_len`, at most allocate
-        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
-        vocab_size = self.async_engine.hf_cfg.vocab_size
-        max_input_len = 2 * 1024**3 // (vocab_size * 4)
-        sizes = [len(_) for _ in input_ids]
-        result = []
-        sorted_index_values = sorted(list(enumerate(sizes)), key=lambda x: x[1], reverse=True)
-        sizes = [value for index, value in sorted_index_values]
-        indices = [index for index, value in sorted_index_values]
-        logger.info(f'sorted sizes: {sizes}')
-        logger.info(f'sorted indices: {indices}')
-        for (start, end) in self._batch_iterator(sizes, max_input_len):
-            logger.info(f'start: {start}, end: {end}')
-            if start == end:
-                _input_ids = input_ids[indices[start]]
-                session = self.session_mgr.get()
-                res = self._get_long_text_ppl(session, input_ids=_input_ids, max_input_len=max_input_len)
-                result.append(res)
-                self.session_mgr.remove(session)
-            else:
-                _input_ids = [input_ids[indices[i]] for i in range(start, end)]
-                sessions = [self.session_mgr.get() for _ in range(start, end)]
-                res = self._get_ppl(
-                    sessions=sessions,
-                    input_ids=_input_ids,
-                    max_input_len=max_input_len,
-                )
-                result.extend(res)
-                for session in sessions:
-                    self.session_mgr.remove(session)
-        output = list(range(len(result)))
-        for index, sorted_index in enumerate(indices):
-            output[sorted_index] = result[index]
-        return output
+        async def _gather():
+            return await asyncio.gather(*[engine.async_get_ppl(ids) for ids in input_ids])
+
+        results = self._run(coro=_gather()).result()
+        return results
 
     def __call__(self,
                  prompts: list[str] | str | list[dict] | list[list[dict]],
@@ -457,32 +427,6 @@ class Pipeline:
                 continue
             else:
                 i += 1
-
-    def _get_long_text_ppl(self, session, input_ids, max_input_len):
-        assert all(isinstance(_, int) for _ in input_ids)
-        seq_len = len(input_ids)
-        assert seq_len > max_input_len
-        logger.info(f'get long text ppl: seq_len {seq_len}')
-
-        losses = []
-        target_counts = []
-        for i in range(0, seq_len, max_input_len):
-            token_ids = input_ids[i:i + max_input_len]
-            session.update(step=i)
-            # shift token_ids by 1 to the left
-            target_ids = input_ids[i + 1:i + 1 + max_input_len]
-            loss = self._get_ppl(sessions=[session],
-                                 input_ids=[token_ids],
-                                 max_input_len=len(token_ids),
-                                 target_ids=[target_ids],
-                                 sequence_start=(i == 0),
-                                 sequence_end=False)
-            losses.extend(loss)
-            target_counts.append(len(target_ids))
-        losses = [loss * target_count for loss, target_count in zip(losses, target_counts)]
-        loss_sum = sum(losses)
-        target_count = sum(target_counts)
-        return loss_sum / target_count
 
     def _get_ppl(self,
                  sessions: list[Session],
