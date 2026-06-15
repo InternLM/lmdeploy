@@ -221,7 +221,7 @@ def filter_suffix(response: str, suffixes: list[str] | None = None) -> str:
 
 def _stop_words(stop_words: list[int | str], tokenizer: object):
     """Return list of stop-words to numpy.ndarray.
-    
+
     Note: stop_word_offsets are kept for compatibility with fastertransformer's
     stop_indexes format, but could be simplified in future refactoring.
     """
