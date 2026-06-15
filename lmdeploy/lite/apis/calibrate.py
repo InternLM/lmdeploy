@@ -202,10 +202,13 @@ def _prepare_for_calibrate(model: nn.Module,
             print(f'Move {mod_name} to GPU.')
 
 
-# TODO to be removed
 def make_compatible_internvl_config(model_path):
     """Patch model.config since after transformers v4.45.0, InternVL models
-    can't use `save_pretrained`"""
+    can't use `save_pretrained`.
+    
+    Deprecated: This workaround may no longer be needed with newer transformers versions.
+    Consider removing after verifying compatibility with latest transformers.
+    """
     from lmdeploy.archs import get_model_arch
     arch, _ = get_model_arch(model_path)
     if arch == 'InternVLChatModel':

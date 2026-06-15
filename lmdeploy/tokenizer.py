@@ -62,7 +62,7 @@ class HuggingFaceTokenizer:
         # for stop words
         self._vocab_size_with_added: int = None
         self._maybe_decode_bytes: bool = None
-        # TODO maybe lack a constant.py
+        # Note: Consider extracting magic numbers (10, 5) to a constants module in the future
         self._indexes_tokens_deque = deque(maxlen=10)
         self.max_indexes_num = 5
         self.token2id = {}
