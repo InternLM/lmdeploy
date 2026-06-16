@@ -70,12 +70,12 @@ from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
-    GetPPLRequest,
-    GetPPLResponse,
     LogProbs,
     ModelCard,
     ModelList,
     ModelPermission,
+    PPLRequest,
+    PPLResponse,
     PoolingRequest,
     PoolingResponse,
     TopLogprob,
@@ -1183,12 +1183,11 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
 
 @router.post('/get_ppl', dependencies=[Depends(validate_json_request)])
-async def get_ppl(request: GetPPLRequest, raw_request: Request = None):
+async def get_ppl(request: PPLRequest, raw_request: Request = None):
     """Get the perplexity (mean cross-entropy loss) of the input prompt.
 
     The request should be a JSON object with the following fields:
 
-    - **model** (str): model name. Available from /v1/models.
     - **input** (str | list[int]): the input to score, either raw text or token
       ids. Text is tokenized with ``tokenizer.encode`` (no chat template is
       applied).
@@ -1196,7 +1195,6 @@ async def get_ppl(request: GetPPLRequest, raw_request: Request = None):
     async_engine = VariableInterface.async_engine
 
     request_input = request.input
-    model_name = request.model or async_engine.model_name
 
     # pydantic already validated `input` as `str | list[int]`; text ->
     # tokenizer.encode, otherwise the token ids are used as-is
@@ -1212,10 +1210,7 @@ async def get_ppl(request: GetPPLRequest, raw_request: Request = None):
     except ValueError as e:
         return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
-    prompt_tokens = len(input_ids)
-    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
-
-    response = GetPPLResponse(model=model_name, ppl=ppl, usage=usage)
+    response = PPLResponse(ppl=ppl)
     return response.model_dump()
 
 

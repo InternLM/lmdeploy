@@ -447,27 +447,21 @@ class PoolingResponse(BaseModel):
     usage: UsageInfo
 
 
-class GetPPLRequest(BaseModel):
+class PPLRequest(BaseModel):
     """Get perplexity request.
 
     The input may be raw text or token ids. Text is tokenized with
     ``tokenizer.encode`` (no chat template applied).
     """
-    model: str | None = None
     input: str | list[int]
 
 
-class GetPPLResponse(BaseModel):
+class PPLResponse(BaseModel):
     """Get perplexity response.
 
     ``ppl`` is the perplexity (mean cross-entropy loss) of the input.
     """
-    id: str = Field(default_factory=lambda: f'ppl-{shortuuid.random()}')
-    object: str = 'ppl'
-    created: int = Field(default_factory=lambda: int(time.time()))
-    model: str = None
     ppl: float
-    usage: UsageInfo
 
 
 class EncodeRequest(BaseModel):
