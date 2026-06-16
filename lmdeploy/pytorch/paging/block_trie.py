@@ -991,6 +991,8 @@ class BlockTrie:
         if recompute_blocks == 0:
             max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
         else:
+            # SSM checkpoint lookup is sparse, but MTP overlap needs the raw KV
+            # trie depth so the whole checkpoint-to-raw-hit span stays private.
             raw_match_step = self._find_raw_block_match_step(seq, init_curr)
             max_step = max(init_num_matched, raw_match_step - recompute_blocks * self.block_size)
         max_step = seq.clamp_prefix_cache_match_step(max_step)
@@ -1113,10 +1115,10 @@ class BlockTrie:
                 num_matched = init_num_matched
 
         max_match_step = seq.get_prefix_cache_max_match_step()
-        clamped_num_matched = seq.clamp_prefix_cache_match_step(min(num_matched, max_match_step))
-        unclamped_num_matched = num_matched
-        __clamp_match_step(clamped_num_matched)
-        self._set_private_recompute_range(seq, num_matched, unclamped_num_matched)
+        raw_num_matched = num_matched
+        effective_num_matched = seq.clamp_prefix_cache_match_step(min(raw_num_matched, max_match_step))
+        __clamp_match_step(effective_num_matched)
+        self._set_private_recompute_range(seq, num_matched, raw_num_matched)
 
         if len(matched_blocks) > 0:
             matched_blocks = np.array(matched_blocks)
@@ -1137,8 +1139,8 @@ class BlockTrie:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Prefix-cache match: session_id={seq.session_id} seq_id={seq.seq_id} '
                          f'init_step={init_num_matched} matched_step={num_matched} '
-                         f'candidate_step={unclamped_num_matched} '
-                         f'clamped={clamped_num_matched != unclamped_num_matched}')
+                         f'candidate_step={raw_num_matched} '
+                         f'clamped={effective_num_matched != raw_num_matched}')
 
     def allocate(self, seq: SchedulerSequence):
         """Attach newly allocated full blocks to the prefix-cache trie."""
