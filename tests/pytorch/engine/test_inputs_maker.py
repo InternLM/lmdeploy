@@ -276,6 +276,53 @@ def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():
     assert not model_inputs.is_chunk_multimodal
 
 
+def test_prefix_resumed_long_context_suffix_starts_new_chunk_chain():
+    seq = _DummySeq(
+        history_ids=1024,
+        token_ids=2000,
+        all_multimodals={},
+        input_multimodals={},
+        match_start_step=0,
+    )
+    model_inputs = SimpleNamespace(is_decoding=False,
+                                   is_chunk=False,
+                                   is_first_chunk=False,
+                                   is_last_chunk=False,
+                                   is_chunk_multimodal=False)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode)
+    maker.spec_decoding = False
+    maker.scheduler = _FakeScheduler([seq])
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    captured = {}
+
+    def _create_model_inputs_long_context(seq_arg, chunk_size, multimodals):
+        captured['seq'] = seq_arg
+        captured['chunk_size'] = chunk_size
+        captured['multimodals'] = multimodals
+        return model_inputs
+
+    maker.create_model_inputs_long_context = _create_model_inputs_long_context
+
+    forward_inputs = maker._make_forward_inputs(prefill=True)
+
+    assert forward_inputs['inputs'] is model_inputs
+    assert captured == {
+        'seq': seq,
+        'chunk_size': 512,
+        'multimodals': None,
+    }
+    assert model_inputs.is_first_chunk
+    assert not model_inputs.is_last_chunk
+    assert not model_inputs.is_chunk_multimodal
+
+
 def test_long_context_final_chunk_preserves_multimodal_flag_for_spec_decoding():
     image = _DummyMultiModal(start=0, end=1024)
     seq = _DummySeq(

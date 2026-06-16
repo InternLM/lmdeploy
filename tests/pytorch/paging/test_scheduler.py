@@ -613,7 +613,7 @@ def test_scheduler_excludes_recompute_eviction_prefix_hits_from_stats():
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
 
-def test_scheduler_rolls_back_prefix_hit_that_would_start_long_context_chunk_from_middle():
+def test_scheduler_accepts_prefix_hit_that_starts_middle_long_context_chunk():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
     seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
@@ -641,8 +641,8 @@ def test_scheduler_rolls_back_prefix_hit_that_would_start_long_context_chunk_fro
     output = scheduler.schedule(is_prefill=True)
 
     assert output.running == [seq]
-    assert seq.num_history_ids == 0
-    assert seq.num_token_ids == len(token_ids)
-    assert seq.cached_tokens == 0
-    assert scheduler.block_trie.stats.num_query_tokens == 0
-    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert seq.num_history_ids == block_size * 2
+    assert seq.num_token_ids == len(token_ids) - block_size * 2
+    assert seq.cached_tokens == block_size * 2
+    assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
+    assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2

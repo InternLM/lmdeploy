@@ -5,8 +5,9 @@
 The scheduler is the first owner of prefix-cache side effects.  In prefill,
 ``BlockTrie.match()`` is intentionally called before eviction and allocation so
 the scheduler can account for reused KV/state.  That match is tentative:
-rollback is required if long-context chunking, checkpoint pinning, KV eviction,
-or runtime state allocation means the request cannot safely run now.
+rollback is required if checkpoint pinning, KV eviction, or runtime state
+allocation means the request cannot safely run now.  Long-context suffixes can
+continue chunking from the accepted prefix hit.
 
 Successful prefill scheduling keeps this order:
 
@@ -172,19 +173,6 @@ class Scheduler:
             return
         Scheduler._finalize_prefix_cache_match(seq)
 
-    def _prefix_hit_starts_middle_long_context_chunk(self, seq: SchedulerSequence):
-        """Check whether a prefix hit would start chunking from the middle."""
-        if seq.num_history_ids <= 0:
-            return False
-
-        max_prefill_num = self.cache_config.max_prefill_token_num
-        mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
-        for value in mm_for_chunk_limit.values():
-            max_mm_size = max([v.end - v.start for v in value], default=0)
-            max_prefill_num = max(max_prefill_num, max_mm_size)
-
-        return seq.num_token_ids > max_prefill_num
-
     @staticmethod
     def create_status_list_property(status: MessageStatus):
         """Create status list property."""
@@ -338,9 +326,6 @@ class Scheduler:
                     self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
                 self.block_trie.match(seq)
-                if self._prefix_hit_starts_middle_long_context_chunk(seq):
-                    __rollback_prefix_match('long-context chunk starts after prefix hit')
-
                 had_ssm_restore = self.is_ssm and seq.prefix_cache.restore_state >= 0
                 if not self._acquire_ssm_restore_if_needed(seq):
                     __rollback_prefix_match('failed to acquire SSM restore checkpoint')
