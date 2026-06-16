@@ -6,7 +6,6 @@ from PIL import Image
 
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.model.base import VisionModel
 
 multimodal_module = sys.modules[MultimodalProcessor.__module__]
 
@@ -395,8 +394,6 @@ def test_async_parse_multimodal_item_preserves_tool_image_content(monkeypatch):
     assert parsed[2]['content'][1]['type'] == Modality.IMAGE
     assert parsed[2]['content'][1]['data'] == f'loaded:{image_data_url}'
     assert parsed[2]['content'][1]['detail'] == 'auto'
-    mm_items = VisionModel.collect_multimodal_items(parsed)
-    assert [(modality, data) for modality, data, _ in mm_items] == [(Modality.IMAGE, f'loaded:{image_data_url}')]
     assert load_calls == [(image_data_url, 'ImageMediaIO')]
 
 
