@@ -356,7 +356,7 @@ class EngineLoop:
             req_metrics = RequestMetrics(new_token_timestamp,
                                          msg.engine_events,
                                          spec_info=spec_info,
-                                         cached_tokens=msg.prefix_cache_hit_tokens)
+                                         cached_tokens=msg.cached_tokens)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
