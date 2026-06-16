@@ -282,8 +282,13 @@ class Pipeline:
         assert all(len(_) > 1 for _ in input_ids)
 
         engine = self.async_engine
+
+        async def _get_one(ids):
+            async with self._get_limiter():
+                return await engine.async_get_ppl(ids)
+
         async def _gather():
-            return await asyncio.gather(*[engine.async_get_ppl(ids) for ids in input_ids])
+            return await asyncio.gather(*[_get_one(ids) for ids in input_ids])
 
         results = self._run(coro=_gather()).result()
         return results
