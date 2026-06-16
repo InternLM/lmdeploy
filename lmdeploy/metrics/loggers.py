@@ -121,7 +121,7 @@ class LoggingStatLogger(StatLoggerBase):
         now = time.perf_counter()
 
         # skip logging if no tokens were processed
-        if (self.total_prompt_tokens == 0 and self.total_generation_tokens == 0 and self.num_preemptions == 0):
+        if (self.total_prompt_tokens == 0 and self.total_generation_tokens == 0):
             self._reset(now)
             return
 

@@ -103,6 +103,7 @@ def test_iteration_stats_ttft_includes_preemption_before_first_token():
 def test_logging_stat_logger_logs_preemptions(capsys):
     logger = LoggingStatLogger(dp_rank=0)
     stats = IterationStats()
+    stats.new_generation_tokens = 1
     stats.num_preempted_reqs = 1
 
     logger.record_iteration(stats)
