@@ -305,7 +305,7 @@ class EngineLoop:
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
-            seq.append_ce_loss(ce_loss)
+            seq.append_ce_loss(ce_loss, finish=False)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -365,7 +365,7 @@ class EngineLoop:
 
             if msg.return_ce_loss:
                 if ce_loss is not None:
-                    msg.append_ce_loss(ce_loss[idx])
+                    msg.append_ce_loss(ce_loss[idx], finish=True)
                 if finish:
                     outputs[session_id].ce_loss = msg.ce_loss
 

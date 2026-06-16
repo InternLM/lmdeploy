@@ -878,13 +878,9 @@ class AsyncEngine:
         session = self.session_mgr.get()
         try:
             async with session.request_handle() as handle:
-                # TurboMind needs one decode token to drive the request to
-                # FINISH. The in-engine CE reduction still scores prompt tokens
-                # only.
-                max_new_tokens = 1 if self.backend == 'turbomind' else 0
                 # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
                 # when perform inference on a reward model.
-                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, return_ppl=True, top_k=1)
+                gen_config = GenerationConfig(max_new_tokens=1, return_ppl=True, top_k=1)
                 async with self.safe_run(handle,
                                          session=session,
                                          input_ids=input_ids,

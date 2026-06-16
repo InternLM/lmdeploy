@@ -658,6 +658,7 @@ class SchedulerSequence:
 
     # accumulated, unnormalized cross-entropy (NLL) of the input prompt
     ce_loss: float = 0.0
+    ce_loss_finished: bool = False
 
     # mrope
     history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
@@ -823,15 +824,14 @@ class SchedulerSequence:
     def return_ce_loss(self):
         return self.sampling_param.out_ce_loss
 
-    def append_ce_loss(self, ce_loss):
+    def append_ce_loss(self, ce_loss, finish: bool = False):
         """Accumulate the summed cross-entropy (NLL) of the input prompt."""
-        if not self.return_ce_loss:
-            return
-        if ce_loss is None:
+        if not self.return_ce_loss or self.ce_loss_finished or ce_loss is None:
             return
         if isinstance(ce_loss, Tensor):
             ce_loss = ce_loss.item()
         self.ce_loss += float(ce_loss)
+        self.ce_loss_finished = finish
 
     def get_input_multimodals(self):
         """Get input multimodals."""

@@ -629,6 +629,14 @@ class BaseModelAgent:
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
+        # Compute prompt CE before sampling, which may update last_logits in place.
+        ce_loss = None
+        if return_ce_loss and logits is not None and not inputs.is_dummy and not inputs.is_decoding:
+            prev_last_logit = self._prev_chunk_last_logit if (inputs.is_chunk and not inputs.is_first_chunk) else None
+            ce_loss = compute_input_ce_loss(logits, inputs.input_ids, seq_length, prev_last_logit=prev_last_logit)
+            if inputs.is_chunk:
+                self._prev_chunk_last_logit = None if inputs.is_last_chunk else logits[-1:].clone()
+
         (next_token_ids, logprobs, output_token_ids, extra_inputs) = await self.async_sampling_logits(
             last_logits, inputs, extra_inputs, sampling_inputs)
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
@@ -653,14 +661,6 @@ class BaseModelAgent:
             inputs=inputs,
             extra_inputs=extra_inputs,
         )
-
-        # compute summed, unnormalized prompt cross-entropy
-        ce_loss = None
-        if return_ce_loss and logits is not None:
-            prev_last_logit = self._prev_chunk_last_logit if (inputs.is_chunk and not inputs.is_first_chunk) else None
-            ce_loss = compute_input_ce_loss(logits, inputs.input_ids, seq_length, prev_last_logit=prev_last_logit)
-            if inputs.is_chunk:
-                self._prev_chunk_last_logit = None if inputs.is_last_chunk else logits[-1:].clone()
 
         # send output
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
