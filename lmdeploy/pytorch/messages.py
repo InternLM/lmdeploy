@@ -73,6 +73,11 @@ class PrefixCacheState:
     from it.  ``match_start_step`` remembers the sequence step before a
     tentative prefix-cache match so long-context chunking can distinguish
     current-turn cached multimodal spans from older session history.
+    ``match_recompute_blocks`` keeps a small full-block overlap out of prefix
+    reuse for strategies that need target hidden-state bridge data.
+    ``private_recompute_*_step`` marks trie-known blocks that were deliberately
+    dropped from a match and therefore must stay writable/private during the
+    next allocation instead of being deduplicated back to shared trie blocks.
     ``suppress_match_stats`` is set while replaying work after recompute
     eviction; cache reuse may still happen, but it should not affect the public
     prefix-cache hit-rate metric.
@@ -94,6 +99,9 @@ class PrefixCacheState:
     save_acquired_node: Any = field(default=None, repr=False)
     decode_state_node: Any = field(default=None, repr=False)
     match_start_step: int = -1
+    match_recompute_blocks: int = 0
+    private_recompute_start_step: int = -1
+    private_recompute_end_step: int = -1
     suppress_match_stats: bool = False
 
 
@@ -944,6 +952,15 @@ class SchedulerSequence:
                 break
             clamped = next_step
         return clamped
+
+    def get_prefix_cache_max_match_step(self):
+        """Get the deepest prefix step allowed for a cache hit."""
+        block_size = self.block_size
+        max_step = ((self.num_valid_ids - 1) // block_size) * block_size
+        recompute_blocks = max(0, self.prefix_cache.match_recompute_blocks)
+        if recompute_blocks > 0:
+            max_step = max(0, max_step - recompute_blocks * block_size)
+        return self.clamp_prefix_cache_match_step(max_step)
 
     def record_event(
         self,

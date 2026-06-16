@@ -148,6 +148,8 @@ class Scheduler:
         prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
         prefix_cache.match_start_step = -1
+        prefix_cache.private_recompute_start_step = -1
+        prefix_cache.private_recompute_end_step = -1
         seq.cached_tokens = 0
 
     @staticmethod

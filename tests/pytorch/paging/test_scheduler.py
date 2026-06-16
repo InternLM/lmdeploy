@@ -515,6 +515,43 @@ def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit():
     assert seq.prefix_cache.match_start_step == -1
 
 
+def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSpecSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    token_ids = [1] * block_size + [2] * block_size + [3] * block_size + [4]
+    cached = scheduler.add_session(0).add_sequence(token_ids)
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+    cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+    cached.state.stop()
+
+    seq = scheduler.add_session(1).add_sequence(token_ids)
+    scheduler.block_trie.stats.reset()
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.prefix_cache.match_recompute_blocks == 1
+    assert seq.num_history_ids == block_size * 2
+    assert seq.cached_tokens == block_size * 2
+    assert seq.logical_blocks[2] != cached_blocks[2]
+    assert seq.prefix_cache.private_recompute_start_step == -1
+    assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
+    assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
+
+
 def test_scheduler_reports_zero_cached_tokens_for_prefix_miss():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
