@@ -107,6 +107,8 @@ class SubCliServe:
         ArgumentHelper.enable_return_routed_experts(pt_group)
         ArgumentHelper.distributed_executor_backend(pt_group)
         ArgumentHelper.kernel_block_size(pt_group)
+        ArgumentHelper.prefix_cache_state_budget(pt_group)
+        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
 
         # common engine args
         disable_vision_encoder = ArgumentHelper.disable_vision_encoder(pt_group)
@@ -234,6 +236,8 @@ class SubCliServe:
                 session_len=args.session_len,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
+                prefix_cache_state_budget=args.prefix_cache_state_budget,
+                prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,

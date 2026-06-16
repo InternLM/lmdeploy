@@ -586,6 +586,30 @@ class ArgumentHelper:
                                    help='Enable cache and match prefix')
 
     @staticmethod
+    def prefix_cache_state_budget(parser):
+        """Add argument prefix_cache_state_budget to parser."""
+
+        return parser.add_argument('--prefix-cache-state-budget',
+                                   type=int,
+                                   default=0,
+                                   help='Extra SSM state-cache slots budgeted for prefix-cache checkpoints. '
+                                   '0 adds no extra slots, but checkpoints may borrow idle runtime state slots. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
+    def prefix_cache_decode_state_interval(parser):
+        """Add argument prefix_cache_decode_state_interval to parser."""
+
+        return parser.add_argument('--prefix-cache-decode-state-interval',
+                                   type=int,
+                                   default=0,
+                                   help='Token interval for SSM decode-state prefix-cache checkpoints. '
+                                   '0 disables decode checkpoint saves while keeping prefill/chunk checkpoints. '
+                                   'Use a positive multiple of block size only for long SSM decoding where later '
+                                   'requests can reuse decode prefixes; smaller values improve hit granularity '
+                                   'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,
