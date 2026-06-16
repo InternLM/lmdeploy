@@ -75,9 +75,9 @@ def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
 
 
 def _zeros_int4_symmetric(scales: Tensor) -> Tensor:
-    """Synthesize symmetric int4 zero-points (value = 8) matching *scales*
-    shape."""
-    return torch.full(scales.shape, 8, dtype=torch.uint8, device=scales.device)
+    """Synthesize normalized symmetric int4 zero-points (value = 8) matching
+    *scales* shape."""
+    return torch.full(scales.shape, 8, dtype=scales.dtype, device=scales.device)
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +328,22 @@ class CompressedTensorFormat(WeightFormat):
 
     def synthesize_zeros(self, scales: Tensor) -> Tensor:
         return _zeros_int4_symmetric(scales)
+
+    def dequant(self, tensors, data_type):
+        weight = tensors['weight']
+        scales = tensors['scales']
+        zeros = tensors['zeros']
+
+        out_size = weight.shape[-1]
+        zeros = zeros[..., :out_size]
+
+        scales = scales.repeat_interleave(self.block_in, dim=0)[:weight.shape[0]]
+        zeros = zeros.repeat_interleave(self.block_in, dim=0)[:weight.shape[0]]
+        w = (weight.to(scales.dtype) - zeros.to(scales.dtype)) * scales
+        result: dict[str, Tensor] = {'weight': w}
+        if 'bias' in tensors:
+            result['bias'] = tensors['bias']
+        return result
 
 
 class FP8Format(WeightFormat):
