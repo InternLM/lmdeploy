@@ -168,6 +168,14 @@ def model_forward(
         )
 
         with ctx_mgr.context(context):
+            if (not inputs.is_dummy and inputs.state_offsets is not None
+                    and inputs.state_prefix_cache_offsets is not None):
+                # Restore frozen SSM prefix state into this request's runtime
+                # slot on the forward stream.  The input maker already
+                # compacted valid src/dst pairs on CPU, so no CUDA boolean
+                # indexing/nonzero synchronization is needed here.
+                state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets,
+                                               inputs.state_prefix_cache_dst_offsets)
 
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
@@ -183,6 +191,13 @@ def model_forward(
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
+            if (not inputs.is_dummy and inputs.state_offsets is not None
+                    and inputs.state_prefix_cache_save_offsets is not None):
+                # Save the post-forward runtime state into reserved checkpoint
+                # slots.  The scheduler publishes these slots only after the
+                # executor output boundary confirms the copy was enqueued.
+                state_cache_engine.copy_caches(inputs.state_prefix_cache_save_src_offsets,
+                                               inputs.state_prefix_cache_save_offsets)
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             # for draft model reuse
