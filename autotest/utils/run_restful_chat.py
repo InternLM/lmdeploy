@@ -397,7 +397,7 @@ def _mm_demo_public_answer_text(text: str) -> str:
 
 def _mm_demo_tomb_answer_assert(text: str) -> bool:
     """Tomb/MCQ: visible tail mentions scene, a digit, or an MCQ-style letter
-    (A–D)."""
+    (A-D)."""
     raw = _mm_demo_public_answer_text(text).strip()
     if not raw:
         return False

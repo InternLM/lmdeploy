@@ -233,6 +233,59 @@ class TestBlockTire:
         assert allocator.get_ref_count(np.array([private_overlap_block])).item() == 1
         assert seq.prefix_cache.last_shared_node.num_matched == block_size * 3
 
+    @pytest.mark.parametrize('raw_match_blocks', [1, 2, 5])
+    def test_match_recompute_overlap_boundary_cases(self, block_trie, block_mgr, scheduler, raw_match_blocks):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = []
+        for block_id in range(raw_match_blocks):
+            token_ids.extend([block_id + 1] * block_size)
+        token_ids.append(99)
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        seq = sess.add_sequence(token_ids)
+        seq.prefix_cache.match_recompute_blocks = 1
+
+        block_trie.match(seq)
+
+        expected_history = max(0, raw_match_blocks - 1) * block_size
+        expected_raw = raw_match_blocks * block_size
+        assert seq.num_history_ids == expected_history
+        assert seq.prefix_cache.private_recompute_start_step == expected_history
+        assert seq.prefix_cache.private_recompute_end_step == expected_raw
+
+        block_mgr.allocate(seq)
+        private_blocks = seq.logical_blocks.get_real_blocks()[expected_history // block_size:raw_match_blocks]
+        if len(private_blocks) > 0:
+            assert not np.array_equal(private_blocks, cached_blocks[expected_history // block_size:raw_match_blocks])
+
+        block_trie.allocate(seq)
+
+        assert seq.prefix_cache.private_recompute_start_step == -1
+        assert seq.prefix_cache.private_recompute_end_step == -1
+        assert seq.prefix_cache.last_shared_node.num_matched == expected_raw
+
+    def test_match_recompute_disabled_keeps_ar_full_hit(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3] * block_size + [4]
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+
+        seq = sess.add_sequence(token_ids)
+        block_trie.match(seq)
+
+        assert seq.prefix_cache.match_recompute_blocks == 0
+        assert seq.num_history_ids == block_size * 3
+        assert seq.prefix_cache.private_recompute_start_step == -1
+        assert seq.prefix_cache.private_recompute_end_step == -1
+
     def test_match_recompute_overlap_expands_to_multimodal_boundary(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size

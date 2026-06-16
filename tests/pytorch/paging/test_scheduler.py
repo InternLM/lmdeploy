@@ -552,6 +552,44 @@ def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
 
 
+def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window():
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSpecSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    token_ids = [1] * block_size + [2] * block_size + [3] * block_size + [4]
+    cached = scheduler.add_session(0).add_sequence(token_ids)
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+
+    seq = scheduler.add_session(1).add_sequence(token_ids)
+    stats_snapshot = scheduler.block_trie.snapshot_stats()
+    scheduler.block_trie.match(seq)
+
+    assert seq.num_history_ids == block_size * 2
+    assert seq.prefix_cache.private_recompute_start_step == block_size * 2
+
+    scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
+
+    assert seq.num_history_ids == 0
+    assert seq.num_token_ids == len(token_ids)
+    assert seq.cached_tokens == 0
+    assert seq.prefix_cache.private_recompute_start_step == -1
+    assert seq.prefix_cache.private_recompute_end_step == -1
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
 def test_scheduler_reports_zero_cached_tokens_for_prefix_miss():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
