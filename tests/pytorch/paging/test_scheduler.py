@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from lmdeploy.messages import EventType
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
 from lmdeploy.pytorch.paging.scheduler import Scheduler
@@ -70,6 +71,10 @@ class TestScheduler:
         assert len(block_tables) == 1
         assert len(block_tables[0]) == num_blocks
         assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - num_blocks
+
+        events = seq.take_events()
+        assert [event.type for event in events] == [EventType.QUEUED, EventType.SCHEDULED]
+        assert seq.take_events() == []
 
         assert scheduler.has_unfinished()
 
@@ -178,4 +183,27 @@ class TestScheduler:
         # seq3: 3 nan
         assert seq1.status == MessageStatus.READY
         assert seq2.status == MessageStatus.WAITING
+        assert seq2.engine_events[-1].type == EventType.PREEMPTED
         assert block_manager.get_num_free_gpu_blocks() == 2
+
+    def test_schedule_running_records_preempted_event(self, scheduler, block_size, num_gpu_blocks):
+        block_manager = scheduler.block_manager
+        session = scheduler.add_session(0)
+        seq1 = session.add_sequence(torch.tensor([0] * block_size * 2))
+        seq2 = session.add_sequence(torch.tensor([0] * block_size * 2))
+
+        scheduler.schedule(is_prefill=True)
+        assert block_manager.get_num_free_gpu_blocks() == 0
+        seq1.take_events()
+        seq2.take_events()
+
+        seq1.state.activate()
+        seq2.state.activate()
+        seq1.update_token_ids(torch.tensor([1]))
+        seq2.update_token_ids(torch.tensor([1]))
+
+        valid_mask = scheduler.schedule_running([seq1, seq2])
+
+        assert valid_mask == [True, False]
+        assert seq2.status == MessageStatus.WAITING
+        assert seq2.engine_events[-1].type == EventType.PREEMPTED

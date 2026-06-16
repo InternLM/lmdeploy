@@ -51,6 +51,7 @@ class LoggingStatLogger(StatLoggerBase):
         self.last_log_time = now
         self.total_prompt_tokens = 0
         self.total_generation_tokens = 0
+        self.num_preemptions = 0
         self.total_multimodal_requests = 0
         self.total_multimodal_items = 0
         self.total_multimodal_preprocess_time = 0.0
@@ -69,6 +70,7 @@ class LoggingStatLogger(StatLoggerBase):
         # the value is 0. This enables cumulative counting in `total_prompt_tokens`
         self.total_prompt_tokens += stats.prompt_tokens
         self.total_generation_tokens += stats.new_generation_tokens
+        self.num_preemptions += stats.num_preempted_reqs
 
     def record_specdecode(self, stats: SpeculativeDecodingStats):
         """Record spec decoding stats."""
@@ -119,7 +121,7 @@ class LoggingStatLogger(StatLoggerBase):
         now = time.perf_counter()
 
         # skip logging if no tokens were processed
-        if (self.total_prompt_tokens == 0 and self.total_generation_tokens == 0):
+        if (self.total_prompt_tokens == 0 and self.total_generation_tokens == 0 and self.num_preemptions == 0):
             self._reset(now)
             return
 
@@ -142,6 +144,9 @@ class LoggingStatLogger(StatLoggerBase):
 
         if scheduler_stats.prefix_cache_hit_rate != 0:
             log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
+
+        if self.num_preemptions > 0:
+            log_msg += f'Preemptions: {self.num_preemptions}, '
 
         if self.total_multimodal_requests:
             avg_mm_time = self.total_multimodal_preprocess_time / self.total_multimodal_requests
@@ -228,6 +233,11 @@ class PrometheusStatLogger(StatLoggerBase):
         self.counter_generation_tokens = prometheus_client.Counter(
             name='lmdeploy:generation_tokens_total',
             documentation='Number of generation tokens processed.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_num_preemptions = prometheus_client.Counter(
+            name='lmdeploy:num_preemptions_total',
+            documentation='Cumulative number of request preemptions from the engine.',
             labelnames=labelnames).labels(*labelvalues)
 
         # Speculative decoding counters. Acceptance rate and mean acceptance
@@ -423,6 +433,7 @@ class PrometheusStatLogger(StatLoggerBase):
 
         self.counter_prompt_tokens.inc(stats.prompt_tokens)
         self.counter_generation_tokens.inc(stats.new_generation_tokens)
+        self.counter_num_preemptions.inc(stats.num_preempted_reqs)
         self.histogram_iteration_tokens.observe(stats.prompt_tokens + stats.new_generation_tokens)
 
         if stats.ttft:

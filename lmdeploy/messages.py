@@ -605,7 +605,7 @@ class EventType(enum.IntEnum):
     """
     QUEUED = 1
     SCHEDULED = 2
-    PREEMPTED = 3  # FIXME, currently ignored for simplicity
+    PREEMPTED = 3
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py

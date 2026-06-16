@@ -271,9 +271,11 @@ class Scheduler:
                     break
                 seq_preempted = running.pop(-1)
                 seq_preempted.state.evict()
+                seq_preempted.record_event(EventType.PREEMPTED)
 
             if self.block_manager.get_num_free_gpu_blocks() < num_required_blocks:
                 seq.state.evict()
+                seq.record_event(EventType.PREEMPTED)
                 continue
 
             self.block_manager.allocate(seq, prealloc_size)
@@ -322,6 +324,7 @@ class Scheduler:
             seq.state.deactivate()
             # ready to waiting
             seq.state.evict()
+            seq.record_event(EventType.PREEMPTED)
             valid_mask[idx] = False
         valid_mask = list(reversed(valid_mask))
         return valid_mask

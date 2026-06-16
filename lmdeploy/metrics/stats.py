@@ -245,9 +245,6 @@ class RequestStats:
             elif event.type == EventType.SCHEDULED:
                 if self.scheduled_time == 0.0:  # ignore preemptions
                     self.scheduled_time = event.timestamp
-            # FIXME: deal with preempted case
-            # elif event.type == EventType.PREEMPTED:
-            #     self.num_preempted_reqs += 1
 
     @property
     def e2e_latency(self) -> float:
@@ -273,7 +270,7 @@ class RequestStats:
 
         Any preemptions during decode are included.
         """
-        return self.finish_time - self.first_token_time
+        return self.lastest_token_time - self.first_token_time
 
     @property
     def inference_time_interval(self) -> float:
@@ -281,7 +278,7 @@ class RequestStats:
 
         Any preemptions during prefill or decode are included.
         """
-        return self.finish_time - self.scheduled_time
+        return self.lastest_token_time - self.scheduled_time
 
 
 class IterationStats:
@@ -301,6 +298,7 @@ class IterationStats:
         self.iteration_timestamp = time.time()
         self.new_generation_tokens = 0
         self.prompt_tokens = 0
+        self.num_preempted_reqs = 0
         self.ttft: float | None = None
         self.tpot: float | None = None
         self.itl: float | None = None
@@ -310,6 +308,7 @@ class IterationStats:
                 f'  iteration_timestamp={self.iteration_timestamp:.6f},\n'
                 f'  new_generation_tokens={self.new_generation_tokens},\n'
                 f'  prompt_tokens={self.prompt_tokens},\n'
+                f'  num_preempted_reqs={self.num_preempted_reqs},\n'
                 f'  ttft={self.ttft},\n'
                 f'  tpot={self.tpot},\n'
                 f'  itl={self.itl},\n'
@@ -318,6 +317,15 @@ class IterationStats:
     def _time_since(self, start: float) -> float:
         """Calculate an interval relative to this iteration's timestamp."""
         return self.iteration_timestamp - start
+
+    def update_from_events(self, engine_events: list[EngineEvent]):
+        """Update iteration counters from engine events."""
+        # avoid circular dependency
+        from lmdeploy.messages import EventType
+
+        for event in engine_events:
+            if event.type == EventType.PREEMPTED:
+                self.num_preempted_reqs += 1
 
     def update_from_output(self, outputs: EngineOutput, req_stats: RequestStats):
         """Update the iteration statistics.
@@ -329,6 +337,8 @@ class IterationStats:
         if outputs.req_metrics is None:
             # when users visit "/abort_request" endpoint, `req_metrics` might be None
             return
+
+        self.update_from_events(outputs.req_metrics.engine_events)
 
         new_generation_tokens = len(outputs.token_ids)
         if new_generation_tokens == 0:

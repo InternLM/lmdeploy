@@ -351,7 +351,7 @@ class EngineLoop:
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
-            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
+            req_metrics = RequestMetrics(new_token_timestamp, msg.take_events(), spec_info=spec_info)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -504,7 +504,7 @@ class EngineLoop:
             token_ids = [msg.migration_request.remote_token_id]
             # MUST be a wall-clock time
             new_token_timestamp = time.time()
-            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
+            req_metrics = RequestMetrics(new_token_timestamp, msg.take_events())
             out = InferOutput(
                 session_id=session_id,
                 resp=msg.resp,
