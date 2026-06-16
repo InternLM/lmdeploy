@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Literal
 
-from transformers import AutoConfig
-
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .utils import get_logger
 
@@ -154,11 +152,9 @@ def get_model_arch(model_path: str, trust_remote_code: bool = False):
     Args:
         model_path(str): the model path
     """
-    try:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
-    except Exception as e:  # noqa
-        from transformers import PretrainedConfig
-        cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+    from lmdeploy.hf_configs import config_from_pretrained
+
+    cfg = config_from_pretrained(model_path, trust_remote_code=trust_remote_code)
 
     _cfg = cfg.to_dict()
     if _cfg.get('architectures', None):

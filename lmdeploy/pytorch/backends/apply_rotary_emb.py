@@ -8,7 +8,13 @@ class ApplyRotaryEmbImpl(ABC):
     """Apply rotary embedding implementation."""
 
     @abstractmethod
-    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
+    def forward(self,
+                query: Tensor,
+                key: Tensor,
+                cos: Tensor,
+                sin: Tensor,
+                inplace: bool = True,
+                complex_mode: bool = False):
         """forward."""
         raise NotImplementedError
 
