@@ -165,7 +165,7 @@ class MultimodalProcessor:
                 else:
                     mm_stats.record_failure('parse', modality.value)
                     raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
-                                        'Expected a str URL/path/data URL or PIL.Image.Image.')
+                                     'Expected a str URL/path/data URL or PIL.Image.Image.')
             elif item_type in ('video_url', 'video'):
                 modality = Modality.VIDEO
                 mm_stats.add_item(modality.value)
@@ -187,7 +187,7 @@ class MultimodalProcessor:
                 with _mm_stage(mm_stats, 'media_io', modality.value):
                     data = load_from_url(data_src, TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
             else:
-                mm_stats.record_failure('media_io', 'unknown')
+                mm_stats.record_failure('parse', 'unknown')
                 raise NotImplementedError(f'unknown type: {item_type}')
 
             out_message['content'].append({'type': modality.value, 'data': data, **item_params})

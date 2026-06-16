@@ -23,17 +23,6 @@ lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct --enable-metrics
 Replace the model path according to your needs.
 By default, the metrics endpoint will be available at `http://<lmdeploy_server_host>:23333/metrics`.
 
-For VLM serving, multimodal preprocessing metrics are exported when the metrics system is enabled:
-
-The multimodal metrics include:
-
-- `lmdeploy:multimodal_requests_total`: multimodal request count
-- `lmdeploy:multimodal_items_total`: multimodal item count by modality
-- `lmdeploy:multimodal_preprocess_time_seconds`: total multimodal preprocessing time
-- `lmdeploy:multimodal_stage_time_seconds`: stage time by stage and modality
-- `lmdeploy:multimodal_item_count`: item count per request by modality
-- `lmdeploy:multimodal_processing_failures_total`: processing failures by stage and modality
-
 2. **Navigate to the monitoring directory**
 
 ```
