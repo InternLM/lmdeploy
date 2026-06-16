@@ -560,6 +560,8 @@ class AsyncRPCClient:
         try:
             stream_id = await asyncio.shield(stream_task)
             if local_stream_started_callback is not None:
+                # The streaming task has returned a stream id, which means the
+                # engine accepted startup and API-side handoff resources can go.
                 local_stream_started_callback()
             while not stopped:
                 output, stopped = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)

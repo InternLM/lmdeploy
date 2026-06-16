@@ -558,6 +558,8 @@ class AsyncEngine:
                                                                             mm_processor_kwargs=mm_processor_kwargs,
                                                                             **kwargs)
                 if self.backend != 'pytorch':
+                    # Non-PyTorch backends consume the preprocessed payload in-process,
+                    # so the MM gate can open as soon as prompt processing finishes.
                     release_mm_preprocess_lease()
                 prompt = prompt_input.get('prompt')
                 input_ids = prompt_input.get('input_ids')
@@ -674,6 +676,8 @@ class AsyncEngine:
             finish_reason = None
             handoff_kwargs = {}
             if self.backend == 'pytorch':
+                # PyTorch MP needs the large MM payload until ADD_MESSAGE reaches
+                # the engine. Release at stream startup, not after full decode.
                 handoff_kwargs['local_stream_started_callback'] = release_mm_preprocess_lease
             async with self.safe_run(handle,
                                      session=session,

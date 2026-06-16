@@ -212,8 +212,9 @@ class EngineInstance(EngineInstanceBase):
         )
         logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
-        # notify add msg
         if notify_add_msg_func is not None:
+            # Signal the API process once the request payload is queued in the
+            # engine; this releases the MM preprocess gate before decode ends.
             notify_add_msg_func()
 
         output_offset = 0

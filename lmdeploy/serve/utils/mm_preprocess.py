@@ -33,6 +33,8 @@ class MultimodalPreprocessLease:
 
     def __init__(self, semaphore: asyncio.Semaphore | None = None):
         self._semaphore = semaphore
+        # Cleanup may run from prompt errors, cancels, handoff, and final exit.
+        # Keep repeated release calls from increasing semaphore capacity.
         self._released = False
 
     def release(self):
@@ -59,6 +61,7 @@ class MultimodalPreprocessGate:
     async def acquire(self) -> MultimodalPreprocessLease:
         """Acquire a multimodal preprocessing slot."""
         if self._semaphore is None:
+            # Return a no-op lease so callers can keep one cleanup path.
             return MultimodalPreprocessLease()
         await self._semaphore.acquire()
         return MultimodalPreprocessLease(self._semaphore)

@@ -142,6 +142,8 @@ class MPEngineInstance(EngineInstanceBase):
             yield EngineOutput(ResponseType.CANCEL, [])
             return
         kwargs['session_id'] = session_id
+        # This callback releases API-server local resources; keep it out of RPC
+        # kwargs so it is not pickled or executed in the engine process.
         local_stream_started_callback = kwargs.pop('local_stream_started_callback', None)
         generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer',
                                                                 state.init_done,
