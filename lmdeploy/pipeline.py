@@ -12,7 +12,6 @@ from queue import Queue
 from threading import Thread
 from typing import TYPE_CHECKING
 
-import torch
 import tqdm
 from typing_extensions import deprecated
 
@@ -406,78 +405,6 @@ class Pipeline:
 
             coro = _coro()
         return asyncio.run_coroutine_threadsafe(coro, loop)
-
-    def _batch_iterator(self, sizes, max_value):
-        """Return an iterator that calculates intervals (start, end) of a
-        descend-order list, in which the sum of values in the range is the
-        maximum number not less than max_value. By "the sum of values",
-
-        here it means $$len(sizes[start:end]) * sizes[start]$$
-        """
-        i = 0
-        while i < len(sizes):
-            current_sum = 0
-            start_index = i
-
-            while i < len(sizes) and current_sum + sizes[start_index] <= max_value:
-                current_sum += sizes[start_index]
-                i += 1
-
-            yield (start_index, i)
-            if i > start_index:
-                continue
-            else:
-                i += 1
-
-    def _get_ppl(self,
-                 sessions: list[Session],
-                 input_ids: list[list[int]],
-                 max_input_len: int,
-                 target_ids=None,
-                 sequence_start: bool = True,
-                 sequence_end: bool = True):
-        assert (isinstance(input_ids, list) and all(isinstance(_, list) for _ in input_ids))
-        assert target_ids is None or len(target_ids) == len(input_ids)
-        assert len(sessions) == len(input_ids)
-
-        lens = [len(_) for _ in input_ids]
-        total_len = sum(lens)
-        assert sum(lens) <= max_input_len
-
-        logger.info(f'get_ppl: bs: {len(input_ids)}, lens: {lens}, '
-                    f'total_len: {total_len}')
-        torch.cuda.empty_cache()
-
-        logits = self._run(coro=self.async_engine.async_get_logits(
-            input_ids=input_ids, sessions=sessions, sequence_start=sequence_start, sequence_end=sequence_end)).result()
-        padding_token_id = -100
-        if target_ids is None:
-            target_ids = [x[1:] + [padding_token_id] for x in input_ids]
-        else:
-            target_ids = [
-                target_ids[i] + [padding_token_id] if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
-                for i in range(len(input_ids))
-            ]
-        target_ids = [torch.Tensor(torch.LongTensor(_target_ids)) for _target_ids in target_ids]
-
-        result = []
-        for _logits, _target_ids in zip(logits, target_ids):
-            _logits = _logits.float()
-            vocab_size = _logits.shape[-1]
-            _target_ids = _target_ids.to(_logits.device)
-            target_mask = _target_ids != padding_token_id
-            # compute cross entropy loss
-            flat_logits = _logits.contiguous().view(-1, vocab_size)
-            flat_target_ids = _target_ids.contiguous().view(-1)
-            flat_loss_matrix = torch.nn.functional.cross_entropy(flat_logits,
-                                                                 flat_target_ids,
-                                                                 reduction='none',
-                                                                 ignore_index=padding_token_id)
-            loss = flat_loss_matrix.sum()
-            target_count = target_mask.sum()
-            result.append(loss.item() / target_count.item())
-        logger.info(f'ppl result: {result}')
-        return result
 
 
 class _EventLoopThread:
