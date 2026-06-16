@@ -2,11 +2,12 @@
 
 accelerate>=0.29.3
 aiohttp
+apache-tvm-ffi==0.1.11; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 flash-linear-attention
 opencv-python-headless
 peft<=0.14.0
 prometheus_client
-tilelang; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
+tilelang==0.1.11; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 torch<=2.10.0,>=2.0.0
 torchvision<=0.25.0,>=0.15.0
 triton<=3.6.0,>=3.0.0; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from http import HTTPStatus
 
 import shortuuid
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
 from ..adapter import (
@@ -183,17 +185,23 @@ def register(router: APIRouter, server_context) -> None:
         )
 
         request_id = f'msg_{shortuuid.random()}'
+        session_mgr = server_context.get_session_manager()
 
         if request.stream:
             return StreamingResponse(
-                stream_messages_response(
-                    result_generator,
-                    request_id=request_id,
-                    model=request.model,
-                    response_parser=response_parser,
-                    return_token_ids=request.return_token_ids or False,
-                    return_routed_experts=request.return_routed_experts or False,
-                    logprobs=request.return_logprob or False,
+                with_request_cleanup(
+                    stream_messages_response(
+                        result_generator,
+                        request_id=request_id,
+                        model=request.model,
+                        response_parser=response_parser,
+                        return_token_ids=request.return_token_ids or False,
+                        return_routed_experts=request.return_routed_experts or False,
+                        logprobs=request.return_logprob or False,
+                    ),
+                    [result_generator],
+                    [session],
+                    session_mgr,
                 ),
                 media_type='text/event-stream',
             )
@@ -202,16 +210,18 @@ def register(router: APIRouter, server_context) -> None:
         final_token_ids: list[int] = []
         final_logprobs: list[dict[int, float]] = []
         final_res = None
-        async for res in result_generator:
-            if await raw_request.is_disconnected():
-                await session.async_abort()
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            final_res = res
-            text += res.response or ''
-            if res.token_ids:
-                final_token_ids.extend(res.token_ids)
-            if res.logprobs:
-                final_logprobs.extend(res.logprobs)
+        async with aclosing(with_request_cleanup(result_generator, [result_generator], [session],
+                                                 session_mgr)) as generator:
+            async for res in generator:
+                if await raw_request.is_disconnected():
+                    await session.async_abort()
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                final_res = res
+                text += res.response or ''
+                if res.token_ids:
+                    final_token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    final_logprobs.extend(res.logprobs)
 
         if final_res is None:
             return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')

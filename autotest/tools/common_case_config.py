@@ -238,7 +238,21 @@ PYTORCH_PR_TEST_LLM_GPU2 = [{
         'tp': 2
     },
     'extra_params': {}
-}]
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256
+    }
+}
+]
 
 PYTORCH_PR_TEST_LLM_GPU1 = [{
     'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',

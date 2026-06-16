@@ -10,6 +10,7 @@ from lmdeploy.pytorch.config import (
     MiscConfig,
     SchedulerConfig,
     SpecDecodeConfig,
+    normalize_cudagraph_capture_batch_sizes,
 )
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
@@ -39,6 +40,11 @@ class ConfigBuilder:
                                f'since dllm_block_length({engine_config.dllm_block_length}) * max_batch_size '
                                f'({max_batch_size}) > max_prefill_token_num ({max_prefill_token_num}).')
 
+        capture_sizes = engine_config.cudagraph_capture_batch_sizes
+        if capture_sizes is not None:
+            engine_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                capture_sizes, engine_config.max_batch_size)
+
         if engine_config.dp != 1:
             if engine_config.tp == 1 and engine_config.ep == 1:
                 logger.warning('Data parallelism is enabled but tensor parallelism and '
@@ -67,7 +73,10 @@ class ConfigBuilder:
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
+            cudagraph_capture_batch_sizes=engine_config.cudagraph_capture_batch_sizes,
             enable_prefix_caching=engine_config.enable_prefix_caching,
+            prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
+            prefix_cache_decode_state_interval=engine_config.prefix_cache_decode_state_interval,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,

@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from functools import partial
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Literal
@@ -63,6 +63,7 @@ from lmdeploy.serve.openai.protocol import (
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
     DeltaMessage,
+    DestroyWeightsUpdateGroupRequest,
     EmbeddingsRequest,
     EncodeRequest,
     EncodeResponse,
@@ -70,6 +71,7 @@ from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
+    InitWeightsUpdateGroupRequest,
     LogProbs,
     ModelCard,
     ModelList,
@@ -80,8 +82,12 @@ from lmdeploy.serve.openai.protocol import (
     PPLResponse,
     TopLogprob,
     UpdateParamsRequest,
+    UpdateWeightsFromDistributedRequest,
     UsageInfo,
 )
+from lmdeploy.serve.openai.responses import create_responses_router
+from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
+from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -139,6 +145,13 @@ class VariableInterface:
     @classmethod
     def get_engine_config(cls):
         return cls.async_engine.backend_config
+
+
+async def _with_request_cleanup(generator, result_generators, sessions):
+    """Yield from an API generator and cleanup when the HTTP task exits."""
+    session_mgr = VariableInterface.get_session_manager()
+    async for item in with_request_cleanup(generator, result_generators, sessions, session_mgr):
+        yield item
 
 
 router = APIRouter()
@@ -542,6 +555,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                          output_token_logprobs=output_token_logprobs,
                                                          output_ids=output_ids,
                                                          routed_experts=routed_experts)
+        choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
@@ -638,7 +652,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     final_logprobs = []
@@ -647,19 +662,20 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     text = ''
     cache_block_ids = []
     remote_token_ids = []
-    async for res in result_generator:
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            await session.async_abort()
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-        final_res = res
-        text += res.response
-        if res.token_ids:
-            final_token_ids.extend(res.token_ids)
-        if res.logprobs:
-            final_logprobs.extend(res.logprobs)
-        cache_block_ids.append(res.cache_block_ids)
-        remote_token_ids.append(res.token_ids)
+    async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+        async for res in generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                await session.async_abort()
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+            final_res = res
+            text += res.response
+            if res.token_ids:
+                final_token_ids.extend(res.token_ids)
+            if res.logprobs:
+                final_logprobs.extend(res.logprobs)
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
 
     tool_calls = None
     reasoning_content = None
@@ -704,6 +720,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         output_ids=final_token_ids if request.return_token_ids else None,
         routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     )
+    choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
     choices.append(choice_data)
 
     if with_cache:
@@ -908,7 +925,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), generators, sessions)
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     usage = UsageInfo()
@@ -916,25 +934,26 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     cache_block_ids = []
     remote_token_ids = []
 
-    async def _inner_call(i, generator):
+    async def _inner_call(i, generator, session):
         nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
         text = ''
-        async for res in generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            final_res = res
-            text += res.response
-            cache_block_ids.append(res.cache_block_ids)
-            remote_token_ids.append(res.token_ids)
-            if res.token_ids:
-                final_token_ids.extend(res.token_ids)
-            if res.logprobs:
-                final_logprobs.extend(res.logprobs)
+        async with aclosing(_with_request_cleanup(generator, [generator], [session])) as cleanup_generator:
+            async for res in cleanup_generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await VariableInterface.async_engine.stop_session(request.session_id)
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                final_res = res
+                text += res.response
+                cache_block_ids.append(res.cache_block_ids)
+                remote_token_ids.append(res.token_ids)
+                if res.token_ids:
+                    final_token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    final_logprobs.extend(res.logprobs)
 
         logprobs = None
         assert final_res is not None
@@ -953,7 +972,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
 
-    await asyncio.gather(*[_inner_call(i, generators[i]) for i in range(len(generators))])
+    await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
 
     response = CompletionResponse(
         id=request_id,
@@ -1058,7 +1077,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         yield 'data: [DONE]\n\n'
 
     if request.stream:
-        return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(generate_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     response = None
 
@@ -1066,14 +1086,15 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''
         output_ids = []
         logprobs = []
-        async for res in result_generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await session.async_abort()
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            text += res.response or ''
-            output_ids.extend(res.token_ids or [])
-            logprobs.extend(res.logprobs or [])
+        async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+            async for res in generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await session.async_abort()
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                text += res.response or ''
+                output_ids.extend(res.token_ids or [])
+                logprobs.extend(res.logprobs or [])
 
         output_token_logprobs = []
         if len(logprobs) and len(output_ids):
@@ -1219,6 +1240,52 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
+
+
+def _check_pytorch_backend_for_disagg_weight_update():
+    """Disaggregated weight-update endpoints are PyTorch-backend only for
+    now."""
+    backend = getattr(VariableInterface.async_engine, 'backend', None)
+    if backend != 'pytorch':
+        return create_error_response(
+            HTTPStatus.NOT_IMPLEMENTED,
+            f'Disaggregated weight-update endpoints require backend="pytorch", got {backend!r}.')
+    return None
+
+
+@router.post('/init_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def init_weights_update_group(request: InitWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Initialize the torch.distributed process group used by an external
+    trainer to broadcast weights into this rollout engine."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.init_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/update_weights_from_distributed', dependencies=[Depends(validate_json_request)])
+async def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest, raw_request: Request = None):
+    """Receive a bucket of weights through a previously initialized weights-
+    update group and load them into the running model."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.update_weights_from_distributed(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/destroy_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def destroy_weights_update_group(request: DestroyWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Tear down a previously initialized weights-update group."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.destroy_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
 
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
@@ -1578,6 +1645,7 @@ def serve(model_path: str,
 
     app.include_router(router)
     app.include_router(create_anthropic_router(VariableInterface))
+    app.include_router(create_responses_router(VariableInterface))
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     mount_metrics(app, backend_config)
 
