@@ -107,6 +107,8 @@ class SubCliServe:
         ArgumentHelper.enable_return_routed_experts(pt_group)
         ArgumentHelper.distributed_executor_backend(pt_group)
         ArgumentHelper.kernel_block_size(pt_group)
+        ArgumentHelper.prefix_cache_state_budget(pt_group)
+        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
 
         # common engine args
         disable_vision_encoder = ArgumentHelper.disable_vision_encoder(pt_group)
@@ -128,6 +130,7 @@ class SubCliServe:
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
+        ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -234,10 +237,13 @@ class SubCliServe:
                 session_len=args.session_len,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
+                prefix_cache_state_budget=args.prefix_cache_state_budget,
+                prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,
                 max_prefill_token_num=args.max_prefill_token_num,
+                cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,
                 enable_metrics=not args.disable_metrics,

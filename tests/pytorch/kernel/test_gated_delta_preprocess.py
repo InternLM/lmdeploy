@@ -80,7 +80,7 @@ def _fla_l2norm_reference(query, key, b, a, dt_bias, a_log_exp, kv_ratio, init_t
 
 @pytest.mark.skipif(not do_test(), reason='triton or cuda is not available')
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16])
-@pytest.mark.parametrize('kv_ratio', [1, 4])
+@pytest.mark.parametrize('kv_ratio', [1, 3, 4])
 @pytest.mark.parametrize('use_init_token_mask', [False, True])
 @pytest.mark.parametrize('apply_qk_l2norm', [False, True])
 def test_gated_delta_preprocess_3d_ba(dtype, kv_ratio, use_init_token_mask, apply_qk_l2norm):
@@ -127,7 +127,7 @@ def test_gated_delta_preprocess_3d_ba(dtype, kv_ratio, use_init_token_mask, appl
 
 @pytest.mark.skipif(not do_test(), reason='triton or cuda is not available')
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16])
-@pytest.mark.parametrize('kv_ratio', [1, 4])
+@pytest.mark.parametrize('kv_ratio', [1, 3, 4])
 @pytest.mark.parametrize('use_init_token_mask', [False, True])
 @pytest.mark.parametrize('apply_qk_l2norm', [False, True])
 def test_gated_delta_preprocess_4d_grouped_ba(dtype, kv_ratio, use_init_token_mask, apply_qk_l2norm):
@@ -175,7 +175,7 @@ def test_gated_delta_preprocess_4d_grouped_ba(dtype, kv_ratio, use_init_token_ma
 
 @pytest.mark.skipif(not do_test(), reason='triton or cuda is not available')
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16])
-@pytest.mark.parametrize('kv_ratio', [1, 4])
+@pytest.mark.parametrize('kv_ratio', [1, 3, 4])
 @pytest.mark.parametrize('grouped_ba', [False, True])
 @pytest.mark.parametrize('is_decoding', [False, True])
 def test_gated_delta_preprocess_matches_default_prepare_inputs(dtype, kv_ratio, grouped_ba, is_decoding):
