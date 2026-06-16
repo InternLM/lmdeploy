@@ -82,6 +82,7 @@ class ConfigBuilder:
         backend_config = BackendConfig(
             eager_mode=engine_config.eager_mode,
             device_type=engine_config.device_type,
+            max_batch_size=engine_config.max_batch_size,
         )
         return backend_config
 

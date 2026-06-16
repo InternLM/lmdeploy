@@ -72,6 +72,7 @@ class BackendConfig:
     """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
+    max_batch_size: int = 0
 
 
 @dataclass

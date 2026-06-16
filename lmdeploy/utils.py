@@ -506,13 +506,20 @@ def serialize_state_dict(state_dict: dict) -> str:
     return pybase64.b64encode(buf.read()).decode('utf-8')
 
 
-def is_dlblas_installed():
-    is_dlblas_installed = True
+def is_deep_ep_installed():
     try:
-        import dlblas  # noqa: F401
+        import deep_ep  # noqa: F401
     except Exception:
-        is_dlblas_installed = False
-    return is_dlblas_installed
+        return False
+    return True
+
+
+def is_deep_gemm_installed():
+    try:
+        import deep_gemm  # noqa: F401
+    except Exception:
+        return False
+    return True
 
 
 # from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/weight_sync/tensor_bucket.py
