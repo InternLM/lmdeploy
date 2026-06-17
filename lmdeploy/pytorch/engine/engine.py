@@ -196,6 +196,7 @@ class Engine(EngineBase):
         # infer sleeping from empty_init: empty_init still builds runtime
         # resources and has its own weight-update workflow.
         self._sleeping_tags = set()
+        self._weights_update_lock: asyncio.Lock | None = None
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -498,6 +499,29 @@ class Engine(EngineBase):
     def update_params(self, request: Any):
         """Update params."""
         self.executor.update_params(request)
+
+    def _get_weights_update_lock(self):
+        """Get the disaggregated weights-update lock."""
+        if self._weights_update_lock is None:
+            self._weights_update_lock = asyncio.Lock()
+        return self._weights_update_lock
+
+    async def _run_weights_update(self, func, request: Any):
+        """Run one serialized disaggregated weights-update operation."""
+        async with self._get_weights_update_lock():
+            return await asyncio.to_thread(func, request)
+
+    async def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return await self._run_weights_update(self.executor.init_weights_update_group, request)
+
+    async def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return await self._run_weights_update(self.executor.update_weights_from_distributed, request)
+
+    async def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return await self._run_weights_update(self.executor.destroy_weights_update_group, request)
 
     def _block_new_inputs(self):
         """Block new inference work from engine instances."""
