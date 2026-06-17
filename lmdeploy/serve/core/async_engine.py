@@ -540,7 +540,7 @@ class AsyncEngine:
             if mm_preprocess_lease is not None:
                 mm_preprocess_lease.release()
 
-        if messages:
+        if messages is not None:
             try:
                 if mm_preprocess_gate is not None and MultimodalProcessor._has_multimodal_input(messages):
                     mm_preprocess_lease = await mm_preprocess_gate.acquire()

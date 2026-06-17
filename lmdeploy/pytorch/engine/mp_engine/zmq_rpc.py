@@ -561,7 +561,10 @@ class AsyncRPCClient:
             stream_id = await asyncio.shield(stream_task)
             if local_request_accepted_callback is not None:
                 # A stream id here means the engine has accepted the request.
-                local_request_accepted_callback()
+                try:
+                    local_request_accepted_callback()
+                except Exception:
+                    logger.exception('ZMQ MP request-accepted callback failed.')
             while not stopped:
                 output, stopped = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)
                 if output is not None:

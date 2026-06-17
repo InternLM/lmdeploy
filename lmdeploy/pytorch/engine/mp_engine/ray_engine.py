@@ -243,7 +243,10 @@ class RayMPEngine(MPEngine):
         try:
             stream_id = await asyncio.shield(stream_task)
             if local_request_accepted_callback is not None:
-                local_request_accepted_callback()
+                try:
+                    local_request_accepted_callback()
+                except Exception:
+                    logger.exception('Ray MP request-accepted callback failed.')
             while not stopped:
                 result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
                 if result is not None:
