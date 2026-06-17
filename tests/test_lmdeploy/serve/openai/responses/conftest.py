@@ -65,6 +65,7 @@ class FakeServerContext:
     def __init__(self):
         self.async_engine = FakeAsyncEngine()
         self.sessions = []
+        self.mm_preprocess_gate = object()
 
     def create_session(self, session_id):
         session = FakeSession(session_id)
