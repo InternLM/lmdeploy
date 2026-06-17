@@ -195,8 +195,6 @@ class ZMQMPEngine(MPEngine):
                                               local_request_accepted_callback=None,
                                               **kwargs):
         """Collective rpc call."""
-        # The engine calls notify_add_msg_func after ADD_MESSAGE is queued; use
-        # that as the request-accepted signal for API-side gate release.
         startup_notify_kwarg = 'notify_add_msg_func' if func == 'instance_async_stream_infer' else None
         async for out in self.rpc_client.async_stream_call(
                 func,
