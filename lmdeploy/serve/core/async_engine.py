@@ -32,7 +32,6 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
 )
 from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
-from lmdeploy.serve.utils.mm_preprocess import has_multimodal_input
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
@@ -543,7 +542,7 @@ class AsyncEngine:
 
         if messages:
             try:
-                if mm_preprocess_gate is not None and has_multimodal_input(messages):
+                if mm_preprocess_gate is not None and MultimodalProcessor._has_multimodal_input(messages):
                     mm_preprocess_lease = await mm_preprocess_gate.acquire()
                 prompt = messages
                 self.request_logger.log_prompt(session, prompt=prompt)

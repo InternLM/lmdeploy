@@ -3,7 +3,8 @@ from collections import defaultdict
 
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngineInstance, SessionState
-from lmdeploy.serve.utils.mm_preprocess import MultimodalPreprocessGate, has_multimodal_input
+from lmdeploy.serve.processors import MultimodalProcessor
+from lmdeploy.serve.utils.mm_preprocess import MultimodalPreprocessGate
 
 
 async def _run_gate_blocks_until_release():
@@ -24,15 +25,18 @@ def test_mm_preprocess_gate_blocks_until_release():
 
 
 def test_has_multimodal_input_detects_openai_media():
-    assert has_multimodal_input([{
+    assert MultimodalProcessor._has_multimodal_input([{
         'role': 'user',
         'content': [
             {'type': 'text', 'text': 'describe'},
             {'type': 'image_url', 'image_url': {'url': 'file:///tmp/a.png'}},
         ],
     }])
-    assert not has_multimodal_input([{'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]}])
-    assert not has_multimodal_input('hello')
+    assert not MultimodalProcessor._has_multimodal_input([{
+        'role': 'user',
+        'content': [{'type': 'text', 'text': 'hello'}],
+    }])
+    assert not MultimodalProcessor._has_multimodal_input('hello')
 
 
 async def _run_generate_releases_gate_on_prompt_error():

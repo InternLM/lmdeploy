@@ -1,31 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any
-
-
-MULTIMODAL_TYPES = {
-    'image_url',
-    'image_data',
-    'image',
-    'video_url',
-    'video',
-    'audio_url',
-    'audio',
-    'time_series_url',
-    'time_series',
-}
-
-
-def has_multimodal_input(messages: Any) -> bool:
-    """Return whether OpenAI-style messages contain multimodal content."""
-    if not isinstance(messages, list):
-        return False
-    return any(
-        isinstance(message, dict) and isinstance(message.get('content'), list)
-        and any(
-            isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES
-            for item in message['content'])
-        for message in messages)
 
 
 class MultimodalPreprocessLease:
