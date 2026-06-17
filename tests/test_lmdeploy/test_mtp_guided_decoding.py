@@ -79,7 +79,7 @@ def _make_spec_config():
 def _make_engine_config():
     """PytorchEngineConfig suitable for MTP + guided decoding tests."""
     return PytorchEngineConfig(
-        max_batch_size=1,
+        max_batch_size=2,
         session_len=1024,
         cache_max_entry_count=0.1,
     )
@@ -147,7 +147,7 @@ class TestJSONSchemaSpecDecode:
             response_format=response_format,
             max_new_tokens=200,
         )
-        # max_batch_size=1, so send one at a time to avoid queue issues
+        # send one at a time to avoid queue issues
         responses = pipe([PROMPT], gen_config=gen_config)
         for resp in responses:
             data = json.loads(resp.text)
@@ -222,7 +222,7 @@ class TestMixedBatchSpecDecode:
         )
         free_config = GenerationConfig(max_new_tokens=50)
 
-        # max_batch_size=1, so test one guided + one unguided sequentially
+        # test one guided + one unguided sequentially
         guided_resp = pipe(PROMPT, gen_config=guided_config)
         free_resp = pipe('Tell me a short joke.', gen_config=free_config)
 
