@@ -475,14 +475,14 @@ def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
     assert not maker.long_context_chunker.enabled()
 
 
-def test_do_prefill_default_treats_pending_last_chunk_as_waiting_work():
+def test_do_prefill_default_forces_pending_last_chunk_prefill():
     long_seq = _DummySeq(history_ids=512, token_ids=256, all_multimodals={}, input_multimodals={})
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(role=EngineRole.Decode, max_prefill_token_num=512, max_batches=1, prefill_interval=1)
+    maker.config = SimpleNamespace(role=EngineRole.Decode, max_prefill_token_num=512, max_batches=1, prefill_interval=100)
     maker.scheduler = _FakeScheduler([], num_ready=1, num_running=1)
     maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
     maker.long_context_chunker.set_seq(long_seq)
-    maker._decode_count = 1
+    maker._decode_count = 0
 
     assert maker.do_prefill_default()
 

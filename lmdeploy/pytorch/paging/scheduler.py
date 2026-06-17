@@ -383,6 +383,14 @@ class Scheduler:
             evictable = list(chain(hanging, waiting))
             return eviction_helper.evict_for_seq(seq, evictable, evict_prealloc_size)
 
+        def __prepare_and_evict(seq: SchedulerSequence, waiting):
+            """Apply chunk allocation limits and evict for this prefill."""
+            alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
+            if __evict_for_seq(seq, waiting, alloc_prealloc_size):
+                return True, alloc_prealloc_size
+            seq.kv_token_limit = None
+            return False, alloc_prealloc_size
+
         def _reorder_waiting():
             """Reorder waiting."""
             return sorted(self.waiting, key=lambda seq: seq.arrive_time)
@@ -416,36 +424,31 @@ class Scheduler:
                 if not self._acquire_ssm_restore_if_needed(seq):
                     __rollback_prefix_match('failed to acquire SSM restore checkpoint')
 
-                alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
-
-                if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
+                evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                if not evicted:
                     if not had_ssm_restore:
                         __rollback_prefix_match('eviction failed')
-                        seq.kv_token_limit = None
                         break
                     # A matched SSM restore may be pinning the only checkpoint
                     # state that eviction would otherwise free.  Roll it back once
                     # and retry eviction before declaring the sequence unschedulable.
                     __rollback_prefix_match('eviction failed with pinned SSM restore')
-                    alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
-                    if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
-                        seq.kv_token_limit = None
+                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                    if not evicted:
                         break
 
                 # allocate session memory
                 if self.is_ssm and not self._ensure_runtime_state_available():
                     __rollback_prefix_match('no runtime SSM state available')
-                    alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
-                    if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
-                        seq.kv_token_limit = None
+                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                    if not evicted:
                         break
                     if not self._ensure_runtime_state_available():
                         seq.kv_token_limit = None
                         break
             else:
-                alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
-                if not __evict_for_seq(seq, waiting, alloc_prealloc_size):
-                    seq.kv_token_limit = None
+                evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                if not evicted:
                     break
             self.block_manager.allocate(seq, alloc_prealloc_size)
             if self.block_trie.enable:

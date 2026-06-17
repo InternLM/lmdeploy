@@ -962,6 +962,8 @@ class InputsMakerAsync:
         if not scheduler.has_waiting() and not pending_last_chunk:
             self._decode_count = 0
             return False
+        if pending_last_chunk:
+            return True
 
         # force prefill if too many consecutive decode rounds
         if self._decode_count >= self.config.prefill_interval:
@@ -972,10 +974,6 @@ class InputsMakerAsync:
         token_count = 0
         for seq in waiting:
             token_count += seq.num_token_ids
-            if token_count >= self.config.max_prefill_token_num:
-                return True
-        if pending_last_chunk:
-            token_count += self.long_context_chunker.seq.num_token_ids
             if token_count >= self.config.max_prefill_token_num:
                 return True
 
