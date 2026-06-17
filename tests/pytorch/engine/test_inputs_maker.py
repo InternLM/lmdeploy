@@ -478,7 +478,10 @@ def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
 def test_do_prefill_default_forces_pending_last_chunk_prefill():
     long_seq = _DummySeq(history_ids=512, token_ids=256, all_multimodals={}, input_multimodals={})
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(role=EngineRole.Decode, max_prefill_token_num=512, max_batches=1, prefill_interval=100)
+    maker.config = SimpleNamespace(role=EngineRole.Decode,
+                                   max_prefill_token_num=512,
+                                   max_batches=1,
+                                   prefill_interval=100)
     maker.scheduler = _FakeScheduler([], num_ready=1, num_running=1)
     maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
     maker.long_context_chunker.set_seq(long_seq)
