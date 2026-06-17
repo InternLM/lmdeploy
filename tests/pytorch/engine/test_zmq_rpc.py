@@ -131,7 +131,12 @@ class _FakeMPEngine(MPEngine):
         self.calls.append((func, args))
         return ResponseType.SUCCESS
 
-    async def _collective_rpc_streaming_async(self, func, init_done, *args, **kwargs):
+    async def _collective_rpc_streaming_async(self,
+                                              func,
+                                              init_done,
+                                              *args,
+                                              local_request_accepted_callback=None,
+                                              **kwargs):
 
         async def _startup():
             self.started.set()

@@ -707,7 +707,8 @@ class VisionConfig:
             some models will use image patch, the actual running batch could
             be larger than this value.
         max_mm_preprocess_concurrency: the max number of multimodal requests
-            allowed in media decode / preprocessing at the same time. 0 means
+            allowed in media preparation at the same time. For PyTorch MP, the
+            slot is held until the request is accepted by the engine. 0 means
             no limit.
         thread_safe: Specifies whether the engine instance is
             thread-safe. Please set it to True when using the pipeline

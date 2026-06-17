@@ -94,16 +94,16 @@ class _FakeMPEngine:
                                               func,
                                               init_done,
                                               *args,
-                                              local_stream_started_callback=None,
+                                              local_request_accepted_callback=None,
                                               **kwargs):
         self.forwarded_kwargs = kwargs
-        self.local_callback = local_stream_started_callback
-        if local_stream_started_callback is not None:
-            local_stream_started_callback()
+        self.local_callback = local_request_accepted_callback
+        if local_request_accepted_callback is not None:
+            local_request_accepted_callback()
         yield EngineOutput(ResponseType.FINISH, [])
 
 
-async def _run_mp_engine_keeps_notify_callback_local():
+async def _run_mp_engine_keeps_request_accepted_callback_local():
     engine = _FakeMPEngine()
     instance = MPEngineInstance(engine)
     called = False
@@ -112,13 +112,13 @@ async def _run_mp_engine_keeps_notify_callback_local():
         nonlocal called
         called = True
 
-    async for _ in instance.async_stream_infer(260606, [1, 2], local_stream_started_callback=on_handoff):
+    async for _ in instance.async_stream_infer(260606, [1, 2], local_request_accepted_callback=on_handoff):
         break
 
     assert called
     assert engine.local_callback is on_handoff
-    assert 'local_stream_started_callback' not in engine.forwarded_kwargs
+    assert 'local_request_accepted_callback' not in engine.forwarded_kwargs
 
 
-def test_mp_engine_keeps_notify_callback_local():
-    asyncio.run(_run_mp_engine_keeps_notify_callback_local())
+def test_mp_engine_keeps_request_accepted_callback_local():
+    asyncio.run(_run_mp_engine_keeps_request_accepted_callback_local())

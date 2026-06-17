@@ -201,7 +201,7 @@ class RayMPEngine(MPEngine):
                                               func: str,
                                               init_done: asyncio.Event,
                                               *args,
-                                              local_stream_started_callback=None,
+                                              local_request_accepted_callback=None,
                                               **kwargs):
         """Collective rpc call."""
         # ray generator would try cache every result, which is too verbose.
@@ -242,8 +242,8 @@ class RayMPEngine(MPEngine):
         stopped = False
         try:
             stream_id = await asyncio.shield(stream_task)
-            if local_stream_started_callback is not None:
-                local_stream_started_callback()
+            if local_request_accepted_callback is not None:
+                local_request_accepted_callback()
             while not stopped:
                 result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
                 if result is not None:

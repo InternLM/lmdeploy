@@ -43,7 +43,7 @@ class MPEngine(EngineBase):
                                               func: str,
                                               init_done: asyncio.Event,
                                               *args,
-                                              local_stream_started_callback=None,
+                                              local_request_accepted_callback=None,
                                               **kwargs):
         """Collective rpc call."""
         raise NotImplementedError('This method has not been implemented yet.')
@@ -144,11 +144,11 @@ class MPEngineInstance(EngineInstanceBase):
         kwargs['session_id'] = session_id
         # This callback releases API-server local resources; keep it out of RPC
         # kwargs so it is not pickled or executed in the engine process.
-        local_stream_started_callback = kwargs.pop('local_stream_started_callback', None)
+        local_request_accepted_callback = kwargs.pop('local_request_accepted_callback', None)
         generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer',
                                                                 state.init_done,
                                                                 *args,
-                                                                local_stream_started_callback=local_stream_started_callback,
+                                                                local_request_accepted_callback=local_request_accepted_callback,
                                                                 **kwargs)
 
         try:

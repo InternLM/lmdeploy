@@ -509,7 +509,7 @@ class AsyncRPCClient:
                                 sess_event: asyncio.Event,
                                 *args,
                                 streaming_startup_notify_kwarg: str | None = None,
-                                local_stream_started_callback=None,
+                                local_request_accepted_callback=None,
                                 **kwargs):
         """Streaming call."""
         stream_task = asyncio.create_task(
@@ -559,10 +559,9 @@ class AsyncRPCClient:
         stream_task.add_done_callback(_mark_init_done)
         try:
             stream_id = await asyncio.shield(stream_task)
-            if local_stream_started_callback is not None:
-                # The streaming task has returned a stream id, which means the
-                # engine accepted startup and API-side handoff resources can go.
-                local_stream_started_callback()
+            if local_request_accepted_callback is not None:
+                # A stream id here means the engine has accepted the request.
+                local_request_accepted_callback()
             while not stopped:
                 output, stopped = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)
                 if output is not None:

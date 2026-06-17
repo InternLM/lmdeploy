@@ -677,8 +677,8 @@ class AsyncEngine:
             handoff_kwargs = {}
             if self.backend == 'pytorch':
                 # PyTorch MP needs the large MM payload until ADD_MESSAGE reaches
-                # the engine. Release at stream startup, not after full decode.
-                handoff_kwargs['local_stream_started_callback'] = release_mm_preprocess_lease
+                # the engine. Release after request handoff, not after decode.
+                handoff_kwargs['local_request_accepted_callback'] = release_mm_preprocess_lease
             async with self.safe_run(handle,
                                      session=session,
                                      **prompt_input,

@@ -29,12 +29,12 @@ def has_multimodal_input(messages: Any) -> bool:
 
 
 class MultimodalPreprocessLease:
-    """Idempotent lease for one multimodal preprocessing slot."""
+    """Lease for one multimodal preprocessing slot."""
 
     def __init__(self, semaphore: asyncio.Semaphore | None = None):
         self._semaphore = semaphore
-        # Cleanup may run from prompt errors, cancels, handoff, and final exit.
-        # Keep repeated release calls from increasing semaphore capacity.
+        # Multiple cleanup paths can reach release(); only the first one should
+        # return the slot to the gate.
         self._released = False
 
     def release(self):
@@ -47,7 +47,7 @@ class MultimodalPreprocessLease:
 
 
 class MultimodalPreprocessGate:
-    """Admission gate for multimodal media decode and preprocessing."""
+    """Admission gate for large multimodal request preparation."""
 
     def __init__(self, max_concurrency: int = 0):
         self.max_concurrency = max(0, max_concurrency)

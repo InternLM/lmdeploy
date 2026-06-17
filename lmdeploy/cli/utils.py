@@ -659,8 +659,9 @@ class ArgumentHelper:
         return parser.add_argument('--max-mm-preprocess-concurrency',
                                    type=int,
                                    default=0,
-                                   help='the max number of multimodal requests allowed in media decode and '
-                                   'preprocessing at the same time. 0 means no limit')
+                                   help='the max number of multimodal requests allowed in media preparation at the '
+                                   'same time. For PyTorch MP, the slot is held until the request is accepted by '
+                                   'the engine. 0 means no limit')
 
     @staticmethod
     def max_log_len(parser):
