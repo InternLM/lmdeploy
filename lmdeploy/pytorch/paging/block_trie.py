@@ -70,10 +70,11 @@ import heapq
 import logging
 import time
 from dataclasses import dataclass
+from typing import TypeAlias
 
 import numpy as np
 
-from lmdeploy.pytorch.messages import SchedulerSequence
+from lmdeploy.pytorch.messages import PrefixCacheExtraHashes, SchedulerSequence
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig
@@ -126,7 +127,7 @@ class Node:
                  block: int,
                  tokens: np.ndarray,
                  num_matched: int = 0,
-                 extra_hashes: tuple = (),
+                 extra_hashes: PrefixCacheExtraHashes = (),
                  state_idx: int = -1,
                  state_ready: bool = False,
                  state_ref_count: int = 0,
@@ -167,6 +168,11 @@ class Node:
         return True
 
 
+StateCheckpointKey: TypeAlias = tuple[str, int, int]
+StateCheckpointIndex: TypeAlias = dict[StateCheckpointKey, list[Node]]
+StateCheckpointSteps: TypeAlias = dict[str, set[int]]
+
+
 @dataclass
 class StateCheckpointVerifyResult:
     """Verified checkpoint candidate details."""
@@ -193,8 +199,8 @@ class BlockTrie:
         self.leaves: set[Node] = set()
         # SSM checkpoints are sparse.  The trie still owns KV blocks, but ready
         # recurrent-state snapshots are indexed only at selected exact steps.
-        self._state_checkpoint_index: dict[tuple, list[Node]] = dict()
-        self._state_checkpoint_steps: dict[str, set[int]] = dict()
+        self._state_checkpoint_index: StateCheckpointIndex = dict()
+        self._state_checkpoint_steps: StateCheckpointSteps = dict()
         self.stats = PrefixCacheStats()
 
     def hit_rate(self):
@@ -260,17 +266,17 @@ class BlockTrie:
         return self._roots[adapter_name]
 
     @staticmethod
-    def _get_block_extra_hashes(seq: SchedulerSequence, start: int, end: int):
+    def _get_block_extra_hashes(seq: SchedulerSequence, start: int, end: int) -> PrefixCacheExtraHashes:
         """Get multimodal identity entries that belong in a block key."""
         return seq.get_prefix_cache_extra_hashes(start, end)
 
     @staticmethod
-    def _make_key(tokens: np.ndarray, extra_hashes: tuple):
+    def _make_key(tokens: np.ndarray, extra_hashes: PrefixCacheExtraHashes):
         """Make the trie lookup key from tokens plus multimodal identity."""
         return hash(('random', tuple(tokens), extra_hashes))
 
     @staticmethod
-    def _match_node(node: Node, tokens: np.ndarray, extra_hashes: tuple):
+    def _match_node(node: Node, tokens: np.ndarray, extra_hashes: PrefixCacheExtraHashes):
         """Check the exact key payload after the hash-table lookup."""
         return np.array_equal(tokens, node.tokens) and extra_hashes == node.extra_hashes
 
@@ -353,7 +359,7 @@ class BlockTrie:
         for seq in seqs:
             self.cache_routed_experts_for_seq(seq)
 
-    def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int):
+    def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int) -> StateCheckpointKey:
         """Make the sparse SSM checkpoint lookup key for a sequence prefix.
 
         The last block key is only a filter into the sparse index.  Candidate nodes are still verified by walking the
@@ -366,7 +372,7 @@ class BlockTrie:
         return (seq.adapter_name, step, self._make_key(tokens, extra_hashes))
 
     @staticmethod
-    def _make_state_checkpoint_node_key(node: Node):
+    def _make_state_checkpoint_node_key(node: Node) -> StateCheckpointKey:
         """Make the sparse SSM checkpoint lookup key for a trie node."""
         return (node.adapter_name, node.num_matched, node.hash_key)
 
@@ -394,7 +400,7 @@ class BlockTrie:
         if len(steps) == 0:
             self._state_checkpoint_steps.pop(adapter_name)
 
-    def _remove_state_checkpoint_index_entry(self, node: Node, key: tuple):
+    def _remove_state_checkpoint_index_entry(self, node: Node, key: StateCheckpointKey):
         """Remove a node from one sparse-index bucket."""
         nodes = self._state_checkpoint_index.get(key)
         if nodes is None:
@@ -880,7 +886,7 @@ class BlockTrie:
         nodes.reverse()
         return nodes
 
-    def _drop_stale_state_checkpoint_index_entry(self, node: Node, key: tuple, reason: str):
+    def _drop_stale_state_checkpoint_index_entry(self, node: Node, key: StateCheckpointKey, reason: str):
         """Remove a bad sparse-index entry without releasing a valid node."""
         removed = self._remove_state_checkpoint_index_entry(node, key)
         if removed and logger.isEnabledFor(logging.DEBUG):
@@ -914,7 +920,7 @@ class BlockTrie:
                          f'state_idx={state_idx} was_ready={state_ready} reason={reason}')
         return state_idx >= 0 or state_ready
 
-    def _verify_state_checkpoint_node(self, seq: SchedulerSequence, node: Node, index_key: tuple):
+    def _verify_state_checkpoint_node(self, seq: SchedulerSequence, node: Node, index_key: StateCheckpointKey):
         """Verify a sparse SSM checkpoint candidate exactly.
 
         Matching only the sparse index key is not enough: we require every

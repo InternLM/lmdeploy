@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import numpy as np
 import torch
@@ -59,6 +59,11 @@ class PrefixCacheMeta:
     content_hash: str
 
 
+PrefixCacheExtraHash: TypeAlias = tuple[int, int, str, str]
+PrefixCacheExtraHashes: TypeAlias = tuple[PrefixCacheExtraHash, ...]
+PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
+
+
 @dataclass
 class PrefixCacheState:
     """Per-sequence prefix-cache bookkeeping.
@@ -83,13 +88,20 @@ class PrefixCacheState:
     prefix-cache hit-rate metric.
     """
 
+    # Persistent request metadata used to build multimodal-aware trie keys.
     metas: list[PrefixCacheMeta] = field(default_factory=list)
-    block_extra_hashes: dict[int, tuple] = field(default_factory=dict, repr=False)
+    block_extra_hashes: PrefixCacheBlockExtraHashes = field(default_factory=dict, repr=False)
     num_indexed_metas: int = 0
+
+    # Trie cursor for the deepest prefix block already shared by this sequence.
     last_shared_node: Any = field(default=None, repr=False)
+
+    # SSM checkpoint restore state pinned by a prefix hit before forward.
     restore_state: int = -1
     restore_state_acquired: bool = False
     restore_node: Any = field(default=None, repr=False)
+
+    # SSM checkpoint save state staged until model forward publishes it.
     save_state: int = -1
     save_step: int = 0
     save_is_decode: bool = False
@@ -97,7 +109,11 @@ class PrefixCacheState:
     save_state_acquired: bool = False
     save_acquired_state: int = -1
     save_acquired_node: Any = field(default=None, repr=False)
+
+    # Latest decode checkpoint node owned by this sequence.
     decode_state_node: Any = field(default=None, repr=False)
+
+    # Tentative match state used for chunking, MTP overlap, and metrics.
     match_start_step: int = -1
     match_recompute_blocks: int = 0
     private_recompute_start_step: int = -1
@@ -896,7 +912,7 @@ class SchedulerSequence:
             return self.history_multimodals.get_datas(match_start, self.num_all_ids)
         return input_multimodals
 
-    def get_prefix_cache_extra_hashes(self, start: int, end: int):
+    def get_prefix_cache_extra_hashes(self, start: int, end: int) -> PrefixCacheExtraHashes:
         """Get canonical multimodal identity entries for a token range.
 
         The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
