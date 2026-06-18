@@ -3,6 +3,8 @@ import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.engine_loop import EngineLoop
 from lmdeploy.pytorch.engine.inputs_maker import (
@@ -333,3 +335,33 @@ def test_state_prefix_cache_save_offsets_are_compact():
 
     assert src_offsets == (5, 6)
     assert dst_offsets == (21, 22)
+
+
+@pytest.mark.parametrize('max_q_seqlen', [1, 4])  # standard decode, then spec/MTP
+def test_create_model_inputs_delta_valid_only_matches_one_decode_advance(max_q_seqlen):
+    # Regression for #4024. The delta is built from the (stale) scheduler seqs
+    # at the current state, then applied after the model-agent's StepInputs has
+    # advanced one decode step. So delta.max/sum_kv_seqlen must equal the base
+    # kv (num_all_ids of the valid seqs) advanced by EXACTLY one decode step --
+    # the invariant the engine uses in ModelInputs.step (model_inputs.py) and
+    # get_model_inputs_next_decoding (strategies/ar/model_inputs.py):
+    #     max_kv_seqlen += max_q_seqlen
+    #     sum_kv_seqlen += num_valid_seqs * max_q_seqlen
+    # Parametrizing max_q_seqlen proves the offset is one max_q_seqlen, not the
+    # old double (num_all_ids + 2 * max_q_seqlen) nor zero (num_all_ids alone).
+    num_all_ids = [100, 250]  # valid seqs' kv at the (stale) build state
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.engine_strategy = SimpleNamespace(get_num_decode_tokens=lambda: max_q_seqlen)
+    maker.running_seqs = [
+        SimpleNamespace(status=MessageStatus.RUNNING, num_all_ids=num_all_ids[0]),
+        SimpleNamespace(status=MessageStatus.RUNNING, num_all_ids=num_all_ids[1]),
+        SimpleNamespace(status=MessageStatus.STOPPED, num_all_ids=70),  # dropped
+    ]
+
+    output, valid_seqs, invalid_seqs = maker.create_model_inputs_delta_valid_only()
+
+    assert [seq.num_all_ids for seq in valid_seqs] == num_all_ids
+    assert len(invalid_seqs) == 1
+    # base kv at the (stale) build state + one canonical decode advance
+    assert output.max_kv_seqlen == max(num_all_ids) + max_q_seqlen
+    assert output.sum_kv_seqlen == sum(num_all_ids) + len(valid_seqs) * max_q_seqlen

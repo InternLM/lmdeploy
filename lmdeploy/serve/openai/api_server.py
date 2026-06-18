@@ -63,6 +63,7 @@ from lmdeploy.serve.openai.protocol import (
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
     DeltaMessage,
+    DestroyWeightsUpdateGroupRequest,
     EmbeddingsRequest,
     EncodeRequest,
     EncodeResponse,
@@ -70,6 +71,7 @@ from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
+    InitWeightsUpdateGroupRequest,
     LogProbs,
     ModelCard,
     ModelList,
@@ -78,6 +80,7 @@ from lmdeploy.serve.openai.protocol import (
     PoolingResponse,
     TopLogprob,
     UpdateParamsRequest,
+    UpdateWeightsFromDistributedRequest,
     UsageInfo,
 )
 from lmdeploy.serve.openai.responses import create_responses_router
@@ -584,11 +587,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_logprob:
                 output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
-                total_tokens = sum([res.input_token_len, res.generate_token_len])
-                final_usage = UsageInfo(
+                final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
-                    total_tokens=total_tokens,
+                    cached_tokens=res.cached_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
             stream_deltas = response_parser.stream_chunk(
@@ -722,11 +724,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-    usage = UsageInfo(
+    usage = UsageInfo.build(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
+        cached_tokens=final_res.cached_tokens,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -1184,7 +1185,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
-    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    usage = UsageInfo.build(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
 
     data = []
     for i, score in enumerate(batch_scores):
@@ -1203,6 +1204,52 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
+
+
+def _check_pytorch_backend_for_disagg_weight_update():
+    """Disaggregated weight-update endpoints are PyTorch-backend only for
+    now."""
+    backend = getattr(VariableInterface.async_engine, 'backend', None)
+    if backend != 'pytorch':
+        return create_error_response(
+            HTTPStatus.NOT_IMPLEMENTED,
+            f'Disaggregated weight-update endpoints require backend="pytorch", got {backend!r}.')
+    return None
+
+
+@router.post('/init_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def init_weights_update_group(request: InitWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Initialize the torch.distributed process group used by an external
+    trainer to broadcast weights into this rollout engine."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.init_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/update_weights_from_distributed', dependencies=[Depends(validate_json_request)])
+async def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest, raw_request: Request = None):
+    """Receive a bucket of weights through a previously initialized weights-
+    update group and load them into the running model."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.update_weights_from_distributed(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/destroy_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def destroy_weights_update_group(request: DestroyWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Tear down a previously initialized weights-update group."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.destroy_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
 
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])

@@ -4,7 +4,7 @@ import torch
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
-from .default import TritonAttentionImpl, TritonAttentionMetadata
+from .default import TritonAttentionImpl, TritonAttentionMetadata, _cdiv
 
 logger = get_logger('lmdeploy')
 
@@ -261,13 +261,15 @@ class FA3Impl(TritonAttentionImpl):
         quant_policy = attn_metadata.quant_policy
 
         # Flatten KV cache for varlen attention
+        block_size = k_cache.size(1)
+        out_size = _cdiv(kv_flatten_size, block_size) * block_size + block_size
         flatten_k, flatten_v = self.flatten_kv_cache(
             k_cache,
             v_cache,
             kv_seqlens,
             block_offsets,
             start_loc=kv_start_loc,
-            out_size=kv_flatten_size,
+            out_size=out_size,
             out_dtype=query.dtype,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
@@ -293,7 +295,7 @@ class FA3Impl(TritonAttentionImpl):
             cu_seqlens_q=attn_metadata.cu_seqlens_q,
             cu_seqlens_k=attn_metadata.cu_seqlens_k,
             max_seqlen_q=max_q_seqlen,
-            max_seqlen_k=kv_flatten_size,
+            max_seqlen_k=attn_metadata.max_kv_seqlen,
             softmax_scale=self.scale,
             causal=self.causal,
             window_size=sliding_window,
