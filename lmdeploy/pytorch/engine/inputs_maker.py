@@ -722,6 +722,10 @@ class InputsMakerAsync:
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
 
+        def __need_ce_loss(seqs: 'SeqList'):
+            """Need input cross-entropy loss."""
+            return any(seq.return_ce_loss for seq in seqs)
+
         def __create_model_inputs(seqs):
             """Createe model inputs."""
             inputs = self.create_model_inputs(seqs, True)
@@ -832,6 +836,7 @@ class InputsMakerAsync:
 
         return_logits = __need_logits(running)
         return_routed_experts = __need_routed_experts(running)
+        return_ce_loss = __need_ce_loss(running)
 
         return dict(
             running=running,
@@ -844,6 +849,7 @@ class InputsMakerAsync:
             return_logits=return_logits,
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
+            return_ce_loss=return_ce_loss,
         )
 
     def do_prefill_pnode(self):

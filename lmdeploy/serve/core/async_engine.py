@@ -146,6 +146,7 @@ class AsyncEngine:
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
+        self.speculative_config = speculative_config
         self.is_sleeping = backend_config.empty_init
         self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
         logger.info(f'updated backend_config={self.backend_config}')
@@ -890,3 +891,50 @@ class AsyncEngine:
             for session in sessions:
                 self.session_mgr.remove(session)
         return logits
+
+    async def async_get_ppl(self, input_ids: list[int]) -> float:
+        """Get the perplexity (mean cross-entropy loss) of a single input
+        prompt.
+
+        Args:
+            input_ids (list[int]): the input token ids to score.
+
+        Returns:
+            float: the mean cross-entropy loss of the input, matching
+                ``Pipeline.get_ppl``.
+        """
+        if self.backend_config.enable_prefix_caching:
+            raise ValueError('async_get_ppl is not supported when prefix caching is on.')
+        if self.speculative_config is not None:
+            raise ValueError('async_get_ppl is not supported when speculative decoding is on.')
+        # position i predicts token i+1, so the last position has no target
+        num_scored = len(input_ids) - 1
+        if num_scored < 1:
+            raise ValueError('input must have at least 2 tokens to compute ppl.')
+
+        ce_loss = None
+        session = self.session_mgr.get()
+        try:
+            async with session.request_handle() as handle:
+                # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
+                # when perform inference on a reward model.
+                gen_config = GenerationConfig(max_new_tokens=1, return_ppl=True, top_k=1)
+                async with self.safe_run(handle,
+                                         session=session,
+                                         input_ids=input_ids,
+                                         gen_config=gen_config,
+                                         stream_output=False,
+                                         sequence_start=True,
+                                         sequence_end=True,
+                                         step=session.step) as gen:
+                    async for outputs in gen:
+                        pass
+                    ce_loss = outputs.ce_loss
+                if self.backend == 'pytorch':
+                    await handle.async_end(session.session_id)
+        finally:
+            self.session_mgr.remove(session)
+        if ce_loss is None:
+            raise ValueError('async_get_ppl failed to compute ce_loss.')
+        # normalize the summed NLL by the number of scored tokens
+        return ce_loss / num_scored

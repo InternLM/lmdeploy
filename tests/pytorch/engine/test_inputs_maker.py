@@ -37,6 +37,7 @@ class _DummySeq:
         self.prefix_cache = SimpleNamespace(match_start_step=match_start_step)
         self.return_logits = False
         self.return_routed_experts = False
+        self.return_ce_loss = False
 
     def get_input_multimodals(self):
         return self._input_multimodals

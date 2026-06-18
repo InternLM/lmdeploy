@@ -16,19 +16,19 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
+
+#include "src/turbomind/core/core.h"
+
 namespace turbomind {
 
-template<typename T>
-void invokeLogProbFromLogits(float*       cum_log_probs,
-                             const T*     logits,
-                             const int*   input_ids,
-                             const int*   input_lengths,
-                             const size_t max_input_length,
-                             const size_t batch_size,
-                             const size_t vocab_size,
-                             const size_t vocab_size_padded,
-                             void*        workspace,
-                             const size_t workspace_size,
-                             cudaStream_t stream,
-                             const bool   batch_first = false);
+void invokeCrossEntropyLoss(float*        ce_loss,
+                            const Tensor& logits,
+                            const int*    target_ids,
+                            int           target_offset,
+                            int           logit_offset,
+                            int           token_num,
+                            int           vocab_size,
+                            cudaStream_t  stream);
+
 }  // namespace turbomind
