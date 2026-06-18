@@ -54,6 +54,7 @@ class GenOut:
     last_hidden_state: Any = None
     cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
+    cached_tokens: int = 0
 
     def to_response(self, index: int = 0) -> Response:
         """Convert GenOut to Response object.
@@ -70,6 +71,7 @@ class GenOut:
                         last_hidden_state=self.last_hidden_state,
                         logits=self.logits,
                         routed_experts=self.routed_experts,
+                        cached_tokens=self.cached_tokens,
                         index=index)
 
 
@@ -673,6 +675,7 @@ class AsyncEngine:
             response = ''
             response_chunks = []
             finish_reason = None
+            cached_tokens = 0
             handoff_kwargs = {}
             if self.backend == 'pytorch':
                 # PyTorch MP needs the large MM payload until ADD_MESSAGE reaches
@@ -696,6 +699,8 @@ class AsyncEngine:
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
 
                 async for outputs in gen:
+                    req_metrics = outputs.req_metrics
+                    cached_tokens = req_metrics.cached_tokens if req_metrics is not None else 0
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
@@ -731,7 +736,8 @@ class AsyncEngine:
                                  finish_reason,
                                  token_ids=res,
                                  routed_experts=outputs.routed_experts,
-                                 cache_block_ids=outputs.cache_block_ids)
+                                 cache_block_ids=outputs.cache_block_ids,
+                                 cached_tokens=cached_tokens)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
                     if outputs.last_hidden_state is not None:
@@ -784,7 +790,8 @@ class AsyncEngine:
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
-                                 cache_block_ids=outputs.cache_block_ids)
+                                 cache_block_ids=outputs.cache_block_ids,
+                                 cached_tokens=cached_tokens)
                     # Note: We remove the session step update here. Let the caller(e.g., pipeline.chat) take care of it.
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
