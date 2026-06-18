@@ -130,7 +130,6 @@ class TestQwen3_5ResponseParserStreaming:
     def test_parse_tool_call_complete_treats_params_as_strings(self):
         parser = Qwen3CoderToolParser()
         payload = """
-<tool_call>
 <function=find_user_id_by_name_zip>
 <parameter=first_name>
 Chen
@@ -142,7 +141,6 @@ Johnson
 77004
 </parameter>
 </function>
-</tool_call>
 """.strip()
 
         tool_call = parser.parse_tool_call_complete(payload)
@@ -197,7 +195,6 @@ Johnson
         parser.adjust_request(request)
 
         payload = """
-<tool_call>
 <function=typed_tool>
 <parameter=name>
 Chen
@@ -221,7 +218,6 @@ true
 null
 </parameter>
 </function>
-</tool_call>
 """.strip()
 
         tool_call = parser.parse_tool_call_complete(payload)
