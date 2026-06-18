@@ -587,11 +587,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_logprob:
                 output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
-                total_tokens = sum([res.input_token_len, res.generate_token_len])
-                final_usage = UsageInfo(
+                final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
-                    total_tokens=total_tokens,
+                    cached_tokens=res.cached_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
             stream_deltas = response_parser.stream_chunk(
@@ -725,11 +724,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-    usage = UsageInfo(
+    usage = UsageInfo.build(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
+        cached_tokens=final_res.cached_tokens,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -1187,7 +1185,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
-    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    usage = UsageInfo.build(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
 
     data = []
     for i, score in enumerate(batch_scores):

@@ -276,6 +276,26 @@ class PrometheusStatLogger(StatLoggerBase):
                 buckets=build_1_2_5_buckets(max_model_len),
                 labelnames=labelnames).labels(*labelvalues)
 
+        self.histogram_num_cached_tokens_request = \
+            prometheus_client.Histogram(
+                name='lmdeploy:request_cached_tokens',
+                documentation='Number of prefix-cached input tokens per request.',
+                buckets=build_1_2_5_buckets(max_model_len),
+                labelnames=labelnames).labels(*labelvalues)
+
+        self.histogram_cache_hit_ratio_request = \
+            prometheus_client.Histogram(
+                name='lmdeploy:request_cache_hit_ratio',
+                documentation='Prefix cache hit ratio (cached_tokens / prompt_tokens) per request.',
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+                labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_cached_tokens_total = \
+            prometheus_client.Counter(
+                name='lmdeploy:cached_tokens_total',
+                documentation='Total prefix-cached input tokens served.',
+                labelnames=labelnames).labels(*labelvalues)
+
         self.histogram_iteration_tokens = \
             prometheus_client.Histogram(
                 name='lmdeploy:iteration_tokens_total',
@@ -391,6 +411,10 @@ class PrometheusStatLogger(StatLoggerBase):
         self.histogram_decode_time_request.observe(stats.decode_time_interval)
         self.histogram_num_prompt_tokens_request.observe(stats.prompt_tokens)
         self.histogram_num_generation_tokens_request.observe(stats.generation_tokens)
+        self.histogram_num_cached_tokens_request.observe(stats.cached_tokens)
+        if stats.prompt_tokens > 0:
+            self.histogram_cache_hit_ratio_request.observe(stats.cached_tokens / stats.prompt_tokens)
+        self.counter_cached_tokens_total.inc(stats.cached_tokens)
 
     @staticmethod
     def _get_counter_value(counter) -> float:
