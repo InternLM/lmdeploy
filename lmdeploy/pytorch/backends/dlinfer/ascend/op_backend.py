@@ -277,7 +277,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return 0, 0, 0
             # get padded_tokens_current_rank
-            is_graph = cls.enable_graph and step_context.is_decoding
+            is_graph = cls.enable_graph and step_context.global_is_decoding() # global!!!
             if is_graph:
                 from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
                 actual_tokens_current_rank = step_context.q_seqlens.shape[0]
@@ -311,7 +311,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return DlinferMoECommType.ALLGATHER
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
-            is_graph = cls.enable_graph and step_context.is_decoding
+            is_graph = cls.enable_graph and step_context.global_is_decoding() # global!!!
             if is_graph:
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
@@ -353,16 +353,16 @@ class AscendOpsBackend(DlinferOpsBackend):
             group_name = backend.get_hccl_comm_name(local_rank)
             return group_name
 
-        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_prefill_no_cache)
-        q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu,
+        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_prefill_no_cache) # global!!!
+        q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu, # global!!!
                                                            kv_seqlens_cpu)
-        max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_list,
+        max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_list, # global!!!
                                                         kv_seqlens_list)
-        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding,
+        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding, # global!!!
                                                                                    is_prefill_no_cache, q_seqlens_list,
                                                                                    kv_seqlens_list, max_q_seq_len,
                                                                                    max_kv_seq_len)
-        q_seqlens_cpu = update_q_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu)
+        q_seqlens_cpu = update_q_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu) # global!!!
 
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
@@ -385,12 +385,12 @@ class AscendOpsBackend(DlinferOpsBackend):
             q_start_loc = step_context.q_start_loc.to(dtype=step_context.q_seqlens.dtype,
                                                       device=step_context.q_seqlens.device)
             cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
-            if not step_context.is_decoding:
+            if not step_context.is_decoding: # global!!!
                 has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
-            step_context.is_decoding,
+            step_context.is_decoding, # global!!!
             step_context.block_offsets,
             # cu_seqlens is only used in GDN and is passed down via q_start_loc.
             # Otherwise, q_start_loc is None.

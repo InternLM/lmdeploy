@@ -635,11 +635,14 @@ class RayExecutor(ExecutorBase):
                     runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             else:
+                runtime_env = dict()
+                runtime_env = _update_runtime_envs(runtime_env)
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=0,
                     resources={device_str: 0.01},
                     scheduling_strategy=scheduling_strategy,
+                    runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             workers.append(worker)
         return workers
