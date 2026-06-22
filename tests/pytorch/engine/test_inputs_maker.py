@@ -563,6 +563,47 @@ def test_active_long_context_chunk_round_robin_does_not_starve_with_waiting_shor
     assert maker.scheduler.schedule_calls == 3
 
 
+def test_active_long_context_chunk_obeys_short_prefill_quota_after_decode_turn():
+    long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})
+    short_seq = _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={})
+    calls = []
+
+    class _ShortPrefillScheduler(_FakeScheduler):
+
+        def __init__(self):
+            super().__init__([], waiting=[short_seq])
+
+        def schedule(self,
+                     is_prefill: bool,
+                     prealloc_size: int,
+                     allow_long_prefill: bool = True,
+                     prefer_long_prefill: bool = False):
+            calls.append((allow_long_prefill, prefer_long_prefill))
+            assert not allow_long_prefill
+            assert not prefer_long_prefill
+            return SimpleNamespace(running=[short_seq], swap_in_map={}, swap_out_map={})
+
+        def has_waiting(self):
+            return True
+
+    maker = _make_policy_maker(long_seq)
+    maker.scheduler = _ShortPrefillScheduler()
+    maker._last_forward_kind = 'decode'
+    maker.create_model_inputs = lambda seqs, is_prefill: _fake_model_inputs()
+    maker.create_model_inputs_delta = lambda: (_ for _ in ()).throw(AssertionError('decode should not run'))
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+    maker.create_model_inputs_long_context = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError('long chunk should wait behind short prefill quota'))
+
+    forward_inputs = maker._make_forward_inputs(prefill=False)
+
+    assert forward_inputs['running'] == [short_seq]
+    assert not forward_inputs['inputs'].is_chunk
+    assert forward_inputs['delta'] is None
+    assert maker._short_prefill_turns_since_long_chunk == 1
+    assert calls == [(False, False)]
+
+
 def test_active_long_context_chunk_does_not_start_another_waiting_long_prefill():
     active_long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})
     waiting_long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})

@@ -893,6 +893,8 @@ class InputsMakerAsync:
             return running, inputs, delta, extra_inputs, swap_in_map, swap_out_map
 
         def __create_short_or_normal_prefill_turn():
+            nonlocal attempted_short_or_normal_prefill
+            attempted_short_or_normal_prefill = True
             result = __create_inputs_prefill(allow_long_prefill=False)
             _, prefill_inputs, prefill_delta, _, _, _ = result
             if prefill_inputs is not None or prefill_delta is not None:
@@ -910,6 +912,7 @@ class InputsMakerAsync:
         swap_out_map = {}
         deferred_long_context_chunk = False
         attempted_long_work = False
+        attempted_short_or_normal_prefill = False
 
         # Bounded opt-TTFT prefill policy: protect decode before continuing
         # non-final long chunks, then allow a bounded number of short/normal
@@ -921,9 +924,23 @@ class InputsMakerAsync:
             # long context chunking
             if self._should_defer_long_context_chunk(prefill):
                 deferred_long_context_chunk = True
-            elif (prefill and not self.long_context_chunker.is_last_chunk() and scheduler.has_waiting()
+            elif (not self.long_context_chunker.is_last_chunk() and scheduler.has_waiting()
                   and not self._is_long_context_chunk_turn_due()):
-                deferred_long_context_chunk = True
+                # After a decode turn, keep the short/normal prefill quota in
+                # front of active long chunks; otherwise decode -> long can
+                # repeat and small waiting requests remain gated by the active
+                # chunker even while the long-work turn is not due.
+                (
+                    running,
+                    inputs,
+                    delta,
+                    extra_inputs,
+                    swap_in_map,
+                    swap_out_map,
+                ) = __create_short_or_normal_prefill_turn()
+                if inputs is None and delta is None:
+                    attempted_long_work = True
+                    running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
             else:
                 attempted_long_work = True
                 running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
@@ -959,7 +976,8 @@ class InputsMakerAsync:
                 ) = __create_inputs_prefill(prefer_long_prefill=has_waiting_long_prefill)
                 attempted_long_work = has_waiting_long_prefill
 
-        if prefill and inputs is None and delta is None and attempted_long_work and scheduler.has_waiting():
+        if (inputs is None and delta is None and attempted_long_work and scheduler.has_waiting()
+                and not attempted_short_or_normal_prefill):
             (
                 running,
                 inputs,
