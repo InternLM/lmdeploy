@@ -342,8 +342,8 @@ class InputsMakerAsync:
         left."""
         return self.long_context_chunker.enabled() and self.long_context_chunker.is_last_chunk()
 
-    def _should_decode_before_long_context_chunk(self, prefill: bool):
-        """Prefer decode when a long-context chunk should not monopolize the
+    def _should_defer_long_context_chunk(self, prefill: bool):
+        """Check whether the active long-context chunk should yield this
         loop."""
         if self.config.role == EngineRole.Prefill:
             return False
@@ -909,6 +909,7 @@ class InputsMakerAsync:
         swap_in_map = {}
         swap_out_map = {}
         deferred_long_context_chunk = False
+        attempted_long_work = False
 
         # Bounded opt-TTFT prefill policy: protect decode before continuing
         # non-final long chunks, then allow a bounded number of short/normal
@@ -918,12 +919,13 @@ class InputsMakerAsync:
         self.long_context_chunker.check_enable()
         if self.long_context_chunker.enabled():
             # long context chunking
-            if self._should_decode_before_long_context_chunk(prefill):
+            if self._should_defer_long_context_chunk(prefill):
                 deferred_long_context_chunk = True
             elif (prefill and not self.long_context_chunker.is_last_chunk() and scheduler.has_waiting()
                   and not self._is_long_context_chunk_turn_due()):
                 deferred_long_context_chunk = True
             else:
+                attempted_long_work = True
                 running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
         elif prefill:
             # prefill
@@ -955,6 +957,17 @@ class InputsMakerAsync:
                     swap_in_map,
                     swap_out_map,
                 ) = __create_inputs_prefill(prefer_long_prefill=has_waiting_long_prefill)
+                attempted_long_work = has_waiting_long_prefill
+
+        if prefill and inputs is None and delta is None and attempted_long_work and scheduler.has_waiting():
+            (
+                running,
+                inputs,
+                delta,
+                extra_inputs,
+                swap_in_map,
+                swap_out_map,
+            ) = __create_short_or_normal_prefill_turn()
 
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
