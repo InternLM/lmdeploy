@@ -35,10 +35,9 @@ class CLI:
                             'download from ii) and iii). - ii) the model_id of a '
                             'lmdeploy-quantized model hosted inside a model repo on '
                             'huggingface.co, such as "lmdeploy/llama2-chat-70b-4bit",'
-                            ' "lmdeploy/llama2-chat-70b-4bit", etc. - iii) the model_id'
-                            ' of a model hosted inside a model repo on huggingface.co,'
-                            ' such as "internlm/internlm2-chat-7b", "qwen/qwen2.5-7b-instruct"'
-                            ' and so on')
+                            ' etc. - iii) the model_id of a model hosted inside a model'
+                            ' repo on huggingface.co, such as "internlm/internlm2_5-7b-chat",'
+                            ' "internlm/Intern-S2-Preview" and so on')
         # common args
         ArgumentHelper.backend(parser)
         # chat template args
