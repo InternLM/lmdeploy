@@ -124,43 +124,35 @@ class TestBackendInference:
         """Test stream_infer with session for multi-turn context."""
         session = pipe.session()
         prompt1 = 'Hello! My name is Alice.'
-        step = 0
 
-        # First turn
         generator = pipe.stream_infer(prompts=prompt1,
                                       sessions=session,
                                       gen_config=GenerationConfig(max_new_tokens=30),
-                                      sequence_start=True,
-                                      sequence_end=False,
                                       enable_thinking=False)
         resp = None
         for out in generator:
             resp = resp.extend(out) if resp else out
-
-        step += resp.generate_token_len + resp.input_token_len
 
         response1 = resp.text
-
         assert response1
+        session.history.append((prompt1, response1))
 
-        # Second turn should remember context
         prompt2 = 'What is my name?'
-        session.step = step
-        generator = pipe.stream_infer(prompts=prompt2,
+        messages = [
+            dict(role='user', content=prompt1),
+            dict(role='assistant', content=response1),
+            dict(role='user', content=prompt2),
+        ]
+        generator = pipe.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=GenerationConfig(max_new_tokens=30),
-                                      sequence_start=False,
-                                      sequence_end=False,
                                       enable_thinking=False)
 
         resp = None
         for out in generator:
             resp = resp.extend(out) if resp else out
 
-        step += out.generate_token_len + out.input_token_len
-
         response2 = resp.text
-
         assert 'alice' in response2.lower()
 
     def test_chat_streaming(self, pipe):
@@ -180,7 +172,6 @@ class TestBackendInference:
 
         assert len(chunks) > 0
         assert session.response is not None
-        assert session.step > 0
 
     def test_chat_non_streaming(self, pipe):
         """Test chat method with non-streaming output."""

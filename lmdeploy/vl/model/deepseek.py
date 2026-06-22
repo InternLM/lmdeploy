@@ -130,7 +130,7 @@ class DeepSeekVisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, add_bos):
         # apply chat template to get the prompt
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -159,13 +159,13 @@ class DeepSeekVisionModel(VisionModel):
                 else:
                     content = ''.join([f'{IMAGE_TOKEN} is Figure {str(i)}.\n' for i in range(n_image)]) + content
             prompt_messages.append(dict(role='user', content=content))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, add_bos)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, add_bos, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, add_bos)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_turbomind(self, messages, chat_template, tokenizer, add_bos, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, add_bos)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)

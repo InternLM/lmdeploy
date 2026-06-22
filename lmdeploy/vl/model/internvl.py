@@ -239,7 +239,7 @@ class InternVLVisionModel(VisionModel):
         self,
         messages,
         chat_template,
-        sequence_start,
+        add_bos,
         tools: list[object] | None = None,
         chat_template_kwargs: dict | None = None,
     ):
@@ -275,35 +275,35 @@ class InternVLVisionModel(VisionModel):
                     else:
                         raise ValueError(f'Unsupported message type: {item["type"]}')
                 prompt_messages.append(dict(role='user', content=''.join(_content)))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
+        prompt = chat_template.messages2prompt(prompt_messages, add_bos, tools=tools, **chat_template_kwargs)
         return prompt, self.image_token
 
     def to_pytorch(self,
                    messages,
                    chat_template,
                    tokenizer,
-                   sequence_start,
+                   add_bos,
                    tools: list[object] | None = None,
                    chat_template_kwargs: dict | None = None,
                    **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
-                                                 sequence_start,
+                                                 add_bos,
                                                  tools=tools,
                                                  chat_template_kwargs=chat_template_kwargs)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)
 
     def to_turbomind(self,
                      messages,
                      chat_template,
                      tokenizer,
-                     sequence_start,
+                     add_bos,
                      tools: list[object] | None = None,
                      chat_template_kwargs: dict | None = None,
                      **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
-                                                 sequence_start,
+                                                 add_bos,
                                                  tools=tools,
                                                  chat_template_kwargs=chat_template_kwargs)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)

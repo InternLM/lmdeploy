@@ -80,7 +80,7 @@ class TestInternVLHFChatTemplate:
                                                             return_dict=True)
             # InternVL-HF and InternS1 models pad <img> and </img> internally
             reference = reference.replace('<IMG_CONTEXT>', '<img><IMG_CONTEXT></img>')
-            prompt, _ = model.proc_messages(mock_messages, chat_template, sequence_start=True)
+            prompt, _ = model.proc_messages(mock_messages, chat_template, add_bos=True)
             assert prompt == reference
 
     def test_proc_pure_img_messages(self, models, mock_pure_img_messages):
@@ -92,7 +92,7 @@ class TestInternVLHFChatTemplate:
                                                             return_dict=True)
             # InternVL-HF and InternS1 models pad <img> and </img> internally
             reference = reference.replace('<IMG_CONTEXT>', '<img><IMG_CONTEXT></img>')
-            prompt, _ = model.proc_messages(mock_pure_img_messages, chat_template, sequence_start=True)
+            prompt, _ = model.proc_messages(mock_pure_img_messages, chat_template, add_bos=True)
             assert prompt == reference
 
     def test_proc_pure_text_messages(self, models, mock_pure_text_messages):
@@ -102,7 +102,7 @@ class TestInternVLHFChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt, _ = model.proc_messages(mock_pure_text_messages, chat_template, sequence_start=True)
+            prompt, _ = model.proc_messages(mock_pure_text_messages, chat_template, add_bos=True)
             assert prompt == reference
 
 
@@ -129,7 +129,7 @@ class TestQwenVLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt, _ = model.proc_messages(mock_messages, chat_template, sequence_start=True)
+            prompt, _ = model.proc_messages(mock_messages, chat_template, add_bos=True)
             assert prompt == reference
 
     def test_pure_img_messages(self, models, mock_pure_img_messages):
@@ -139,7 +139,7 @@ class TestQwenVLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt, _ = model.proc_messages(mock_pure_img_messages, chat_template, sequence_start=True)
+            prompt, _ = model.proc_messages(mock_pure_img_messages, chat_template, add_bos=True)
             assert prompt == reference
 
     def test_pure_text_messages(self, models, mock_pure_text_messages):
@@ -149,7 +149,7 @@ class TestQwenVLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt, _ = model.proc_messages(mock_pure_text_messages, chat_template, sequence_start=True)
+            prompt, _ = model.proc_messages(mock_pure_text_messages, chat_template, add_bos=True)
             assert prompt == reference
 
 
@@ -181,7 +181,7 @@ class TestQwen3VLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt = model.get_input_prompt(mock_messages, chat_template, sequence_start=True)
+            prompt = model.get_input_prompt(mock_messages, chat_template, add_bos=True)
             assert prompt == reference
 
     def test_pure_img_messages(self, models, mock_pure_img_messages):
@@ -191,7 +191,7 @@ class TestQwen3VLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt = model.get_input_prompt(mock_pure_img_messages, chat_template, sequence_start=True)
+            prompt = model.get_input_prompt(mock_pure_img_messages, chat_template, add_bos=True)
             assert prompt == reference
 
     def test_pure_text_messages(self, models, mock_pure_text_messages):
@@ -201,5 +201,5 @@ class TestQwen3VLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt = model.get_input_prompt(mock_pure_text_messages, chat_template, sequence_start=True)
+            prompt = model.get_input_prompt(mock_pure_text_messages, chat_template, add_bos=True)
             assert prompt == reference
