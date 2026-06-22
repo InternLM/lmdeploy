@@ -258,10 +258,10 @@ class ExecutorBase:
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
             # One state slot is reserved for system use. Active sequences need
-            # max_batches runtime slots; prefix-cache checkpoints use an
-            # explicitly configured extra budget.
+            # max_batches runtime slots plus one spare for rolling prefill;
+            # prefix-cache checkpoints use an explicitly configured extra budget.
             # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 1 + cache_config.prefix_cache_state_budget)
+            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
         mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)

@@ -457,7 +457,7 @@ class ModelConfig:
         fp32_lm_head = False
         if hf_overrides is not None:
             logger.warning(f'Overriding HF config with {hf_overrides}')
-            fp32_lm_head = hf_overrides.pop('fp32_lm_head', False)
+            fp32_lm_head = hf_overrides.get('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
 
         # for fp32 head
