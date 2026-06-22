@@ -140,6 +140,10 @@ def build_state_manager(cache_config: CacheConfig) -> StateManager:
     # `num_state_caches` is the number of allocated cache rows, including
     # reserved rows. StateManager subtracts reserved rows internally, so pass
     # the total row count to keep allocatable state ids below num_state_caches.
+    # Rows left after reserved rows and explicit checkpoint budget are runtime
+    # rows. With ExecutorBase's default sizing this gives max_batches plus one
+    # spare runtime row.
+    num_runtime_states = num_state_caches - num_reserved - cache_config.prefix_cache_state_budget
     return StateManager(num_state_caches,
                         num_reserved,
-                        num_runtime_states=cache_config.max_batches)
+                        num_runtime_states=num_runtime_states)

@@ -285,6 +285,27 @@ def test_ssm_long_chunked_request_schedules_with_only_runtime_state_slot():
     assert scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=block_size * 2) == -1
 
 
+def test_ssm_running_request_reuses_own_runtime_state_without_spare_slot():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
+    block_size = scheduler.seq_meta.block_size
+    seq = scheduler.add_session(100).add_sequence([1] * block_size)
+
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [seq]
+    assert scheduler.state_manager.get_num_free_runtime() == 0
+    seq.state.activate()
+
+    seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
+    valid_mask = scheduler.schedule_running([seq], num_required_tokens=0, prealloc_size=0)
+
+    assert valid_mask == [True]
+    assert seq.status == MessageStatus.RUNNING
+    assert seq.logical_state >= 0
+    assert seq.num_blocks == 2
+    assert scheduler.state_manager.get_num_runtime_states() == 1
+    assert scheduler.state_manager.get_num_free_runtime() == 0
+
+
 def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     block_size = scheduler.seq_meta.block_size
