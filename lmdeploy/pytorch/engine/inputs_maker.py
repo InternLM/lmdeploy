@@ -313,6 +313,8 @@ class InputsMakerAsync:
         # consecutive decode counter for prefill starvation prevention
         self._decode_count = 0
         self._last_forward_kind = None
+        self._short_prefill_turns_since_long_chunk = 0
+        self._short_prefill_turns_per_long_chunk = 3
 
         # record for next forward.
         self.next_is_prefill = True
@@ -344,13 +346,17 @@ class InputsMakerAsync:
         loop."""
         if self.config.role == EngineRole.Prefill:
             return False
-        if len(self.running_seqs) == 0:
-            return False
         if not self.long_context_chunker.enabled():
             return False
         if self.long_context_chunker.is_last_chunk():
+            if len(self.running_seqs) == 0:
+                return False
             return not prefill
         return getattr(self, '_last_forward_kind', None) == 'long_context_chunk'
+
+    def _is_long_context_chunk_turn_due(self):
+        """Check if active long chunk should run before another short prefill."""
+        return self._short_prefill_turns_since_long_chunk >= self._short_prefill_turns_per_long_chunk
 
     def _forward_kind(self, inputs: 'ModelInputs|None', delta: 'ModelInputsDelta|None'):
         """Classify a queued forward for long-context interleaving policy."""
@@ -758,7 +764,7 @@ class InputsMakerAsync:
             return
 
         is_decoding = inputs is None
-        if self.long_context_chunker.enabled() and not is_decoding:
+        if self.long_context_chunker.enabled() and not is_decoding and inputs.is_chunk:
             # long context chunk does not need to update running seqs
             self.long_context_chunker.update_step(inputs)
             return
@@ -842,14 +848,18 @@ class InputsMakerAsync:
                 delta = None
             inputs.is_first_chunk = False
             inputs.is_chunk_multimodal = is_chunk_multimodal
+            self._short_prefill_turns_since_long_chunk = 0
             return running, inputs, delta, extra_inputs
 
-        def __create_inputs_prefill():
+        def __create_inputs_prefill(allow_long_prefill: bool = True, prefer_long_prefill: bool = False):
             if self.config.role == EngineRole.Prefill:
                 prealloc_size = 0
             else:
                 prealloc_size = self.engine_strategy.get_prealloc_size(True)
-            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
+            scheduler_output = scheduler.schedule(is_prefill=True,
+                                                  prealloc_size=prealloc_size,
+                                                  allow_long_prefill=allow_long_prefill,
+                                                  prefer_long_prefill=prefer_long_prefill)
             running = scheduler_output.running
             swap_in_map = scheduler_output.swap_in_map
             swap_out_map = scheduler_output.swap_out_map
@@ -874,6 +884,7 @@ class InputsMakerAsync:
                     inputs, extra_inputs = __create_inputs_chunk(running, chunk_size, multimodals)
                     inputs.is_first_chunk = True
                     inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
+                    self._short_prefill_turns_since_long_chunk = 0
             elif len(running) > 0:
                 # create inputs
                 inputs, delta, extra_inputs = __create_model_inputs(running)
@@ -895,18 +906,43 @@ class InputsMakerAsync:
             # long context chunking
             if self._should_decode_before_long_context_chunk(prefill):
                 deferred_long_context_chunk = True
+            elif (prefill and not self.long_context_chunker.is_last_chunk() and scheduler.has_waiting()
+                  and not self._is_long_context_chunk_turn_due()):
+                deferred_long_context_chunk = True
             else:
                 running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
         elif prefill:
             # prefill
-            (
-                running,
-                inputs,
-                delta,
-                extra_inputs,
-                swap_in_map,
-                swap_out_map,
-            ) = __create_inputs_prefill()
+            has_waiting_long_prefill = scheduler.has_waiting_long_prefill()
+            if has_waiting_long_prefill and not self._is_long_context_chunk_turn_due():
+                (
+                    running,
+                    inputs,
+                    delta,
+                    extra_inputs,
+                    swap_in_map,
+                    swap_out_map,
+                ) = __create_inputs_prefill(allow_long_prefill=False)
+                if inputs is not None or delta is not None:
+                    self._short_prefill_turns_since_long_chunk += 1
+                else:
+                    (
+                        running,
+                        inputs,
+                        delta,
+                        extra_inputs,
+                        swap_in_map,
+                        swap_out_map,
+                    ) = __create_inputs_prefill(prefer_long_prefill=True)
+            else:
+                (
+                    running,
+                    inputs,
+                    delta,
+                    extra_inputs,
+                    swap_in_map,
+                    swap_out_map,
+                ) = __create_inputs_prefill(prefer_long_prefill=has_waiting_long_prefill)
 
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
@@ -914,6 +950,19 @@ class InputsMakerAsync:
             delta, running, invalid_seqs = self.create_model_inputs_delta()
             self.to_evict_seqs = invalid_seqs
             extra_inputs = None
+
+        if (inputs is None and delta is None and deferred_long_context_chunk and scheduler.has_waiting()
+                and not self._is_long_context_chunk_turn_due()):
+            (
+                running,
+                inputs,
+                delta,
+                extra_inputs,
+                swap_in_map,
+                swap_out_map,
+            ) = __create_inputs_prefill(allow_long_prefill=False)
+            if inputs is not None or delta is not None:
+                self._short_prefill_turns_since_long_chunk += 1
 
         if inputs is None and delta is None and deferred_long_context_chunk and self.long_context_chunker.enabled():
             running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()

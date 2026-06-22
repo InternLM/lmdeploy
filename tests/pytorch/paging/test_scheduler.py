@@ -723,6 +723,55 @@ def test_schedule_prefill_allocates_only_first_long_context_chunk():
     assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
 
 
+def test_schedule_prefill_short_only_skips_long_waiter_without_mutation():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=8)
+    head_long = scheduler.add_session(100).add_sequence([1] * (block_size * 4))
+    short_a = scheduler.add_session(101).add_sequence([2] * (block_size // 2))
+    short_b = scheduler.add_session(102).add_sequence([3] * (block_size // 2))
+
+    output = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert output.running == [short_a, short_b]
+    assert head_long.status == MessageStatus.WAITING
+    assert head_long.num_blocks == 0
+    assert head_long.kv_token_limit is None
+    assert short_a.status == MessageStatus.READY
+    assert short_b.status == MessageStatus.READY
+
+    short_a.session.remove_sequence(short_a)
+    short_b.session.remove_sequence(short_b)
+    next_output = scheduler.schedule(is_prefill=True)
+
+    assert next_output.running == [head_long]
+    assert head_long.status == MessageStatus.READY
+    assert head_long.kv_token_limit == block_size * 2
+    assert head_long.num_blocks == 2
+
+
+def test_schedule_prefill_prefer_long_admits_oldest_long_waiter_first():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=8)
+    short_a = scheduler.add_session(100).add_sequence([1] * (block_size // 2))
+    old_long = scheduler.add_session(101).add_sequence([2] * (block_size * 4))
+    short_b = scheduler.add_session(102).add_sequence([3] * (block_size // 2))
+    new_long = scheduler.add_session(103).add_sequence([4] * (block_size * 4))
+
+    assert scheduler.has_waiting_long_prefill()
+
+    output = scheduler.schedule(is_prefill=True, prefer_long_prefill=True)
+
+    assert output.running == [old_long]
+    assert old_long.status == MessageStatus.READY
+    assert old_long.kv_token_limit == block_size * 2
+    assert old_long.num_blocks == 2
+    assert short_a.status == MessageStatus.WAITING
+    assert short_a.num_blocks == 0
+    assert short_b.status == MessageStatus.WAITING
+    assert short_b.num_blocks == 0
+    assert new_long.status == MessageStatus.WAITING
+    assert new_long.num_blocks == 0
+    assert new_long.kv_token_limit is None
+
+
 def test_schedule_prefill_reapplies_chunk_limit_after_ssm_state_rollback():
     scheduler, block_size = _make_ssm_scheduler_for_long_context_chunks(num_gpu_blocks=2)
     long_seq = scheduler.add_session(100).add_sequence([1] * (block_size * 4))

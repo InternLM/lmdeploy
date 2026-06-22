@@ -224,6 +224,17 @@ class Scheduler:
             return None
         return self._next_long_context_chunk_end(seq)
 
+    def _prefill_admission_token_count(self, seq: SchedulerSequence):
+        """Return token budget cost for the next prefill or chunk."""
+        kv_token_limit = self._prefill_kv_token_limit(seq)
+        if kv_token_limit is None:
+            return seq.num_token_ids
+        return max(0, kv_token_limit - seq.num_history_ids)
+
+    def has_waiting_long_prefill(self):
+        """Whether a waiting request would need a non-final prefill chunk."""
+        return any(self._prefill_kv_token_limit(seq) is not None for seq in self.waiting)
+
     def _prepare_prefill_allocation(self, seq: SchedulerSequence, prealloc_size: int):
         """Apply chunk KV limit and return the effective prealloc size."""
         kv_token_limit = self._prefill_kv_token_limit(seq)
@@ -357,7 +368,10 @@ class Scheduler:
         return migration_ready
 
     @record_function('schedule_prefill')
-    def _schedule_prefill(self, prealloc_size: int = 0):
+    def _schedule_prefill(self,
+                          prealloc_size: int = 0,
+                          allow_long_prefill: bool = True,
+                          prefer_long_prefill: bool = False):
         """Schedule for prefilling."""
 
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
@@ -368,12 +382,12 @@ class Scheduler:
         running: SeqList = []
         token_count = 0
 
-        def _to_running(seq: SchedulerSequence):
+        def _to_running(seq: SchedulerSequence, prefill_token_count: int):
             """To running."""
             seq.state.activate()
             running.append(seq)
             nonlocal token_count
-            token_count += seq.num_token_ids
+            token_count += prefill_token_count
 
         def __evict_for_seq(seq: SchedulerSequence, waiting, evict_prealloc_size: int):
             """Evict until can append."""
@@ -393,18 +407,58 @@ class Scheduler:
 
         def _reorder_waiting():
             """Reorder waiting."""
-            return sorted(self.waiting, key=lambda seq: seq.arrive_time)
+            waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
+            if prefer_long_prefill:
+                long_waiting: SeqList = []
+                normal_waiting: SeqList = []
+                for seq in waiting:
+                    if self._prefill_kv_token_limit(seq) is None:
+                        normal_waiting.append(seq)
+                    else:
+                        long_waiting.append(seq)
+                if len(long_waiting) > 0:
+                    normal_waiting = sorted(normal_waiting,
+                                            key=lambda seq: (self._prefill_admission_token_count(seq),
+                                                             seq.arrive_time))
+                    return [long_waiting[0]] + normal_waiting + long_waiting[1:]
+
+            if allow_long_prefill:
+                return waiting
+
+            normal_waiting: SeqList = []
+            long_waiting: SeqList = []
+            for seq in waiting:
+                if self._prefill_kv_token_limit(seq) is None:
+                    normal_waiting.append(seq)
+                else:
+                    long_waiting.append(seq)
+
+            normal_waiting = sorted(normal_waiting, key=lambda seq: (self._prefill_admission_token_count(seq),
+                                                                     seq.arrive_time))
+            return normal_waiting + long_waiting
 
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
         if (len(running) >= max_batches or num_waiting == 0):
             return running, swap_in_map, swap_out_map, copy_map
 
         waiting = _reorder_waiting()
+        skipped_waiting: SeqList = []
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
+            prefill_token_count = self._prefill_admission_token_count(seq)
+            is_nonfinal_long_prefill = self._prefill_kv_token_limit(seq) is not None
 
-            if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
+            if is_nonfinal_long_prefill and not allow_long_prefill:
+                skipped_waiting.append(seq)
+                continue
+
+            if (len(running) > 0 and token_count + prefill_token_count > self.cache_config.max_prefill_token_num):
+                if not allow_long_prefill:
+                    skipped_waiting.append(seq)
+                    continue
                 break
+
+            evictable_waiting = skipped_waiting + waiting
 
             if self.block_trie.enable:
                 stats_snapshot = self.block_trie.snapshot_stats()
@@ -424,7 +478,7 @@ class Scheduler:
                 if not self._acquire_ssm_restore_if_needed(seq):
                     __rollback_prefix_match('failed to acquire SSM restore checkpoint')
 
-                evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
                 if not evicted:
                     if not had_ssm_restore:
                         __rollback_prefix_match('eviction failed')
@@ -433,21 +487,21 @@ class Scheduler:
                     # state that eviction would otherwise free.  Roll it back once
                     # and retry eviction before declaring the sequence unschedulable.
                     __rollback_prefix_match('eviction failed with pinned SSM restore')
-                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
                     if not evicted:
                         break
 
                 # allocate session memory
                 if self.is_ssm and not self._ensure_runtime_state_available():
                     __rollback_prefix_match('no runtime SSM state available')
-                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
                     if not evicted:
                         break
                     if not self._ensure_runtime_state_available():
                         seq.kv_token_limit = None
                         break
             else:
-                evicted, alloc_prealloc_size = __prepare_and_evict(seq, waiting)
+                evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
                 if not evicted:
                     break
             self.block_manager.allocate(seq, alloc_prealloc_size)
@@ -457,9 +511,12 @@ class Scheduler:
                 self.state_manager.allocate(seq)
             if self.block_trie.enable:
                 self._finish_prefix_cache_schedule(seq)
-            _to_running(seq)
+            _to_running(seq, prefill_token_count)
 
             seq.record_event(EventType.SCHEDULED)
+
+            if seq.kv_token_limit is not None:
+                break
 
         return running, swap_in_map, swap_out_map, copy_map
 
@@ -517,10 +574,14 @@ class Scheduler:
 
         return self.ready[:self.scheduler_config.max_batches], swap_in_map, swap_out_map, copy_map
 
-    def schedule(self, is_prefill: bool, prealloc_size: int = 0):
+    def schedule(self,
+                 is_prefill: bool,
+                 prealloc_size: int = 0,
+                 allow_long_prefill: bool = True,
+                 prefer_long_prefill: bool = False):
         """Schedule inputs for next steps."""
         if is_prefill:
-            output = self._schedule_prefill(prealloc_size)
+            output = self._schedule_prefill(prealloc_size, allow_long_prefill, prefer_long_prefill)
         else:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output

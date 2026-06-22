@@ -70,7 +70,13 @@ class _FakeScheduler:
         self._num_ready = num_ready
         self._num_running = num_running
 
-    def schedule(self, is_prefill: bool, prealloc_size: int):
+    def schedule(self,
+                 is_prefill: bool,
+                 prealloc_size: int,
+                 allow_long_prefill: bool = True,
+                 prefer_long_prefill: bool = False):
+        self.allow_long_prefill = allow_long_prefill
+        self.prefer_long_prefill = prefer_long_prefill
         return SimpleNamespace(running=self.running, swap_in_map={}, swap_out_map={})
 
     def reserve_long_context_chunk(self, seq, chunk_size: int, prealloc_size: int = 0, is_last_chunk: bool = False):
@@ -78,6 +84,9 @@ class _FakeScheduler:
 
     def has_waiting(self):
         return len(self.waiting) > 0
+
+    def has_waiting_long_prefill(self):
+        return False
 
     def num_ready(self):
         return self._num_ready
@@ -105,6 +114,14 @@ class _FakeModelAgentStrategy:
 
     def make_stopping_criteria(self, running):
         return None
+
+
+def _fake_model_inputs(is_chunk: bool = False):
+    return SimpleNamespace(is_decoding=False,
+                           is_chunk=is_chunk,
+                           is_first_chunk=False,
+                           is_last_chunk=False,
+                           is_chunk_multimodal=False)
 
 
 def test_engine_loop_skips_prefix_cache_publish_when_disabled():
@@ -201,6 +218,8 @@ def _make_policy_maker(long_seq, decode_seq=None):
     maker.to_evict_seqs = []
     maker._decode_count = 0
     maker._last_forward_kind = None
+    maker._short_prefill_turns_since_long_chunk = 0
+    maker._short_prefill_turns_per_long_chunk = 3
     return maker
 
 
@@ -447,6 +466,141 @@ def test_last_long_context_chunk_waits_for_prefill_turn_with_decode_ready():
     assert forward_inputs['inputs'] is None
     assert forward_inputs['delta'] is delta
     assert maker.long_context_chunker.enabled()
+
+
+def test_active_long_context_chunk_round_robin_does_not_starve_with_waiting_short_prefills():
+    long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})
+    short_seqs = [
+        _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={}) for _ in range(4)
+    ]
+    short_batches = [[seq] for seq in short_seqs]
+    chunk_inputs = _fake_model_inputs(is_chunk=True)
+
+    class _RoundRobinScheduler(_FakeScheduler):
+
+        def __init__(self):
+            super().__init__([], waiting=[object()])
+            self.schedule_calls = 0
+
+        def schedule(self,
+                     is_prefill: bool,
+                     prealloc_size: int,
+                     allow_long_prefill: bool = True,
+                     prefer_long_prefill: bool = False):
+            assert not allow_long_prefill
+            assert not prefer_long_prefill
+            self.schedule_calls += 1
+            running = short_batches.pop(0)
+            return SimpleNamespace(running=running, swap_in_map={}, swap_out_map={})
+
+        def has_waiting(self):
+            return len(short_batches) > 0
+
+    maker = _make_policy_maker(long_seq)
+    maker.scheduler = _RoundRobinScheduler()
+    maker._last_forward_kind = 'long_context_chunk'
+    maker.create_model_inputs_delta = lambda: (_ for _ in ()).throw(AssertionError('decode should not run'))
+    maker.create_model_inputs = lambda seqs, is_prefill: _fake_model_inputs()
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+    maker.create_model_inputs_long_context = lambda seq, chunk_size, multimodals: chunk_inputs
+
+    first = maker._make_forward_inputs(prefill=True)
+    maker._last_forward_kind = 'prefill'
+    second = maker._make_forward_inputs(prefill=True)
+    maker._last_forward_kind = 'prefill'
+    third = maker._make_forward_inputs(prefill=True)
+    maker._last_forward_kind = 'prefill'
+    fourth = maker._make_forward_inputs(prefill=True)
+
+    assert first['running'] == [short_seqs[0]]
+    assert not first['inputs'].is_chunk
+    assert second['running'] == [short_seqs[1]]
+    assert not second['inputs'].is_chunk
+    assert third['running'] == [short_seqs[2]]
+    assert not third['inputs'].is_chunk
+    assert fourth['running'] == [long_seq]
+    assert fourth['inputs'] is chunk_inputs
+    assert fourth['inputs'].is_chunk
+    assert not fourth['inputs'].is_last_chunk
+    assert maker.scheduler.schedule_calls == 3
+
+
+def test_waiting_long_context_first_chunk_gets_round_robin_turn_after_short_prefills():
+    long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})
+    short_seqs = [
+        _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={}) for _ in range(3)
+    ]
+    chunk_inputs = _fake_model_inputs(is_chunk=True)
+    calls = []
+
+    class _RoundRobinScheduler(_FakeScheduler):
+
+        def __init__(self):
+            super().__init__([], waiting=[object()])
+
+        def schedule(self,
+                     is_prefill: bool,
+                     prealloc_size: int,
+                     allow_long_prefill: bool = True,
+                     prefer_long_prefill: bool = False):
+            calls.append((allow_long_prefill, prefer_long_prefill))
+            if prefer_long_prefill:
+                return SimpleNamespace(running=[long_seq], swap_in_map={}, swap_out_map={})
+            running = [short_seqs[len(calls) - 1]]
+            return SimpleNamespace(running=running, swap_in_map={}, swap_out_map={})
+
+        def has_waiting(self):
+            return True
+
+        def has_waiting_long_prefill(self):
+            return True
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode)
+    maker.spec_decoding = False
+    maker.scheduler = _RoundRobinScheduler()
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker._last_forward_kind = None
+    maker._short_prefill_turns_since_long_chunk = 0
+    maker._short_prefill_turns_per_long_chunk = 3
+    maker.create_model_inputs = lambda seqs, is_prefill: _fake_model_inputs()
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+    maker.create_model_inputs_long_context = lambda seq, chunk_size, multimodals: chunk_inputs
+
+    first = maker._make_forward_inputs(prefill=True)
+    second = maker._make_forward_inputs(prefill=True)
+    third = maker._make_forward_inputs(prefill=True)
+    fourth = maker._make_forward_inputs(prefill=True)
+
+    assert first['running'] == [short_seqs[0]]
+    assert not first['inputs'].is_chunk
+    assert second['running'] == [short_seqs[1]]
+    assert not second['inputs'].is_chunk
+    assert third['running'] == [short_seqs[2]]
+    assert not third['inputs'].is_chunk
+    assert fourth['running'] == [long_seq]
+    assert fourth['inputs'] is chunk_inputs
+    assert fourth['inputs'].is_first_chunk
+    assert calls == [(False, False), (False, False), (False, False), (True, True)]
+
+
+def test_normal_prefill_can_update_running_while_long_chunker_is_active():
+    long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    short_seq = _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={})
+    model_inputs = _fake_model_inputs()
+    maker = _make_policy_maker(long_seq)
+
+    maker.update_running_seqs([short_seq], model_inputs)
+
+    assert maker.running_seqs == [short_seq]
+    assert maker.long_context_chunker.enabled()
+    assert maker.long_context_chunker.next_step == 0
 
 
 def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
