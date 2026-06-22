@@ -1,6 +1,9 @@
+import time
+
 import pytest
 import torch
 
+import lmdeploy.pytorch.paging.scheduler as scheduler_module
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.engine.inputs_maker import _compact_state_prefix_cache_save_offsets
@@ -770,6 +773,78 @@ def test_schedule_prefill_prefer_long_admits_oldest_long_waiter_first():
     assert new_long.status == MessageStatus.WAITING
     assert new_long.num_blocks == 0
     assert new_long.kv_token_limit is None
+
+
+def test_scheduler_reads_opt_ttft_env(monkeypatch):
+    monkeypatch.setattr(scheduler_module._envs, 'opt_ttft_policy', 'fifo')
+    monkeypatch.setattr(scheduler_module._envs, 'opt_ttft_aging_sec', 0.25)
+
+    scheduler, _ = _make_scheduler_for_long_context_chunks(num_gpu_blocks=8)
+
+    assert scheduler._long_prefill_policy == 'fifo'
+    assert scheduler._long_prefill_aging_seconds_per_chunk == 0.25
+
+
+def test_schedule_prefill_prefer_long_fifo_policy_keeps_oldest_huge_waiter_first():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=8)
+    scheduler._long_prefill_policy = 'fifo'
+    now = time.perf_counter()
+    huge_long = scheduler.add_session(100).add_sequence([1] * (block_size * 16))
+    huge_long.arrive_time = now - 1.0
+    moderate_long = scheduler.add_session(101).add_sequence([2] * (block_size * 4))
+    moderate_long.arrive_time = now
+
+    output = scheduler.schedule(is_prefill=True, prefer_long_prefill=True)
+
+    assert output.running == [huge_long]
+    assert huge_long.status == MessageStatus.READY
+    assert huge_long.kv_token_limit == block_size * 2
+    assert huge_long.num_blocks == 2
+    assert moderate_long.status == MessageStatus.WAITING
+    assert moderate_long.num_blocks == 0
+    assert moderate_long.kv_token_limit is None
+
+
+def test_schedule_prefill_prefer_long_admits_smaller_long_waiter_first():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=8)
+    now = time.perf_counter()
+    huge_long = scheduler.add_session(100).add_sequence([1] * (block_size * 16))
+    huge_long.arrive_time = now - 1.0
+    moderate_long = scheduler.add_session(101).add_sequence([2] * (block_size * 4))
+    moderate_long.arrive_time = now
+    short = scheduler.add_session(102).add_sequence([3] * (block_size // 2))
+
+    output = scheduler.schedule(is_prefill=True, prefer_long_prefill=True)
+
+    assert output.running == [moderate_long]
+    assert moderate_long.status == MessageStatus.READY
+    assert moderate_long.kv_token_limit == block_size * 2
+    assert moderate_long.num_blocks == 2
+    assert huge_long.status == MessageStatus.WAITING
+    assert huge_long.num_blocks == 0
+    assert huge_long.kv_token_limit is None
+    assert short.status == MessageStatus.WAITING
+    assert short.num_blocks == 0
+
+
+def test_schedule_prefill_prefer_long_ages_huge_long_waiter():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=8)
+    scheduler._long_prefill_aging_seconds_per_chunk = 0.01
+    now = time.perf_counter()
+    huge_long = scheduler.add_session(100).add_sequence([1] * (block_size * 16))
+    huge_long.arrive_time = now - 1.0
+    moderate_long = scheduler.add_session(101).add_sequence([2] * (block_size * 4))
+    moderate_long.arrive_time = now
+
+    output = scheduler.schedule(is_prefill=True, prefer_long_prefill=True)
+
+    assert output.running == [huge_long]
+    assert huge_long.status == MessageStatus.READY
+    assert huge_long.kv_token_limit == block_size * 2
+    assert huge_long.num_blocks == 2
+    assert moderate_long.status == MessageStatus.WAITING
+    assert moderate_long.num_blocks == 0
+    assert moderate_long.kv_token_limit is None
 
 
 def test_schedule_prefill_reapplies_chunk_limit_after_ssm_state_rollback():

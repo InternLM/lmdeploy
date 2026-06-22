@@ -38,6 +38,7 @@ SSM scheduling detail:
 """
 
 import logging
+import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ from dataclasses import dataclass
 from torch.profiler import record_function
 
 from lmdeploy.messages import EventType, ScheduleMetrics
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, SchedulerConfig
@@ -102,6 +104,8 @@ class Scheduler:
         self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
         self.scheduler_tick = 0
+        self._long_prefill_policy = _envs.opt_ttft_policy
+        self._long_prefill_aging_seconds_per_chunk = max(0.001, _envs.opt_ttft_aging_sec)
 
     def tick(self):
         """Mark one scheduler progress step (once per forward dispatch)."""
@@ -234,6 +238,20 @@ class Scheduler:
     def has_waiting_long_prefill(self):
         """Whether a waiting request would need a non-final prefill chunk."""
         return any(self._prefill_kv_token_limit(seq) is not None for seq in self.waiting)
+
+    def _long_prefill_estimated_chunks(self, seq: SchedulerSequence):
+        """Estimate how many non-final long-prefill slots this request
+        needs."""
+        chunk_limit = max(1, self._long_context_chunk_limit(seq))
+        return max(1, (seq.num_token_ids + chunk_limit - 1) // chunk_limit)
+
+    def _long_prefill_priority_key(self, seq: SchedulerSequence, now: float):
+        """Prefer smaller long prompts, with age credit to avoid starvation."""
+        estimated_chunks = self._long_prefill_estimated_chunks(seq)
+        wait_age = max(0.0, now - seq.arrive_time)
+        age_credit = int(wait_age // self._long_prefill_aging_seconds_per_chunk)
+        virtual_chunks = estimated_chunks - age_credit
+        return virtual_chunks, estimated_chunks, seq.arrive_time
 
     def _prepare_prefill_allocation(self, seq: SchedulerSequence, prealloc_size: int):
         """Apply chunk KV limit and return the effective prealloc size."""
@@ -409,6 +427,9 @@ class Scheduler:
             """Reorder waiting."""
             waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
             if prefer_long_prefill:
+                # Long-work turns choose one long waiter first. The size policy
+                # only reorders this long lane; it is not global
+                # shortest-prefill-first admission.
                 long_waiting: SeqList = []
                 normal_waiting: SeqList = []
                 for seq in waiting:
@@ -417,6 +438,10 @@ class Scheduler:
                     else:
                         long_waiting.append(seq)
                 if len(long_waiting) > 0:
+                    if self._long_prefill_policy == 'size':
+                        now = time.perf_counter()
+                        long_waiting = sorted(long_waiting,
+                                              key=lambda seq: self._long_prefill_priority_key(seq, now))
                     normal_waiting = sorted(normal_waiting,
                                             key=lambda seq: (self._prefill_admission_token_count(seq),
                                                              seq.arrive_time))

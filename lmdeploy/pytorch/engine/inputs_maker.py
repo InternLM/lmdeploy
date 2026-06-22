@@ -15,6 +15,7 @@ import numpy as np
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.messages import MessageStatus
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, VisionModelInputs
@@ -314,7 +315,7 @@ class InputsMakerAsync:
         self._decode_count = 0
         self._last_forward_kind = None
         self._short_prefill_turns_since_long_chunk = 0
-        self._short_prefill_turns_per_long_chunk = 3
+        self._short_prefill_turns_per_long_chunk = max(1, _envs.opt_ttft_short_turns)
 
         # record for next forward.
         self.next_is_prefill = True
@@ -355,7 +356,8 @@ class InputsMakerAsync:
         return getattr(self, '_last_forward_kind', None) == 'long_context_chunk'
 
     def _is_long_context_chunk_turn_due(self):
-        """Check if active long chunk should run before another short prefill."""
+        """Check if active long chunk should run before another short
+        prefill."""
         return self._short_prefill_turns_since_long_chunk >= self._short_prefill_turns_per_long_chunk
 
     def _forward_kind(self, inputs: 'ModelInputs|None', delta: 'ModelInputsDelta|None'):
@@ -890,6 +892,13 @@ class InputsMakerAsync:
                 inputs, delta, extra_inputs = __create_model_inputs(running)
             return running, inputs, delta, extra_inputs, swap_in_map, swap_out_map
 
+        def __create_short_or_normal_prefill_turn():
+            result = __create_inputs_prefill(allow_long_prefill=False)
+            _, prefill_inputs, prefill_delta, _, _, _ = result
+            if prefill_inputs is not None or prefill_delta is not None:
+                self._short_prefill_turns_since_long_chunk += 1
+            return result
+
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
@@ -901,6 +910,11 @@ class InputsMakerAsync:
         swap_out_map = {}
         deferred_long_context_chunk = False
 
+        # Bounded opt-TTFT prefill policy: protect decode before continuing
+        # non-final long chunks, then allow a bounded number of short/normal
+        # prefill turns before forcing one long-work turn. A long-work turn
+        # continues the active chunker first, otherwise it admits one waiting
+        # long prefill through the scheduler.
         self.long_context_chunker.check_enable()
         if self.long_context_chunker.enabled():
             # long context chunking
@@ -922,10 +936,8 @@ class InputsMakerAsync:
                     extra_inputs,
                     swap_in_map,
                     swap_out_map,
-                ) = __create_inputs_prefill(allow_long_prefill=False)
-                if inputs is not None or delta is not None:
-                    self._short_prefill_turns_since_long_chunk += 1
-                else:
+                ) = __create_short_or_normal_prefill_turn()
+                if inputs is None and delta is None:
                     (
                         running,
                         inputs,
@@ -960,9 +972,7 @@ class InputsMakerAsync:
                 extra_inputs,
                 swap_in_map,
                 swap_out_map,
-            ) = __create_inputs_prefill(allow_long_prefill=False)
-            if inputs is not None or delta is not None:
-                self._short_prefill_turns_since_long_chunk += 1
+            ) = __create_short_or_normal_prefill_turn()
 
         if inputs is None and delta is None and deferred_long_context_chunk and self.long_context_chunker.enabled():
             running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()

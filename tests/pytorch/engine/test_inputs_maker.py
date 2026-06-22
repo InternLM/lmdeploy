@@ -5,10 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
+import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.engine_loop import EngineLoop
 from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
+    InputsMakerConfig,
     LongContextChunker,
     _compact_state_prefix_cache_restore_offsets,
     _compact_state_prefix_cache_save_offsets,
@@ -221,6 +223,42 @@ def _make_policy_maker(long_seq, decode_seq=None):
     maker._short_prefill_turns_since_long_chunk = 0
     maker._short_prefill_turns_per_long_chunk = 3
     return maker
+
+
+def test_inputs_maker_reads_opt_ttft_short_turns_env(monkeypatch):
+    monkeypatch.setattr(inputs_maker_module._envs, 'opt_ttft_short_turns', 5)
+    scheduler = SimpleNamespace(cache_config=SimpleNamespace(block_size=16, kernel_block_size=16))
+    config = InputsMakerConfig(max_batches=1, max_prefill_token_num=512, role=EngineRole.Decode)
+
+    maker = InputsMakerAsync(
+        executor=SimpleNamespace(device_type='cpu'),
+        scheduler=scheduler,
+        adapter_manager=SimpleNamespace(),
+        engine_strategy=_FakeEngineStrategy(),
+        sampling_strategy=_FakeSamplingStrategy(),
+        model_agent_strategy=_FakeModelAgentStrategy(),
+        config=config,
+    )
+
+    assert maker._short_prefill_turns_per_long_chunk == 5
+
+
+def test_inputs_maker_clamps_opt_ttft_short_turns_to_one(monkeypatch):
+    monkeypatch.setattr(inputs_maker_module._envs, 'opt_ttft_short_turns', 0)
+    scheduler = SimpleNamespace(cache_config=SimpleNamespace(block_size=16, kernel_block_size=16))
+    config = InputsMakerConfig(max_batches=1, max_prefill_token_num=512, role=EngineRole.Decode)
+
+    maker = InputsMakerAsync(
+        executor=SimpleNamespace(device_type='cpu'),
+        scheduler=scheduler,
+        adapter_manager=SimpleNamespace(),
+        engine_strategy=_FakeEngineStrategy(),
+        sampling_strategy=_FakeSamplingStrategy(),
+        model_agent_strategy=_FakeModelAgentStrategy(),
+        config=config,
+    )
+
+    assert maker._short_prefill_turns_per_long_chunk == 1
 
 
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():
