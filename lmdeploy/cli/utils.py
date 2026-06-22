@@ -64,12 +64,12 @@ def get_lora_adapters(adapters: list[str]):
     return output
 
 
-def get_chat_template(chat_template: str, model_path: str = None):
+def get_chat_template(chat_template: str | None, model_path: str | None = None):
     """Get chat template config.
 
     Args:
-        chat_template(str): it could be a builtin chat template name, or a chat template json file
-        model_path(str): the model path, passed through to the chat template config
+        chat_template(str | None): it could be a builtin chat template name, or a chat template json file
+        model_path(str | None): the model path, passed through to the chat template config
     """
     import os
 

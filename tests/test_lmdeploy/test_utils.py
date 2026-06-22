@@ -1,3 +1,4 @@
+import pytest
 import torch
 from transformers import AutoConfig
 
@@ -106,12 +107,8 @@ def test_get_chat_template_unregistered_name():
     """An unregistered name is rejected by the registry check, not by an
     ImportError."""
     from lmdeploy.cli.utils import get_chat_template
-    raised = False
-    try:
+    with pytest.raises(AssertionError):
         get_chat_template('not-a-registered-template')
-    except AssertionError:
-        raised = True
-    assert raised, 'an unregistered chat template name should raise AssertionError'
 
 
 def test_get_chat_template_none():
