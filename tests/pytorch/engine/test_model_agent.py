@@ -81,6 +81,40 @@ def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
     assert agent._prev_chunk_output is None
 
 
+def test_clear_long_context_chunk_state_clears_base_and_spec_carry():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    calls = []
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent._prev_chunk_output = {'model_metas': [{'chunk': 1}]}
+    agent._prev_chunk_last_logit = torch.ones(1, 2)
+    agent.spec_agent = SimpleNamespace(clear_long_context_chunk_state=lambda: calls.append('spec'))
+
+    agent.clear_long_context_chunk_state()
+
+    assert agent._prev_chunk_output is None
+    assert agent._prev_chunk_last_logit is None
+    assert calls == ['spec']
+
+
+def test_async_step_cleanup_only_clears_long_context_chunk_state(event_loop):
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    calls = []
+    agent = _make_agent_with_queues()
+    agent._prev_chunk_output = {'model_metas': [{'chunk': 1}]}
+    agent._prev_chunk_last_logit = torch.ones(1, 2)
+    agent.spec_agent = SimpleNamespace(clear_long_context_chunk_state=lambda: calls.append('spec'))
+
+    event_loop.run_until_complete(
+        BaseModelAgent._async_step(agent, inputs=None, delta=None, clear_long_context_chunk=True))
+
+    assert agent._prev_chunk_output is None
+    assert agent._prev_chunk_last_logit is None
+    assert calls == ['spec']
+    assert event_loop.run_until_complete(agent.get_output_async()) is None
+
+
 class TestDrainQueues:
 
     def test_drain_empty_queues(self):

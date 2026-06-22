@@ -96,6 +96,10 @@ class BaseSpecModelAgent:
         'reset graph runner'
         pass
 
+    def clear_long_context_chunk_state(self):
+        """Clear any pending long-context chunk carry."""
+        pass
+
     def update_main_model_outputs(self, output: dict[str, torch.Tensor],
                                   model_inputs: ModelInputs):
         """Update outputs of main model."""
