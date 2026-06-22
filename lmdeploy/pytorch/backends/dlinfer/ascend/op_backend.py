@@ -295,12 +295,26 @@ class AscendOpsBackend(DlinferOpsBackend):
             is_graph = cls.enable_graph and global_is_decoding and (is_decoding or is_multi_token_decoding)
             if is_graph:
                 from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
-                actual_tokens_current_rank = step_context.q_seqlens.shape[0]
-                padded_tokens_current_rank = min(get_ascend_compatible_size(actual_tokens_current_rank),
-                                                    cls.max_batches)
-                if is_multi_token_decoding:
-                    actual_tokens_current_rank = actual_tokens_current_rank * (num_spec_tokens + 1)
-                    padded_tokens_current_rank = padded_tokens_current_rank * (num_spec_tokens + 1)
+                # The cudagraph is keyed/captured on the GLOBAL padded batch
+                # (max over all DP ranks), so every DP rank executes the MoE with
+                # the same global token count. padded_tokens_current_rank must
+                # therefore mirror that global captured size; deriving it from this
+                # rank's local batch makes DP ranks disagree on the MC2
+                # dispatch/combine token count and corrupts the collective
+                # (MoeDistributeCombineV2 AICORE out-of-bounds). dp_meta.dp_batches
+                # holds the per-rank sequence counts; its max is the global batch
+                # the graph capture uses.
+                dp_meta = step_context.dp_meta
+                if dp_meta is not None and dp_meta.dp_batches:
+                    global_batch = max(dp_meta.dp_batches)
+                else:
+                    global_batch = step_context.q_seqlens.shape[0]
+                query_len = (num_spec_tokens + 1) if is_multi_token_decoding else 1
+                # actual tokens: this rank's real (non-padded) token count, used to
+                # build x_active_mask so MC2 ignores the graph padding region.
+                actual_tokens_current_rank = step_context.q_seqlens.sum().item()
+                padded_tokens_current_rank = min(get_ascend_compatible_size(global_batch),
+                                                 cls.max_batches) * query_len
             else:
                 actual_tokens_current_rank = step_context.q_seqlens.sum().item()
                 padded_tokens_current_rank = actual_tokens_current_rank
