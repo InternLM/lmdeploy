@@ -167,7 +167,13 @@ class AscendOpsBackend(DlinferOpsBackend):
             is_multi_token_decoding = step_context.q_seqlens.max().item() > 1
             # is_decoding: True only for regular single-token decode (original semantics)
             is_decoding = not is_multi_token_decoding
-            
+
+        # MoE EP dispatch/combine and graph capture are collective ops shared by all
+        # DP ranks, so they must agree on decode-vs-prefill. Use the DP-global state
+        # (if any rank is prefill, all ranks are prefill) for those paths; the local
+        # is_decoding / is_multi_token_decoding above stay rank-local for attention.
+        global_is_decoding = step_context.global_is_decoding()
+
         if step_context.block_offsets.dtype != torch.int32:
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
         if step_context.kv_seqlens.dtype != torch.int32:
@@ -286,7 +292,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return 0, 0, 0
             # get padded_tokens_current_rank
-            is_graph = cls.enable_graph and (is_decoding or is_multi_token_decoding)
+            is_graph = cls.enable_graph and global_is_decoding and (is_decoding or is_multi_token_decoding)
             if is_graph:
                 from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
                 actual_tokens_current_rank = step_context.q_seqlens.shape[0]
@@ -323,7 +329,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return DlinferMoECommType.ALLGATHER
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
-            is_graph = cls.enable_graph and (is_decoding or is_multi_token_decoding)
+            is_graph = cls.enable_graph and global_is_decoding and (is_decoding or is_multi_token_decoding)
             if is_graph:
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
@@ -332,7 +338,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 else:
                     return DlinferMoECommType.ALLGATHER
             elif SocVersion.is_A3():
-                if max_tokens_across_dp <= mc2_token_capacity:
+                if max_tokens_across_dp <= mc2_token_capacity and global_is_decoding:
                     return DlinferMoECommType.MC2
                 else:
                     return DlinferMoECommType.ALLTOALL
@@ -349,7 +355,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                                            dtype=torch.bool,
                                            device=torch.npu.current_device())
             elif moe_comm_type == DlinferMoECommType.ALLTOALL:
-                pad_size = tp_size - padded_tokens_current_rank
+                pad_size = (-padded_tokens_current_rank) % tp_size
             elif moe_comm_type == DlinferMoECommType.ALLGATHER:
                 pad_size = max_tokens_across_dp - padded_tokens_current_rank
             else:

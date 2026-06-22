@@ -403,6 +403,7 @@ class BaseModelAgent:
             if dp > 1:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
+                inputs.dp_meta.dp_is_decoding = False
             logger.debug('Warmup prefill start.')
             self._forward_impl(inputs)
             torch.cuda.synchronize()
@@ -423,6 +424,7 @@ class BaseModelAgent:
                 if dp > 1:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)
+                    inputs.dp_meta.dp_is_decoding = True
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
