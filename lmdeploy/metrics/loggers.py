@@ -208,6 +208,22 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation='Number of generation tokens processed.',
             labelnames=labelnames).labels(*labelvalues)
 
+        # Prefix cache hit rate is derived in PromQL from these raw counters:
+        #   rate(prefix_cache_hits_total) / rate(prefix_cache_queries_total)
+        self.counter_prefix_cache_queries = prometheus_client.Counter(
+            name='lmdeploy:prefix_cache_queries_total',
+            documentation='Number of tokens queried against the prefix cache.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_prefix_cache_hits = prometheus_client.Counter(
+            name='lmdeploy:prefix_cache_hits_total',
+            documentation='Number of tokens served from the prefix cache.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        # engine-side stats are cumulative; track last seen values to emit deltas
+        self._last_prefix_cache_query_tokens = 0
+        self._last_prefix_cache_hit_tokens = 0
+
         # Speculative decoding counters. Acceptance rate and mean acceptance
         # length are derived in PromQL from these raw counters.
         #   rate(accepted_tokens) / rate(draft_tokens)
@@ -385,6 +401,15 @@ class PrometheusStatLogger(StatLoggerBase):
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
         self.gauge_prefix_cache_hit_rate.set(stats.prefix_cache_hit_rate)
+
+        query_delta = stats.num_prefix_cache_query_tokens - self._last_prefix_cache_query_tokens
+        hit_delta = stats.num_prefix_cache_hit_tokens - self._last_prefix_cache_hit_tokens
+        if query_delta > 0:
+            self.counter_prefix_cache_queries.inc(query_delta)
+        if hit_delta > 0:
+            self.counter_prefix_cache_hits.inc(hit_delta)
+        self._last_prefix_cache_query_tokens = stats.num_prefix_cache_query_tokens
+        self._last_prefix_cache_hit_tokens = stats.num_prefix_cache_hit_tokens
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""

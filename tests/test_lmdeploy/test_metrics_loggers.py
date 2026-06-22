@@ -3,7 +3,7 @@
 import pytest
 
 from lmdeploy.metrics.loggers import PrometheusStatLogger
-from lmdeploy.metrics.stats import SpeculativeDecodingStats
+from lmdeploy.metrics.stats import SchedulerStats, SpeculativeDecodingStats
 
 prometheus_client = pytest.importorskip('prometheus_client')
 
@@ -42,3 +42,17 @@ def test_prometheus_stat_logger_records_specdecode_metrics():
     position_labels = labels | {'position': '2'}
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_per_pos_total', position_labels) == 0
     assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 0
+
+
+def test_prometheus_stat_logger_records_prefix_cache_counters():
+    logger = PrometheusStatLogger('test-prefix-model', max_model_len=16, dp_rank=0)
+    labels = {'model_name': 'test-prefix-model', 'engine': '0'}
+
+    # engine-side stats are cumulative, so the logger must emit per-interval deltas
+    logger.record_schedule(SchedulerStats(num_prefix_cache_query_tokens=100, num_prefix_cache_hit_tokens=30))
+    assert _get_sample_value('lmdeploy:prefix_cache_queries_total', labels) == 100
+    assert _get_sample_value('lmdeploy:prefix_cache_hits_total', labels) == 30
+
+    logger.record_schedule(SchedulerStats(num_prefix_cache_query_tokens=250, num_prefix_cache_hit_tokens=80))
+    assert _get_sample_value('lmdeploy:prefix_cache_queries_total', labels) == 250
+    assert _get_sample_value('lmdeploy:prefix_cache_hits_total', labels) == 80
