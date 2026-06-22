@@ -179,8 +179,6 @@ class Engine:
                                                                                   top_p=top_p,
                                                                                   top_k=top_k,
                                                                                   ignore_eos=True),
-                                                      sequence_start=True,
-                                                      sequence_end=True,
                                                       stream_output=stream_output)
             try:
                 async for outputs in generator:
@@ -194,10 +192,6 @@ class Engine:
                 sess.finish(Session.SUCCESS)
             finally:
                 await generator.aclose()
-
-            # for pytorch engine to restart a session
-            if self.backend == 'pytorch':
-                await model_inst.async_end(session_id)
 
             self.pbar.update(1)
             session_id += concurrency

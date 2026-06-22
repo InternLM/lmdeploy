@@ -529,7 +529,6 @@ class ResponseType(enum.Enum):
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
-    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
     NO_QUEUE = enum.auto()
 
 

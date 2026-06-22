@@ -115,6 +115,7 @@ class EngineLoop:
     """Engine loop manager should be created in an async context."""
 
     def __init__(self,
+                 engine: 'Engine',
                  req_manager: 'RequestManager',
                  scheduler: 'Scheduler',
                  executor: 'ExecutorBase',
@@ -122,6 +123,7 @@ class EngineLoop:
                  inputs_maker: 'InputsMakerAsync',
                  config: EngineLoopConfig,
                  engine_conn: Optional['EngineP2PConnection'] = None):
+        self.engine = engine
         self.req_manager = req_manager
         self.scheduler = scheduler
         self.executor = executor
@@ -224,6 +226,13 @@ class EngineLoop:
                                 routed_experts=out.routed_experts,
                                 logprobs=logprobs,
                                 ce_loss=out.ce_loss))
+        if out.finish:
+            session_id = out.session_id
+            session = self.scheduler.sessions.get(session_id)
+            if session is not None:
+                msgs = list(session.sequences.values())
+                if not msgs or not msgs[0].preserve_cache:
+                    self.engine.end_session(session_id)
 
     @staticmethod
     def _update_logprobs(step_outputs: list[InferOutput]):
@@ -668,6 +677,7 @@ def build_engine_loop(engine: 'Engine'):
     config = EngineLoopConfig.from_engine(engine)
     inputs_maker = build_inputs_maker(engine)
     return EngineLoop(
+        engine=engine,
         req_manager=engine.req_manager,
         scheduler=engine.scheduler,
         executor=engine.executor,
