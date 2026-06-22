@@ -114,6 +114,104 @@ def _flatten_kv_cache(
 
 
 @triton.jit
+def _flatten_kv_cache_fp8_scalar(
+    kc_ptr,
+    vc_ptr,
+    ko_ptr,
+    vo_ptr,
+    k_scale_ptr,
+    v_scale_ptr,
+    start_loc_ptr,
+    seqlens_ptr,
+    block_offsets_ptr,
+    stride_kcb: tl.constexpr,
+    stride_kcs: tl.constexpr,
+    stride_kch: tl.constexpr,
+    stride_kcd: tl.constexpr,
+    stride_vcb: tl.constexpr,
+    stride_vcs: tl.constexpr,
+    stride_vch: tl.constexpr,
+    stride_vcd: tl.constexpr,
+    stride_koh,
+    stride_kos: tl.constexpr,
+    stride_kod: tl.constexpr,
+    stride_voh,
+    stride_vos: tl.constexpr,
+    stride_vod: tl.constexpr,
+    stride_boff,
+    OUT_SIZE,
+    HEAD_DIM_K: tl.constexpr,
+    HEAD_DIM_V: tl.constexpr,
+    BLOCK_BS: tl.constexpr,
+    BLOCK_DK: tl.constexpr,
+    BLOCK_DV: tl.constexpr,
+):
+    """Flatten per-tensor FP8 KV cache."""
+    page_id = tl.program_id(0)
+    batch_id = tl.program_id(1)
+    head_id = tl.program_id(2)
+    tail_batch = tl.num_programs(1) - 1
+
+    if batch_id == tail_batch:
+        last_batch = tail_batch - 1
+        last_start = tl.load(start_loc_ptr + last_batch)
+        last_seqlen = tl.load(seqlens_ptr + last_batch)
+        start_loc = last_start + last_seqlen
+        seqlen = OUT_SIZE - start_loc
+        if page_id * BLOCK_BS >= seqlen:
+            return
+
+        offs_obs = page_id * BLOCK_BS + tl.arange(0, BLOCK_BS)
+        mask_bs = offs_obs < seqlen
+        offs_dk = tl.arange(0, BLOCK_DK) % HEAD_DIM_K
+        offs_dv = tl.arange(0, BLOCK_DV) % HEAD_DIM_V
+        mask_dk = tl.arange(0, BLOCK_DK) < HEAD_DIM_K
+        mask_dv = tl.arange(0, BLOCK_DV) < HEAD_DIM_V
+        ko_ptrs = (ko_ptr + head_id * stride_koh + (start_loc + offs_obs[:, None]) * stride_kos +
+                   offs_dk[None, :] * stride_kod)
+        vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
+                   offs_dv[None, :] * stride_vod)
+        zeros_k = tl.zeros([BLOCK_BS, BLOCK_DK], dtype=tl.float32)
+        zeros_v = tl.zeros([BLOCK_BS, BLOCK_DV], dtype=tl.float32)
+        tl.store(ko_ptrs, zeros_k, mask=mask_bs[:, None] & mask_dk[None, :])
+        tl.store(vo_ptrs, zeros_v, mask=mask_bs[:, None] & mask_dv[None, :])
+        return
+
+    seqlen = tl.load(seqlens_ptr + batch_id)
+    if page_id * BLOCK_BS >= seqlen:
+        return
+
+    start_loc = tl.load(start_loc_ptr + batch_id)
+    b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
+    b_off = b_off.to(tl.int64)
+    offs_bs = tl.arange(0, BLOCK_BS)
+    offs_dk = tl.arange(0, BLOCK_DK) % HEAD_DIM_K
+    offs_dv = tl.arange(0, BLOCK_DV) % HEAD_DIM_V
+    offs_obs = page_id * BLOCK_BS + tl.arange(0, BLOCK_BS)
+    mask_bs = offs_obs < seqlen
+    mask_dk = tl.arange(0, BLOCK_DK) < HEAD_DIM_K
+    mask_dv = tl.arange(0, BLOCK_DV) < HEAD_DIM_V
+
+    kc_ptrs = (kc_ptr + b_off * stride_kcb + offs_bs[:, None] * stride_kcs + head_id * stride_kch +
+               offs_dk[None, :] * stride_kcd)
+    vc_ptrs = (vc_ptr + b_off * stride_vcb + offs_bs[:, None] * stride_vcs + head_id * stride_vch +
+               offs_dv[None, :] * stride_vcd)
+    ko_ptrs = (ko_ptr + head_id * stride_koh + (start_loc + offs_obs[:, None]) * stride_kos +
+               offs_dk[None, :] * stride_kod)
+    vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
+               offs_dv[None, :] * stride_vod)
+
+    k_scale = tl.load(k_scale_ptr).to(tl.float32)
+    kc = tl.load(kc_ptrs).to(tl.float32) * k_scale
+    tl.store(ko_ptrs, kc.to(ko_ptr.dtype.element_ty), mask=mask_bs[:, None] & mask_dk[None, :])
+
+    if HEAD_DIM_V > 0:
+        v_scale = tl.load(v_scale_ptr).to(tl.float32)
+        vc = tl.load(vc_ptrs).to(tl.float32) * v_scale
+        tl.store(vo_ptrs, vc.to(vo_ptr.dtype.element_ty), mask=mask_bs[:, None] & mask_dv[None, :])
+
+
+@triton.jit
 def _dequant_int4(val, HEAD_DIM: tl.constexpr, BLOCK: tl.constexpr):
     """Dequant int4."""
     offs = tl.arange(0, BLOCK) // (HEAD_DIM // 2)
@@ -308,7 +406,14 @@ def flatten_kv_cache(k_caches: Tensor,
                      quant_policy: QuantPolicy = QuantPolicy.NONE,
                      kv_layout: str = 'bshd',
                      flatten_kv_layout: str = 'hsd'):
-    """Recovery paged kv cache to normal kv cache."""
+    """Recover paged KV cache to contiguous KV cache.
+
+    Args:
+        k_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor key scale for per-tensor FP8 KV cache.
+        v_scales_zeros: Per-token scale/zero metadata for int KV cache, or
+            per-tensor value scale for per-tensor FP8 KV cache.
+    """
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':
@@ -317,7 +422,7 @@ def flatten_kv_cache(k_caches: Tensor,
         raise RuntimeError('Unsupported layout.')
 
     if out_dtype is None:
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT):
             out_dtype = torch.float16
         else:
             out_dtype = k_caches.dtype
@@ -376,6 +481,41 @@ def flatten_kv_cache(k_caches: Tensor,
             v_caches,
             k_states,
             v_states,
+            start_loc,
+            seqlens,
+            block_offsets,
+            stride_kcb=k_caches.stride(b_dim),
+            stride_kcs=k_caches.stride(s_dim),
+            stride_kch=k_caches.stride(h_dim),
+            stride_kcd=k_caches.stride(d_dim),
+            stride_vcb=v_caches.stride(b_dim),
+            stride_vcs=v_caches.stride(s_dim),
+            stride_vch=v_caches.stride(h_dim),
+            stride_vcd=v_caches.stride(d_dim),
+            stride_koh=stride_koh,
+            stride_kos=stride_kos,
+            stride_kod=k_states.stride(2),
+            stride_voh=stride_voh,
+            stride_vos=stride_vos,
+            stride_vod=v_states.stride(2),
+            stride_boff=block_offsets.stride(0),
+            OUT_SIZE=out_size,
+            HEAD_DIM_K=k_head_dim,
+            HEAD_DIM_V=v_head_dim,
+            BLOCK_BS=BLOCK_BS,
+            BLOCK_DK=BLOCK_DK,
+            BLOCK_DV=BLOCK_DV,
+        )
+    elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+        assert k_scales_zeros is not None, 'FP8 KV cache requires k scale.'
+        assert v_scales_zeros is not None, 'FP8 KV cache requires v scale.'
+        _flatten_kv_cache_fp8_scalar[grid](
+            k_caches,
+            v_caches,
+            k_states,
+            v_states,
+            k_scales_zeros,
+            v_scales_zeros,
             start_loc,
             seqlens,
             block_offsets,

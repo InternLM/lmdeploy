@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.utils import singleton
 
 
@@ -15,7 +16,8 @@ class DeepEPState:
 
     def enabled(self):
         """Return whether DeepEP is enabled."""
-        return self._enabled
+        is_ep_mode = get_dist_manager().current_context().dist_config.ep > 1
+        return self._enabled and is_ep_mode
 
 
 def get_deepep_state():

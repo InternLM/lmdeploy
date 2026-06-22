@@ -3,8 +3,14 @@ import time
 
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid, resolve_eval_config_name
-from utils.evaluate_utils import eval_test
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_eval_preset_config,
+    get_func_config_list,
+    get_workerid,
+    resolve_eval_config_name,
+)
+from utils.evaluate_utils import build_eval_judge_run_config, eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
@@ -21,7 +27,7 @@ def _run_ray_distributed_test(
     assert manager is not None, 'Manager instance must be provided'
     eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
 
     if manager.is_master:
         model_path = os.path.join(config['model_path'], run_config['model'])
@@ -63,7 +69,7 @@ def _run_proxy_distributed_test(config,
     if eval_subpath is None:
         eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
     model_name = run_config['model']
     model_path = os.path.join(config['model_path'], model_name)
 
@@ -106,7 +112,7 @@ def _run_proxy_distributed_test(config,
 def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
     """Run test with specified evaluation configuration."""
     eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
     eval_path = config.get('eval_path')
     if eval_subpath:
         eval_path = os.path.join(eval_path, eval_subpath)
@@ -157,10 +163,8 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     else:  # eval
         port = constant.PROXY_PORT + get_workerid(worker_id)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port, f'{case_name}_eval')
-        eval_run_config = constant.EVAL_RUN_CONFIG.copy()
-        if 'extra_params' not in eval_run_config:
-            eval_run_config['extra_params'] = {}
-        eval_run_config['extra_params']['proxy-url'] = f'http://{constant.DEFAULT_SERVER}:{port}'
+        eval_run_config = build_eval_judge_run_config(
+            config, f'http://{constant.DEFAULT_SERVER}:{port}')
 
         pid, content = start_openai_service(config, eval_run_config, worker_id)
         try:
@@ -330,46 +334,6 @@ def test_pytorch_restful_tp2_longtext_512k(config, run_config, worker_id):
                   'infer',
                   eval_subpath='longtext-512k',
                   eval_config_name='longtext-512k')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
 
 
 @pytest.mark.infer

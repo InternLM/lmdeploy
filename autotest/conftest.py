@@ -9,7 +9,6 @@ from utils.ray_distributed_utils import RayLMDeployManager
 
 cli_prompt_case_file = 'autotest/chat_prompt_case.yml'
 common_prompt_case_file = 'autotest/prompt_case.yml'
-config_file = 'autotest/config.yml'
 
 PROXY_PORT = 8000
 
@@ -39,18 +38,7 @@ def common_case_config():
 @pytest.fixture(scope='session')
 def shared_ray_manager():
     master_addr = DEFAULT_SERVER
-    env_tag = os.environ.get('TEST_ENV')
-    if env_tag:
-        device_config_path = f'autotest/config_{env_tag}.yml'
-        if os.path.exists(device_config_path):
-            config_path = device_config_path
-        else:
-            config_path = config_file
-    else:
-        config_path = config_file
-
-    with open(config_path) as f:
-        env_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+    env_config = get_config()
     run_id = os.environ.get('RUN_ID', 'local_run')
     log_dir = os.path.join(env_config.get('server_log_path', '/tmp/lmdeploy_test'), str(run_id).replace('/', '_'))
 

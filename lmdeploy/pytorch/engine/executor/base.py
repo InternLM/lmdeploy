@@ -5,6 +5,7 @@ import contextlib
 from typing import Any, NamedTuple
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
@@ -44,6 +45,12 @@ class ExecutorBase:
         if cache_config.window_size is not None and cache_config.window_size > 0:
             # do not support sliding window prefix caching
             logger.warning('Sliding window prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
+        if specdecode_config is not None and cache_config.enable_prefix_caching:
+            logger.warning('Speculative decoding prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
+        if cache_config.role != EngineRole.Hybrid and cache_config.enable_prefix_caching:
+            logger.warning('PD prefix caching is not supported.')
             cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
@@ -97,6 +104,18 @@ class ExecutorBase:
 
     def update_params(self, request: Any):
         """Update params."""
+        raise NotImplementedError('Not Implemented.')
+
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        raise NotImplementedError('Not Implemented.')
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        raise NotImplementedError('Not Implemented.')
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
         raise NotImplementedError('Not Implemented.')
 
     def get_input_processor(self):
@@ -167,13 +186,25 @@ class ExecutorBase:
         ]
         return min(num_gpu_blocks)
 
+    def _get_spec_attn_tp(self) -> int:
+        """Get draft/spec attention TP."""
+        specdecode_config = getattr(self, 'specdecode_config', None)
+        spec_dist_config = getattr(specdecode_config, 'dist_config', None)
+        return getattr(spec_dist_config, 'attn_tp', 1)
+
     def _get_rank_cache_block_sizes(self, num_ranks: int, cache_block_size: _CacheBlockSize) -> list[int]:
         """Get per-rank KV cache block sizes."""
         if cache_block_size.spec == 0:
             return [cache_block_size.target] * num_ranks
 
         attn_tp = self.dist_config.attn_tp
-        # Spec decoding only builds the draft/spec cache on one rank in each
+        draft_tp = self._get_spec_attn_tp()
+        if draft_tp > 1:
+            # Draft/spec cache is sharded across the same TP ranks as the
+            # target, so every participating rank carries the sharded footprint.
+            return [cache_block_size.total] * num_ranks
+
+        # Draft TP=1 only builds the draft/spec cache on one rank in each
         # attention-TP group. Other ranks can use the memory that would have
         # gone to spec cache for additional target KV blocks.
         return [
@@ -226,17 +257,15 @@ class ExecutorBase:
 
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
-            # add more caches for eviction
+            # One state slot is reserved for system use. Active sequences need
+            # max_batches runtime slots plus one spare for rolling prefill;
+            # prefix-cache checkpoints use an explicitly configured extra budget.
             # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 1)
+            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
         mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
         mems *= num_state_caches
-
-        if cache_config.enable_prefix_caching:
-            cache_config.enable_prefix_caching = False
-            logger.warning('Prefix caching has not been support for state space model.')
 
         return mems
 
@@ -279,9 +308,8 @@ class ExecutorBase:
 
         spec_cache_block_size = 0
         if spec_cache_config is not None:
-            # Draft/spec cache is not tensor-parallelized with the target
-            # attention group here, so its block size is measured at world_size=1.
-            spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, 1)
+            draft_tp = self._get_spec_attn_tp()
+            spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, draft_tp)
 
         return _CacheBlockSize(target=cache_block_size, spec=spec_cache_block_size)
 
@@ -351,6 +379,9 @@ class ExecutorBase:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
         self.build_cache_engine()
+        if self.misc_config.empty_init:
+            logger.info('Skip warming up model during empty init.')
+            return
         logger.info('Warming up model.')
         self.warmup()
 

@@ -10,6 +10,7 @@ from lmdeploy.pytorch.config import (
     MiscConfig,
     SchedulerConfig,
     SpecDecodeConfig,
+    normalize_cudagraph_capture_batch_sizes,
 )
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
@@ -39,6 +40,11 @@ class ConfigBuilder:
                                f'since dllm_block_length({engine_config.dllm_block_length}) * max_batch_size '
                                f'({max_batch_size}) > max_prefill_token_num ({max_prefill_token_num}).')
 
+        capture_sizes = engine_config.cudagraph_capture_batch_sizes
+        if capture_sizes is not None:
+            engine_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                capture_sizes, engine_config.max_batch_size)
+
         if engine_config.dp != 1:
             if engine_config.tp == 1 and engine_config.ep == 1:
                 logger.warning('Data parallelism is enabled but tensor parallelism and '
@@ -67,7 +73,10 @@ class ConfigBuilder:
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
+            cudagraph_capture_batch_sizes=engine_config.cudagraph_capture_batch_sizes,
             enable_prefix_caching=engine_config.enable_prefix_caching,
+            prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
+            prefix_cache_decode_state_interval=engine_config.prefix_cache_decode_state_interval,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,
@@ -98,11 +107,25 @@ class ConfigBuilder:
         return misc_config
 
     @staticmethod
-    def build_specdecode_config(target_model, speculative_config: SpeculativeConfig, engine_config: PytorchEngineConfig,
-                                cache_config: CacheConfig, trust_remote_code: bool = False):
+    def build_specdecode_config(target_model,
+                                speculative_config: SpeculativeConfig,
+                                engine_config: PytorchEngineConfig,
+                                cache_config: CacheConfig,
+                                dist_config: DistConfig,
+                                trust_remote_code: bool = False,
+                                ):
         """Build spec decode config."""
+        def _build_draft_dist_ctx(dist_config):
+            # TODO support tp > 1, ep > 1 for other methods
+            if speculative_config.method == 'qwen3_5_mtp':
+                draft_dist_config = copy.deepcopy(dist_config)
+            else:
+                draft_dist_config = DistConfig()
+            return draft_dist_config
+
         specdecode_config = None
         if speculative_config is not None:
+            draft_dist_config = _build_draft_dist_ctx(dist_config)
             draft_model = speculative_config.model
             if draft_model and not os.path.exists(speculative_config.model):
                 draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)
@@ -117,5 +140,6 @@ class ConfigBuilder:
                 trust_remote_code=trust_remote_code,
                 model_format=engine_config.model_format,
                 hf_overrides=engine_config.hf_overrides,
+                dist_config=draft_dist_config,
             )
         return specdecode_config

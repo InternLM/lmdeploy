@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from argparse import Namespace
+
 import torch
 from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
 
@@ -8,6 +10,13 @@ from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
+
+
+def _normalize_vision_config(vision_config):
+    """Normalize vision_config to support both dict and object forms."""
+    if isinstance(vision_config, dict):
+        return Namespace(**vision_config)
+    return vision_config
 
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
@@ -84,6 +93,7 @@ class InternVLVisionModel(VisionModel):
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         self.config = self.hf_config
+        self.vision_config = _normalize_vision_config(self.config.vision_config)
         dynamic_image_size = getattr(self.config, 'dynamic_image_size', False)
         image_processor = None
         try:
@@ -97,7 +107,7 @@ class InternVLVisionModel(VisionModel):
             STD = (0.229, 0.224, 0.225)
             import torchvision.transforms as T
             from torchvision.transforms.functional import InterpolationMode
-            input_size = self.config.vision_config.image_size
+            input_size = self.vision_config.image_size
             self.transform = T.Compose([
                 T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
                 T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
@@ -112,7 +122,7 @@ class InternVLVisionModel(VisionModel):
             self._forward_func = self._forward
 
         force_image_size = self.hf_config.force_image_size
-        patch_size = self.hf_config.vision_config.patch_size
+        patch_size = self.vision_config.patch_size
         downsample_ratio = self.hf_config.downsample_ratio
         self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
 
@@ -151,7 +161,7 @@ class InternVLVisionModel(VisionModel):
         out = dynamic_preprocess(image,
                                  min_num=self.config.min_dynamic_patch,
                                  max_num=max_num,
-                                 image_size=self.config.vision_config.image_size,
+                                 image_size=self.vision_config.image_size,
                                  use_thumbnail=self.config.use_thumbnail)
         pixel_values = [self.transform(x) for x in out]
         # (patch) x c x h x w

@@ -12,7 +12,7 @@ def test_decode_tool_incremental_json_id_only_on_first_chunk():
         def decode_tool_incremental(self, added_text, *, final): return []
         def parse_tool_call_complete(self, payload): return None
 
-    parser = TestToolParser(tokenizer=None)
+    parser = TestToolParser()
     parser.start_tool_call()
 
     # Step 1: feed partial JSON with name

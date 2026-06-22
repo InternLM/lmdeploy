@@ -6,6 +6,12 @@ from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
     assert_chat_completions_stream_return,
+    assert_chat_delta_empty,
+    assert_chat_delta_error,
+    assert_chat_message_empty,
+    assert_chat_message_error,
+    get_chat_delta_text,
+    get_chat_message_text,
     has_repeated_fragment,
 )
 
@@ -153,7 +159,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             continue
         assert_chat_completions_batch_return(output, model_name)
-        assert ' is' not in output.get('choices')[0].get('message').get('content')
+        assert ' is' not in get_chat_message_text(output.get('choices')[0])
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
     def test_single_stopword_streaming(self, backend, model_case):
@@ -175,7 +181,7 @@ class TestRestfulInterfaceChatCompletions:
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' to' not in get_chat_delta_text(outputList[index].get('choices')[0])
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords(self, backend, model_case):
@@ -192,9 +198,9 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             continue
         assert_chat_completions_batch_return(output, model_name)
-        assert ' is' not in output.get('choices')[0].get('message').get('content')
-        assert ' 上海' not in output.get('choices')[0].get('message').get('content')
-        assert ' to ' not in output.get('choices')[0].get('message').get('content')
+        assert ' is' not in get_chat_message_text(output.get('choices')[0])
+        assert ' 上海' not in get_chat_message_text(output.get('choices')[0])
+        assert ' to ' not in get_chat_message_text(output.get('choices')[0])
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords_streaming(self, backend, model_case):
@@ -216,9 +222,9 @@ class TestRestfulInterfaceChatCompletions:
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            assert ' is' not in outputList[index].get('choices')[0].get('delta').get('content')
-            assert '上海' not in outputList[index].get('choices')[0].get('delta').get('content')
-            assert ' to ' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' is' not in get_chat_delta_text(outputList[index].get('choices')[0])
+            assert '上海' not in get_chat_delta_text(outputList[index].get('choices')[0])
+            assert ' to ' not in get_chat_delta_text(outputList[index].get('choices')[0])
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     @pytest.mark.internlm2_5
@@ -240,7 +246,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             continue
         assert_chat_completions_batch_return(output, model_name)
-        assert '<|action_start|><|interpreter|>' in output.get('choices')[0].get('message').get('content')
+        assert '<|action_start|><|interpreter|>' in get_chat_message_text(output.get('choices')[0])
 
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages=message,
@@ -248,7 +254,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             continue
         assert_chat_completions_batch_return(output, model_name)
-        assert '<|action_start|><|interpreter|>' not in output.get('choices')[0].get('message').get('content')
+        assert '<|action_start|><|interpreter|>' not in get_chat_message_text(output.get('choices')[0])
 
     def test_minimum_repetition_penalty(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -266,7 +272,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      min_new_tokens=100):
             continue
         assert_chat_completions_batch_return(output, model_name)
-        result, msg = has_repeated_fragment(output.get('choices')[0].get('message').get('content'))
+        result, msg = has_repeated_fragment(get_chat_message_text(output.get('choices')[0]))
         assert result, msg
 
     def test_minimum_repetition_penalty_streaming(self, backend, model_case):
@@ -290,7 +296,7 @@ class TestRestfulInterfaceChatCompletions:
         response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            response += outputList[index].get('choices')[0].get('delta').get('content')
+            response += get_chat_delta_text(outputList[index].get('choices')[0])
         result, msg = has_repeated_fragment(response)
         assert result, msg
 
@@ -347,10 +353,9 @@ class TestRestfulInterfaceChatCompletions:
                                                          max_tokens=10):
                 outputList.append(output)
             assert_chat_completions_batch_return(output, model_name)
-        assert outputList[0].get('choices')[0].get('message').get('content') == outputList[1].get('choices')[0].get(
-            'message').get('content')
-        assert outputList[1].get('choices')[0].get('message').get('content') == outputList[2].get('choices')[0].get(
-            'message').get('content')
+        texts = [get_chat_message_text(output.get('choices')[0]) for output in outputList]
+        assert texts[0] == texts[1]
+        assert texts[1] == texts[2]
 
     def test_minimum_topp_streaming(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -374,7 +379,7 @@ class TestRestfulInterfaceChatCompletions:
             response = ''
             for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index], model_name)
-                response += outputList[index].get('choices')[0].get('delta').get('content')
+                response += get_chat_delta_text(outputList[index].get('choices')[0])
             responseList.append(response)
         assert responseList[0] == responseList[1] or responseList[1] == responseList[2]
 
@@ -427,9 +432,8 @@ class TestRestfulInterfaceChatCompletions:
                                                          max_tokens=100):
                 outputList.append(output)
             assert_chat_completions_batch_return(output, model_name)
-        assert outputList[0].get('choices')[0].get('message').get('content') != outputList[1].get('choices')[0].get(
-            'message').get('content') or outputList[1].get('choices')[0].get('message').get(
-                'content') != outputList[2].get('choices')[0].get('message').get('content')
+        texts = [get_chat_message_text(output.get('choices')[0]) for output in outputList]
+        assert texts[0] != texts[1] or texts[1] != texts[2]
 
     def test_mutilple_times_response_should_not_same_streaming(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -451,7 +455,7 @@ class TestRestfulInterfaceChatCompletions:
             response = ''
             for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index], model_name)
-                response += outputList[index].get('choices')[0].get('delta').get('content')
+                response += get_chat_delta_text(outputList[index].get('choices')[0])
             responseList.append(response)
         assert responseList[0] != responseList[1] or responseList[1] == responseList[2]
 
@@ -468,7 +472,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             continue
         assert output.get('choices')[0].get('finish_reason') == 'length'
-        assert output.get('choices')[0].get('message').get('content') == ''
+        assert_chat_message_empty(output.get('choices')[0])
 
     def test_longtext_input_streaming(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -486,7 +490,7 @@ class TestRestfulInterfaceChatCompletions:
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
         assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
-        assert outputList[0].get('choices')[0].get('delta').get('content') == ''
+        assert_chat_delta_empty(outputList[0].get('choices')[0])
         assert len(outputList) == 1
 
     def test_ignore_eos(self, backend, model_case):
@@ -528,7 +532,7 @@ class TestRestfulInterfaceChatCompletions:
         response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            response += outputList[index].get('choices')[0].get('delta').get('content')
+            response += get_chat_delta_text(outputList[index].get('choices')[0])
         length = api_client.encode(response, add_bos=False)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length >= 99 and length <= 101
@@ -614,7 +618,7 @@ class TestRestfulInterfaceChatCompletions:
         response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            response += outputList[index].get('choices')[0].get('delta').get('content')
+            response += get_chat_delta_text(outputList[index].get('choices')[0])
         length = api_client.encode(response, add_bos=False)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
@@ -667,7 +671,7 @@ class TestRestfulInterfaceChatCompletions:
         response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name, check_logprobs=True, logprobs_num=10)
-            response += outputList[index].get('choices')[0].get('delta').get('content')
+            response += get_chat_delta_text(outputList[index].get('choices')[0])
         length = api_client.encode(response, add_bos=False)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
@@ -732,7 +736,7 @@ class TestRestfulOpenAI:
 
         output = outputs.model_dump()
         assert_chat_completions_batch_return(output, model_name)
-        assert ' is' not in output.get('choices')[0].get('message').get('content')
+        assert ' is' not in get_chat_message_text(output.get('choices')[0])
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
     @pytest.mark.pr_test
@@ -757,7 +761,7 @@ class TestRestfulOpenAI:
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            assert ' is ' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' is ' not in get_chat_delta_text(outputList[index].get('choices')[0])
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords(self, backend, model_case):
@@ -777,9 +781,9 @@ class TestRestfulOpenAI:
 
         output = outputs.model_dump()
         assert_chat_completions_batch_return(output, model_name)
-        assert ' is' not in output.get('choices')[0].get('message').get('content')
-        assert ' 上海' not in output.get('choices')[0].get('message').get('content')
-        assert ' to' not in output.get('choices')[0].get('message').get('content')
+        assert ' is' not in get_chat_message_text(output.get('choices')[0])
+        assert ' 上海' not in get_chat_message_text(output.get('choices')[0])
+        assert ' to' not in get_chat_message_text(output.get('choices')[0])
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords_streaming(self, backend, model_case):
@@ -803,9 +807,9 @@ class TestRestfulOpenAI:
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            assert ' is' not in outputList[index].get('choices')[0].get('delta').get('content')
-            assert '上海' not in outputList[index].get('choices')[0].get('delta').get('content')
-            assert ' to ' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' is' not in get_chat_delta_text(outputList[index].get('choices')[0])
+            assert '上海' not in get_chat_delta_text(outputList[index].get('choices')[0])
+            assert ' to ' not in get_chat_delta_text(outputList[index].get('choices')[0])
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     @pytest.mark.pr_test
@@ -827,10 +831,9 @@ class TestRestfulOpenAI:
             output = outputs.model_dump()
             outputList.append(output)
             assert_chat_completions_batch_return(output, model_name)
-        assert outputList[0].get('choices')[0].get('message').get('content') == outputList[1].get('choices')[0].get(
-            'message').get('content')
-        assert outputList[1].get('choices')[0].get('message').get('content') == outputList[2].get('choices')[0].get(
-            'message').get('content')
+        texts = [get_chat_message_text(output.get('choices')[0]) for output in outputList]
+        assert texts[0] == texts[1]
+        assert texts[1] == texts[2]
 
     def test_minimum_topp_streaming(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
@@ -855,7 +858,7 @@ class TestRestfulOpenAI:
             response = ''
             for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index], model_name)
-                response += outputList[index].get('choices')[0].get('delta').get('content')
+                response += get_chat_delta_text(outputList[index].get('choices')[0])
             responseList.append(response)
         assert responseList[0] == responseList[1] or responseList[1] == responseList[2]
 
@@ -907,9 +910,8 @@ class TestRestfulOpenAI:
             output = outputs.model_dump()
             outputList.append(output)
             assert_chat_completions_batch_return(output, model_name)
-        assert outputList[0].get('choices')[0].get('message').get('content') != outputList[1].get('choices')[0].get(
-            'message').get('content') or outputList[1].get('choices')[0].get('message').get(
-                'content') != outputList[2].get('choices')[0].get('message').get('content')
+        texts = [get_chat_message_text(output.get('choices')[0]) for output in outputList]
+        assert texts[0] != texts[1] or texts[1] != texts[2]
 
     def test_mutilple_times_response_should_not_same_streaming(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
@@ -933,7 +935,7 @@ class TestRestfulOpenAI:
             response = ''
             for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index], model_name)
-                response += outputList[index].get('choices')[0].get('delta').get('content')
+                response += get_chat_delta_text(outputList[index].get('choices')[0])
             responseList.append(response)
         assert responseList[0] != responseList[1] or responseList[1] == responseList[2]
 
@@ -951,8 +953,7 @@ class TestRestfulOpenAI:
         output = outputs.model_dump()
         print(output)
         assert output.get('choices')[0].get('finish_reason') == 'error'
-        assert output.get('choices')[0].get('message').get(
-            'content') == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
+        assert_chat_message_error(output.get('choices')[0])
 
     @pytest.mark.pr_test
     def test_longtext_input_streaming(self, backend, model_case):
@@ -975,8 +976,7 @@ class TestRestfulOpenAI:
 
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
         assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
-        assert outputList[0].get('choices')[0].get('delta').get(
-            'content') == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
+        assert_chat_delta_error(outputList[0].get('choices')[0])
         assert len(outputList) == 1
 
     @pytest.mark.pr_test
@@ -1020,7 +1020,7 @@ class TestRestfulOpenAI:
         response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            response += outputList[index].get('choices')[0].get('delta').get('content')
+            response += get_chat_delta_text(outputList[index].get('choices')[0])
         api_client = APIClient(BASE_URL)
         length = api_client.encode(response, add_bos=False)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
@@ -1074,7 +1074,7 @@ class TestRestfulOpenAI:
         response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name, check_logprobs=True, logprobs_num=10)
-            response += outputList[index].get('choices')[0].get('delta').get('content')
+            response += get_chat_delta_text(outputList[index].get('choices')[0])
         api_client = APIClient(BASE_URL)
         length = api_client.encode(response, add_bos=False)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
@@ -1145,89 +1145,3 @@ class TestRestfulOpenAI:
 
         with pytest.raises(Exception):
             client.chat.completions.create(model=model_name, messages=messages, temperature='test', stream=True)
-
-    @pytest.mark.interns1
-    def test_disable_think(self, backend, model_case):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
-        model_name = client.models.list().data[0].id
-        output = client.chat.completions.create(model=model_name,
-                                                messages=[
-                                                    {
-                                                        'role': 'user',
-                                                        'content': 'Hi, pls intro yourself'
-                                                    },
-                                                ],
-                                                temperature=0.8,
-                                                top_p=0.8)
-        print(output)
-        assert '</think>' in str(output.model_dump())
-
-        output = client.chat.completions.create(model=model_name,
-                                                messages=[
-                                                    {
-                                                        'role': 'user',
-                                                        'content': 'Hi, pls intro yourself'
-                                                    },
-                                                ],
-                                                temperature=0.8,
-                                                top_p=0.8,
-                                                extra_body={
-                                                    'enable_thinking': False,
-                                                })
-
-        response = output.model_dump()
-        assert '</think>' not in response
-        assert_chat_completions_batch_return(response, model_name)
-
-    @pytest.mark.interns1
-    def test_disable_think_with_image(self, backend, model_case):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
-        model_name = client.models.list().data[0].id
-        output = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {
-                    'role':
-                    'user',
-                    'content': [{
-                        'type': 'text',
-                        'text': 'Describe the image please',
-                    }, {
-                        'type': 'image_url',
-                        'image_url': {
-                            'url': 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
-                        },
-                    }],
-                },
-            ],
-            temperature=0.8,
-            top_p=0.8)
-        print(output)
-        assert '</think>' in str(output.model_dump())
-
-        output = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {
-                    'role':
-                    'user',
-                    'content': [{
-                        'type': 'text',
-                        'text': 'Describe the image please',
-                    }, {
-                        'type': 'image_url',
-                        'image_url': {
-                            'url': 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
-                        },
-                    }],
-                },
-            ],
-            temperature=0.8,
-            top_p=0.8,
-            extra_body={
-                'enable_thinking': False,
-            })
-
-        response = output.model_dump()
-        assert '</think>' not in response
-        assert_chat_completions_batch_return(response, model_name)

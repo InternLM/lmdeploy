@@ -4,6 +4,7 @@ import torch
 from lmdeploy.pytorch.model_inputs import ModelInputs
 
 from ..base.model_inputs import MakeDummyMeta, ModelInputsStrategy, make_dummy_inputs
+from .model_agent import ARSpecExtraInputs
 
 
 class ARSpecModelInputsStrategy(ModelInputsStrategy):
@@ -44,3 +45,14 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
             inputs.target_position_ids = torch.zeros_like(inputs.input_ids, dtype=torch.long, device=device)
 
         return inputs
+
+
+    def make_dummy_extra_inputs(self,
+                   inputs: ModelInputs,
+                   meta: MakeDummyMeta | None = None) -> ARSpecExtraInputs:
+        """Create dummy model inputs."""
+        extra_inputs = ARSpecExtraInputs()
+        if inputs.is_decoding:
+            batch_size = inputs.seq_length.size(0)
+            extra_inputs.output_draft_token_ids = inputs.input_ids.new_zeros((batch_size, self.num_spec_tokens))
+        return extra_inputs

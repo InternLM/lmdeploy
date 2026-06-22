@@ -260,6 +260,7 @@ def parse_args():
 
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
+    ArgumentHelper.device(pt_group)
     ArgumentHelper.eager_mode(pt_group)
     ArgumentHelper.enable_return_routed_experts(pt_group)
 
@@ -315,6 +316,7 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
+            device_type=args.device,
             thread_safe=False,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,

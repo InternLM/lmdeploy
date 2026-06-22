@@ -1,0 +1,13 @@
+# HF model id: internlm/Intern-S1-Pro-BF16
+
+ascend:
+- model_type: chat
+  engine_config:
+    dp: 64
+    ep: 64
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func

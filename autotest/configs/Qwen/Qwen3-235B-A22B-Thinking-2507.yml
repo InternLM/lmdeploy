@@ -1,0 +1,94 @@
+# HF model id: Qwen/Qwen3-235B-A22B-Thinking-2507
+
+h:
+- model_type: chat
+  engine_config:
+    dp: 8
+    ep: 8
+    extra:
+      cache-max-entry-count: 0.9
+      max-batch-size: 256
+      session-len: 65536
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - prefix_cache
+  quantization:
+    pytorch:
+    - kvint8
+  gen_config:
+    temperature: 0.6
+- model_type: chat
+  engine_config:
+    tp: 8
+    extra:
+      cache-max-entry-count: 0.9
+      max-batch-size: 1024
+      session-len: 65536
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - prefix_cache
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+  gen_config:
+    temperature: 0.6
+- model_type: chat
+  engine_config:
+    tp: 8
+    cp: 2
+    extra:
+      cache-max-entry-count: 0.9
+      max-batch-size: 1024
+      session-len: 65536
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - prefix_cache
+  quantization:
+    turbomind:
+    - kvint8
+  gen_config:
+    temperature: 0.6
+ascend:
+- model_type: chat
+  engine_config:
+    tp: 16
+    extra:
+      session-len: 65536
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - prefix_cache
+  gen_config:
+    temperature: 0.6

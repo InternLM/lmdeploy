@@ -8,6 +8,8 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
 
+from .helpers import first_stream_delta
+
 
 @dataclass
 class _FakeMsg:
@@ -94,9 +96,10 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser(_scripted_events()),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
-        delta, tool_emitted = parser.stream_chunk(delta_text='ignored', delta_token_ids=[1, 2, 3, 4, 5, 6, 7, 8])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk(delta_text='ignored',
+                                                                     delta_token_ids=[1, 2, 3, 4, 5, 6, 7, 8]))
         assert delta is not None
         assert delta.content == 'Result: sunny'
         assert delta.reasoning_content == 'Need tool. '
@@ -164,7 +167,7 @@ class TestGptOssResponseParser:
                 },
             },
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.tools == [{
             'type': 'function',
@@ -188,7 +191,7 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser(_scripted_events()),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
         content, tool_calls, reasoning = parser.parse_complete(text='', token_ids=[1, 2, 3, 4, 5, 6, 7, 8])
         assert content == 'Result: sunny'
@@ -203,9 +206,9 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser({}),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
         assert delta is not None
         assert delta.role == 'assistant'
         assert delta.content == ''
@@ -217,10 +220,10 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser({}),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
         parser.stream_chunk('warmup', [])
-        delta, tool_emitted = parser.stream_chunk('', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
         assert delta is None
         assert tool_emitted is False
 
@@ -230,9 +233,9 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser({}),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
-        delta, tool_emitted = parser.stream_chunk('plain text', [])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('plain text', []))
         assert delta is not None
         assert delta.content == 'plain text'
         assert delta.reasoning_content is None
@@ -248,9 +251,9 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser(script),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [10])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', [10]))
         assert delta is None
         assert tool_emitted is False
 
@@ -264,9 +267,9 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser(script),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
-        delta, tool_emitted = parser.stream_chunk('', [1, 2])
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', [1, 2]))
         assert delta is not None
         assert delta.content is None
         assert delta.reasoning_content == 'think more'
@@ -274,7 +277,7 @@ class TestGptOssResponseParser:
         assert tool_emitted is False
 
     def test_parse_complete_without_token_ids_returns_raw_text(self):
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
         content, tool_calls, reasoning = parser.parse_complete('hello', token_ids=[])
         assert content == 'hello'
@@ -282,7 +285,7 @@ class TestGptOssResponseParser:
         assert reasoning is None
 
     def test_parse_complete_without_token_ids_empty_text(self):
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
         content, tool_calls, reasoning = parser.parse_complete('', token_ids=None)
         assert content is None
@@ -304,7 +307,7 @@ class TestGptOssResponseParser:
             'StreamableParser',
             lambda *args, **kwargs: _FakeStreamableParser(script),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object(), tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
         content, tool_calls, reasoning = parser.parse_complete(text='', token_ids=[1])
         assert content is None
@@ -358,7 +361,7 @@ class TestGptOssResponseFormatHarmonyConversion:
                 ),
             ),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
         assert parser.request.response_format is None
 
     def test_schema_appended_to_existing_system_message(self):
@@ -380,7 +383,7 @@ class TestGptOssResponseFormatHarmonyConversion:
                 json_schema=JsonSchema(name='test', schema=schema_dict),
             ),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         msgs = parser.request.messages
         assert msgs[0]['role'] == 'system'
@@ -409,7 +412,7 @@ class TestGptOssResponseFormatHarmonyConversion:
                 json_schema=JsonSchema(name='test', schema=schema_dict),
             ),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         msgs = parser.request.messages
         assert msgs[0]['role'] == 'system'
@@ -429,7 +432,7 @@ class TestGptOssResponseFormatHarmonyConversion:
             messages=[{'role': 'user', 'content': 'hi'}],
             response_format=ResponseFormat(type='text'),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
         assert parser.request.response_format is None
 
     def test_no_response_format_leaves_request_unchanged(self):
@@ -438,7 +441,7 @@ class TestGptOssResponseFormatHarmonyConversion:
             model='openai/gpt-oss-20b',
             messages=[{'role': 'user', 'content': 'hi'}],
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
         assert parser.request.response_format is None
         assert len(parser.request.messages) == 1
 
@@ -457,7 +460,7 @@ class TestGptOssResponseFormatHarmonyConversion:
                 json_schema=JsonSchema(name='test', schema=schema_dict),
             ),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.response_format is None
         assert isinstance(parser.request.messages, str)
@@ -484,7 +487,7 @@ class TestGptOssResponseFormatHarmonyConversion:
             response_format = fmt
 
         sentinel = _Sentinel()
-        parser = gpt_oss_mod.GptOssResponseParser(request=sentinel, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=sentinel)
 
         assert parser.request.response_format is None
         msgs = parser.request.messages
@@ -515,7 +518,7 @@ class TestGptOssResponseFormatHarmonyConversion:
                 json_schema=JsonSchema(name='test', schema=schema_dict),
             ),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.response_format is None
         sys_msg = parser.request.messages[0]
@@ -550,7 +553,7 @@ class TestGptOssResponseFormatHarmonyConversion:
                 json_schema=JsonSchema(name='test', schema=schema_dict),
             ),
         )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.response_format is None
         msgs = parser.request.messages

@@ -2,7 +2,7 @@
 try:
     from deep_ep import Buffer
 
-    from lmdeploy.pytorch.envs import deep_ep_buffer_num_sms
+    from lmdeploy.pytorch.envs import deep_ep_buffer_num_sms, deep_ep_max_tokens_per_rank
 
     Buffer.set_num_sms(deep_ep_buffer_num_sms)
     use_deepep = True
@@ -366,7 +366,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         self.hidden_size = hidden_size
         self.params_bytes = params_dtype.itemsize
         self.handle = None
-        self.num_max_dispatch_tokens_per_rank = 128
+        self.num_max_dispatch_tokens_per_rank = deep_ep_max_tokens_per_rank
         self.buffer_low_latency = get_buffer_common(self.group,
                                                     self.num_max_dispatch_tokens_per_rank,
                                                     self.hidden_size,

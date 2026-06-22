@@ -9,7 +9,7 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEn
 
 MODEL_IDS = [
     'Qwen/Qwen3-0.6B',
-    'OpenGVLab/InternVL3_5-1B',
+    'Qwen/Qwen3-VL-2B-Instruct'
 ]
 
 BACKEND_FACTORIES = [

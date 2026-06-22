@@ -1,0 +1,44 @@
+# HF model id: Qwen/Qwen3-VL-8B-Instruct
+
+a100:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - mllm_evaluate
+  quantization:
+    pytorch:
+    - kvint8
+h:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    pytorch:
+    - kvint8
+ascend:
+- model_type: vl
+  engine_config:
+    tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - mllm_evaluate

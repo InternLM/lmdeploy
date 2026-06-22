@@ -14,6 +14,24 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 logger = get_logger('lmdeploy')
 
 
+def normalize_cudagraph_capture_batch_sizes(capture_sizes: list[int] | None, max_batches: int) -> list[int] | None:
+    """Normalize configured cudagraph capture batch sizes."""
+    if capture_sizes is None:
+        return None
+
+    assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
+    assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
+        'cudagraph_capture_batch_sizes should be positive integers')
+
+    capture_sizes = sorted({size for size in capture_sizes if size <= max_batches})
+    assert len(capture_sizes) > 0, (
+        'cudagraph_capture_batch_sizes should contain at least one value '
+        f'<= max_batch_size ({max_batches})')
+    if capture_sizes[-1] != max_batches:
+        capture_sizes.append(max_batches)
+    return capture_sizes
+
+
 def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'auto'):
     """Update the torch dtype from the model config.
 
@@ -98,10 +116,13 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    prefix_cache_state_budget: int = 0
+    prefix_cache_decode_state_interval: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -113,11 +134,18 @@ class CacheConfig:
 
     def __post_init__(self):
         """Post init."""
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
+        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
         if self.kernel_block_size == -1:
             self.kernel_block_size = self.block_size
+        if self.prefix_cache_decode_state_interval > 0:
+            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
+                'prefix_cache_decode_state_interval must be a multiple of block_size')
+        self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+            self.cudagraph_capture_batch_sizes, self.max_batches)
 
 
 class TPMode(enum.Enum):
@@ -324,6 +352,7 @@ class ModelConfig:
     vocab_size: int = 40000
     hf_config: Any = None
     llm_config: Any = None
+    dist_config: DistConfig = None
     cogvlm_style: bool = False
     custom_module_map: dict[str, setattr] = None
 
@@ -363,6 +392,19 @@ class ModelConfig:
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
+
+    def get_num_qkv_head_by_tp(self):
+        """Get q and kv heads per TP rank."""
+        dist_config = self.dist_config or DistConfig()
+        tp = dist_config.attn_tp
+        assert self.num_attention_heads % tp == 0
+        if self.num_key_value_heads >= tp:
+            assert self.num_key_value_heads % tp == 0
+        else:
+            assert tp % self.num_key_value_heads == 0
+        num_q_heads = self.num_attention_heads // tp
+        num_kv_heads = max(self.num_key_value_heads // tp, 1)
+        return num_q_heads, num_kv_heads
 
     @classmethod
     def from_pretrained(
@@ -415,7 +457,7 @@ class ModelConfig:
         fp32_lm_head = False
         if hf_overrides is not None:
             logger.warning(f'Overriding HF config with {hf_overrides}')
-            fp32_lm_head = hf_overrides.pop('fp32_lm_head', False)
+            fp32_lm_head = hf_overrides.get('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
 
         # for fp32 head
@@ -471,6 +513,7 @@ class ModelConfig:
             assert model_config.num_key_value_heads % tp == 0
         else:
             assert tp % model_config.num_key_value_heads == 0
+        model_config.dist_config = dist_config
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
@@ -557,6 +600,7 @@ class SpecDecodeConfig:
     cache_config: CacheConfig = None
     num_speculative_tokens: int = 1
     model_config: ModelConfig = None
+    dist_config: DistConfig = field(default_factory=DistConfig)
 
     @classmethod
     def from_config(
@@ -570,11 +614,14 @@ class SpecDecodeConfig:
         trust_remote_code: bool = False,
         model_format: str = None,
         hf_overrides: dict[str, Any] = None,
+        dist_config: DistConfig = None,
     ):
         model = model or target_model
+        dist_config = dist_config or DistConfig()
         model_config = ModelConfig.from_pretrained(model,
                                                    trust_remote_code=trust_remote_code,
                                                    dtype=dtype,
+                                                   dist_config=dist_config,
                                                    is_draft_model=True,
                                                    spec_method=method,
                                                    block_size=target_cache_cfg.block_size,
@@ -592,6 +639,7 @@ class SpecDecodeConfig:
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
+                                       cudagraph_capture_batch_sizes=target_cache_cfg.cudagraph_capture_batch_sizes,
                                        device_type=target_cache_cfg.device_type,
                                        quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)
@@ -600,6 +648,7 @@ class SpecDecodeConfig:
             method=method,
             cache_config=cache_config,
             model_config=model_config,
+            dist_config=dist_config,
             num_speculative_tokens=num_speculative_tokens,
         )
         return obj

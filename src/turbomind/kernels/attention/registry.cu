@@ -62,7 +62,7 @@ const Kernel* Registry::Find(const AttnDesc& desc) const
     for (const auto* k : ptrs_) {
         const auto& d = k->desc();
         if (d.mode != desc.mode || d.head_dim != desc.head_dim  //
-            || d.data_type != desc.data_type || d.kv_quant != desc.kv_quant) {
+            || d.data_type != desc.data_type || d.kv_quant != desc.kv_quant || d.causal != desc.causal) {
             continue;
         }
         if (desc.mode == AttnDesc::kDecoding) {

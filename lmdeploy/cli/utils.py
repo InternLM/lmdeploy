@@ -269,12 +269,23 @@ class ArgumentHelper:
 
         from lmdeploy.messages import QuantPolicy
 
+        _aliases = {p.name.lower(): p.value for p in QuantPolicy}
+        _aliases['fp8_e4m3'] = QuantPolicy.FP8.value
+
+        def _parse(x):
+            key = x.lower()
+            if key in _aliases:
+                return _aliases[key]
+            v = int(x)
+            if v not in list(QuantPolicy):
+                raise ValueError(f'invalid quant_policy: {x!r}')
+            return v
+
         return parser.add_argument('--quant-policy',
-                                   type=int,
-                                   default=0,
-                                   choices=list(QuantPolicy),
-                                   help='KV cache quantization policy. '
-                                   '0: no quantization; 4: 4-bit; 8: 8-bit; 42: TurboQuant (K4V2)')
+                                   type=_parse,
+                                   default=default,
+                                   help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
+                                   'turbo_quant (or 0/4/8/16/17/42). fp8 defaults to fp8_e4m3.')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -575,6 +586,30 @@ class ArgumentHelper:
                                    help='Enable cache and match prefix')
 
     @staticmethod
+    def prefix_cache_state_budget(parser):
+        """Add argument prefix_cache_state_budget to parser."""
+
+        return parser.add_argument('--prefix-cache-state-budget',
+                                   type=int,
+                                   default=0,
+                                   help='Extra SSM state-cache slots budgeted for prefix-cache checkpoints. '
+                                   '0 adds no extra slots, but checkpoints may borrow idle runtime state slots. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
+    def prefix_cache_decode_state_interval(parser):
+        """Add argument prefix_cache_decode_state_interval to parser."""
+
+        return parser.add_argument('--prefix-cache-decode-state-interval',
+                                   type=int,
+                                   default=0,
+                                   help='Token interval for SSM decode-state prefix-cache checkpoints. '
+                                   '0 disables decode checkpoint saves while keeping prefill/chunk checkpoints. '
+                                   'Use a positive multiple of block size only for long SSM decoding where later '
+                                   'requests can reuse decode prefixes; smaller values improve hit granularity '
+                                   'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,
@@ -604,6 +639,16 @@ class ArgumentHelper:
                                    type=int,
                                    default=8192,
                                    help='the max number of tokens per iteration during prefill')
+
+    @staticmethod
+    def cudagraph_capture_batch_sizes(parser):
+        return parser.add_argument('--cudagraph-capture-batch-sizes',
+                                   type=int,
+                                   nargs='+',
+                                   default=None,
+                                   help='Batch sizes to capture CUDA graphs for in the PyTorch engine. '
+                                   'If not specified, the engine infers them from max_batch_size. '
+                                   'max_batch_size is always captured')
 
     @staticmethod
     def vision_max_batch_size(parser):

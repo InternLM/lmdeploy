@@ -18,6 +18,7 @@ void dispatchAttention(const AttentionParams<T>& params)
     desc.mode      = AttnDesc::kPrefill;
     desc.head_dim  = params.size_per_head;
     desc.data_type = data_type_v<T>;
+    desc.causal    = params.causal;
 
     auto* kernel = reg.Find(desc);
 

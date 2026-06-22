@@ -24,6 +24,7 @@ VISION_MODELS = Registry('vision_model')
 class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: str | list[str] = None
+    _turbomind_native_vision = False
 
     # mapping from processor output attribute names to modality types
     ATTR_NAME_TO_MODALITY = {
@@ -33,6 +34,10 @@ class VisionModel(ABC):
         # video-related attributes
         'pixel_values_videos': Modality.VIDEO,
         'video_grid_thw': Modality.VIDEO,
+        'video_second_per_grid': Modality.VIDEO,
+        # audio-related attributes
+        'input_features': Modality.AUDIO,
+        'feature_attention_mask': Modality.AUDIO,
         # time series-related attributes
         'ts_values': Modality.TIME_SERIES,
         'ts_sr': Modality.TIME_SERIES,
@@ -43,6 +48,7 @@ class VisionModel(ABC):
     FEATURE_NAMES = [
         'pixel_values',
         'pixel_values_videos',
+        'input_features',
         'ts_values',
     ]
 
@@ -127,6 +133,7 @@ class VisionModel(ABC):
         mm_items = self.collect_multimodal_items(messages)
 
         raw_images, raw_videos, video_metadatas = [], [], []
+        raw_audios = []
         raw_time_series, sampling_rates = [], []
         for modality, data, params in mm_items:
             if modality == Modality.IMAGE:
@@ -134,6 +141,8 @@ class VisionModel(ABC):
             elif modality == Modality.VIDEO:
                 raw_videos.append(data)
                 video_metadatas.append(params.get('video_metadata', None))
+            elif modality == Modality.AUDIO:
+                raw_audios.append(data[0] if isinstance(data, tuple) else data)
             elif modality == Modality.TIME_SERIES:
                 raw_time_series.append(data)
                 sampling_rates.append(params.get('sampling_rate', None))
@@ -144,6 +153,7 @@ class VisionModel(ABC):
         kwargs = {}
         images_kwargs = {}
         videos_kwargs = {}
+        audio_kwargs = {}
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
@@ -163,15 +173,24 @@ class VisionModel(ABC):
                                            modality='video')
             if video_size is not None:
                 videos_kwargs['size'] = video_size
+        if raw_audios:
+            kwargs['audio'] = raw_audios
+            audio_kwargs = dict(mm_processor_kwargs.get('audio') or {})
+            feature_extractor = getattr(self.processor, 'feature_extractor', None)
+            sampling_rate = getattr(feature_extractor, 'sampling_rate', None)
+            if sampling_rate is not None:
+                audio_kwargs.setdefault('sampling_rate', sampling_rate)
         if images_kwargs:
             kwargs['images_kwargs'] = images_kwargs
         if videos_kwargs:
             kwargs['videos_kwargs'] = videos_kwargs
+        if audio_kwargs:
+            kwargs['audio_kwargs'] = audio_kwargs
         if raw_time_series:
             assert hasattr(self, 'time_series_processor'), \
                 'time series processor is not defined for time series input'
-            assert not raw_images and not raw_videos, \
-                'time series is not compatible with image/video input'
+            assert not raw_images and not raw_videos and not raw_audios, \
+                'time series is not compatible with image/video/audio input'
             self.tokenizer = self.processor.tokenizer
             time_series_processor = self.time_series_processor
             kwargs['time_series'] = raw_time_series
@@ -195,7 +214,7 @@ class VisionModel(ABC):
                     collected_mm_items[current_modality] = {}
 
                 if attr_name in self.FEATURE_NAMES:
-                    value = self._postprocess_mm_output(value, self.mm_feature_dtype)
+                    value = self._postprocess_mm_output(value, getattr(self, 'mm_feature_dtype', None))
                     processor_outputs[attr_name] = value
                     attr_name = 'feature'
 

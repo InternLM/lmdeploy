@@ -22,6 +22,8 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
+    FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -134,6 +136,9 @@ class GenerationConfig:
     output_last_hidden_state: Literal['all', 'generation'] = None
     include_stop_str_in_output: bool = False
 
+    # return the perplexity (mean cross-entropy loss) of the input prompt,
+    return_ppl: bool = False
+
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
@@ -242,8 +247,8 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        quant_policy: default to 0. For TurboMind, when k/v is quantized
+            into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
             default to 0. TurboMind follows the implementation of transformer
             LlamaAttention
@@ -264,6 +269,7 @@ class TurbomindEngineConfig:
         devices: the used devices
         empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
+        disable_vision_encoder: Whether to disable loading vision encoder.
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
@@ -302,6 +308,7 @@ class TurbomindEngineConfig:
     async_: int = 1
     devices: list[int] | None = None
     empty_init: bool = False
+    disable_vision_encoder: bool = False
     communicator: str = 'nccl'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
@@ -311,8 +318,14 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
-        assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
-               'invalid quant_policy'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
+        assert self.quant_policy not in (
+            QuantPolicy.FP8,
+            QuantPolicy.FP8_E5M2,
+        ), 'invalid quant_policy for TurboMind, FP8 quantization is not supported'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
@@ -352,8 +365,22 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
+            If not specified, the engine will infer them from max_batch_size.
+            max_batch_size is always captured.
         thread_safe: thread safe engine instance.
         enable_prefix_caching: Enable token match and sharing caches.
+        prefix_cache_state_budget: Extra SSM state-cache slots budgeted for
+            prefix-cache checkpoints. 0 adds no extra slots, but SSM
+            checkpoints may still borrow idle runtime state slots.
+        prefix_cache_decode_state_interval: Token interval for SSM decode
+            state checkpoints. 0 disables decode-state checkpoint saves; prefill
+            and chunk checkpoints may still be saved. Keep 0 unless the workload
+            has long SSM decoding and repeated continuations that can reuse
+            decode checkpoints. Smaller positive values create more hit points
+            but use more checkpoint memory and copy work; larger values reduce
+            overhead but make decode-prefix hits less likely. Positive values
+            must be multiples of the cache block size.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -364,8 +391,9 @@ class PytorchEngineConfig:
         revision: The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        quant_policy: default to 0. When k/v is quantized into int4,
+            int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
+            respectively
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
@@ -411,8 +439,11 @@ class PytorchEngineConfig:
     num_gpu_blocks: int = 0
     adapters: dict[str, str] = None
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     thread_safe: bool = False
     enable_prefix_caching: bool = False
+    prefix_cache_state_budget: int = 0
+    prefix_cache_decode_state_interval: int = 0
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: dict[str, str] = None
@@ -457,8 +488,12 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
-        assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
-               'invalid quant_policy'
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
+        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.kernel_block_size >= 16 and \
                (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
@@ -468,6 +503,9 @@ class PytorchEngineConfig:
                (f'block_size must be >= kernel_block_size and an integer multiple '
                 f'of kernel_block_size, but got block_size {self.block_size} '
                 f'and kernel_block_size {self.kernel_block_size}')
+        if self.prefix_cache_decode_state_interval > 0:
+            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
+                'prefix_cache_decode_state_interval must be a multiple of block_size')
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
@@ -523,6 +561,7 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
+    cached_tokens: int = 0
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -624,6 +663,7 @@ class ScheduleMetrics:
     cached_blocks: int = 0
     free_blocks: int = 0
     prefix_cache_hit_rate: float = 0
+    scheduler_tick: int = 0
 
 
 @dataclass
@@ -637,6 +677,7 @@ class RequestMetrics:
     token_timestamp: float = 0.0
     engine_events: list[EngineEvent] = field(default_factory=list)
     spec_info: dict[str, Any] | None = None
+    cached_tokens: int = 0
 
 
 @dataclass
@@ -651,6 +692,8 @@ class EngineOutput:
         cache_block_ids: send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
         req_metrics: request metrics information
+        ce_loss: the summed, unnormalized cross-entropy (NLL) of the input
+            prompt, available when ``GenerationConfig.return_ppl`` is set.
     """
     status: ResponseType
     token_ids: list[int]
@@ -660,6 +703,7 @@ class EngineOutput:
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
+    ce_loss: float = None
 
 
 @dataclass

@@ -1,0 +1,34 @@
+# HF model id: THUDM/glm-4v-9b
+
+a100:
+- model_type:
+  - chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    pytorch:
+    - awq
+    - kvint4
+    - kvint8
+h:
+- model_type:
+  - chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    pytorch:
+    - kvint4
+    - kvint8

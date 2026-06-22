@@ -30,6 +30,7 @@ from .qwen import QwenVisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
 from .qwen3 import Qwen3VLModel  # noqa F401
 from .qwen3_5 import Qwen3_5Model  # noqa F401
+from .qwen3_omni import Qwen3OmniModel  # noqa F401
 from .xcomposer2 import Xcomposer2VisionModel  # noqa F401
 from .yi import YiVisionModel  # noqa F401
 
@@ -74,9 +75,11 @@ def load_vl_model(model_path: str,
                 logger.info(f'matching vision model: {name}')
                 model = module(**kwargs)
                 model.build_preprocessor(trust_remote_code=trust_remote_code)
-                # build the vision part of a VLM model when backend is
-                # turbomind, or load the whole VLM model when `with_llm==True`
-                if backend == 'turbomind' or with_llm:
+                # build the Python vision part for legacy TurboMind models,
+                # or load the whole VLM model when `with_llm==True`. Native
+                # TurboMind vision models run the visual encoder in C++.
+                native_tm_vision = backend == 'turbomind' and model._turbomind_native_vision
+                if (backend == 'turbomind' and not native_tm_vision) or with_llm:
                     model.build_model(trust_remote_code=trust_remote_code)
                 return model
         except Exception as e:

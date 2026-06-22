@@ -31,7 +31,7 @@ jobs:
       matrix:
         cudaver: [12.6.2, 12.8.1]
     name: cuda-${{ matrix.cudaver }}
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Set git for windows
         run: |

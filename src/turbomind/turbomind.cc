@@ -21,6 +21,8 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/vision_model.h"
+#include "src/turbomind/models/vision_model_weight.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 
@@ -216,7 +218,7 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& c = ctx->comm;
 
-    c.h_global = group_id_->CreateCommunicator(comm_size_, global_rank, p.node_rank);
+    c.h_global = group_id_->CreateCommunicator(comm_size_ * p.outer_dp_size, global_rank, p.node_rank);
 
     c.h_comm = c.h_global->Split(outer_rank, 0);
 
@@ -276,9 +278,16 @@ void TurboMind::Impl::CreateEngine(int index)
     // create model
     LanguageModel model{param, ctx, *weights_[index]->text_model_ptr(), phases_};
 
+    // create optional vision model
+    std::unique_ptr<VisionModel> vision_model;
+    if (auto* vw = weights_[index]->vision_model_ptr()) {
+        vision_model = CreateVisionModel(*vw, param, ctx, phases_);
+    }
+
     // create engine
     engines_[index] = Engine{param,
                              std::move(model),
+                             std::move(vision_model),
                              *weights_[index]->text_model_ptr(),
                              ctx,
                              *gateway_,

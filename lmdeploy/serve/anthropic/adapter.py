@@ -351,8 +351,11 @@ def to_generation_config(request: MessagesRequest) -> GenerationConfig:
         top_p=1.0 if request.top_p is None else request.top_p,
         temperature=1.0 if request.temperature is None else request.temperature,
         stop_words=request.stop_sequences,
+        include_stop_str_in_output=request.include_stop_str_in_output or False,
         skip_special_tokens=True,
         spaces_between_special_tokens=True,
+        return_routed_experts=request.return_routed_experts or False,
+        logprobs=1 if request.return_logprob else None,
     )
 
 
@@ -372,6 +375,7 @@ def map_finish_reason(reason: str | None) -> str:
         'stop': 'end_turn',
         'length': 'max_tokens',
         'tool_calls': 'tool_use',
+        'parse_error': 'parse_error',
         'abort': 'stop_sequence',
         'error': 'stop_sequence',
     }

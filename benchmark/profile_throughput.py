@@ -312,6 +312,7 @@ def parse_args():
 
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
+    ArgumentHelper.device(pt_group)
     ArgumentHelper.eager_mode(pt_group)
     ArgumentHelper.dllm_block_length(pt_group)
     ArgumentHelper.dllm_unmasking_strategy(pt_group)
@@ -375,6 +376,7 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
+            device_type=args.device,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
             quant_policy=args.quant_policy,

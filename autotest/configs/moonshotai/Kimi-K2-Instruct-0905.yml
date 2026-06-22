@@ -1,0 +1,37 @@
+# HF model id: moonshotai/Kimi-K2-Instruct-0905
+
+h:
+- model_type: chat
+  engine_config:
+    dp: 16
+    ep: 16
+    extra:
+      session-len: 65536
+      max-batch-size: 256
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 0.6
+  deps:
+    transformers: 4.57.6
+- model_type: chat
+  engine_config:
+    tp: 16
+    extra:
+      session-len: 65536
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 0.6
+  deps:
+    transformers: 4.57.6

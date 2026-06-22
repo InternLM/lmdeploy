@@ -6,7 +6,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
@@ -565,21 +564,17 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        beta = b.sigmoid()
-        # If the model is loaded in fp16, without the .float() here, A might be -inf
-        g = self.get_A_log_exp() * F.softplus(a.float() + self.dt_bias)
-        if self.kv_ratio > 1:
-            query = query.repeat_interleave(self.kv_ratio, dim=-2)
-            key = key.repeat_interleave(self.kv_ratio, dim=-2)
-
         core_attn_out, recurrent_state = self.gated_delta(
             query,
             key,
             value,
-            g=g,
-            beta=beta,
+            b=b,
+            a=a,
+            dt_bias=self.dt_bias,
+            a_log_exp=self.get_A_log_exp(),
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
+            kv_ratio=self.kv_ratio,
         )
 
         z_shape_og = z.shape

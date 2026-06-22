@@ -198,10 +198,12 @@ class EngineLoop:
     def _send_resp(self, out: InferOutput):
         """Send response."""
         logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
-        if out.resp.is_done:
+        if out.finish:
+            resp_type = ResponseType.FINISH
+        elif out.resp.is_done:
             resp_type = out.resp.type
         else:
-            resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
+            resp_type = ResponseType.SUCCESS
         response_reqs(self.req_manager,
                       out.resp,
                       resp_type,
@@ -210,7 +212,8 @@ class EngineLoop:
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
-                                logprobs=logprobs))
+                                logprobs=logprobs,
+                                ce_loss=out.ce_loss))
 
     @staticmethod
     def _update_logprobs(step_outputs: list[InferOutput]):
@@ -297,12 +300,15 @@ class EngineLoop:
 
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
+        ce_loss = batched_outputs.ce_loss
 
         if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
+            seq.append_ce_loss(ce_loss, finish=False)
+            self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -316,6 +322,7 @@ class EngineLoop:
                                          batched_outputs=batched_outputs,
                                          model_inputs=model_inputs,
                                          delta=delta)
+        self.scheduler.block_trie.cache_routed_experts(running)
 
         # generate output
         outputs: dict[int, InferOutput] = dict()
@@ -349,7 +356,10 @@ class EngineLoop:
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
-            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
+            req_metrics = RequestMetrics(new_token_timestamp,
+                                         msg.engine_events,
+                                         spec_info=spec_info,
+                                         cached_tokens=msg.cached_tokens)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -359,6 +369,12 @@ class EngineLoop:
                               logprobs=cur_logprobs,
                               routed_experts=msg.routed_experts)
             outputs[session_id] = out
+
+            if msg.return_ce_loss:
+                if ce_loss is not None:
+                    msg.append_ce_loss(ce_loss[idx], finish=True)
+                if finish:
+                    outputs[session_id].ce_loss = msg.ce_loss
 
             if msg.return_logits:
                 logit = __get_logit(msg, logits, seq_length, idx)
@@ -376,6 +392,42 @@ class EngineLoop:
         scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
 
+    @staticmethod
+    def _has_state_checkpoint_save(model_inputs: 'ModelInputs | None', delta: 'ModelInputsDelta | None'):
+        """Check whether the current forward reserved SSM checkpoints."""
+        return ((model_inputs is not None and model_inputs.state_prefix_cache_save_offsets is not None)
+                or (delta is not None and delta.state_prefix_cache_save_offsets is not None))
+
+    async def _prefetch_next_inputs(self):
+        """Collect migration completions before prefetching the next batch."""
+        self.scheduler.collect_migration_done()
+        return await self.inputs_maker.prefetch_next_inputs()
+
+    def _publish_forward_prefix_cache(self, running: 'SeqList', has_state_checkpoint_save: bool):
+        """Publish per-forward prefix-cache ownership before prefetching."""
+        if not self.scheduler.block_trie.enable:
+            return
+        if has_state_checkpoint_save:
+            self.scheduler.block_trie.commit_state_checkpoints(running, acquire_save_ref=True)
+        self.scheduler.block_trie.release_state_checkpoint_restores(running)
+
+    def _release_forward_prefix_cache_saves(self, running: 'SeqList'):
+        """Release producer refs after the forward output/event boundary."""
+        if not self.scheduler.block_trie.enable:
+            return
+        self.scheduler.block_trie.release_state_checkpoint_saves(running)
+
+    def _finish_forward_output(self,
+                               out: 'BatchedOutputs | None',
+                               running: 'SeqList',
+                               model_inputs: 'ModelInputs | None',
+                               delta: 'ModelInputsDelta | None'):
+        """Publish outputs."""
+        if out is None:
+            return
+        step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
+        self.resp_queue.put_nowait(step_outputs)
+
     async def _main_loop_get_outputs(
         self,
         running: 'SeqList',
@@ -385,18 +437,19 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         self.inputs_maker.update_running_seqs(running, model_inputs)
+        has_state_checkpoint_save = self._has_state_checkpoint_save(model_inputs, delta)
 
-        # try prefetch inputs
-        self.scheduler.collect_migration_done()
-        forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
-
-        # send output
+        # ModelAgent executes queued forwards in send order.  Once the current
+        # input is queued, matched checkpoints can be published before waiting
+        # for GPU output; save checkpoints keep a producer ref until the output
+        # event boundary so prefetch cannot evict/reuse their destination slots.
+        self._publish_forward_prefix_cache(running, has_state_checkpoint_save)
+        forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        if out is not None:
-            step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
-            self.resp_queue.put_nowait(step_outputs)
-            # out might come from shared memory, need to explicitly delete to release memory in time
-            del out
+        self._release_forward_prefix_cache_saves(running)
+        self._finish_forward_output(out, running, model_inputs, delta)
+        # out might come from shared memory, need to explicitly delete to release memory in time
+        del out
 
         return forward_inputs, next_running
 

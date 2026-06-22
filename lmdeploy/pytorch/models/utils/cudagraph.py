@@ -98,7 +98,8 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """Return True is model support cudagraph."""
-        return attn_metadata.is_decoding
+        context = get_step_ctx_manager().current_context()
+        return context.global_is_decoding()
 
     def make_output_buffers(self, output):
         """Make output buffers."""
@@ -116,8 +117,7 @@ class CudaGraphMixin:
         step_ctx = ctx_mgr.current_context()
         model_config = step_ctx.model_config
         sliding_window = model_config.sliding_window
-        num_attention_heads = model_config.num_attention_heads
-        num_key_value_heads = model_config.num_key_value_heads
+        num_attention_heads, num_key_value_heads = model_config.get_num_qkv_head_by_tp()
         headdim = model_config.head_dim
         torch_dtype = model_config.dtype
         if sliding_window is None:
@@ -142,8 +142,9 @@ class CudaGraphMixin:
         )
         return scheduler_metadata
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: list[list[torch.Tensor]],
-                               **kwargs) -> BuffType:
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
+                               past_key_values: list[list[torch.Tensor]], attn_metadata: Any,
+                               inputs_embeds: Tensor = None, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
@@ -176,7 +177,9 @@ class CudaGraphMixin:
             import flash_mla
 
             # create buffers for flash mla
-            num_attention_heads = self.config.num_attention_heads
+            step_ctx = get_step_ctx_manager().current_context()
+            model_config = step_ctx.model_config
+            num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
             index_topk = graph_meta.mla_index_topk
             num_heads_q = None if index_topk is None else num_attention_heads
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
@@ -257,7 +260,9 @@ class CudaGraphMixin:
 
         if graph_meta.use_flash_mla is True:
             import flash_mla
-            num_attention_heads = self.config.num_attention_heads
+            step_ctx = get_step_ctx_manager().current_context()
+            model_config = step_ctx.model_config
+            num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
             index_topk = graph_meta.mla_index_topk
             num_heads_q = None if index_topk is None else num_attention_heads
             tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
