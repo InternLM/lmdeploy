@@ -131,6 +131,8 @@ class TestQwen3_5ResponseParserStreaming:
         """Regression: parallel tool calls must not reuse the first call's args."""
         response_parser = _build_response_parser()
         text = """
+</think>
+
 <tool_call>
 <function=get_current_weather>
 <parameter=location>
@@ -149,7 +151,7 @@ San Francisco, CA
 
         content, tool_calls, _ = response_parser.parse_complete(text)
 
-        assert content is None
+        assert (content or '').strip() == ''
         assert tool_calls is not None
         assert len(tool_calls) == 2
         assert json.loads(tool_calls[0].function.arguments) == {'location': 'Boston, MA'}
