@@ -525,6 +525,65 @@ def test_active_long_context_chunk_round_robin_does_not_starve_with_waiting_shor
     assert maker.scheduler.schedule_calls == 3
 
 
+def test_active_long_context_chunk_does_not_start_another_waiting_long_prefill():
+    active_long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})
+    waiting_long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})
+    waiting_long_seq.status = MessageStatus.WAITING
+    short_seqs = [
+        _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={}) for _ in range(3)
+    ]
+    short_batches = [[seq] for seq in short_seqs]
+    chunk_inputs = _fake_model_inputs(is_chunk=True)
+    calls = []
+
+    class _ActiveLongScheduler(_FakeScheduler):
+
+        def __init__(self):
+            super().__init__([], waiting=[waiting_long_seq])
+
+        def schedule(self,
+                     is_prefill: bool,
+                     prealloc_size: int,
+                     allow_long_prefill: bool = True,
+                     prefer_long_prefill: bool = False):
+            calls.append((allow_long_prefill, prefer_long_prefill))
+            assert not allow_long_prefill
+            assert not prefer_long_prefill
+            return SimpleNamespace(running=short_batches.pop(0), swap_in_map={}, swap_out_map={})
+
+        def has_waiting(self):
+            return True
+
+        def has_waiting_long_prefill(self):
+            return True
+
+    maker = _make_policy_maker(active_long_seq)
+    maker.scheduler = _ActiveLongScheduler()
+    maker._last_forward_kind = 'long_context_chunk'
+    maker.create_model_inputs_delta = lambda: (_ for _ in ()).throw(AssertionError('decode should not run'))
+    maker.create_model_inputs = lambda seqs, is_prefill: _fake_model_inputs()
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+    maker.create_model_inputs_long_context = lambda seq, chunk_size, multimodals: chunk_inputs
+
+    first = maker._make_forward_inputs(prefill=True)
+    maker._last_forward_kind = 'prefill'
+    second = maker._make_forward_inputs(prefill=True)
+    maker._last_forward_kind = 'prefill'
+    third = maker._make_forward_inputs(prefill=True)
+    maker._last_forward_kind = 'prefill'
+    fourth = maker._make_forward_inputs(prefill=True)
+
+    assert first['running'] == [short_seqs[0]]
+    assert second['running'] == [short_seqs[1]]
+    assert third['running'] == [short_seqs[2]]
+    assert fourth['running'] == [active_long_seq]
+    assert fourth['inputs'] is chunk_inputs
+    assert fourth['inputs'].is_chunk
+    assert not fourth['inputs'].is_last_chunk
+    assert waiting_long_seq.status == MessageStatus.WAITING
+    assert calls == [(False, False), (False, False), (False, False)]
+
+
 def test_waiting_long_context_first_chunk_gets_round_robin_turn_after_short_prefills():
     long_seq = _DummySeq(history_ids=0, token_ids=2048, all_multimodals={}, input_multimodals={})
     short_seqs = [

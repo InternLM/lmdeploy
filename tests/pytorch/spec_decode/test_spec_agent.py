@@ -373,14 +373,25 @@ def test_prepare_inputs_from_main_keeps_chunk_carry_across_decode():
     assert torch.equal(agent._prev_chunk_last['hidden_states'], torch.tensor([[[6., 60.]]]))
 
 
-def test_prepare_inputs_from_main_clears_chunk_carry_on_non_chunk_prefill():
+def test_prepare_inputs_from_main_keeps_chunk_carry_across_interleaved_prefill():
     agent = SpecModelAgent.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
+    saved = torch.ones(1, 1, 2)
+    agent._prev_chunk_last = {'hidden_states': saved.clone()}
 
     prefill = _model_inputs([10, 11, 12])
     agent._prepare_inputs_from_main(prefill, _extra([[1, 10], [2, 20], [3, 30]]))
 
-    assert agent._prev_chunk_last == {}
+    torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], saved)
+
+
+def test_prepare_inputs_from_main_first_chunk_clears_stale_chunk_carry():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
+
+    first_chunk = _model_inputs([10, 11, 12], is_chunk=True, is_first_chunk=True)
+    agent._prepare_inputs_from_main(first_chunk, _extra([[1, 10], [2, 20], [3, 30]]))
+
+    torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], torch.tensor([[[3., 30.]]]))
 
 
 def test_prepare_inputs_from_main_keeps_chunk_carry_for_dp_local_decode_global_prefill():
