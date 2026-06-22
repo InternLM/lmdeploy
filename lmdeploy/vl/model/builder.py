@@ -23,10 +23,8 @@ from .llava import LlavaVisionModel  # noqa F401
 from .llava_hf import LlavaHfVisionModel  # noqa F401
 from .llava_next import LlavaNextVisionModel  # noqa F401
 from .minicpmv import MiniCPMVModel  # noqa F401
-from .mllama import MllamaVLModel  # noqa F401
 from .molmo import MolmoVisionModel  # noqa F401
 from .phi3_vision import Phi3VisionModel  # noqa F401
-from .qwen import QwenVisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
 from .qwen3 import Qwen3VLModel  # noqa F401
 from .qwen3_5 import Qwen3_5Model  # noqa F401

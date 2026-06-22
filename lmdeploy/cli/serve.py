@@ -39,11 +39,11 @@ class SubCliServe:
                             ' which is converted by `lmdeploy convert` command or '
                             'download from ii) and iii). - ii) the model_id of a '
                             'lmdeploy-quantized model hosted inside a model repo on '
-                            'huggingface.co, such as "internlm/internlm-chat-20b-4bit",'
+                            'huggingface.co, such as "lmdeploy/llama2-chat-70b-4bit",'
                             ' "lmdeploy/llama2-chat-70b-4bit", etc. - iii) the model_id'
                             ' of a model hosted inside a model repo on huggingface.co,'
-                            ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
-                            ', "baichuan-inc/baichuan2-7b-chat" and so on')
+                            ' such as "internlm/internlm2-chat-7b", "qwen/qwen2.5-7b-instruct"'
+                            ' and so on')
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for serving')
         parser.add_argument('--server-port', type=int, default=23333, help='Server port')
         parser.add_argument('--allow-origins',

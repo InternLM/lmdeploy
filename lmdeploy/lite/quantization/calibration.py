@@ -226,7 +226,7 @@ class CalibrationContext:
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        if type(self.model).__name__ in ('QWenLMHeadModel', 'ChatGLMForConditionalGeneration'):
+        if type(self.model).__name__ == 'ChatGLMForConditionalGeneration':
             model = self.model.transformer
         else:
             model = self.model.model

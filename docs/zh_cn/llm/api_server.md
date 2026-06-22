@@ -200,7 +200,7 @@ curl http://{server_ip}:{server_port}/v1/models
 curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "qwen2.5-7b",
     "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```
