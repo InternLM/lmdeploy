@@ -54,6 +54,8 @@ class CLI:
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
         ArgumentHelper.dllm_block_length(pt_group)
+        ArgumentHelper.prefix_cache_state_budget(pt_group)
+        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)

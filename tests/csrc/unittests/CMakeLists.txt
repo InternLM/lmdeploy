@@ -32,7 +32,6 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(unittest
-    test_logprob_kernels.cu
     test_penalty_kernels.cu
     test_sampling_kernels.cu
     test_sampling_layer.cu
@@ -47,10 +46,6 @@ target_link_libraries(  # Libs for test_attention_kernels
   unittest PUBLIC
     CUDA::cudart CUDA::curand
     gpt_kernels gtest memory_utils tensor unfused_attention_kernels cuda_utils)
-target_link_libraries(  # Libs for test_logprob_kernels
-  unittest PUBLIC
-    CUDA::cudart
-    logprob_kernels memory_utils cuda_utils)
 target_link_libraries(  # Libs for test_penalty_kernels
   unittest PUBLIC
     CUDA::cublas CUDA::cublasLt CUDA::cudart

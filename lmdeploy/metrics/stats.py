@@ -124,6 +124,7 @@ class RequestStats:
         self.prompt_tokens = prompt_tokens
 
         self.generation_tokens: int = 0
+        self.cached_tokens: int = 0
         self.queued_time: float = 0.0
         self.scheduled_time: float = 0.0
         self.first_token_time: float = 0.0

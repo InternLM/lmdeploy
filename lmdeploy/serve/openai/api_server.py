@@ -63,6 +63,7 @@ from lmdeploy.serve.openai.protocol import (
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
     DeltaMessage,
+    DestroyWeightsUpdateGroupRequest,
     EmbeddingsRequest,
     EncodeRequest,
     EncodeResponse,
@@ -70,16 +71,22 @@ from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
+    InitWeightsUpdateGroupRequest,
     LogProbs,
     ModelCard,
     ModelList,
     ModelPermission,
     PoolingRequest,
     PoolingResponse,
+    PPLRequest,
+    PPLResponse,
     TopLogprob,
     UpdateParamsRequest,
+    UpdateWeightsFromDistributedRequest,
     UsageInfo,
 )
+from lmdeploy.serve.openai.responses import create_responses_router
+from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
@@ -559,6 +566,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                          output_token_logprobs=output_token_logprobs,
                                                          output_ids=output_ids,
                                                          routed_experts=routed_experts)
+        choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
@@ -595,11 +603,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_logprob:
                 output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
-                total_tokens = sum([res.input_token_len, res.generate_token_len])
-                final_usage = UsageInfo(
+                final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
-                    total_tokens=total_tokens,
+                    cached_tokens=res.cached_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
             stream_deltas = response_parser.stream_chunk(
@@ -729,17 +736,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         output_ids=final_token_ids if request.return_token_ids else None,
         routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     )
+    choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
     choices.append(choice_data)
 
     if with_cache:
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-    usage = UsageInfo(
+    usage = UsageInfo.build(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
+        cached_tokens=final_res.cached_tokens,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -1197,7 +1204,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
-    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    usage = UsageInfo.build(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
 
     data = []
     for i, score in enumerate(batch_scores):
@@ -1211,11 +1218,89 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     return response.model_dump()
 
 
+@router.post('/get_ppl', dependencies=[Depends(validate_json_request)])
+async def get_ppl(request: PPLRequest, raw_request: Request = None):
+    """Get the perplexity (mean cross-entropy loss) of the input prompt.
+
+    The request should be a JSON object with the following fields:
+
+    - **input** (str | list[int]): the input to score, either raw text or token
+      ids. Text is tokenized with ``tokenizer.encode`` (no chat template is
+      applied).
+    """
+    async_engine = VariableInterface.async_engine
+
+    request_input = request.input
+
+    # pydantic already validated `input` as `str | list[int]`; text ->
+    # tokenizer.encode, otherwise the token ids are used as-is
+    if isinstance(request_input, str):
+        input_ids = async_engine.tokenizer.encode(request_input)
+    else:
+        input_ids = request_input
+    if not input_ids:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must not be empty.')
+
+    try:
+        ppl = await async_engine.async_get_ppl(input_ids)
+    except ValueError as e:
+        return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
+
+    response = PPLResponse(ppl=ppl)
+    return response.model_dump()
+
+
 @router.post('/update_weights', dependencies=[Depends(validate_json_request)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
+
+
+def _check_pytorch_backend_for_disagg_weight_update():
+    """Disaggregated weight-update endpoints are PyTorch-backend only for
+    now."""
+    backend = getattr(VariableInterface.async_engine, 'backend', None)
+    if backend != 'pytorch':
+        return create_error_response(
+            HTTPStatus.NOT_IMPLEMENTED,
+            f'Disaggregated weight-update endpoints require backend="pytorch", got {backend!r}.')
+    return None
+
+
+@router.post('/init_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def init_weights_update_group(request: InitWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Initialize the torch.distributed process group used by an external
+    trainer to broadcast weights into this rollout engine."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.init_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/update_weights_from_distributed', dependencies=[Depends(validate_json_request)])
+async def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest, raw_request: Request = None):
+    """Receive a bucket of weights through a previously initialized weights-
+    update group and load them into the running model."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.update_weights_from_distributed(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/destroy_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def destroy_weights_update_group(request: DestroyWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Tear down a previously initialized weights-update group."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.destroy_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
 
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
@@ -1575,6 +1660,7 @@ def serve(model_path: str,
 
     app.include_router(router)
     app.include_router(create_anthropic_router(VariableInterface))
+    app.include_router(create_responses_router(VariableInterface))
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     mount_metrics(app, backend_config)
 

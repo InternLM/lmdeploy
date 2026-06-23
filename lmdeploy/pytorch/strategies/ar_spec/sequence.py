@@ -57,7 +57,9 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def _update_token_ids_inputs(self, token_ids: np.ndarray):
         """Append tokens."""
         num_tokens = len(token_ids)
-        self.output_start_pos = self.num_valid_ids + num_tokens
+        self.input_start_pos = self.num_valid_ids
+        self.input_end_pos = self.input_start_pos + num_tokens
+        self.output_start_pos = self.input_end_pos
         self._num_valid_ids = self._num_valid_ids + num_tokens
         self._num_token_ids = num_tokens
         self.num_new_tokens = 0
@@ -133,6 +135,9 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         if draft_token_ids is not None:
             draft_token_ids = _to_ndarray(draft_token_ids)
         if mode == UpdateTokenMode.INPUTS:
+            self.cached_tokens = 0
+            self.prefix_cache.suppress_match_stats = False
+            self.prefix_cache.match_start_step = -1
             self._update_token_ids_inputs(token_ids)
         elif mode == UpdateTokenMode.PREFILL:
             self._update_token_ids_prefill(token_ids, draft_token_ids,
