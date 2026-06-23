@@ -641,12 +641,6 @@ class BaseModelAgent:
 
         return inputs
 
-    def clear_long_context_chunk_state(self):
-        """Clear pending carry from an abandoned long-context chunk stream."""
-        self._prev_chunk_output = None
-        self._prev_chunk_last_logit = None
-        self.spec_agent.clear_long_context_chunk_state()
-
     async def _step_postprocess_with_output(self,
                                             last_logits: torch.Tensor,
                                             logits: torch.Tensor,
@@ -758,16 +752,8 @@ class BaseModelAgent:
         return_routed_experts: bool = False,
         return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
-        clear_long_context_chunk: bool = False,
     ):
         """Asyc forward task."""
-
-        if clear_long_context_chunk:
-            self.clear_long_context_chunk_state()
-
-        if inputs is None and delta is None:
-            self._out_que.put_nowait(None)
-            return
 
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config

@@ -127,10 +127,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         # for long context carry-over in chunked decoding
         self._prev_chunk_last = {}
 
-    def clear_long_context_chunk_state(self):
-        """Clear pending long-context carry from an abandoned chunk stream."""
-        self._prev_chunk_last.clear()
-
     @contextmanager
     def draft_context(self):
         """Draft-local dist context."""

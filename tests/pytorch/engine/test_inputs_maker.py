@@ -222,7 +222,6 @@ def _make_policy_maker(long_seq, decode_seq=None):
     maker._last_forward_kind = None
     maker._short_prefill_turns_since_long_chunk = 0
     maker._short_prefill_turns_per_long_chunk = 3
-    maker._clear_abandoned_long_context_chunk = False
     return maker
 
 
@@ -453,7 +452,7 @@ def test_long_context_chunk_runs_after_decode_forward():
     assert not model_inputs.is_last_chunk
 
 
-def test_abandoned_long_context_chunk_sends_cleanup_only_forward():
+def test_abandoned_long_context_chunk_is_dropped_without_cleanup_forward():
     long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
     maker = _make_policy_maker(long_seq)
     long_seq.status = MessageStatus.STOPPED
@@ -463,12 +462,8 @@ def test_abandoned_long_context_chunk_sends_cleanup_only_forward():
 
     forward_inputs = maker._make_forward_inputs(prefill=False)
 
-    assert forward_inputs['running'] == []
-    assert forward_inputs['inputs'] is None
-    assert forward_inputs['delta'] is None
-    assert forward_inputs['clear_long_context_chunk']
+    assert forward_inputs is None
     assert not maker.long_context_chunker.enabled()
-    assert not maker._clear_abandoned_long_context_chunk
 
 
 def test_deferred_long_context_chunk_runs_when_decode_has_no_valid_seqs():

@@ -394,15 +394,6 @@ def test_prepare_inputs_from_main_first_chunk_clears_stale_chunk_carry():
     torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], torch.tensor([[[3., 30.]]]))
 
 
-def test_clear_long_context_chunk_state_clears_saved_chunk_carry():
-    agent = SpecModelAgent.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
-
-    agent.clear_long_context_chunk_state()
-
-    assert agent._prev_chunk_last == {}
-
-
 def test_prepare_inputs_from_main_keeps_chunk_carry_for_dp_local_decode_global_prefill():
     agent = SpecModelAgent.__new__(SpecModelAgent)
     saved = torch.ones(1, 1, 2)

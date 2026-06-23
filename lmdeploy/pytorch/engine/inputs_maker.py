@@ -245,11 +245,13 @@ class LongContextChunker:
 
     def check_enable(self):
         if not self.enabled():
-            return False
+            return
         if self.seq.status != MessageStatus.RUNNING:
+            # A stopped long request no longer has a valid continuation.  We do
+            # not send a cleanup-only worker forward here: normal prefill/decode
+            # ignore chunk carry, and the next first chunk resets carry before
+            # use.  Avoiding a no-work forward also keeps DP ranks aligned.
             self.clear()
-            return True
-        return False
 
 
 class InputsMakerAsync:
@@ -330,7 +332,6 @@ class InputsMakerAsync:
 
         # long context chunker
         self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
-        self._clear_abandoned_long_context_chunk = False
 
     def _init_do_prefill(self, config: InputsMakerConfig):
         if config.role == EngineRole.Prefill:
@@ -922,11 +923,7 @@ class InputsMakerAsync:
         # prefill turns before forcing one long-work turn. A long-work turn
         # continues the active chunker first, otherwise it admits one waiting
         # long prefill through the scheduler.
-        # If the active chunk stream was abandoned, keep the cleanup request
-        # sticky until a worker forward clears model/spec chunk carry.
-        clear_pending = getattr(self, '_clear_abandoned_long_context_chunk', False)
-        self._clear_abandoned_long_context_chunk = clear_pending or self.long_context_chunker.check_enable()
-        clear_long_context_chunk = self._clear_abandoned_long_context_chunk
+        self.long_context_chunker.check_enable()
         if self.long_context_chunker.enabled():
             # long context chunking
             if self._should_defer_long_context_chunk(prefill):
@@ -1021,23 +1018,7 @@ class InputsMakerAsync:
 
         # skip if enable empty
         if inputs is None and delta is None:
-            if not clear_long_context_chunk:
-                return None
-            self._clear_abandoned_long_context_chunk = False
-            return dict(
-                running=[],
-                inputs=None,
-                delta=None,
-                swap_in_map={},
-                swap_out_map={},
-                sampling_inputs=None,
-                stopping_criteria=None,
-                return_logits=False,
-                extra_inputs=None,
-                return_routed_experts=False,
-                return_ce_loss=False,
-                clear_long_context_chunk=True,
-            )
+            return None
 
         sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
         if inputs is not None:
@@ -1049,7 +1030,6 @@ class InputsMakerAsync:
         return_routed_experts = __need_routed_experts(running)
         return_ce_loss = __need_ce_loss(running)
 
-        self._clear_abandoned_long_context_chunk = False
         return dict(
             running=running,
             inputs=inputs,
@@ -1062,7 +1042,6 @@ class InputsMakerAsync:
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
             return_ce_loss=return_ce_loss,
-            clear_long_context_chunk=clear_long_context_chunk,
         )
 
     def do_prefill_pnode(self):
