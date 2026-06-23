@@ -224,13 +224,13 @@ def test_state_manager_caps_runtime_count_even_with_extra_free_slots():
         manager.allocate_state()
 
 
-def _make_ssm_scheduler(max_batch_size: int = 1, prefix_cache_state_budget: int = 0):
+def _make_ssm_scheduler(max_batch_size: int = 1, prefix_cache_state_budget: int = 0, num_gpu_blocks: int = 16):
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
     cache_config = CacheConfig(max_batches=max_batch_size,
                                block_size=block_size,
                                num_cpu_blocks=4,
-                               num_gpu_blocks=16,
+                               num_gpu_blocks=num_gpu_blocks,
                                enable_prefix_caching=True,
                                num_state_caches=max_batch_size + 1 + prefix_cache_state_budget,
                                prefix_cache_state_budget=prefix_cache_state_budget,
@@ -547,6 +547,192 @@ def test_scheduler_recomputes_prefill_budget_after_prefix_hit():
     assert cache_hit_tail.num_history_ids == block_size
     assert cache_hit_tail.num_token_ids == 1
     assert short.status == MessageStatus.READY
+
+
+def _make_prefix_cache_scheduler(max_batches: int = 2, max_prefill_token_num: int = 16):
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=max_batches,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               max_prefill_token_num=max_prefill_token_num,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=max_batches,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+    return scheduler, block_size
+
+
+def test_scheduler_short_turn_uses_prefix_hit_to_admit_long_looking_sibling():
+    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=16)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size)
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    short = scheduler.add_session(1).add_sequence([4])
+    cache_hit_tail = scheduler.add_session(2).add_sequence([1] * block_size + [3])
+
+    output = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert output.running == [short, cache_hit_tail]
+    assert cache_hit_tail.num_history_ids == block_size
+    assert cache_hit_tail.num_token_ids == 1
+    assert cache_hit_tail.cached_tokens == block_size
+
+
+def test_scheduler_budget_gate_uses_prefix_hit_to_admit_sibling():
+    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=16)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size)
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    almost_full = scheduler.add_session(1).add_sequence([4] * (block_size - 1))
+    cache_hit_tail = scheduler.add_session(2).add_sequence([1] * block_size + [3])
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [almost_full, cache_hit_tail]
+    assert cache_hit_tail.num_history_ids == block_size
+    assert cache_hit_tail.num_token_ids == 1
+
+
+def test_scheduler_rolls_back_prefix_match_for_prefill_gate_when_tail_still_exceeds_budget():
+    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=16)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size)
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    full = scheduler.add_session(1).add_sequence([4] * block_size)
+    cache_hit_tail = scheduler.add_session(2).add_sequence([1] * block_size + [3])
+
+    output = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert output.running == [full]
+    assert cache_hit_tail.status == MessageStatus.WAITING
+    assert cache_hit_tail.num_history_ids == 0
+    assert cache_hit_tail.cached_tokens == 0
+    assert cache_hit_tail.prefix_cache.last_shared_node is None
+    assert cache_hit_tail.prefix_cache.match_start_step == -1
+
+
+def test_scheduler_rolls_back_prefix_match_for_prefill_gate_that_still_needs_long_chunk():
+    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=1, max_prefill_token_num=16)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size)
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+    scheduler.block_trie.stats.reset()
+
+    still_long = scheduler.add_session(1).add_sequence([1] * block_size + [3] * (block_size + 1))
+
+    output = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert output.running == []
+    assert still_long.status == MessageStatus.WAITING
+    assert still_long.num_history_ids == 0
+    assert still_long.cached_tokens == 0
+    assert still_long.prefix_cache.last_shared_node is None
+    assert still_long.prefix_cache.match_start_step == -1
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
+def test_ssm_scheduler_rolls_back_prefix_match_for_prefill_gate_without_pinning_restore_state():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
+    scheduler.cache_config.max_prefill_token_num = scheduler.seq_meta.block_size
+    block_size = scheduler.seq_meta.block_size
+    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    scheduler.block_trie.stats.reset()
+
+    still_long = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3] * (block_size + 1))
+
+    output = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert output.running == []
+    assert still_long.status == MessageStatus.WAITING
+    assert still_long.num_history_ids == 0
+    assert still_long.cached_tokens == 0
+    assert still_long.prefix_cache.last_shared_node is None
+    assert still_long.prefix_cache.restore_state == -1
+    assert still_long.prefix_cache.restore_node is None
+    assert not still_long.prefix_cache.restore_state_acquired
+    assert node.state_idx == state_idx
+    assert node.state_ref_count == 0
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
+def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_pinned_restore_rollback():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1, num_gpu_blocks=2)
+    scheduler.cache_config.max_prefill_token_num = scheduler.seq_meta.block_size
+    block_size = scheduler.seq_meta.block_size
+    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    scheduler.block_trie.stats.reset()
+
+    cache_hit_tail = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3])
+
+    output = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert output.running == []
+    assert cache_hit_tail.status == MessageStatus.WAITING
+    assert cache_hit_tail.num_history_ids == 0
+    assert cache_hit_tail.num_token_ids == block_size * 2 + 1
+    assert cache_hit_tail.num_blocks == 0
+    assert cache_hit_tail.kv_token_limit is None
+    assert cache_hit_tail.logical_state == -1
+    assert cache_hit_tail.cached_tokens == 0
+    assert cache_hit_tail.prefix_cache.last_shared_node is None
+    assert cache_hit_tail.prefix_cache.restore_state == -1
+    assert cache_hit_tail.prefix_cache.restore_node is None
+    assert not cache_hit_tail.prefix_cache.restore_state_acquired
+    assert node.state_idx == state_idx
+    assert node.state_ready
+    assert node.state_ref_count == 0
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
+def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_runtime_state_rollback(monkeypatch):
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1, num_gpu_blocks=4)
+    scheduler.cache_config.max_prefill_token_num = scheduler.seq_meta.block_size
+    block_size = scheduler.seq_meta.block_size
+    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    ensure_results = iter([False, True])
+
+    def _ensure_runtime_state_available_once_then_succeed():
+        return next(ensure_results)
+
+    monkeypatch.setattr(scheduler, '_ensure_runtime_state_available', _ensure_runtime_state_available_once_then_succeed)
+    scheduler.block_trie.stats.reset()
+
+    cache_hit_tail = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3])
+
+    output = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert output.running == []
+    assert cache_hit_tail.status == MessageStatus.WAITING
+    assert cache_hit_tail.num_history_ids == 0
+    assert cache_hit_tail.num_token_ids == block_size * 2 + 1
+    assert cache_hit_tail.num_blocks == 0
+    assert cache_hit_tail.kv_token_limit is None
+    assert cache_hit_tail.logical_state == -1
+    assert cache_hit_tail.cached_tokens == 0
+    assert cache_hit_tail.prefix_cache.last_shared_node is None
+    assert cache_hit_tail.prefix_cache.restore_state == -1
+    assert cache_hit_tail.prefix_cache.restore_node is None
+    assert not cache_hit_tail.prefix_cache.restore_state_acquired
+    assert node.state_idx == state_idx
+    assert node.state_ready
+    assert node.state_ref_count == 0
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
 
 
 def test_scheduler_reports_zero_cached_tokens_for_prefix_miss():
