@@ -52,11 +52,18 @@ def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
     os.setpgrp()
     if len(gpu_ids) > 0:
         os.environ['CUDA_VISIBLE_DEVICES'] = cuda_visible_devices
-    serve(model_path, **kwargs)
+    try:
+        serve(model_path, **kwargs)
+    except Exception:
+        logger.exception('Server process failed during startup or serving.')
+        # Avoid Python multiprocessing atexit cleanup blocking forever while
+        # non-daemon engine/Ray children are still alive. The launcher will
+        # observe the non-zero exit code and terminate this process group.
+        os._exit(1)
 
 
-def cleanup_processes(processes: list[mp.Process]):
-    """Clean up server process."""
+def terminate_processes(processes: list[mp.Process]):
+    """Terminate child server process groups."""
     for process in processes:
         logger.info(f'Terminating process group {process.pid}')
         try:
@@ -76,6 +83,11 @@ def cleanup_processes(processes: list[mp.Process]):
                 pass
 
     logger.info('All processes terminated')
+
+
+def cleanup_processes(processes: list[mp.Process]):
+    """Clean up server process."""
+    terminate_processes(processes)
     sys.exit(0)
 
 
@@ -142,5 +154,17 @@ def launch_server(num_nodes: int,
     signal.signal(signal.SIGTERM, lambda sig, frame: cleanup_processes(processes))
     signal.signal(signal.SIGQUIT, lambda sig, frame: cleanup_processes(processes))
 
-    for p in processes:
-        p.join()
+    # Poll all DP server processes so one failed child cannot be hidden behind
+    # another healthy long-running server blocked in join().
+    alive_processes = list(processes)
+    while alive_processes:
+        for process in list(alive_processes):
+            process.join(timeout=1)
+            if process.exitcode is None:
+                continue
+
+            alive_processes.remove(process)
+            if process.exitcode != 0:
+                logger.error(f'Server process {process.pid} exited with code {process.exitcode}')
+                terminate_processes(alive_processes)
+                raise RuntimeError(f'Server process {process.pid} exited with code {process.exitcode}')
