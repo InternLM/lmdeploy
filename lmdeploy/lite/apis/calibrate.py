@@ -28,6 +28,7 @@ LAYER_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewDecoderLayer',
+    'InternS2ForConditionalGeneration': 'InternS2DecoderLayer',
     'Phi3ForCausalLM': 'Phi3DecoderLayer',
     'ChatGLMForConditionalGeneration': 'GLMBlock',
     'MixtralForCausalLM': 'MixtralDecoderLayer',
@@ -53,6 +54,7 @@ NORM_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewRMSNorm',
+    'InternS2ForConditionalGeneration': 'InternS2RMSNorm',
     'Phi3ForCausalLM': 'Phi3RMSNorm',
     'ChatGLMForConditionalGeneration': 'RMSNorm',
     'MixtralForCausalLM': 'MixtralRMSNorm',
@@ -78,6 +80,7 @@ HEAD_NAME_MAP = {
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'output',
     'InternS2PreviewForConditionalGeneration': 'lm_head',
+    'InternS2ForConditionalGeneration': 'lm_head',
     'Phi3ForCausalLM': 'lm_head',
     'ChatGLMForConditionalGeneration': 'output_layer',
     'MixtralForCausalLM': 'lm_head',
@@ -108,7 +111,8 @@ def check_vl_llm(backend: str, config: dict) -> bool:
         'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
         'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
         'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
-        'InternS2PreviewForConditionalGeneration'
+        'InternS2PreviewForConditionalGeneration',
+        'InternS2ForConditionalGeneration',
     ])
     if arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
