@@ -1151,6 +1151,8 @@ class BlockTrie:
                 if not self._is_evict_candidate_leaf(leaf):
                     self.leaves.discard(leaf)
                     continue
+                if self._is_pinned_state_checkpoint(leaf):
+                    continue
                 if int(self.allocator.get_ref_count(leaf.block)) != 1:
                     continue
                 break
@@ -1209,6 +1211,8 @@ class BlockTrie:
             if len(parent.children) == 0:
                 __add_leaf(leaves, parent)
 
+        if len(evicted_blocks) == 0:
+            return 0
         self.allocator.free(np.array(evicted_blocks))
 
         return len(evicted_blocks)
