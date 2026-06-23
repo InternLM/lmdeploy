@@ -61,12 +61,15 @@ uint64_t make_schedule_key(SchedulePolicy policy, bool scheduled, uint8_t priori
     switch (policy) {
         case SchedulePolicy::kFifo:
             return arrival_order;
-        case SchedulePolicy::kPriority:
+        case SchedulePolicy::kPriority: {
             const uint64_t order           = arrival_order & ((uint64_t{1} << 48) - 1);
             const uint64_t scheduled_field = scheduled ? 0x00 : 0x0F;
             return (scheduled_field << 56) | (uint64_t{priority} << 48) | order;
+        }
+        default:
+            TM_CHECK(false) << "unsupported schedule_policy: " << static_cast<int>(policy);
+            return arrival_order;
     }
-    return arrival_order;
 }
 
 }  // namespace

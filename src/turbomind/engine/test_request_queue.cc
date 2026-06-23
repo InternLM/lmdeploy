@@ -185,4 +185,10 @@ TEST_CASE("invalid schedule policy string is rejected", "[request_queue]")
     REQUIRE_THROWS_AS(parse_schedule_policy("bad"), std::invalid_argument);
 }
 
+TEST_CASE("request queue factory rejects unknown schedule policy", "[request_queue]")
+{
+    const auto invalid_policy = static_cast<SchedulePolicy>(0xFFFF);
+    REQUIRE_THROWS_AS(RequestQueue::create(invalid_policy), std::invalid_argument);
+}
+
 }  // namespace turbomind

@@ -9,10 +9,14 @@ namespace turbomind {
 
 std::unique_ptr<RequestQueue> RequestQueue::create(SchedulePolicy schedule_policy)
 {
-    if (schedule_policy == SchedulePolicy::kFifo) {
-        return std::make_unique<FifoRequestQueue>();
+    switch (schedule_policy) {
+        case SchedulePolicy::kFifo:
+            return std::make_unique<FifoRequestQueue>();
+        case SchedulePolicy::kPriority:
+            return std::make_unique<PriorityRequestQueue>();
+        default:
+            throw std::invalid_argument("unsupported schedule_policy " + std::to_string(static_cast<int>(schedule_policy)));
     }
-    return std::make_unique<PriorityRequestQueue>();
 }
 
 }  // namespace turbomind

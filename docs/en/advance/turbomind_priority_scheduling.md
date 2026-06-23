@@ -37,7 +37,7 @@ response = pipe(
 
 ## Set Request Priority
 
-Set request priority with `priority`. The valid range is `[0, 255]`. Smaller values have higher priority; `0` is the highest priority and `255` is the lowest priority. The default value is `0`. `priority` must be an integer; out-of-range values and strings, floats, booleans, or other non-integer types are rejected by validation.
+Set request priority with `priority`. The valid range is `[0, 255]`. Smaller values have higher priority; `0` is the highest priority and `255` is the lowest priority. The default value is `0`. `priority` must be an integer; out-of-range values and strings, floats, booleans, or other non-integer types are rejected by validation. `null` is treated as not set (equivalent to `0`).
 
 ### OpenAI-Compatible API
 
