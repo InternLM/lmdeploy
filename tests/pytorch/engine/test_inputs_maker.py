@@ -7,7 +7,7 @@ import pytest
 
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.engine.engine_loop import EngineLoop
+from lmdeploy.pytorch.engine.engine_loop import EngineLoop, RunableEventAsync
 from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
     InputsMakerConfig,
@@ -204,6 +204,38 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         ('release_save', True),
     ]
     assert not block_trie.pinned
+
+
+def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
+    events = []
+
+    class _Scheduler:
+
+        def has_unfinished(self):
+            return False
+
+        def collect_migration_done(self):
+            events.append('collect_migration_done')
+
+    class _InputsMaker:
+
+        def has_pending_long_context_chunk(self):
+            return True
+
+        async def send_next_inputs(self):
+            events.append('send_next_inputs')
+            return 'forward_inputs', ['long-seq']
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = _Scheduler()
+    loop.inputs_maker = _InputsMaker()
+    loop.has_runable_event = RunableEventAsync(loop.scheduler, loop.inputs_maker.has_pending_long_context_chunk)
+    loop._sleep_requested = False
+
+    result = asyncio.run(asyncio.wait_for(loop._main_loop_try_send_next_inputs(), timeout=1.0))
+
+    assert result == ('forward_inputs', ['long-seq'])
+    assert events == ['collect_migration_done', 'send_next_inputs']
 
 
 def _make_policy_maker(long_seq, decode_seq=None):

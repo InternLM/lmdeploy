@@ -346,6 +346,11 @@ class InputsMakerAsync:
         left."""
         return self.long_context_chunker.enabled() and self.long_context_chunker.is_last_chunk()
 
+    def has_pending_long_context_chunk(self):
+        """Check whether engine-local long-context chunk work can run."""
+        self.long_context_chunker.check_enable()
+        return self.long_context_chunker.enabled()
+
     def _should_defer_long_context_chunk(self, prefill: bool):
         """Check whether the active long-context chunk should yield this
         loop."""
