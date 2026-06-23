@@ -518,6 +518,37 @@ def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit():
     assert seq.prefix_cache.match_start_step == -1
 
 
+def test_scheduler_recomputes_prefill_budget_after_prefix_hit():
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=2,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               max_prefill_token_num=block_size,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=2,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size + [2])
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    cache_hit_tail = scheduler.add_session(1).add_sequence([1] * block_size + [3])
+    short = scheduler.add_session(2).add_sequence([4])
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [cache_hit_tail, short]
+    assert cache_hit_tail.num_history_ids == block_size
+    assert cache_hit_tail.num_token_ids == 1
+    assert short.status == MessageStatus.READY
+
+
 def test_scheduler_reports_zero_cached_tokens_for_prefix_miss():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16

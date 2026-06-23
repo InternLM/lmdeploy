@@ -544,6 +544,11 @@ class Scheduler:
                 evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
                 if not evicted:
                     break
+            # Prefix-cache matching can advance the sequence step and shrink
+            # the remaining prefill tail.  Charge the admitted batch with the
+            # post-match/post-rollback cost, not the conservative pre-match
+            # estimate used to decide whether this sequence is worth trying.
+            prefill_token_count = self._prefill_admission_token_count(seq)
             self.block_manager.allocate(seq, alloc_prealloc_size)
             if self.block_trie.enable:
                 self.block_trie.allocate(seq)
