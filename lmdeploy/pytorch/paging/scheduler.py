@@ -250,8 +250,8 @@ class Scheduler:
         estimated_chunks = self._long_prefill_estimated_chunks(seq)
         wait_age = max(0.0, now - seq.arrive_time)
         age_credit = int(wait_age // self._long_prefill_aging_seconds_per_chunk)
-        virtual_chunks = estimated_chunks - age_credit
-        return virtual_chunks, estimated_chunks, seq.arrive_time
+        age_adjusted_chunks = estimated_chunks - age_credit
+        return age_adjusted_chunks, estimated_chunks, seq.arrive_time
 
     def _prepare_prefill_allocation(self, seq: SchedulerSequence, prealloc_size: int):
         """Apply chunk KV limit and return the effective prealloc size."""
@@ -423,33 +423,9 @@ class Scheduler:
             seq.kv_token_limit = None
             return False, alloc_prealloc_size
 
-        def _reorder_waiting():
-            """Reorder waiting."""
-            waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
-            if prefer_long_prefill:
-                # Long-work turns choose one long waiter first. The size policy
-                # only reorders this long lane; it is not global
-                # shortest-prefill-first admission.
-                long_waiting: SeqList = []
-                normal_waiting: SeqList = []
-                for seq in waiting:
-                    if self._prefill_kv_token_limit(seq) is None:
-                        normal_waiting.append(seq)
-                    else:
-                        long_waiting.append(seq)
-                if len(long_waiting) > 0:
-                    if self._long_prefill_policy == 'size':
-                        now = time.perf_counter()
-                        long_waiting = sorted(long_waiting,
-                                              key=lambda seq: self._long_prefill_priority_key(seq, now))
-                    normal_waiting = sorted(normal_waiting,
-                                            key=lambda seq: (self._prefill_admission_token_count(seq),
-                                                             seq.arrive_time))
-                    return [long_waiting[0]] + normal_waiting + long_waiting[1:]
-
-            if allow_long_prefill:
-                return waiting
-
+        def _split_waiting_by_prefill_kind(waiting: SeqList):
+            """Split waiting requests into normal/final and non-final long
+            prefill."""
             normal_waiting: SeqList = []
             long_waiting: SeqList = []
             for seq in waiting:
@@ -457,10 +433,49 @@ class Scheduler:
                     normal_waiting.append(seq)
                 else:
                     long_waiting.append(seq)
+            return normal_waiting, long_waiting
 
-            normal_waiting = sorted(normal_waiting, key=lambda seq: (self._prefill_admission_token_count(seq),
-                                                                     seq.arrive_time))
-            return normal_waiting + long_waiting
+        def _sort_normal_prefills(waiting: SeqList):
+            return sorted(waiting, key=lambda seq: (self._prefill_admission_token_count(seq), seq.arrive_time))
+
+        def _sort_long_prefills_for_long_turn(waiting: SeqList):
+            if self._long_prefill_policy != 'size':
+                return waiting
+            now = time.perf_counter()
+            return sorted(waiting, key=lambda seq: self._long_prefill_priority_key(seq, now))
+
+        def _reorder_waiting_for_long_turn(waiting: SeqList):
+            """Choose one long waiter, then fill the turn with normal
+            prefills."""
+            normal_waiting, long_waiting = _split_waiting_by_prefill_kind(waiting)
+            if len(long_waiting) == 0:
+                return None
+
+            long_waiting = _sort_long_prefills_for_long_turn(long_waiting)
+            normal_waiting = _sort_normal_prefills(normal_waiting)
+            return [long_waiting[0]] + normal_waiting + long_waiting[1:]
+
+        def _reorder_waiting_for_short_turn(waiting: SeqList):
+            """Prioritize normal/final prefills while preserving long
+            waiters."""
+            normal_waiting, long_waiting = _split_waiting_by_prefill_kind(waiting)
+            return _sort_normal_prefills(normal_waiting) + long_waiting
+
+        def _reorder_waiting():
+            """Reorder waiting."""
+            waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
+            if prefer_long_prefill:
+                # Long-work turns choose one long waiter first. The size policy
+                # only reorders this long lane; it is not global
+                # shortest-prefill-first admission.
+                long_turn_waiting = _reorder_waiting_for_long_turn(waiting)
+                if long_turn_waiting is not None:
+                    return long_turn_waiting
+
+            if allow_long_prefill:
+                return waiting
+
+            return _reorder_waiting_for_short_turn(waiting)
 
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
         if (len(running) >= max_batches or num_waiting == 0):

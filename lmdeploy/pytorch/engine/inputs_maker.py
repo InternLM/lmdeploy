@@ -905,6 +905,53 @@ class InputsMakerAsync:
                 self._short_prefill_turns_since_long_chunk += 1
             return result
 
+        def __is_empty_forward(forward_inputs: 'ModelInputs|None', forward_delta: 'ModelInputsDelta|None'):
+            return forward_inputs is None and forward_delta is None
+
+        def __try_active_long_context_chunk():
+            nonlocal attempted_long_work
+            nonlocal active_long_chunk_blocked_by_kv
+            attempted_long_work = True
+            result = __create_inputs_long_context_chunk()
+            _, chunk_inputs, chunk_delta, _ = result
+            active_long_chunk_blocked_by_kv = __is_empty_forward(chunk_inputs, chunk_delta)
+            return result
+
+        def __should_try_short_prefill_before_active_chunk():
+            """Allow short/normal prefill quota before an active non-final
+            chunk."""
+            if self.long_context_chunker.is_last_chunk():
+                return False
+            if not scheduler.has_waiting():
+                return False
+            return not self._is_long_context_chunk_turn_due()
+
+        def __has_no_forward():
+            return __is_empty_forward(inputs, delta)
+
+        def __can_fallback_to_short_after_long_work():
+            if not __has_no_forward():
+                return False
+            if not attempted_long_work:
+                return False
+            if active_long_chunk_blocked_by_kv:
+                return False
+            if attempted_short_or_normal_prefill:
+                return False
+            return scheduler.has_waiting()
+
+        def __can_try_short_prefill_after_defer():
+            if not __has_no_forward():
+                return False
+            if not deferred_long_context_chunk:
+                return False
+            if self._is_long_context_chunk_turn_due():
+                return False
+            return scheduler.has_waiting()
+
+        def __can_retry_deferred_active_chunk():
+            return __has_no_forward() and deferred_long_context_chunk and self.long_context_chunker.enabled()
+
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
@@ -926,11 +973,9 @@ class InputsMakerAsync:
         # long prefill through the scheduler.
         self.long_context_chunker.check_enable()
         if self.long_context_chunker.enabled():
-            # long context chunking
             if self._should_defer_long_context_chunk(prefill):
                 deferred_long_context_chunk = True
-            elif (not self.long_context_chunker.is_last_chunk() and scheduler.has_waiting()
-                  and not self._is_long_context_chunk_turn_due()):
+            elif __should_try_short_prefill_before_active_chunk():
                 # After a decode turn, keep the short/normal prefill quota in
                 # front of active long chunks; otherwise decode -> long can
                 # repeat and small waiting requests remain gated by the active
@@ -943,14 +988,10 @@ class InputsMakerAsync:
                     swap_in_map,
                     swap_out_map,
                 ) = __create_short_or_normal_prefill_turn()
-                if inputs is None and delta is None:
-                    attempted_long_work = True
-                    running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
-                    active_long_chunk_blocked_by_kv = inputs is None and delta is None
+                if __is_empty_forward(inputs, delta):
+                    running, inputs, delta, extra_inputs = __try_active_long_context_chunk()
             else:
-                attempted_long_work = True
-                running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
-                active_long_chunk_blocked_by_kv = inputs is None and delta is None
+                running, inputs, delta, extra_inputs = __try_active_long_context_chunk()
         elif prefill:
             # prefill
             has_waiting_long_prefill = scheduler.has_waiting_long_prefill()
@@ -963,7 +1004,7 @@ class InputsMakerAsync:
                     swap_in_map,
                     swap_out_map,
                 ) = __create_short_or_normal_prefill_turn()
-                if inputs is None and delta is None:
+                if __has_no_forward():
                     (
                         running,
                         inputs,
@@ -986,8 +1027,7 @@ class InputsMakerAsync:
         # Waiting-long admission failure can still fall back to short prefills.
         # Active-long reservation failure means KV is pinned by running work;
         # admit decode only so existing requests can drain blocks.
-        if (inputs is None and delta is None and attempted_long_work and not active_long_chunk_blocked_by_kv
-                and scheduler.has_waiting() and not attempted_short_or_normal_prefill):
+        if __can_fallback_to_short_after_long_work():
             (
                 running,
                 inputs,
@@ -1004,8 +1044,7 @@ class InputsMakerAsync:
             self.to_evict_seqs = invalid_seqs
             extra_inputs = None
 
-        if (inputs is None and delta is None and deferred_long_context_chunk and scheduler.has_waiting()
-                and not self._is_long_context_chunk_turn_due()):
+        if __can_try_short_prefill_after_defer():
             (
                 running,
                 inputs,
@@ -1015,8 +1054,8 @@ class InputsMakerAsync:
                 swap_out_map,
             ) = __create_short_or_normal_prefill_turn()
 
-        if inputs is None and delta is None and deferred_long_context_chunk and self.long_context_chunker.enabled():
-            running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
+        if __can_retry_deferred_active_chunk():
+            running, inputs, delta, extra_inputs = __try_active_long_context_chunk()
 
         # reset decode count when non-decoding inputs are produced
         if inputs is not None and not inputs.is_decoding:
