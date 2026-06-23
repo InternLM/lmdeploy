@@ -35,13 +35,16 @@ class LoggingStatLogger(StatLoggerBase):
 
     def __init__(self, dp_rank: int = 0):
         self.dp_rank = dp_rank
-        self._reset(time.perf_counter())
         self.last_scheduler_stats = SchedulerStats()
+        self._reset(time.perf_counter())
 
     def _reset(self, now):
         self.last_log_time = now
         self.total_prompt_tokens = 0
         self.total_generation_tokens = 0
+        # prefix cache token counts at the start of this interval
+        self.last_prefix_cache_query_tokens = self.last_scheduler_stats.num_prefix_cache_query_tokens
+        self.last_prefix_cache_hit_tokens = self.last_scheduler_stats.num_prefix_cache_hit_tokens
         # spec decode
         self.num_drafts: int = 0
         self.num_draft_tokens: int = 0
@@ -118,8 +121,10 @@ class LoggingStatLogger(StatLoggerBase):
                    f'{scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
                    f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
 
-        if scheduler_stats.prefix_cache_hit_rate != 0:
-            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
+        if scheduler_stats.num_prefix_cache_query_tokens > self.last_prefix_cache_query_tokens:
+            query_delta = scheduler_stats.num_prefix_cache_query_tokens - self.last_prefix_cache_query_tokens
+            hit_delta = scheduler_stats.num_prefix_cache_hit_tokens - self.last_prefix_cache_hit_tokens
+            log_msg += f'Prefix cache hit rate: {hit_delta / query_delta * 100 :.1f}%, '
 
         if spec_msg is not None:
             log_msg += spec_msg
@@ -191,11 +196,6 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation='GPU KV-cache usage. 1 means 100 percent usage.',
             labelnames=labelnames).labels(*labelvalues)
 
-        self.gauge_prefix_cache_hit_rate = prometheus_client.Gauge(
-            name='lmdeploy:prefix_cache_hit_rate',
-            documentation='Prefix-cache hit rate. 1 means 100 percent of queried prefix tokens hit.',
-            labelnames=labelnames).labels(*labelvalues)
-
         #
         # Counters
         #
@@ -207,22 +207,6 @@ class PrometheusStatLogger(StatLoggerBase):
             name='lmdeploy:generation_tokens_total',
             documentation='Number of generation tokens processed.',
             labelnames=labelnames).labels(*labelvalues)
-
-        # Prefix cache hit rate is derived in PromQL from these raw counters:
-        #   rate(prefix_cache_hits_total) / rate(prefix_cache_queries_total)
-        self.counter_prefix_cache_queries = prometheus_client.Counter(
-            name='lmdeploy:prefix_cache_queries_total',
-            documentation='Number of tokens queried against the prefix cache.',
-            labelnames=labelnames).labels(*labelvalues)
-
-        self.counter_prefix_cache_hits = prometheus_client.Counter(
-            name='lmdeploy:prefix_cache_hits_total',
-            documentation='Number of tokens served from the prefix cache.',
-            labelnames=labelnames).labels(*labelvalues)
-
-        # engine-side stats are cumulative; track last seen values to emit deltas
-        self._last_prefix_cache_query_tokens = 0
-        self._last_prefix_cache_hit_tokens = 0
 
         # Speculative decoding counters. Acceptance rate and mean acceptance
         # length are derived in PromQL from these raw counters.
@@ -400,16 +384,6 @@ class PrometheusStatLogger(StatLoggerBase):
         self.gauge_scheduler_running.set(stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
-        self.gauge_prefix_cache_hit_rate.set(stats.prefix_cache_hit_rate)
-
-        query_delta = stats.num_prefix_cache_query_tokens - self._last_prefix_cache_query_tokens
-        hit_delta = stats.num_prefix_cache_hit_tokens - self._last_prefix_cache_hit_tokens
-        if query_delta > 0:
-            self.counter_prefix_cache_queries.inc(query_delta)
-        if hit_delta > 0:
-            self.counter_prefix_cache_hits.inc(hit_delta)
-        self._last_prefix_cache_query_tokens = stats.num_prefix_cache_query_tokens
-        self._last_prefix_cache_hit_tokens = stats.num_prefix_cache_hit_tokens
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""

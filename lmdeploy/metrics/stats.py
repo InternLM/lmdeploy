@@ -38,7 +38,6 @@ class SchedulerStats:
         num_running_reqs: Engine core, currently executing requests.
         num_waiting_reqs: Engine core, requests queued waiting for execution.
         gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
-        prefix_cache_hit_rate: Prefix caching hit rate.
         num_prefix_cache_query_tokens: Cumulative number of tokens queried against the prefix cache.
         num_prefix_cache_hit_tokens: Cumulative number of tokens served from the prefix cache.
     """
@@ -55,7 +54,6 @@ class SchedulerStats:
     num_running_reqs: int = 0
     num_waiting_reqs: int = 0
     gpu_cache_usage: float = 0.0
-    prefix_cache_hit_rate: float = 0.0
     num_prefix_cache_query_tokens: int = 0
     num_prefix_cache_hit_tokens: int = 0
 
@@ -88,7 +86,6 @@ class SchedulerStats:
                 f'  num_running_reqs={self.num_running_reqs},\n'
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
-                f'  prefix_cache_hit_rate={self.prefix_cache_hit_rate:.6f},\n'
                 f'  num_prefix_cache_query_tokens={self.num_prefix_cache_query_tokens},\n'
                 f'  num_prefix_cache_hit_tokens={self.num_prefix_cache_hit_tokens},\n'
                 ')')
@@ -97,7 +94,6 @@ class SchedulerStats:
         self.num_running_reqs = scheduled_metrics.active_seqs
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
         self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
-        self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
         self.num_prefix_cache_query_tokens = scheduled_metrics.num_prefix_cache_query_tokens
         self.num_prefix_cache_hit_tokens = scheduled_metrics.num_prefix_cache_hit_tokens
 

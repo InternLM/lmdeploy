@@ -567,7 +567,6 @@ class Scheduler:
             waiting_seqs=self.num_waiting() + self.num_ready(),
             total_blocks=self.block_manager.num_gpu_blocks,
             free_blocks=self.block_manager.get_num_free_gpu_blocks(),
-            prefix_cache_hit_rate=self.block_trie.hit_rate(),
             num_prefix_cache_query_tokens=prefix_cache_stats.num_query_tokens,
             num_prefix_cache_hit_tokens=prefix_cache_stats.num_hit_tokens,
             scheduler_tick=self.scheduler_tick,
