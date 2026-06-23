@@ -1034,7 +1034,7 @@ class BaseModelAgent:
         assert self._out_que is not None, ('Please start backendground task before forward.')
         out = await self._out_que.get()
         if out is None:
-            return None
+            return dict()
 
         out, event = out
         while not event.query():

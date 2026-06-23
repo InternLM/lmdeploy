@@ -917,6 +917,7 @@ class InputsMakerAsync:
         deferred_long_context_chunk = False
         attempted_long_work = False
         attempted_short_or_normal_prefill = False
+        active_long_chunk_blocked_by_kv = False
 
         # Bounded opt-TTFT prefill policy: protect decode before continuing
         # non-final long chunks, then allow a bounded number of short/normal
@@ -945,9 +946,11 @@ class InputsMakerAsync:
                 if inputs is None and delta is None:
                     attempted_long_work = True
                     running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
+                    active_long_chunk_blocked_by_kv = inputs is None and delta is None
             else:
                 attempted_long_work = True
                 running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
+                active_long_chunk_blocked_by_kv = inputs is None and delta is None
         elif prefill:
             # prefill
             has_waiting_long_prefill = scheduler.has_waiting_long_prefill()
@@ -980,8 +983,11 @@ class InputsMakerAsync:
                 ) = __create_inputs_prefill(prefer_long_prefill=has_waiting_long_prefill)
                 attempted_long_work = has_waiting_long_prefill
 
-        if (inputs is None and delta is None and attempted_long_work and scheduler.has_waiting()
-                and not attempted_short_or_normal_prefill):
+        # Waiting-long admission failure can still fall back to short prefills.
+        # Active-long reservation failure means KV is pinned by running work;
+        # admit decode only so existing requests can drain blocks.
+        if (inputs is None and delta is None and attempted_long_work and not active_long_chunk_blocked_by_kv
+                and scheduler.has_waiting() and not attempted_short_or_normal_prefill):
             (
                 running,
                 inputs,
