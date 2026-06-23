@@ -9,6 +9,9 @@ from utils.tool_reasoning_definitions import (
     RoutedExpertsNotSupported,
     assert_arguments_parseable,
     assert_no_parser_drop,
+    assert_parallel_mixed_tools_isolated,
+    assert_parallel_weather_cities_isolated,
+    assert_tool_call_dict_fields,
     assert_tool_call_fields,
     build_messages_with_parallel_tool_responses,
     build_messages_with_tool_response,
@@ -190,11 +193,14 @@ class TestToolCallParallel(_ToolCallTestBase):
         assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls for two cities, '
                                                                  f'got {len(tool_calls) if tool_calls else 0}')
 
+        parsed_list = []
         for tc in tool_calls:
             assert_tool_call_fields(tc)
             assert tc.function.name == 'get_current_weather'
             parsed = assert_arguments_parseable(tc.function.arguments)
             assert 'city' in parsed and 'state' in parsed
+            parsed_list.append(parsed)
+        assert_parallel_weather_cities_isolated(parsed_list)
 
         ids = [tc.id for tc in tool_calls]
         assert len(set(ids)) == len(ids), (f'IDs should be unique, got {ids}')
@@ -221,6 +227,7 @@ class TestToolCallParallel(_ToolCallTestBase):
         assert len(tc_data) >= 2, (f'Expected ≥2 parallel streaming tool calls, '
                                    f'got {len(tc_data)} indices: {list(tc_data.keys())}')
 
+        parsed_list = []
         for idx, data in tc_data.items():
             assert data['name'], (f'Index {idx}: missing function name')
             assert data['name'] == 'get_current_weather', (
@@ -228,6 +235,8 @@ class TestToolCallParallel(_ToolCallTestBase):
             assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
             parsed = assert_arguments_parseable(data['args_str'])
             assert 'city' in parsed and 'state' in parsed
+            parsed_list.append(parsed)
+        assert_parallel_weather_cities_isolated(parsed_list)
 
     def test_parallel_mixed_tools(self, backend, model_case):
         """Weather + calculator in one request."""
@@ -248,14 +257,56 @@ class TestToolCallParallel(_ToolCallTestBase):
         assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls (weather+calc), '
                                                                  f'got {len(tool_calls) if tool_calls else 0}')
 
+        named_args = []
         for tc in tool_calls:
             assert_tool_call_fields(tc)
-            assert_arguments_parseable(tc.function.arguments)
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            named_args.append((tc.function.name, parsed))
+        assert_parallel_mixed_tools_isolated(named_args)
 
         ids = [tc.id for tc in tool_calls]
         assert len(set(ids)) == len(ids), (f'Tool call IDs should be unique, got {ids}')
 
         names = {tc.function.name for tc in tool_calls}
+        assert len(names) >= 2, (f'Expected ≥2 distinct tool names, got {names}')
+        assert 'get_current_weather' in names, (f'Expected get_current_weather in tool calls, got {names}')
+        assert 'calculate' in names, (f'Expected calculate in tool calls, got {names}')
+
+    def test_parallel_mixed_tools_streaming(self, backend, model_case):
+        """Streaming: weather + calculator parallel tool calls indexed correctly."""
+        client, model_name = self._get_client()
+
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_PARALLEL_MIXED,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, CALCULATOR_TOOL],
+            logprobs=False,
+            stream=True,
+        )
+
+        tc_data, fr_count = collect_stream_parallel_tool_calls(stream)
+        assert fr_count == 1
+
+        assert len(tc_data) >= 2, (f'Expected ≥2 parallel streaming tool calls (weather+calc), '
+                                   f'got {len(tc_data)} indices: {list(tc_data.keys())}')
+
+        ids = []
+        names = set()
+        named_args = []
+        for idx, data in tc_data.items():
+            assert data['name'], (f'Index {idx}: missing function name')
+            assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
+            assert_tool_call_dict_fields(data)
+            parsed = assert_arguments_parseable(data['args_str'])
+            named_args.append((data['name'], parsed))
+            ids.append(data['id'])
+            names.add(data['name'])
+
+        assert_parallel_mixed_tools_isolated(named_args)
+
+        assert len(set(ids)) == len(ids), (f'Tool call IDs should be unique, got {ids}')
         assert len(names) >= 2, (f'Expected ≥2 distinct tool names, got {names}')
         assert 'get_current_weather' in names, (f'Expected get_current_weather in tool calls, got {names}')
         assert 'calculate' in names, (f'Expected calculate in tool calls, got {names}')

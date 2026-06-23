@@ -312,6 +312,86 @@ def assert_arguments_parseable(arguments_str: str) -> dict:
     return parsed
 
 
+def assert_parallel_weather_cities_isolated(parsed_args_list: list[dict]) -> None:
+    """Parallel weather calls must target Dallas and SF on distinct tool
+    calls."""
+    assert len(parsed_args_list) >= 2, (
+        f'Expected ≥2 parallel weather tool calls, got {len(parsed_args_list)}')
+
+    dallas_idxs = []
+    sf_idxs = []
+    for i, parsed in enumerate(parsed_args_list):
+        city = str(parsed['city']).lower()
+        state = str(parsed['state']).upper()
+        if 'dallas' in city or state == 'TX':
+            dallas_idxs.append(i)
+        if 'san francisco' in city or state == 'CA':
+            sf_idxs.append(i)
+
+    assert dallas_idxs, (
+        f'Expected at least one tool call for Dallas/TX, got args: {parsed_args_list!r}')
+    assert sf_idxs, (
+        f'Expected at least one tool call for San Francisco/CA, got args: {parsed_args_list!r}')
+
+    overlap = set(dallas_idxs) & set(sf_idxs)
+    assert not overlap, (
+        f'A single tool call matched both Dallas and SF: index {overlap}, '
+        f'args: {parsed_args_list!r}')
+
+    location_keys = [
+        (str(parsed['city']).lower().strip(), str(parsed['state']).upper().strip())
+        for parsed in parsed_args_list
+    ]
+    assert len(location_keys) == len(set(location_keys)), (
+        'Parallel weather tool calls must have distinct city/state arguments '
+        f'(duplicate-args bug); got {location_keys!r} in {parsed_args_list!r}')
+
+
+def assert_parallel_mixed_tools_isolated(named_args: list[tuple[str, dict]]) -> None:
+    """Parallel weather+calculate calls must have correct, distinct
+    arguments."""
+    assert len(named_args) >= 2, (
+        f'Expected ≥2 parallel mixed tool calls, got {len(named_args)}')
+
+    weather_args = [parsed for name, parsed in named_args if name == 'get_current_weather']
+    calc_args = [parsed for name, parsed in named_args if name == 'calculate']
+
+    assert weather_args, (
+        f'Expected at least one get_current_weather call, got {named_args!r}')
+    assert calc_args, (
+        f'Expected at least one calculate call, got {named_args!r}')
+
+    dallas_ok = any(
+        'dallas' in str(parsed['city']).lower() or str(parsed['state']).upper() == 'TX'
+        for parsed in weather_args
+    )
+    assert dallas_ok, (
+        f'Expected Dallas/TX in weather args, got {weather_args!r}')
+
+    calc_ok = any(
+        '1234' in str(parsed['expression']) and '5678' in str(parsed['expression'])
+        for parsed in calc_args
+    )
+    assert calc_ok, (
+        f'Expected 1234 and 5678 in calculate expression, got {calc_args!r}')
+
+    args_keys = []
+    for name, parsed in named_args:
+        if name == 'get_current_weather':
+            args_keys.append((
+                name,
+                str(parsed['city']).lower().strip(),
+                str(parsed['state']).upper().strip(),
+            ))
+        elif name == 'calculate':
+            args_keys.append((name, str(parsed['expression']).strip()))
+        else:
+            args_keys.append((name, repr(parsed)))
+    assert len(args_keys) == len(set(args_keys)), (
+        'Parallel mixed tool calls must have distinct arguments '
+        f'(duplicate-args bug); got {args_keys!r} in {named_args!r}')
+
+
 def assert_tool_call_dict_fields(tc: dict) -> dict:
     """Validate aggregated tool-call dict from stream collectors."""
     assert_tool_call_fields({
@@ -439,9 +519,13 @@ def make_response_parser(
 ):
     """Build ``BaseResponseParser`` aligned with server parser
     configuration."""
-    BaseResponseParser.set_parsers(reasoning_parser_name, tool_parser_name)
-    parser_cls = ResponseParserManager.get('default')
     tokenizer = get_tokenizer(tokenizer_path)
+    BaseResponseParser.set_parsers(
+        reasoning_parser_name,
+        tool_parser_name,
+        tokenizer=tokenizer,
+    )
+    parser_cls = ResponseParserManager.get('default')
     chat_template_kwargs = None
     if enable_thinking is not None:
         chat_template_kwargs = {'enable_thinking': enable_thinking}
@@ -452,7 +536,7 @@ def make_response_parser(
         tool_choice=tool_choice,
         chat_template_kwargs=chat_template_kwargs,
     )
-    return parser_cls(request=request, tokenizer=tokenizer)
+    return parser_cls(request=request)
 
 
 def supports_raw_reasoning_decode_validate(model_case: str) -> bool:
