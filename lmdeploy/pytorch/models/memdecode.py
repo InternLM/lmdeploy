@@ -161,6 +161,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         )
 
         base_hf_config = self._load_hf_config(self.base_model_path, trust_remote_code=trust_remote_code)
+        self._apply_tp_kv_head_config(base_hf_config)
         base_dtype = self._resolve_build_dtype(base_hf_config, dtype)
 
         # build true base model (do not recursively build MemDecodeForCausalLM)
@@ -174,6 +175,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         self.memory_model_config = None
         if self.memory_model_path is not None:
             memory_hf_config = self._load_hf_config(self.memory_model_path, trust_remote_code=trust_remote_code)
+            self._apply_tp_kv_head_config(memory_hf_config)
             memory_dtype = self._resolve_build_dtype(memory_hf_config, base_dtype)
             memory_build_ctx = self.ctx_mgr.build_ctx
             if memory_build_ctx is not None:
@@ -207,6 +209,29 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             hf_config = AutoConfig.from_pretrained(model_path)
         return hf_config
+
+    @staticmethod
+    def _apply_tp_kv_head_config(hf_config) -> None:
+        """Mirror ModelConfig builder KV-head replication for nested sub-
+        models."""
+        from lmdeploy.pytorch.configurations.builder import AutoModelConfigBuilder
+        from lmdeploy.pytorch.distributed import get_dist_manager
+
+        tp = get_dist_manager().current_config().attn_tp
+        if tp <= 1:
+            return
+
+        def _update(cfg):
+            num_kv_heads = getattr(cfg, 'num_key_value_heads', None)
+            if num_kv_heads is None:
+                num_kv_heads = cfg.num_attention_heads
+            AutoModelConfigBuilder.update_num_kv_heads(cfg, tp, num_kv_heads)
+
+        text_config = getattr(hf_config, 'text_config', None)
+        if text_config is not None:
+            _update(text_config)
+        else:
+            _update(hf_config)
 
     @staticmethod
     def _get_hf_dtype(config):

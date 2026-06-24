@@ -92,7 +92,6 @@ def parse_args() -> argparse.Namespace:
 def build_hf_overrides(args: argparse.Namespace) -> dict:
     overrides = {
         'architectures': [args.arch_name],
-        'base_model_path': args.base_model_path,
         'memory_model_path': args.memory_model_path,
         'lambda_value': args.lambda_value,
         'adaptive_router': False,
@@ -172,6 +171,7 @@ def main() -> int:
         '--max-batch-size', str(args.max_batch_size),
         '--trust-remote-code',
         '--model-name', args.model_name,
+        '--log-level', 'INFO',
         '--hf-overrides', json.dumps(hf_overrides),
     ]
 

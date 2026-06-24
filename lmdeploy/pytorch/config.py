@@ -454,7 +454,7 @@ class ModelConfig:
         hf_config = _patch_quantization_config(hf_config, model_format=model_format)
 
         hf_overrides = dict(hf_overrides or {})
-        base_model_path = hf_overrides.pop('base_model_path', pretrained_model_name_or_path)
+        base_model_path = pretrained_model_name_or_path
         memory_model_path = hf_overrides.pop('memory_model_path', None)
         lambda_value = hf_overrides.pop('lambda_value', 1.0)
         adaptive_router = hf_overrides.pop('adaptive_router', False)
