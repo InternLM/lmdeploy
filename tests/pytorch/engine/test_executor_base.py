@@ -191,6 +191,53 @@ def test_get_cache_block_sizes_uses_spec_tp(monkeypatch):
     assert world_sizes == [4, 4]
 
 
+def test_get_cache_block_sizes_includes_nested_memdecode_memory_model(monkeypatch):
+    executor = object.__new__(ExecutorBase)
+    memory_model_config = object()
+    executor.dist_config = SimpleNamespace(attn_tp=8)
+    executor.cache_config = object()
+    executor.model_config = SimpleNamespace(memdecode_config=SimpleNamespace(memory_model_config=memory_model_config))
+    executor.specdecode_config = None
+    calls = []
+
+    def fake_get_cache_block_size(cache_config, model_config, world_size):
+        calls.append((cache_config, model_config, world_size))
+        if model_config is memory_model_config:
+            return 64
+        return 256
+
+    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
+
+    cache_block_size = executor._get_cache_block_sizes(None, None)
+
+    assert cache_block_size == _CacheBlockSize(target=256, memory=64)
+    assert calls == [
+        (executor.cache_config, executor.model_config, 8),
+        (executor.cache_config, memory_model_config, 8),
+    ]
+
+
+def test_validate_memdecode_configs_rejects_specdecode():
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(memdecode_config=SimpleNamespace(memory_model_config=SimpleNamespace()))
+    executor.specdecode_config = SimpleNamespace()
+
+    with pytest.raises(ValueError, match='MemDecode and speculative decoding cannot be enabled together.'):
+        executor._validate_memdecode_configs()
+
+
+def test_validate_memdecode_configs_rejects_state_cache_mismatch():
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(
+        states_shapes=[],
+        memdecode_config=SimpleNamespace(memory_model_config=SimpleNamespace(states_shapes=[(1, 2, 3)])),
+    )
+    executor.specdecode_config = None
+
+    with pytest.raises(ValueError, match='Base and memory model must both use SSM state caches or both not use them.'):
+        executor._validate_memdecode_configs()
+
+
 def test_update_num_gpu_blocks_can_be_limited_by_non_spec_rank():
     executor = object.__new__(ExecutorBase)
     executor.dist_config = SimpleNamespace(attn_tp=2)

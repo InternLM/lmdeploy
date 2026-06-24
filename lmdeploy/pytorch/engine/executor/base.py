@@ -286,10 +286,35 @@ class ExecutorBase:
 
     def _get_mem_state_cache_mem(self) -> int:
         """Get memory-model state cache mem usage for memdecode."""
-        mem_model_config = self.model_config.memory_model_config
+        mem_model_config = self._get_memory_model_config()
         if mem_model_config is None or len(mem_model_config.states_shapes) == 0:
             return 0
         return self._get_state_cache_mem(mem_model_config.states_shapes, self.cache_config)
+
+    def _get_memdecode_config(self):
+        """Get MemDecode config if present."""
+        return getattr(self.model_config, 'memdecode_config', None)
+
+    def _get_memory_model_config(self):
+        """Get nested MemDecode memory model config if present."""
+        memdecode_config = self._get_memdecode_config()
+        if memdecode_config is None:
+            return None
+        return getattr(memdecode_config, 'memory_model_config', None)
+
+    def _validate_memdecode_configs(self):
+        """Validate MemDecode config compatibility."""
+        memory_model_config = self._get_memory_model_config()
+        if memory_model_config is None:
+            return
+
+        if self.specdecode_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
+
+        base_has_states = bool(getattr(self.model_config, 'states_shapes', None))
+        memory_has_states = bool(getattr(memory_model_config, 'states_shapes', None))
+        if base_has_states != memory_has_states:
+            raise ValueError('Base and memory model must both use SSM state caches or both not use them.')
 
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""
@@ -328,10 +353,11 @@ class ExecutorBase:
         cache_block_size = CacheEngine.get_cache_block_size(self.cache_config, self.model_config,
                                                             self.dist_config.attn_tp)
         memory_cache_block_size = 0
-        if self.model_config.memory_model_config is not None:
+        memory_model_config = self._get_memory_model_config()
+        if memory_model_config is not None:
             memory_cache_block_size = CacheEngine.get_cache_block_size(
                 self.cache_config,
-                self.model_config.memory_model_config,
+                memory_model_config,
                 self.dist_config.attn_tp,
             )
 
@@ -386,6 +412,7 @@ class ExecutorBase:
         """Update cache config."""
         self._adjust_block_size()
         self._sync_spec_cache_block_size()
+        self._validate_memdecode_configs()
         self.cache_config.states_shapes = self.model_config.states_shapes
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
@@ -411,7 +438,7 @@ class ExecutorBase:
         if self.specdecode_config:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
-        if self.model_config.memory_model_config is not None:
+        if self._get_memdecode_config() is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
         if self.misc_config.empty_init:
