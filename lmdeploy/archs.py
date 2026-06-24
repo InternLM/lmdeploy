@@ -94,21 +94,16 @@ def autoget_backend_config(
 
 def check_vl_llm(backend: str, config: dict) -> bool:
     """Check if the model is a vl model from model config."""
-    if 'auto_map' in config:
-        for _, v in config['auto_map'].items():
-            if 'InternLMXComposer2ForCausalLM' in v:
-                return True
-
     if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
             'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
         return True
 
     arch = config['architectures'][0]
     supported_archs = set([
-        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
-        'InternVLChatModel', 'MiniCPMV', 'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration',
-        'Phi3VForCausalLM', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
-        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
+        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternVLChatModel', 'MiniCPMV',
+        'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
+        'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration', 'Qwen3VLForConditionalGeneration',
+        'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
         'Qwen3_5MoeForConditionalGeneration', 'Qwen3OmniMoeForConditionalGeneration', 'MolmoForCausalLM',
         'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
         'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
@@ -160,10 +155,6 @@ def get_model_arch(model_path: str, trust_remote_code: bool = False):
     _cfg = cfg.to_dict()
     if _cfg.get('architectures', None):
         arch = _cfg['architectures'][0]
-        if _cfg.get('auto_map'):
-            for _, v in _cfg['auto_map'].items():
-                if 'InternLMXComposer2ForCausalLM' in v:
-                    arch = 'InternLMXComposer2ForCausalLM'
     elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
         arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
     elif _cfg.get('language_config', None) and _cfg['language_config'].get(

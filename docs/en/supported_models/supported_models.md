@@ -14,8 +14,6 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |            InternLM2             |     7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |           InternLM2.5            |        7B        | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            InternLM3             |        8B        | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternLM-XComposer2        |   7B, 4khd-7B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|      InternLM-XComposer2.5       |        7B        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |            Intern-S1             |       241B       | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 |          Intern-S1-mini          |       8.3B       | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 |     Qwen1.5<sup>\[1\]</sup>      |   1.8B - 110B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |

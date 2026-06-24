@@ -22,7 +22,6 @@ LAYER_TYPE_MAP = {
     'LlamaForCausalLM': 'LlamaDecoderLayer',
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewDecoderLayer',
     'Phi3ForCausalLM': 'Phi3DecoderLayer',
     'ChatGLMForConditionalGeneration': 'GLMBlock',
@@ -43,7 +42,6 @@ NORM_TYPE_MAP = {
     'LlamaForCausalLM': 'LlamaRMSNorm',
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewRMSNorm',
     'Phi3ForCausalLM': 'Phi3RMSNorm',
     'ChatGLMForConditionalGeneration': 'RMSNorm',
@@ -64,7 +62,6 @@ HEAD_NAME_MAP = {
     'LlamaForCausalLM': 'lm_head',
     'LlavaLlamaForCausalLM': 'lm_head',
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'output',
     'InternS2PreviewForConditionalGeneration': 'lm_head',
     'Phi3ForCausalLM': 'lm_head',
     'ChatGLMForConditionalGeneration': 'output_layer',
@@ -77,20 +74,15 @@ HEAD_NAME_MAP = {
 
 def check_vl_llm(backend: str, config: dict) -> bool:
     """Check if the model is a vl model from model config."""
-    if 'auto_map' in config:
-        for _, v in config['auto_map'].items():
-            if 'InternLMXComposer2ForCausalLM' in v:
-                return True
-
     if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
             'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
         return True
 
     arch = config['architectures'][0]
     supported_archs = set([
-        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
-        'InternVLChatModel', 'MiniCPMV', 'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration',
-        'Phi3VForCausalLM', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
+        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternVLChatModel', 'MiniCPMV',
+        'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
+        'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
         'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
         'Qwen3_5MoeForConditionalGeneration', 'MolmoForCausalLM', 'Gemma3ForConditionalGeneration',
         'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration',
