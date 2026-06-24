@@ -21,6 +21,7 @@ from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, Sche
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
+from lmdeploy.vl import hasher as mm_hasher
 
 from .supported_models import is_supported
 
@@ -282,6 +283,9 @@ class TurboMind:
         if self.engine_config.language_model_only:
             logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
             return None
+
+        if self.engine_config.enable_prefix_caching:
+            mm_hasher.ensure_multimodal_item_content_hashes(multimodal)
 
         parser = getattr(self.source_model, 'to_turbomind_multimodal', None)
         if parser is None:
