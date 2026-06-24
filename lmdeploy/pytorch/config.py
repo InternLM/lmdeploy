@@ -502,7 +502,21 @@ class ModelConfig:
         hf_config.lambda_base_only_threshold = model_config.lambda_base_only_threshold
         hf_config.trust_remote_code = trust_remote_code
         if memory_model_config is not None:
-            model_config.vocab_size = max(model_config.vocab_size, memory_model_config.vocab_size)
+            memory_vocab_size = memory_model_config.vocab_size
+            if memory_vocab_size > model_config.vocab_size:
+                logger.warning(
+                    'Memory model vocab_size (%s) is larger than base vocab_size (%s); '
+                    'fusion and sampling will use the base vocab only.',
+                    memory_vocab_size,
+                    model_config.vocab_size,
+                )
+            elif memory_vocab_size < model_config.vocab_size:
+                logger.warning(
+                    'Memory model vocab_size (%s) is smaller than base vocab_size (%s); '
+                    'memory-only tokens will be padded with -inf during fusion.',
+                    memory_vocab_size,
+                    model_config.vocab_size,
+                )
 
         fp32_lm_head = False
         if hf_overrides:

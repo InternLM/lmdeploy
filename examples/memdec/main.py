@@ -5,13 +5,19 @@ PyTorch.
 Starts an api_server with base + memory + optional router paths via ``--hf-overrides``,
 then runs a simple Chat Completion call.
 
-Example (Intern-S2-Preview + Qwen3.5-4B memory, tp=2 for 2-GPU debug):
+Default paths target Intern-S2-Preview + fine-tuned 4B memory with **fixed** fusion
+(``lambda_value``). The bundled ``DEFAULT_ROUTER_PATH`` is trained for Intern-S2-397B
+base hidden size and does **not** match Preview; use ``--mode fixed`` for Preview.
 
-    python examples/memdec/main.py \\
+Example (Intern-S2-Preview + memory, single GPU):
+
+    CUDA_VISIBLE_DEVICES=0 python examples/memdec/main.py \\
         --base-model-path /path/to/Intern-S2-Preview \\
         --memory-model-path /path/to/memory/checkpoint \\
-        --router-path /path/to/router \\
-        --mode adaptive --tp 2 --max-batch-size 4
+        --mode fixed --tp 1 --max-new-tokens 64
+
+Adaptive mode requires a router checkpoint whose input dim matches
+``base_hidden_size + memory_hidden_size + 4 * scalar_proj_dim`` for your pair.
 """
 
 from __future__ import annotations
@@ -32,12 +38,13 @@ DEFAULT_BASE_MODEL_PATH = (
     'snapshots/4f57cab513689b089019fce4ad24e26520df183c'
 )
 DEFAULT_MEM_MODEL_PATH = (
-    '/mnt/shared-storage-gpfs2/gpfs2-shared-public/huggingface/hub/models--Qwen--Qwen3.5-4B/'
-    'snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a'
+    '/mnt/shared-storage-user/llmrazor-share/memdecode/'
+    'interns2_4bmemory_m4match_clean8n_tp2_mbs1_gbs1024_lr4e5_wu5p_3epoch_hf'
 )
 DEFAULT_ROUTER_PATH = (
+    # Trained for Intern-S2-397B + 4B memory (mlp input dim 6912). Not for Preview (4864).
     '/mnt/shared-storage-user/llmrazor-share/memdecode/'
-    'interns2_4bmemory_m4match_clean8n_tp2_mbs1_gbs1024_lr4e5_wu5p_3epoch_hf/router'
+    'interns2_397b_base02_2806_plus_interns2_4b_mem_m4match_clean8n_sft32k_bio128k_realmm_mlp4_lr4e4_epoch1_20260622'
 )
 
 
@@ -45,12 +52,21 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument('--base-model-path', default=DEFAULT_BASE_MODEL_PATH)
     p.add_argument('--memory-model-path', default=DEFAULT_MEM_MODEL_PATH)
-    p.add_argument('--router-path', default=DEFAULT_ROUTER_PATH)
+    p.add_argument(
+        '--router-path',
+        default=DEFAULT_ROUTER_PATH,
+        help='Adaptive mode only. Router must match base/memory hidden sizes (not Preview + 397B router).',
+    )
     p.add_argument('--arch-name', default=ARCH_NAME)
-    p.add_argument('--mode', choices=['fixed', 'adaptive'], default='adaptive')
+    p.add_argument(
+        '--mode',
+        choices=['fixed', 'adaptive'],
+        default='fixed',
+        help='Fusion mode. Use fixed for Intern-S2-Preview unless you have a matching router.',
+    )
     p.add_argument('--server-name', default='127.0.0.1')
     p.add_argument('--server-port', type=int, default=23333)
-    p.add_argument('--tp', type=int, default=2)
+    p.add_argument('--tp', type=int, default=1)
     p.add_argument('--dp', type=int, default=1)
     p.add_argument('--ep', type=int, default=1)
     p.add_argument('--cache-max-entry-count', type=float, default=0.8)
@@ -70,7 +86,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--top-p', type=float, default=1.0)
     p.add_argument('--prompt', default='Explain MemDecode in one concise sentence.')
     p.add_argument('--timeout', type=int, default=3600)
-    p.add_argument('--cuda', default='0,1', help='CUDA_VISIBLE_DEVICES override')
     return p.parse_args()
 
 
@@ -139,7 +154,6 @@ def main() -> int:
         raise FileNotFoundError(f'router path does not exist: {args.router_path}')
 
     env = os.environ.copy()
-    env['CUDA_VISIBLE_DEVICES'] = args.cuda
 
     hf_overrides = build_hf_overrides(args)
     server_url = f'http://{args.server_name}:{args.server_port}'

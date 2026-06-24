@@ -13,13 +13,13 @@ import torch.nn.functional as F
 from torch import nn
 from transformers import AutoConfig
 
-from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.patch import build_model_from_hf_config
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
 from lmdeploy.pytorch.utils import get_logger
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_model_weights
 
-logger = get_logger('memdecode')
+logger = get_logger('lmdeploy')
 
 
 class RouterNetwork(nn.Module):
@@ -117,6 +117,17 @@ def get_hidden_size(config) -> int:
     raise ValueError('Cannot resolve hidden_size from config.')
 
 
+def get_vocab_size(config) -> int:
+    """Resolve vocab size from nested HF configs."""
+    if hasattr(config, 'vocab_size') and config.vocab_size is not None:
+        return int(config.vocab_size)
+    if hasattr(config, 'text_config') and hasattr(config.text_config, 'vocab_size'):
+        return int(config.text_config.vocab_size)
+    if hasattr(config, 'llm_config') and hasattr(config.llm_config, 'vocab_size'):
+        return int(config.llm_config.vocab_size)
+    raise ValueError('Cannot resolve vocab_size from config.')
+
+
 class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
     """Dual-model wrapper that fuses base and memory logits."""
 
@@ -141,10 +152,16 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         if self.base_model_path is None:
             raise ValueError('`base_model_path` is required for MemDecodeForCausalLM')
 
+        logger.warning(
+            'Initializing MemDecodeForCausalLM: base=%s memory=%s adaptive_router=%s lambda_value=%s',
+            self.base_model_path,
+            self.memory_model_path,
+            self.adaptive_router,
+            self.lambda_value,
+        )
+
         base_hf_config = self._load_hf_config(self.base_model_path, trust_remote_code=trust_remote_code)
-        base_dtype = self._get_hf_dtype(config)
-        if base_dtype is None:
-            base_dtype = dtype
+        base_dtype = self._resolve_build_dtype(base_hf_config, dtype)
 
         # build true base model (do not recursively build MemDecodeForCausalLM)
         self.base_model = build_model_from_hf_config(base_hf_config,
@@ -152,11 +169,12 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
                                                     device=device,
                                                     ctx_mgr=self.ctx_mgr,
                                                     build_model_ctx=self.ctx_mgr.build_ctx)
+        self.base_vocab_size = get_vocab_size(self.base_model.config)
         self.memory_model = None
         self.memory_model_config = None
         if self.memory_model_path is not None:
             memory_hf_config = self._load_hf_config(self.memory_model_path, trust_remote_code=trust_remote_code)
-            memory_dtype = getattr(memory_hf_config, 'torch_dtype', base_dtype)
+            memory_dtype = self._resolve_build_dtype(memory_hf_config, base_dtype)
             memory_build_ctx = self.ctx_mgr.build_ctx
             if memory_build_ctx is not None:
                 memory_build_ctx = replace(memory_build_ctx, quant_config=None)
@@ -199,12 +217,72 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
             return getattr(torch, hf_dtype)
         return hf_dtype
 
+    @classmethod
+    def _resolve_build_dtype(cls, hf_config, fallback: torch.dtype | None):
+        dtype = cls._get_hf_dtype(hf_config)
+        if dtype is None and hasattr(hf_config, 'text_config'):
+            dtype = cls._get_hf_dtype(hf_config.text_config)
+        if dtype is None:
+            dtype = fallback
+        return dtype
+
     @staticmethod
-    def _align_vocab_dim(logits: torch.Tensor, target_vocab_size: int) -> torch.Tensor:
-        if logits.size(-1) >= target_vocab_size:
+    def _unwrap_hidden_states(model_output: torch.Tensor | dict) -> torch.Tensor:
+        if isinstance(model_output, dict):
+            return model_output['hidden_states']
+        return model_output
+
+    @staticmethod
+    def _align_vocab_to_base(logits: torch.Tensor, base_vocab_size: int) -> torch.Tensor:
+        vocab_size = logits.size(-1)
+        if vocab_size == base_vocab_size:
             return logits
-        pad = logits.new_full((*logits.shape[:-1], target_vocab_size - logits.size(-1)), float('-inf'))
+        if vocab_size > base_vocab_size:
+            return logits[..., :base_vocab_size]
+        pad = logits.new_full((*logits.shape[:-1], base_vocab_size - vocab_size), float('-inf'))
         return torch.cat([logits, pad], dim=-1)
+
+    def _align_fusion_logits(self, base_logits: torch.Tensor, mem_logits: torch.Tensor):
+        base_vocab_size = base_logits.size(-1)
+        if base_vocab_size != self.base_vocab_size:
+            logger.warning(
+                f'Base logits vocab ({base_vocab_size}) differs from config '
+                f'base_vocab_size ({self.base_vocab_size}); using logits size for fusion.',
+            )
+        base_logits = self._align_vocab_to_base(base_logits, base_vocab_size)
+        mem_logits = self._align_vocab_to_base(mem_logits, base_vocab_size)
+        return base_logits, mem_logits
+
+    def _get_fixed_log_mixing_weights(self) -> tuple[float, float]:
+        lam = self.lambda_value
+        if lam <= 0.0:
+            return float('-inf'), 0.0
+        if lam >= 1.0:
+            return 0.0, float('-inf')
+        return math.log(lam), math.log1p(-lam)
+
+    def _log_fusion_debug(
+        self,
+        base_logits: torch.Tensor,
+        mem_logits: torch.Tensor,
+        fused_logits: torch.Tensor,
+    ) -> None:
+        """Log fusion tensor shapes.
+
+        Visible on prefill / cudagraph capture only.
+        """
+        ctx = get_step_ctx_manager().current_context()
+        is_decoding = ctx.global_is_decoding() if ctx is not None else None
+        logger.warning(
+            '[memdecode] is_decoding=%s adaptive_router=%s lambda_value=%s '
+            'base_logits=%s mem_logits=%s fused_logits=%s',
+            is_decoding,
+            self.adaptive_router,
+            self.lambda_value,
+            tuple(base_logits.shape),
+            tuple(mem_logits.shape),
+            tuple(fused_logits.shape),
+        )
 
     def get_logits(self, hidden_states: torch.Tensor):
         """MemDecode already outputs logits in hidden_states field."""
@@ -269,7 +347,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        base_hidden_states = self.base_model(
+        base_output = self.base_model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -277,6 +355,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
             **kwargs,
         )
+        base_hidden_states = self._unwrap_hidden_states(base_output)
         base_logits = self.base_model.get_logits(base_hidden_states)
 
         if self.memory_model is None:
@@ -284,7 +363,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
                 'hidden_states': base_logits,
             }
 
-        mem_hidden_states = self.memory_model(
+        mem_output = self.memory_model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=memory_past_key_values,
@@ -292,6 +371,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
             **kwargs,
         )
+        mem_hidden_states = self._unwrap_hidden_states(mem_output)
         mem_logits = self.memory_model.get_logits(mem_hidden_states)
 
         if self.adaptive_router:
@@ -304,6 +384,8 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         else:
             fused_logits, all_routed_experts = self._fixed_fuse(base_logits, mem_logits)
 
+        self._log_fusion_debug(base_logits, mem_logits, fused_logits)
+
         output = {
             'hidden_states': fused_logits,
             'all_routed_experts': all_routed_experts,
@@ -311,12 +393,8 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         return output
 
     def _fixed_fuse(self, base_logits: torch.Tensor, mem_logits: torch.Tensor):
-        target_vocab_size = max(base_logits.size(-1), mem_logits.size(-1))
-        base_logits = self._align_vocab_dim(base_logits, target_vocab_size)
-        mem_logits = self._align_vocab_dim(mem_logits, target_vocab_size)
-
-        log_lambda = math.log(self.lambda_value)
-        log_one_minus_lambda = math.log1p(-self.lambda_value)
+        base_logits, mem_logits = self._align_fusion_logits(base_logits, mem_logits)
+        log_lambda, log_one_minus_lambda = self._get_fixed_log_mixing_weights()
 
         logp_joint = torch.logaddexp(
             F.log_softmax(base_logits, dim=-1) + log_one_minus_lambda,
@@ -434,9 +512,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
             log_one_minus_lambda = torch.where(gate, torch.zeros_like(log_one_minus_lambda), log_one_minus_lambda)
             log_lambda = torch.where(gate, torch.full_like(log_lambda, float('-inf')), log_lambda)
 
-        target_vocab_size = max(base_logits.size(-1), mem_logits.size(-1))
-        base_logits = self._align_vocab_dim(base_logits, target_vocab_size)
-        mem_logits = self._align_vocab_dim(mem_logits, target_vocab_size)
+        base_logits, mem_logits = self._align_fusion_logits(base_logits, mem_logits)
 
         logp_base = F.log_softmax(base_logits.to(self._get_router_device()[0]), dim=-1)
         logp_mem = F.log_softmax(mem_logits.to(self._get_router_device()[0]), dim=-1)
