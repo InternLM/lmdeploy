@@ -15,8 +15,11 @@ PROXY_PORT = 8000
 
 @pytest.fixture(scope='session')
 def config():
-    # Use device-specific config file if DEVICE environment variable is set
-    return get_config()
+    cfg = get_config()
+    device = cfg.get('device')
+    if device:
+        os.environ.setdefault('DEVICE', device)
+    return cfg
 
 
 @pytest.fixture(scope='session')

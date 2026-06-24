@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pytest
 from transformers import AutoTokenizer
-from utils.config_utils import set_device_env_variable, unset_device_env_variable
+from utils.config_utils import get_model_path_from_config, set_device_env_variable, unset_device_env_variable
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.messages import Response
@@ -85,7 +85,7 @@ NTK_CONFIG = {
 
 
 def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     if backend == 'turbomind':
         if 'qwen' in model.lower():
             backend_config = TurbomindEngineConfig(session_len=session_len,

@@ -7,7 +7,13 @@ from time import time as time_time
 from typing import Any
 
 import requests
-from utils.config_utils import get_case_str_by_config, get_cli_common_param, resolve_extra_params
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_rank_table
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_model_path_from_config,
+    resolve_extra_params,
+)
 
 # Default constants
 LM_DEPLOY_API_PORT = 8000
@@ -156,10 +162,11 @@ class RayLMDeployManager:
         Worker nodes: Do not start the service, only verify that the master node's API Server is ready.
         """
         # Derive model_path from config and run_config
-        model_path = os.path.join(config['model_path'], run_config['model'])
+        model_path = get_model_path_from_config(config, run_config['model'])
 
         extra_params = run_config.get('extra_params', {})
-        resolve_extra_params(extra_params, config['model_path'])
+        resolve_extra_params(extra_params, config)
+        ensure_ascend_rank_table(config, run_config)
 
         # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
         case_name = get_case_str_by_config(run_config)
@@ -184,7 +191,8 @@ class RayLMDeployManager:
 
             print(f"🚀 Master node starting LMDeploy API Server: {' '.join(cmd)}")
             self._log_file = open(log_path, 'w')
-            self._api_process = subprocess.Popen(cmd, stdout=self._log_file, stderr=self._log_file)
+            env = build_ascend_multinode_env(config, run_config)
+            self._api_process = subprocess.Popen(cmd, stdout=self._log_file, stderr=self._log_file, env=env)
             print(f'📝 API Server log: {log_path}')
 
             # Wait for service to be ready

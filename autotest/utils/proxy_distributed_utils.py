@@ -6,7 +6,13 @@ import time
 from typing import Any
 
 import requests
-from utils.config_utils import get_case_str_by_config, get_cli_common_param, resolve_extra_params
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_rank_table
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_model_path_from_config,
+    resolve_extra_params,
+)
 from utils.ray_distributed_utils import verify_service_functionality
 
 time_time = time.time
@@ -228,7 +234,7 @@ class ApiServerPerTest:
         self.run_config = run_config
 
         model_name = run_config['model']
-        self.model_path = os.path.join(config['model_path'], model_name)
+        self.model_path = get_model_path_from_config(config, model_name)
 
         self.master_addr = proxy_manager.master_addr
         self.proxy_port = proxy_manager.proxy_port
@@ -246,7 +252,8 @@ class ApiServerPerTest:
         proxy_url = f'http://{self.master_addr}:{self.proxy_port}'
 
         extra_params = self.run_config.get('extra_params', {})
-        resolve_extra_params(extra_params, self.config['model_path'])
+        resolve_extra_params(extra_params, self.config)
+        ensure_ascend_rank_table(self.config, self.run_config)
 
         # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
         case_name = get_case_str_by_config(self.run_config)
@@ -272,7 +279,12 @@ class ApiServerPerTest:
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, f'log_{case_name}_{timestamp}.log')
         self._log_file = open(log_path, 'w')
-        self.api_process = subprocess.Popen(cmd, stdout=self._log_file, stderr=self._log_file)
+        env = build_ascend_multinode_env(self.config, self.run_config)
+        env['MASTER_PORT'] = os.getenv('MASTER_PORT', '29500')
+        self.api_process = subprocess.Popen(cmd,
+                                            stdout=self._log_file,
+                                            stderr=self._log_file,
+                                            env=env)
         print(f'📝 API Server log: {log_path}')
 
     def wait_until_ready(self):
