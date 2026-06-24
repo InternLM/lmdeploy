@@ -335,6 +335,26 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
 
 
 @dataclass
+class MemDecodeConfig:
+    """Configuration for MemDecode auxiliary memory model and fusion."""
+
+    memory_model_path: str
+    memory_model_config: 'ModelConfig'
+    lambda_value: float = 1.0
+    adaptive_router: bool = False
+    router_path: str | None = None
+    lambda_base_only_threshold: float = -1.0
+
+    def __post_init__(self):
+        self.lambda_value = float(self.lambda_value)
+        self.lambda_base_only_threshold = float(self.lambda_base_only_threshold)
+        if not 0.0 <= self.lambda_value <= 1.0:
+            raise ValueError(f'lambda_value must be in [0, 1], got {self.lambda_value}')
+        if self.adaptive_router and self.router_path is None:
+            raise ValueError('router_path is required when adaptive_router is enabled.')
+
+
+@dataclass
 class ModelConfig:
     """Config of model."""
 
@@ -390,13 +410,7 @@ class ModelConfig:
     use_mrope: bool = False
 
     # memdecode
-    base_model_path: str = None
-    memory_model_path: str = None
-    memory_model_config: 'ModelConfig | None' = None
-    lambda_value: float = 1.0
-    adaptive_router: bool = False
-    router_path: str = None
-    lambda_base_only_threshold: float = -1.0
+    memdecode_config: MemDecodeConfig | None = None
 
     def get_head_size(self):
         """Get head size."""
@@ -414,6 +428,18 @@ class ModelConfig:
         num_q_heads = self.num_attention_heads // tp
         num_kv_heads = max(self.num_key_value_heads // tp, 1)
         return num_q_heads, num_kv_heads
+
+    def validate_memdecode_config(self):
+        """Validate base and memory model compatibility for MemDecode."""
+        memdecode_config = self.memdecode_config
+        if memdecode_config is None:
+            return
+
+        memory_model_config = memdecode_config.memory_model_config
+        base_has_state = len(self.states_shapes) > 0
+        memory_has_state = len(memory_model_config.states_shapes) > 0
+        if base_has_state != memory_has_state:
+            raise ValueError('Base and memory model must both use SSM state caches or both not use them.')
 
     @classmethod
     def from_pretrained(
@@ -454,7 +480,6 @@ class ModelConfig:
         hf_config = _patch_quantization_config(hf_config, model_format=model_format)
 
         hf_overrides = dict(hf_overrides or {})
-        base_model_path = pretrained_model_name_or_path
         memory_model_path = hf_overrides.pop('memory_model_path', None)
         lambda_value = hf_overrides.pop('lambda_value', 1.0)
         adaptive_router = hf_overrides.pop('adaptive_router', False)
@@ -471,8 +496,16 @@ class ModelConfig:
                 device_type=device_type,
                 block_size=block_size,
             )
+            memdecode_config = MemDecodeConfig(
+                memory_model_path=memory_model_path,
+                memory_model_config=memory_model_config,
+                lambda_value=lambda_value,
+                adaptive_router=adaptive_router,
+                router_path=router_path,
+                lambda_base_only_threshold=lambda_base_only_threshold,
+            )
         else:
-            memory_model_config = None
+            memdecode_config = None
 
         model_config = cls.from_hf_config(
             hf_config,
@@ -484,25 +517,12 @@ class ModelConfig:
             num_spec_tokens=num_spec_tokens,
             device_type=device_type,
         )
-        model_config.base_model_path = base_model_path
-        model_config.memory_model_path = memory_model_path
-        model_config.memory_model_config = memory_model_config
-        model_config.lambda_value = float(lambda_value)
-        model_config.adaptive_router = adaptive_router
-        model_config.router_path = router_path
-        model_config.lambda_base_only_threshold = float(lambda_base_only_threshold)
+        model_config.memdecode_config = memdecode_config
+        model_config.validate_memdecode_config()
 
-        # keep memdecode settings on the HF config object for model-side
-        # initialization in patched model classes
-        hf_config.base_model_path = base_model_path
-        hf_config.memory_model_path = memory_model_path
-        hf_config.lambda_value = model_config.lambda_value
-        hf_config.adaptive_router = adaptive_router
-        hf_config.router_path = router_path
-        hf_config.lambda_base_only_threshold = model_config.lambda_base_only_threshold
         hf_config.trust_remote_code = trust_remote_code
-        if memory_model_config is not None:
-            memory_vocab_size = memory_model_config.vocab_size
+        if memdecode_config is not None:
+            memory_vocab_size = memdecode_config.memory_model_config.vocab_size
             if memory_vocab_size > model_config.vocab_size:
                 logger.warning(
                     'Memory model vocab_size (%s) is larger than base vocab_size (%s); '
