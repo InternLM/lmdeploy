@@ -2,8 +2,9 @@
 """End-to-end smoke test for MemDecode dual-checkpoint setup in lmdeploy
 PyTorch.
 
-Starts an api_server with base + memory + optional router paths via ``--hf-overrides``,
-then runs a simple Chat Completion call.
+Starts an api_server with a base model plus MemDecode ``memory_model_path`` and
+optional router settings via ``--hf-overrides``, then runs a simple Chat
+Completion call.
 
 Default paths target Intern-S2-Preview + fine-tuned 4B memory with **fixed** fusion
 (``lambda_value``). The bundled ``DEFAULT_ROUTER_PATH`` is trained for Intern-S2-397B
@@ -32,7 +33,6 @@ import time
 
 import requests
 
-ARCH_NAME = 'MemDecodeForCausalLM'
 DEFAULT_BASE_MODEL_PATH = (
     '/mnt/shared-storage-gpfs2/gpfs2-shared-public/huggingface/hub/models--internlm--Intern-S2-Preview/'
     'snapshots/4f57cab513689b089019fce4ad24e26520df183c'
@@ -57,7 +57,6 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_ROUTER_PATH,
         help='Adaptive mode only. Router must match base/memory hidden sizes (not Preview + 397B router).',
     )
-    p.add_argument('--arch-name', default=ARCH_NAME)
     p.add_argument(
         '--mode',
         choices=['fixed', 'adaptive'],
@@ -91,7 +90,6 @@ def parse_args() -> argparse.Namespace:
 
 def build_hf_overrides(args: argparse.Namespace) -> dict:
     overrides = {
-        'architectures': [args.arch_name],
         'memory_model_path': args.memory_model_path,
         'lambda_value': args.lambda_value,
         'adaptive_router': False,
