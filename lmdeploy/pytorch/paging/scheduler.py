@@ -95,6 +95,15 @@ class _PrefillGateCheck:
     reject_action: str | None = None
 
 
+@dataclass(frozen=True)
+class _PrefillReorderInfo:
+    """Immutable pre-admission metadata used only for waiting-list ordering."""
+
+    prefill_token_count: int
+    is_nonfinal_long_prefill: bool
+    estimated_long_chunks: int
+
+
 class Scheduler:
     """Tools to schedule next step.
 
@@ -308,9 +317,10 @@ class Scheduler:
 
         return max_prefill_num
 
-    def _next_long_context_chunk_end(self, seq: SchedulerSequence):
+    def _next_long_context_chunk_end(self, seq: SchedulerSequence, max_prefill_num: int | None = None):
         """Return the exclusive absolute token end for the next chunk."""
-        max_prefill_num = self._long_context_chunk_limit(seq)
+        if max_prefill_num is None:
+            max_prefill_num = self._long_context_chunk_limit(seq)
         chunk_size = min(seq.num_token_ids, max_prefill_num)
         start = seq.num_history_ids
         end = start + chunk_size
@@ -339,7 +349,7 @@ class Scheduler:
         max_prefill_num = self._long_context_chunk_limit(seq)
         if seq.num_token_ids <= max_prefill_num:
             return None
-        return self._next_long_context_chunk_end(seq)
+        return self._next_long_context_chunk_end(seq, max_prefill_num)
 
     def _prefill_admission_token_count(self, seq: SchedulerSequence):
         """Return token budget cost for the next prefill or chunk."""
@@ -351,20 +361,6 @@ class Scheduler:
     def has_waiting_long_prefill(self):
         """Whether a waiting request would need a non-final prefill chunk."""
         return any(self._prefill_kv_token_limit(seq) is not None for seq in self.waiting)
-
-    def _long_prefill_estimated_chunks(self, seq: SchedulerSequence):
-        """Estimate how many non-final long-prefill slots this request
-        needs."""
-        chunk_limit = max(1, self._long_context_chunk_limit(seq))
-        return max(1, (seq.num_token_ids + chunk_limit - 1) // chunk_limit)
-
-    def _long_prefill_priority_key(self, seq: SchedulerSequence, now: float):
-        """Prefer smaller long prompts, with age credit to avoid starvation."""
-        estimated_chunks = self._long_prefill_estimated_chunks(seq)
-        wait_age = max(0.0, now - seq.arrive_time)
-        age_credit = int(wait_age // self._long_prefill_aging_seconds_per_chunk)
-        age_adjusted_chunks = estimated_chunks - age_credit
-        return age_adjusted_chunks, estimated_chunks, seq.arrive_time
 
     def _prepare_prefill_allocation(self, seq: SchedulerSequence, prealloc_size: int):
         """Apply chunk KV limit and return the effective prealloc size."""
@@ -536,26 +532,65 @@ class Scheduler:
             seq.kv_token_limit = None
             return False, alloc_prealloc_size
 
+        reorder_info_cache: dict[int, _PrefillReorderInfo] = {}
+
+        def _get_prefill_reorder_info(seq: SchedulerSequence):
+            """Return reorder-only info before prefix-cache side effects.
+
+            Prefix-cache match/rollback mutates the remaining prompt.  Keep this cache confined to waiting-list ordering
+            and recompute fresh values in the admission path below.
+            """
+            seq_key = id(seq)
+            info = reorder_info_cache.get(seq_key)
+            if info is not None:
+                return info
+
+            chunk_limit = self._long_context_chunk_limit(seq)
+            if seq.num_token_ids <= chunk_limit:
+                info = _PrefillReorderInfo(prefill_token_count=seq.num_token_ids,
+                                           is_nonfinal_long_prefill=False,
+                                           estimated_long_chunks=1)
+            else:
+                kv_token_limit = self._next_long_context_chunk_end(seq, chunk_limit)
+                safe_chunk_limit = max(1, chunk_limit)
+                info = _PrefillReorderInfo(
+                    prefill_token_count=max(0, kv_token_limit - seq.num_history_ids),
+                    is_nonfinal_long_prefill=True,
+                    estimated_long_chunks=max(1, (seq.num_token_ids + safe_chunk_limit - 1) // safe_chunk_limit),
+                )
+            reorder_info_cache[seq_key] = info
+            return info
+
+        def _long_prefill_priority_key_for_reorder(seq: SchedulerSequence, now: float):
+            """Prefer smaller long prompts, with age credit to avoid
+            starvation."""
+            info = _get_prefill_reorder_info(seq)
+            wait_age = max(0.0, now - seq.arrive_time)
+            age_credit = int(wait_age // self._long_prefill_aging_seconds_per_chunk)
+            age_adjusted_chunks = info.estimated_long_chunks - age_credit
+            return age_adjusted_chunks, info.estimated_long_chunks, seq.arrive_time
+
         def _split_waiting_by_prefill_kind(waiting: SeqList):
             """Split waiting requests into normal/final and non-final long
             prefill."""
             normal_waiting: SeqList = []
             long_waiting: SeqList = []
             for seq in waiting:
-                if self._prefill_kv_token_limit(seq) is None:
-                    normal_waiting.append(seq)
-                else:
+                if _get_prefill_reorder_info(seq).is_nonfinal_long_prefill:
                     long_waiting.append(seq)
+                else:
+                    normal_waiting.append(seq)
             return normal_waiting, long_waiting
 
         def _sort_normal_prefills(waiting: SeqList):
-            return sorted(waiting, key=lambda seq: (self._prefill_admission_token_count(seq), seq.arrive_time))
+            return sorted(waiting, key=lambda seq: (_get_prefill_reorder_info(seq).prefill_token_count,
+                                                   seq.arrive_time))
 
         def _sort_long_prefills_for_long_turn(waiting: SeqList):
             if self._long_prefill_policy != 'size':
                 return waiting
             now = time.perf_counter()
-            return sorted(waiting, key=lambda seq: self._long_prefill_priority_key(seq, now))
+            return sorted(waiting, key=lambda seq: _long_prefill_priority_key_for_reorder(seq, now))
 
         def _reorder_waiting_for_long_turn(waiting: SeqList):
             """Choose one long waiter, then fill the turn with normal

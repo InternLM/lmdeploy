@@ -602,6 +602,25 @@ def test_scheduler_budget_gate_uses_prefix_hit_to_admit_sibling():
     assert cache_hit_tail.num_token_ids == 1
 
 
+def test_scheduler_reorder_cache_stays_order_only_after_prefix_hit():
+    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=16)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size)
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    cache_hit_tail = scheduler.add_session(1).add_sequence([1] * block_size + [3])
+    normal = scheduler.add_session(2).add_sequence([4] * (block_size - 1))
+
+    output = scheduler.schedule(is_prefill=True, prefer_long_prefill=True)
+
+    assert output.running == [cache_hit_tail, normal]
+    assert cache_hit_tail.num_history_ids == block_size
+    assert cache_hit_tail.num_token_ids == 1
+    assert cache_hit_tail.cached_tokens == block_size
+    assert normal.status == MessageStatus.READY
+
+
 def test_scheduler_rolls_back_prefix_match_for_prefill_gate_when_tail_still_exceeds_budget():
     scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=16)
 
