@@ -206,9 +206,14 @@ class MemDecodeFusion(nn.Module):
         memory_probs = memory_log_probs.exp()
         base_confidence = base_probs.max(dim=-1).values
         memory_confidence = memory_probs.max(dim=-1).values
-        base_entropy = -(base_probs * base_log_probs).sum(dim=-1)
-        memory_entropy = -(memory_probs * memory_log_probs).sum(dim=-1)
-        return torch.stack((base_confidence, memory_confidence, base_entropy, memory_entropy), dim=-1)
+        base_entropy = MemDecodeFusion._entropy(base_probs, base_log_probs)
+        memory_entropy = MemDecodeFusion._entropy(memory_probs, memory_log_probs)
+        return torch.stack((base_confidence, base_entropy, memory_confidence, memory_entropy), dim=-1)
+
+    @staticmethod
+    def _entropy(probs: torch.Tensor, log_probs: torch.Tensor) -> torch.Tensor:
+        finite_log_probs = torch.where(torch.isfinite(log_probs), log_probs, torch.zeros_like(log_probs))
+        return -(probs * finite_log_probs).sum(dim=-1)
 
     def _router_dtype(self) -> torch.dtype:
         assert self.router is not None
@@ -231,7 +236,6 @@ class MemDecodeFusion(nn.Module):
         config = {
             'num_layers': 1,
             'input_mode': 'both',
-            'use_scalars': False,
             'scalar_proj_dim': 0,
             'dropout': 0.0,
         }

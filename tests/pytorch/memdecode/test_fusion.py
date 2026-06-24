@@ -203,6 +203,72 @@ def test_lambda_base_only_threshold_gates_to_base_only(tmp_path):
     assert not routing_info['thresholded_log_weights'].requires_grad
 
 
+def test_adaptive_scalar_features_ignore_padded_negative_infinity(tmp_path):
+    router_config = {
+        'num_layers': 1,
+        'input_mode': 'mem_hidden_both_scalars',
+        'use_scalars': True,
+        'scalar_proj_dim': 0,
+        'hidden_dim': 4,
+        'dropout': 0.0,
+    }
+    router_path = _write_router_checkpoint(tmp_path / 'router', router_config, output_bias=[0.5, -0.5])
+    fusion = _fusion(
+        _memdecode_config(adaptive_router=True, router_path=str(router_path)),
+        base_hidden_size=2,
+        memory_hidden_size=3,
+        base_vocab_size=4,
+    )
+    base_logits = torch.tensor([[1.0, 0.0, -1.0, -2.0]])
+    memory_logits = torch.tensor([[2.0, -2.0]])
+
+    fused, routing_info = fusion(
+        base_logits,
+        memory_logits,
+        base_hidden_states=torch.randn(1, 2),
+        memory_hidden_states=torch.randn(1, 3),
+    )
+
+    log_weights = torch.log_softmax(torch.tensor([[0.5, -0.5]]), dim=-1)
+    aligned_memory = torch.tensor([[2.0, -2.0, -torch.inf, -torch.inf]])
+    expected = torch.logaddexp(
+        torch.log_softmax(base_logits, dim=-1) + log_weights[:, 0:1],
+        torch.log_softmax(aligned_memory, dim=-1) + log_weights[:, 1:2],
+    )
+    assert torch.isfinite(routing_info['log_weights']).all()
+    torch.testing.assert_close(routing_info['log_weights'], log_weights)
+    torch.testing.assert_close(fused, expected)
+
+
+def test_mem_hidden_both_scalars_uses_implicit_scalar_architecture(tmp_path):
+    router_config = {
+        'num_layers': 1,
+        'input_mode': 'mem_hidden_both_scalars',
+        'scalar_proj_dim': 0,
+        'hidden_dim': 4,
+        'dropout': 0.0,
+    }
+    router_path = _write_router_checkpoint(tmp_path / 'router', router_config, output_bias=[-0.25, 0.25])
+    fusion = _fusion(
+        _memdecode_config(adaptive_router=True, router_path=str(router_path)),
+        base_hidden_size=2,
+        memory_hidden_size=3,
+    )
+
+    fused, routing_info = fusion(
+        torch.tensor([[1.0, 0.0, -1.0, -2.0]]),
+        torch.tensor([[-2.0, -1.0, 0.0, 1.0]]),
+        base_hidden_states=torch.randn(1, 2),
+        memory_hidden_states=torch.randn(1, 3),
+    )
+
+    torch.testing.assert_close(
+        routing_info['log_weights'],
+        torch.log_softmax(torch.tensor([[-0.25, 0.25]]), dim=-1),
+    )
+    assert torch.isfinite(fused).all()
+
+
 def test_router_checkpoint_without_state_dict_fails(tmp_path):
     router_path = tmp_path / 'router.pt'
     torch.save({'config': {'hidden_dim': 4}}, router_path)
