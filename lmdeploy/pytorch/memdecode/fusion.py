@@ -1,12 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.config import MemDecodeConfig, ModelConfig
+from lmdeploy.pytorch.config import MemDecodeConfig
 
 
 def align_logits_to_base(logits: torch.Tensor, base_vocab_size: int) -> torch.Tensor:
@@ -23,47 +25,111 @@ def align_logits_to_base(logits: torch.Tensor, base_vocab_size: int) -> torch.Te
 
 
 class RouterNetwork(nn.Module):
-    """Small router that predicts base/memory log mixing weights per token."""
+    """Router that predicts per-token base/memory log mixing weights."""
 
-    def __init__(self, hidden_size: int, intermediate_size: int | None = None):
+    _INPUT_MODES = {'both', 'memory_only', 'mem_hidden_both_scalars'}
+
+    def __init__(self, config: dict[str, Any], base_hidden_size: int, memory_hidden_size: int):
         super().__init__()
-        self.hidden_size = int(hidden_size)
-        if intermediate_size is None:
-            self.network = nn.Linear(self.hidden_size, 2)
-        else:
-            self.network = nn.Sequential(
-                nn.Linear(self.hidden_size, int(intermediate_size)),
-                nn.GELU(),
-                nn.Linear(int(intermediate_size), 2),
-            )
+        self.config = dict(config)
+        self.input_mode = self.config.get('input_mode', 'both')
+        if self.input_mode not in self._INPUT_MODES:
+            raise ValueError(f'unsupported router input_mode: {self.input_mode}')
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return torch.log_softmax(self.network(hidden_states), dim=-1)
+        self.use_scalars = bool(self.config.get('use_scalars', self.input_mode == 'mem_hidden_both_scalars'))
+        scalar_proj_dim = int(self.config.get('scalar_proj_dim', 0) or 0)
+        self.scalar_proj = nn.Linear(4, scalar_proj_dim) if self.use_scalars and scalar_proj_dim > 0 else None
+
+        hidden_dim = int(self.config.get('hidden_dim', max(base_hidden_size, memory_hidden_size)))
+        num_layers = max(int(self.config.get('num_layers', 1)), 1)
+        dropout = float(self.config.get('dropout', 0.0))
+        input_dim = self._hidden_input_dim(base_hidden_size, memory_hidden_size)
+        if self.use_scalars:
+            input_dim += scalar_proj_dim if self.scalar_proj is not None else 4
+
+        layers: list[nn.Module] = []
+        if num_layers == 1:
+            layers.append(nn.Linear(input_dim, 2))
+        else:
+            layers.extend([nn.Linear(input_dim, hidden_dim), nn.GELU()])
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            for _ in range(num_layers - 2):
+                layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.GELU()])
+                if dropout > 0:
+                    layers.append(nn.Dropout(dropout))
+            layers.append(nn.Linear(hidden_dim, 2))
+        self.network = nn.Sequential(*layers)
+
+    def forward(
+        self,
+        base_hidden_states: torch.Tensor,
+        memory_hidden_states: torch.Tensor,
+        scalar_features: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        router_input = self._hidden_input(base_hidden_states, memory_hidden_states)
+        if self.use_scalars:
+            if scalar_features is None:
+                raise ValueError('scalar_features are required for this router configuration.')
+            if self.scalar_proj is not None:
+                scalar_features = self.scalar_proj(scalar_features)
+            router_input = torch.cat((router_input, scalar_features), dim=-1)
+        return torch.log_softmax(self.network(router_input), dim=-1)
+
+    def _hidden_input_dim(self, base_hidden_size: int, memory_hidden_size: int) -> int:
+        if self.input_mode == 'both':
+            return int(base_hidden_size) + int(memory_hidden_size)
+        if self.input_mode in {'memory_only', 'mem_hidden_both_scalars'}:
+            return int(memory_hidden_size)
+        raise AssertionError('unreachable')
+
+    def _hidden_input(self, base_hidden_states: torch.Tensor, memory_hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.input_mode == 'both':
+            return torch.cat((base_hidden_states, memory_hidden_states), dim=-1)
+        if self.input_mode in {'memory_only', 'mem_hidden_both_scalars'}:
+            return memory_hidden_states
+        raise AssertionError('unreachable')
 
 
 class MemDecodeFusion(nn.Module):
     """Fuse base and memory model logits into log probabilities."""
 
-    def __init__(self, model_config: ModelConfig, memdecode_config: MemDecodeConfig):
+    def __init__(
+        self,
+        config: MemDecodeConfig,
+        base_hidden_size: int,
+        memory_hidden_size: int,
+        base_vocab_size: int,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
         super().__init__()
-        self.model_config = model_config
-        self.memdecode_config = memdecode_config
-        self.base_vocab_size = int(model_config.vocab_size)
-        self.lambda_value = float(memdecode_config.lambda_value)
-        self.adaptive_router = bool(memdecode_config.adaptive_router)
-        self.lambda_base_only_threshold = float(memdecode_config.lambda_base_only_threshold)
-        self.router: RouterNetwork | nn.Module | None = None
+        self.config = config
+        self.base_hidden_size = int(base_hidden_size)
+        self.memory_hidden_size = int(memory_hidden_size)
+        self.base_vocab_size = int(base_vocab_size)
+        self.lambda_value = float(config.lambda_value)
+        self.adaptive_router = bool(config.adaptive_router)
+        self.lambda_base_only_threshold = float(config.lambda_base_only_threshold)
+        self.router: RouterNetwork | None = None
+        self.router_config: dict[str, Any] | None = None
 
         if self.adaptive_router:
-            if memdecode_config.router_path is None:
+            if config.router_path is None:
                 raise ValueError('router_path is required when adaptive_router is enabled.')
-            self.router = self._load_router(memdecode_config.router_path)
+            self.router_config, checkpoint_path = self._resolve_router_config_and_checkpoint(config.router_path)
+            self.router = RouterNetwork(self.router_config, self.base_hidden_size, self.memory_hidden_size)
+            state_dict = self._load_router_state_dict(checkpoint_path)
+            self.router.load_state_dict(state_dict)
+            self.router.eval()
+            self.router.to(device=device, dtype=dtype)
 
     def forward(
         self,
         base_logits: torch.Tensor,
         memory_logits: torch.Tensor,
-        hidden_states: torch.Tensor | None = None,
+        base_hidden_states: torch.Tensor | None = None,
+        memory_hidden_states: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
         base_logits = align_logits_to_base(base_logits, self.base_vocab_size)
         memory_logits = align_logits_to_base(memory_logits, self.base_vocab_size)
@@ -71,7 +137,12 @@ class MemDecodeFusion(nn.Module):
         memory_log_probs = torch.log_softmax(memory_logits, dim=-1)
 
         if self.adaptive_router:
-            return self._adaptive_fusion(base_log_probs, memory_log_probs, hidden_states)
+            return self._adaptive_fusion(
+                base_log_probs,
+                memory_log_probs,
+                base_hidden_states=base_hidden_states,
+                memory_hidden_states=memory_hidden_states,
+            )
 
         if self.lambda_value == 0.0:
             return base_log_probs, None
@@ -87,16 +158,23 @@ class MemDecodeFusion(nn.Module):
         self,
         base_log_probs: torch.Tensor,
         memory_log_probs: torch.Tensor,
-        hidden_states: torch.Tensor | None,
+        base_hidden_states: torch.Tensor | None,
+        memory_hidden_states: torch.Tensor | None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        if hidden_states is None:
-            raise ValueError('hidden_states are required when adaptive_router is enabled.')
+        if base_hidden_states is None or memory_hidden_states is None:
+            raise ValueError(
+                'base_hidden_states and memory_hidden_states are required when adaptive_router is enabled.'
+            )
 
         assert self.router is not None
-        self.router.to(device=base_log_probs.device)
         router_dtype = self._router_dtype()
-        router_hidden_states = hidden_states.to(device=base_log_probs.device, dtype=router_dtype)
-        log_weights = self.router(router_hidden_states)
+        router_device = base_log_probs.device
+        self.router.to(device=router_device)
+        base_hidden_states = base_hidden_states.to(device=router_device, dtype=router_dtype)
+        memory_hidden_states = memory_hidden_states.to(device=router_device, dtype=router_dtype)
+        scalar_features = self._scalar_features(base_log_probs, memory_log_probs).to(dtype=router_dtype)
+
+        log_weights = self.router(base_hidden_states, memory_hidden_states, scalar_features)
         log_weights = log_weights.to(dtype=base_log_probs.dtype)
         if log_weights.shape[-1] != 2:
             raise ValueError(f'router must produce 2 log mixing weights, got {log_weights.shape[-1]}')
@@ -122,32 +200,76 @@ class MemDecodeFusion(nn.Module):
         fused = torch.logaddexp(base_log_probs + log_weights[..., 0:1], memory_log_probs + log_weights[..., 1:2])
         return fused, routing_info
 
+    @staticmethod
+    def _scalar_features(base_log_probs: torch.Tensor, memory_log_probs: torch.Tensor) -> torch.Tensor:
+        base_probs = base_log_probs.exp()
+        memory_probs = memory_log_probs.exp()
+        base_confidence = base_probs.max(dim=-1).values
+        memory_confidence = memory_probs.max(dim=-1).values
+        base_entropy = -(base_probs * base_log_probs).sum(dim=-1)
+        memory_entropy = -(memory_probs * memory_log_probs).sum(dim=-1)
+        return torch.stack((base_confidence, memory_confidence, base_entropy, memory_entropy), dim=-1)
+
     def _router_dtype(self) -> torch.dtype:
         assert self.router is not None
         for parameter in self.router.parameters():
             return parameter.dtype
         return torch.float32
 
-    def _load_router(self, router_path: str) -> RouterNetwork | nn.Module:
-        checkpoint = torch.load(Path(router_path), map_location='cpu')
-        if isinstance(checkpoint, nn.Module):
-            return checkpoint
-        if not isinstance(checkpoint, dict):
-            raise ValueError('router checkpoint must be a dict or nn.Module.')
+    @classmethod
+    def _resolve_router_config_and_checkpoint(cls, router_path: str) -> tuple[dict[str, Any], Path]:
+        path = Path(router_path)
+        if path.is_dir():
+            checkpoint_path = cls._latest_checkpoint(path)
+            config_path = path / 'router_config.json'
+        else:
+            checkpoint_path = path
+            config_path = path.parent / 'router_config.json'
 
-        config = self._router_config_from_checkpoint(checkpoint)
-        hidden_size = int(config.get('hidden_size', self.model_config.hidden_size))
-        intermediate_size = config.get('intermediate_size')
-        router = RouterNetwork(hidden_size=hidden_size, intermediate_size=intermediate_size)
-
-        state_dict = self._router_state_dict_from_checkpoint(checkpoint)
-        if state_dict:
-            router.load_state_dict(state_dict)
-        return router
+        checkpoint_config = cls._router_config_from_checkpoint(checkpoint_path)
+        file_config = cls._router_config_from_file(config_path)
+        config = {
+            'num_layers': 1,
+            'input_mode': 'both',
+            'use_scalars': False,
+            'scalar_proj_dim': 0,
+            'dropout': 0.0,
+        }
+        config.update(checkpoint_config)
+        config.update(file_config)
+        return config, checkpoint_path
 
     @staticmethod
-    def _router_config_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
-        config = checkpoint.get('config', checkpoint.get('router_config', {}))
+    def _latest_checkpoint(router_dir: Path) -> Path:
+        checkpoints = sorted(
+            router_dir.glob('*.pt'),
+            key=lambda path: (MemDecodeFusion._checkpoint_number(path), path.name),
+        )
+        if not checkpoints:
+            raise ValueError(f'no .pt router checkpoints found in {router_dir}')
+        return checkpoints[-1]
+
+    @staticmethod
+    def _checkpoint_number(path: Path) -> int:
+        matches = re.findall(r'\d+', path.stem)
+        return int(matches[-1]) if matches else -1
+
+    @staticmethod
+    def _router_config_from_file(config_path: Path) -> dict[str, Any]:
+        if not config_path.exists():
+            return {}
+        with config_path.open() as f:
+            config = json.load(f)
+        if not isinstance(config, dict):
+            raise ValueError('router_config.json must contain a JSON object.')
+        return config
+
+    @staticmethod
+    def _router_config_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        if not isinstance(checkpoint, dict):
+            return {}
+        config = checkpoint.get('router_config', checkpoint.get('config', {}))
         if config is None:
             return {}
         if not isinstance(config, dict):
@@ -155,14 +277,22 @@ class MemDecodeFusion(nn.Module):
         return config
 
     @staticmethod
-    def _router_state_dict_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, torch.Tensor]:
-        for key in ('state_dict', 'model_state_dict', 'router_state_dict'):
-            state_dict = checkpoint.get(key)
-            if state_dict is not None:
-                if not isinstance(state_dict, dict):
-                    raise ValueError(f'{key} must be a state dict.')
-                return state_dict
+    def _load_router_state_dict(checkpoint_path: Path) -> dict[str, torch.Tensor]:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        if not isinstance(checkpoint, dict):
+            raise ValueError('router checkpoint must be a state-dict checkpoint.')
 
-        if checkpoint and all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
-            return checkpoint
-        return {}
+        state_dict = None
+        for key in ('state_dict', 'router_state_dict', 'model_state_dict'):
+            value = checkpoint.get(key)
+            if value is not None:
+                state_dict = value
+                break
+        if state_dict is None and checkpoint and all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
+            state_dict = checkpoint
+
+        if not isinstance(state_dict, dict) or not state_dict:
+            raise ValueError('router checkpoint must contain a non-empty state dict.')
+        if not all(isinstance(value, torch.Tensor) for value in state_dict.values()):
+            raise ValueError('router checkpoint state dict must contain only tensors.')
+        return state_dict
