@@ -166,5 +166,5 @@ def launch_server(num_nodes: int,
             alive_processes.remove(process)
             if process.exitcode != 0:
                 logger.error(f'Server process {process.pid} exited with code {process.exitcode}')
-                terminate_processes(alive_processes)
+                terminate_processes([process, *alive_processes])
                 raise RuntimeError(f'Server process {process.pid} exited with code {process.exitcode}')
