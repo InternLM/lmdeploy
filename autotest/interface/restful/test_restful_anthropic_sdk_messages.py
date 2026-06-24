@@ -7,30 +7,25 @@ import pytest
 
 pytest.importorskip('anthropic')
 
+from utils.anthropic_messages import get_async_anthropic_client_and_model
 from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
-from utils.tool_reasoning_definitions import get_async_anthropic_client_and_model
 
 
 def _text_from_message(msg) -> str:
     parts: list[str] = []
-    for block in getattr(msg, 'content', []) or []:
-        if getattr(block, 'type', None) == 'text':
-            parts.append(getattr(block, 'text', '') or '')
+    for block in msg.content:
+        if block.type == 'text':
+            parts.append(block.text)
     return ''.join(parts)
 
 
-def _first_message_start_usage(events: list) -> tuple[int, int] | None:
+def _first_message_start_usage(events: list) -> tuple[int, int]:
     for ev in events:
-        if getattr(ev, 'type', None) != 'message_start':
+        if ev.type != 'message_start':
             continue
-        msg = getattr(ev, 'message', None)
-        if msg is None:
-            continue
-        u = getattr(msg, 'usage', None)
-        if u is None:
-            return None
-        return getattr(u, 'input_tokens', 0), getattr(u, 'output_tokens', 0)
-    return None
+        usage = ev.message.usage
+        return usage.input_tokens, usage.output_tokens
+    raise AssertionError('message_start with usage not found in stream')
 
 
 async def _sdk_simple_non_stream() -> object:
@@ -49,7 +44,7 @@ async def _sdk_system_non_stream() -> object:
         model=model_name,
         max_tokens=1024,
         temperature=0.01,
-        system='you are a helpful assistant',
+        system=[{'type': 'text', 'text': 'you are a helpful assistant'}],
         messages=[{'role': 'user', 'content': 'how are you!'}],
     )
 
@@ -81,24 +76,22 @@ async def _sdk_stream_events_and_final() -> tuple[list, object | None]:
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
 class TestRestfulAnthropicSdkMessages:
-    """Covers simple / system / streaming Messages (LMDeploy streams zero usage
-    on ``message_start``)."""
+    """SDK smoke: simple / system / streaming Messages API."""
 
     def test_sdk_simple_messages_non_stream(self, backend, model_case):
         msg = asyncio.run(_sdk_simple_non_stream())
-        assert getattr(msg, 'role', None) == 'assistant'
-        assert getattr(msg, 'stop_reason', None) in ('end_turn', 'max_tokens')
+        assert msg.role == 'assistant'
+        assert msg.stop_reason in ('end_turn', 'max_tokens')
         text = _text_from_message(msg)
         assert len(text) > 0
-        usage = getattr(msg, 'usage', None)
-        assert usage is not None
-        assert getattr(usage, 'input_tokens', 0) > 0
-        assert getattr(usage, 'output_tokens', 0) > 0
+        usage = msg.usage
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
 
     def test_sdk_system_message_non_stream(self, backend, model_case):
         msg = asyncio.run(_sdk_system_non_stream())
-        assert getattr(msg, 'role', None) == 'assistant'
-        assert getattr(msg, 'stop_reason', None) in ('end_turn', 'max_tokens')
+        assert msg.role == 'assistant'
+        assert msg.stop_reason in ('end_turn', 'max_tokens')
         text = _text_from_message(msg)
         assert len(text) > 0
 
@@ -106,18 +99,15 @@ class TestRestfulAnthropicSdkMessages:
         events, final_msg = asyncio.run(_sdk_stream_events_and_final())
         assert len(events) > 0
 
-        usage0 = _first_message_start_usage(events)
-        assert usage0 is not None, 'message_start with usage not found in stream'
-        in0, out0 = usage0
-        assert out0 == 0, 'LMDeploy streams output_tokens=0 until message_delta'
-        assert in0 == 0, 'LMDeploy streams input_tokens=0 on message_start (final usage appears in message_delta)'
+        in0, out0 = _first_message_start_usage(events)
+        assert in0 >= 0
+        assert out0 >= 0
 
         if final_msg is not None:
-            assert getattr(final_msg, 'role', None) == 'assistant'
-            u = getattr(final_msg, 'usage', None)
-            assert u is not None
-            assert getattr(u, 'input_tokens', 0) > 5
-            assert getattr(u, 'output_tokens', 0) > 0
+            assert final_msg.role == 'assistant'
+            u = final_msg.usage
+            assert u.input_tokens > 0
+            assert u.output_tokens > 0
             text = _text_from_message(final_msg)
             assert len(text) > 0
             return

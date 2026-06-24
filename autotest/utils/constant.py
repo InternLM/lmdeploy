@@ -210,7 +210,7 @@ RESTFUL_MODEL_LIST_LATEST = [
     'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B-FP8', 'Qwen/Qwen3.5-122B-A10B',
     'Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-0.6B', 'OpenGVLab/InternVL3_5-30B-A3B',
     'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1', 'meta-llama/Llama-3.2-3B-Instruct',
-    'Qwen/Qwen3-VL-30B-A3B-Instruct',
+    'Qwen/Qwen3-VL-30B-A3B-Instruct', 'internlm/Intern-S2-Preview','internlm/Intern-S2-Preview-FP8',
 ]
 
 RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
