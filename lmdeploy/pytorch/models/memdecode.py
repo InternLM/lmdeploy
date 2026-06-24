@@ -1,16 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from collections.abc import Iterable
-import math
 import json
+import math
 import os
 import re
+from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 import torch
-from torch import nn
 import torch.nn.functional as F
-
+from torch import nn
 from transformers import AutoConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext
@@ -18,7 +18,6 @@ from lmdeploy.pytorch.models.patch import build_model_from_hf_config
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
 from lmdeploy.pytorch.utils import get_logger
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_model_weights
-
 
 logger = get_logger('memdecode')
 
@@ -107,6 +106,17 @@ DEFAULT_ROUTER_CONFIG = {
 }
 
 
+def get_hidden_size(config) -> int:
+    """Resolve hidden size from nested HF configs."""
+    if hasattr(config, 'hidden_size') and config.hidden_size is not None:
+        return int(config.hidden_size)
+    if hasattr(config, 'text_config') and hasattr(config.text_config, 'hidden_size'):
+        return int(config.text_config.hidden_size)
+    if hasattr(config, 'llm_config') and hasattr(config.llm_config, 'hidden_size'):
+        return int(config.llm_config.hidden_size)
+    raise ValueError('Cannot resolve hidden_size from config.')
+
+
 class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
     """Dual-model wrapper that fuses base and memory logits."""
 
@@ -147,11 +157,14 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         if self.memory_model_path is not None:
             memory_hf_config = self._load_hf_config(self.memory_model_path, trust_remote_code=trust_remote_code)
             memory_dtype = getattr(memory_hf_config, 'torch_dtype', base_dtype)
+            memory_build_ctx = self.ctx_mgr.build_ctx
+            if memory_build_ctx is not None:
+                memory_build_ctx = replace(memory_build_ctx, quant_config=None)
             self.memory_model = build_model_from_hf_config(memory_hf_config,
                                                           dtype=memory_dtype,
                                                           device=device,
                                                           ctx_mgr=self.ctx_mgr,
-                                                          build_model_ctx=self.ctx_mgr.build_ctx)
+                                                          build_model_ctx=memory_build_ctx)
 
         self.router = None
         self.router_config = None
@@ -163,8 +176,8 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
             self.router_config = self._load_router_config(self.router_path)
             router_config = self.router_config or DEFAULT_ROUTER_CONFIG
             self.router = RouterNetwork(
-                base_hidden_size=self.base_model.config.hidden_size,
-                mem_hidden_size=self.memory_model.config.hidden_size,
+                base_hidden_size=get_hidden_size(self.base_model.config),
+                mem_hidden_size=get_hidden_size(self.memory_model.config),
                 **router_config,
             )
             self._load_router(self.router_path)
@@ -224,10 +237,15 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
             base_inputs['memory_past_key_values'] = None
             return base_inputs
 
+        memory_state_caches = context.memory_state_caches
+        if memory_state_caches is None:
+            memory_state_caches = context.state_caches
+        memory_context = replace(context, state_caches=memory_state_caches)
+
         memory_inputs = self.memory_model.prepare_inputs_for_generation(
             memory_past_key_values,
             inputs_embeds=inputs_embeds,
-            context=context,
+            context=memory_context,
         )
         base_inputs['memory_past_key_values'] = memory_inputs['past_key_values']
         # keep any embedding patching done by either side
@@ -277,7 +295,12 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         mem_logits = self.memory_model.get_logits(mem_hidden_states)
 
         if self.adaptive_router:
-            fused_logits, all_routed_experts = self._adaptive_fuse(base_logits, mem_logits, base_hidden_states, mem_hidden_states)
+            fused_logits, all_routed_experts = self._adaptive_fuse(
+                base_logits,
+                mem_logits,
+                base_hidden_states,
+                mem_hidden_states,
+            )
         else:
             fused_logits, all_routed_experts = self._fixed_fuse(base_logits, mem_logits)
 
@@ -342,7 +365,7 @@ class MemDecodeForCausalLM(nn.Module, CudaGraphMixin):
         if config_file is None:
             return None
 
-        with open(config_file, 'r', encoding='utf-8') as f:
+        with open(config_file, encoding='utf-8') as f:
             return json.load(f)
 
     @staticmethod

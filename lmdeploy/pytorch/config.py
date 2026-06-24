@@ -467,7 +467,7 @@ class ModelConfig:
                 trust_remote_code=trust_remote_code,
                 dtype=dtype,
                 dist_config=dist_config,
-                model_format=model_format,
+                model_format=None,
                 device_type=device_type,
                 block_size=block_size,
             )

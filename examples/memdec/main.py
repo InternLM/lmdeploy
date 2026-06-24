@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test for MemDecode dual-checkpoint setup in lmdeploy PyTorch.
+"""End-to-end smoke test for MemDecode dual-checkpoint setup in lmdeploy
+PyTorch.
 
-The script starts an api_server process with memdecode configuration passed via
-`--hf-overrides`, then executes a simple Chat Completion call.
+Starts an api_server with base + memory + optional router paths via ``--hf-overrides``,
+then runs a simple Chat Completion call.
 
-Important: this test uses the memdecode interface defined in the implementation
-plan (architecture class name and hf-overrides schema). Adjust `ARCH_NAME` and
-`hf_overrides` fields in sync with final implementation.
+Example (InternS2 397B + Qwen3.5-4B memory, tp=8):
+
+    python examples/memdec/main.py \\
+        --base-model-path workspace/memdecode/merged_interns2_397b \\
+        --memory-model-path /path/to/memory/checkpoint \\
+        --router-path /path/to/router \\
+        --mode adaptive --tp 8 --max-batch-size 16
 """
 
 from __future__ import annotations
@@ -21,11 +26,16 @@ import time
 
 import requests
 
-
 ARCH_NAME = 'MemDecodeForCausalLM'
-DEFAULT_BASE_MODEL_PATH = '/mnt/shared-storage-gpfs2/gpfs2-shared-public/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/2069b3fae1114555f3c020c81410e51fa0f656f2'
-DEFAULT_MEM_MODEL_PATH = '/mnt/shared-storage-user/llmrazor-share/memdecode/vllmHF_results_20260601/memory/qwen3_8b_bioins_sftv3knn_epoch_0'
-DEFAULT_ROUTER_PATH = '/mnt/shared-storage-user/llmrazor-share/memdecode/vllmHF_results_20260601/router/q8raw_mem8_sftv3knn_v2c_g4uniq_reg24_lr5e5'
+DEFAULT_BASE_MODEL_PATH = 'workspace/memdecode/merged_interns2_397b'
+DEFAULT_MEM_MODEL_PATH = (
+    '/mnt/shared-storage-gpfs2/gpfs2-shared-public/huggingface/hub/models--Qwen--Qwen3.5-4B/'
+    'snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a'
+)
+DEFAULT_ROUTER_PATH = (
+    '/mnt/shared-storage-user/llmrazor-share/memdecode/'
+    'interns2_4bmemory_m4match_clean8n_tp2_mbs1_gbs1024_lr4e5_wu5p_3epoch_hf/router'
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,24 +44,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--memory-model-path', default=DEFAULT_MEM_MODEL_PATH)
     p.add_argument('--router-path', default=DEFAULT_ROUTER_PATH)
     p.add_argument('--arch-name', default=ARCH_NAME)
-    p.add_argument('--mode', choices=['fixed', 'adaptive'], default='fixed')
+    p.add_argument('--mode', choices=['fixed', 'adaptive'], default='adaptive')
     p.add_argument('--server-name', default='127.0.0.1')
     p.add_argument('--server-port', type=int, default=23333)
-    p.add_argument('--tp', type=int, default=1)
+    p.add_argument('--tp', type=int, default=8)
     p.add_argument('--dp', type=int, default=1)
     p.add_argument('--ep', type=int, default=1)
     p.add_argument('--cache-max-entry-count', type=float, default=0.8)
-    p.add_argument('--max-batch-size', type=int, default=1)
-    p.add_argument('--lambda-value', type=float, default=0.5, help='Fixed lambda for fused logits.', dest='lambda_value')
+    p.add_argument('--max-batch-size', type=int, default=16)
+    p.add_argument(
+        '--lambda-value',
+        type=float,
+        default=0.5,
+        help='Fixed lambda for fused logits.',
+        dest='lambda_value',
+    )
     p.add_argument('--lambda-base-only-threshold', type=float, default=-1.0,
                    help='Adaptive mode only; if >=0.0, force base-only when lambda < threshold.')
-    p.add_argument('--model-name', default='memdecode-qwen3-8b')
+    p.add_argument('--model-name', default='memdecode-interns2-397b')
     p.add_argument('--max-new-tokens', type=int, default=None)
     p.add_argument('--temperature', type=float, default=0.0)
     p.add_argument('--top-p', type=float, default=1.0)
     p.add_argument('--prompt', default='Explain MemDecode in one concise sentence.')
-    p.add_argument('--timeout', type=int, default=120)
-    p.add_argument('--cuda', default='0', help='CUDA_VISIBLE_DEVICES override')
+    p.add_argument('--timeout', type=int, default=3600)
+    p.add_argument('--cuda', default='0,1,2,3,4,5,6,7', help='CUDA_VISIBLE_DEVICES override')
     return p.parse_args()
 
 

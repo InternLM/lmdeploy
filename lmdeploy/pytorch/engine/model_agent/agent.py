@@ -159,10 +159,14 @@ def model_forward(
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     memory_cache_engine: CacheEngine = None,
+    memory_state_cache_engine: StateCacheEngine = None,
     stream: torch.cuda.Stream = None,
 ):
     """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
+    memory_state_caches = None
+    if memory_state_cache_engine is not None:
+        memory_state_caches = memory_state_cache_engine.state_caches
     with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
         ctx_mgr = model.ctx_mgr
@@ -173,6 +177,7 @@ def model_forward(
             kv_caches=cache_engine.gpu_cache,
             memory_kv_caches=memory_cache_engine.gpu_cache if memory_cache_engine is not None else None,
             state_caches=state_cache_engine.state_caches,
+            memory_state_caches=memory_state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
@@ -298,6 +303,7 @@ class BaseModelAgent:
         self.cache_engine = None
         self.memory_cache_engine = None
         self.state_cache_engine = None
+        self.memory_state_cache_engine = None
         self.profiler: AgentProfiler = None
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
@@ -1127,6 +1133,18 @@ class BaseModelAgent:
             else:
                 self.memory_cache_engine = None
             self.state_cache_engine = StateCacheEngine(self.cache_config)
+            self.memory_state_cache_engine = None
+            mem_model_config = self.model_config.memory_model_config
+            if mem_model_config is not None and len(mem_model_config.states_shapes) > 0:
+                from dataclasses import replace
+
+                mem_state_cache_config = replace(
+                    self.cache_config,
+                    states_shapes=list(mem_model_config.states_shapes),
+                )
+                if self.cache_config.num_state_caches is not None:
+                    mem_state_cache_config.num_state_caches = self.cache_config.num_state_caches
+                self.memory_state_cache_engine = StateCacheEngine(mem_state_cache_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
 
@@ -1135,8 +1153,9 @@ class BaseModelAgent:
             self.patched_model,
             inputs,
             self.cache_engine,
-            memory_cache_engine=self.memory_cache_engine,
             state_cache_engine=self.state_cache_engine,
+            memory_cache_engine=self.memory_cache_engine,
+            memory_state_cache_engine=self.memory_state_cache_engine,
             stream=self.stream,
         )
         return output
@@ -1389,6 +1408,7 @@ class BaseModelAgent:
         self.cache_engine = None
         self.memory_cache_engine = None
         self.state_cache_engine = None
+        self.memory_state_cache_engine = None
         self.reset_graph_runner()
         self.patched_model.get_model().to(device=device, non_blocking=True)
 
@@ -1443,4 +1463,5 @@ class BaseModelAgent:
         self.cache_engine = None
         self.memory_cache_engine = None
         self.state_cache_engine = None
+        self.memory_state_cache_engine = None
         torch.cuda.empty_cache()

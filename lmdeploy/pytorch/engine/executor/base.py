@@ -261,10 +261,11 @@ class ExecutorBase:
                 f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
             )
 
-    def _get_state_cache_mem(self):
+    def _get_state_cache_mem(self, states_shapes=None, cache_config=None):
         """Get state cache mem usage."""
-        cache_config = self.cache_config
-        if len(cache_config.states_shapes) == 0:
+        cache_config = cache_config or self.cache_config
+        states_shapes = states_shapes if states_shapes is not None else cache_config.states_shapes
+        if len(states_shapes) == 0:
             return 0
 
         from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
@@ -278,10 +279,17 @@ class ExecutorBase:
             num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
-        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
+        mems = StateCacheEngine.get_cache_state_size(states_shapes)
         mems *= num_state_caches
 
         return mems
+
+    def _get_mem_state_cache_mem(self) -> int:
+        """Get memory-model state cache mem usage for memdecode."""
+        mem_model_config = self.model_config.memory_model_config
+        if mem_model_config is None or len(mem_model_config.states_shapes) == 0:
+            return 0
+        return self._get_state_cache_mem(mem_model_config.states_shapes, self.cache_config)
 
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""
@@ -301,7 +309,7 @@ class ExecutorBase:
 
     def _reserve_state_cache_mem(self, free_mems: list[int]) -> list[int]:
         """Reserve non-pageable state cache memory from free memory."""
-        state_cache_mem = self._get_state_cache_mem()
+        state_cache_mem = self._get_state_cache_mem() + self._get_mem_state_cache_mem()
         # State cache is allocated as a separate pool and is not governed by
         # cache_max_entry_count, so subtract it from every rank first.
         free_mems = [free_mem - state_cache_mem for free_mem in free_mems]
@@ -403,6 +411,8 @@ class ExecutorBase:
         if self.specdecode_config:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
+        if self.model_config.memory_model_config is not None:
+            logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
         if self.misc_config.empty_init:
             logger.info('Skip warming up model during empty init.')
