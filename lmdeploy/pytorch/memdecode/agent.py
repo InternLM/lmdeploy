@@ -91,7 +91,7 @@ class BaseMemDecodeAgent:
         """Set cache config."""
         pass
 
-    def build_model(self, empty_init: bool = False):
+    def build_model(self, empty_init: bool = False, build_model_ctx=None):
         """Build memory model."""
         pass
 
@@ -141,18 +141,19 @@ class MemDecodeAgent(BaseMemDecodeAgent):
         """Set cache config."""
         self.cache_config = cache_config
 
-    def build_model(self, empty_init: bool = False):
+    def build_model(self, empty_init: bool = False, build_model_ctx=None):
         """Build memory model."""
         with self.memory_context():
             custom_module_map = self.model_config.custom_module_map
             if custom_module_map is not None:
                 update_custom_module_map(custom_module_map)
 
-            build_model_ctx = BuildModelContext(
-                quant_config=self.model_config.quant_config,
-                fp32_lm_head=self.model_config.fp32_lm_head,
-                tie_word_embeddings=self.model_config.tie_word_embeddings,
-            )
+            if build_model_ctx is None:
+                build_model_ctx = BuildModelContext(
+                    quant_config=self.model_config.quant_config,
+                    fp32_lm_head=self.model_config.fp32_lm_head,
+                    tie_word_embeddings=self.model_config.tie_word_embeddings,
+                )
             self.model = build_patched_model(self.model_config, device=self.device, build_model_ctx=build_model_ctx)
             if not empty_init:
                 load_model_weights(self.model, self.memdecode_config.memory_model_path, device=self.device)
@@ -192,13 +193,14 @@ class MemDecodeAgent(BaseMemDecodeAgent):
 
     async def async_forward(self, inputs: ModelInputs):
         """Run memory model forward."""
-        output = memory_model_forward(
-            self.model,
-            inputs,
-            self.model_config,
-            self.cache_engine,
-            state_cache_engine=self.state_cache_engine,
-        )
+        with self.memory_context():
+            output = memory_model_forward(
+                self.model,
+                inputs,
+                self.model_config,
+                self.cache_engine,
+                state_cache_engine=self.state_cache_engine,
+            )
         await asyncio.sleep(0)
         return output
 
