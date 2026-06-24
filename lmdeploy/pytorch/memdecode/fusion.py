@@ -37,15 +37,18 @@ class RouterNetwork(nn.Module):
             raise ValueError(f'unsupported router input_mode: {self.input_mode}')
 
         self.use_scalars = bool(self.config.get('use_scalars', self.input_mode == 'mem_hidden_both_scalars'))
+        self.num_scalars = self._num_scalars_for_input_mode()
         scalar_proj_dim = int(self.config.get('scalar_proj_dim', 0) or 0)
-        self.scalar_proj = nn.Linear(4, scalar_proj_dim) if self.use_scalars and scalar_proj_dim > 0 else None
+        self.scalar_proj = (
+            nn.Linear(self.num_scalars, scalar_proj_dim) if self.use_scalars and scalar_proj_dim > 0 else None
+        )
 
         hidden_dim = int(self.config.get('hidden_dim', max(base_hidden_size, memory_hidden_size)))
         num_layers = max(int(self.config.get('num_layers', 1)), 1)
         dropout = float(self.config.get('dropout', 0.0))
         input_dim = self._hidden_input_dim(base_hidden_size, memory_hidden_size)
         if self.use_scalars:
-            input_dim += scalar_proj_dim if self.scalar_proj is not None else 4
+            input_dim += scalar_proj_dim if self.scalar_proj is not None else self.num_scalars
 
         layers: list[nn.Module] = []
         if num_layers == 1:
@@ -89,6 +92,11 @@ class RouterNetwork(nn.Module):
         if self.input_mode in {'memory_only', 'mem_hidden_both_scalars'}:
             return memory_hidden_states
         raise AssertionError('unreachable')
+
+    def _num_scalars_for_input_mode(self) -> int:
+        if self.input_mode == 'memory_only':
+            return 2
+        return 4
 
 
 class MemDecodeFusion(nn.Module):
@@ -172,7 +180,8 @@ class MemDecodeFusion(nn.Module):
         self.router.to(device=router_device)
         base_hidden_states = base_hidden_states.to(device=router_device, dtype=router_dtype)
         memory_hidden_states = memory_hidden_states.to(device=router_device, dtype=router_dtype)
-        scalar_features = self._scalar_features(base_log_probs, memory_log_probs).to(dtype=router_dtype)
+        scalar_features = self._scalar_features(base_log_probs, memory_log_probs, self.router.input_mode)
+        scalar_features = scalar_features.to(dtype=router_dtype)
 
         log_weights = self.router(base_hidden_states, memory_hidden_states, scalar_features)
         log_weights = log_weights.to(dtype=base_log_probs.dtype)
@@ -201,13 +210,20 @@ class MemDecodeFusion(nn.Module):
         return fused, routing_info
 
     @staticmethod
-    def _scalar_features(base_log_probs: torch.Tensor, memory_log_probs: torch.Tensor) -> torch.Tensor:
+    def _scalar_features(
+        base_log_probs: torch.Tensor,
+        memory_log_probs: torch.Tensor,
+        input_mode: str,
+    ) -> torch.Tensor:
         base_probs = base_log_probs.exp()
         memory_probs = memory_log_probs.exp()
-        base_confidence = base_probs.max(dim=-1).values
         memory_confidence = memory_probs.max(dim=-1).values
-        base_entropy = MemDecodeFusion._entropy(base_probs, base_log_probs)
         memory_entropy = MemDecodeFusion._entropy(memory_probs, memory_log_probs)
+        if input_mode == 'memory_only':
+            return torch.stack((memory_confidence, memory_entropy), dim=-1)
+
+        base_confidence = base_probs.max(dim=-1).values
+        base_entropy = MemDecodeFusion._entropy(base_probs, base_log_probs)
         return torch.stack((base_confidence, base_entropy, memory_confidence, memory_entropy), dim=-1)
 
     @staticmethod

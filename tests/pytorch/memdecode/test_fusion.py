@@ -269,6 +269,50 @@ def test_mem_hidden_both_scalars_uses_implicit_scalar_architecture(tmp_path):
     assert torch.isfinite(fused).all()
 
 
+def test_memory_only_scalar_router_ignores_base_logits(tmp_path):
+    router_config = {
+        'num_layers': 1,
+        'input_mode': 'memory_only',
+        'use_scalars': True,
+        'scalar_proj_dim': 0,
+        'hidden_dim': 4,
+        'dropout': 0.0,
+    }
+    router_dir = tmp_path / 'router'
+    router_dir.mkdir()
+    (router_dir / 'router_config.json').write_text(json.dumps(router_config))
+    router = RouterNetwork(router_config, base_hidden_size=2, memory_hidden_size=3)
+    state_dict = router.state_dict()
+    for name, value in state_dict.items():
+        state_dict[name] = torch.zeros_like(value)
+    state_dict['network.0.weight'][0, 3] = 3.0
+    state_dict['network.0.weight'][1, 4] = -2.0
+    torch.save({'state_dict': state_dict}, router_dir / 'router_1.pt')
+    fusion = _fusion(
+        _memdecode_config(adaptive_router=True, router_path=str(router_dir)),
+        base_hidden_size=2,
+        memory_hidden_size=3,
+    )
+    memory_logits = torch.tensor([[1.5, 0.0, -1.0, -2.0]])
+    base_hidden_states = torch.randn(1, 2)
+    memory_hidden_states = torch.randn(1, 3)
+
+    _, routing_info_a = fusion(
+        torch.tensor([[50.0, -50.0, -50.0, -50.0]]),
+        memory_logits,
+        base_hidden_states=base_hidden_states,
+        memory_hidden_states=memory_hidden_states,
+    )
+    _, routing_info_b = fusion(
+        torch.tensor([[0.0, 0.0, 0.0, 0.0]]),
+        memory_logits,
+        base_hidden_states=base_hidden_states,
+        memory_hidden_states=memory_hidden_states,
+    )
+
+    torch.testing.assert_close(routing_info_a['log_weights'], routing_info_b['log_weights'])
+
+
 def test_router_checkpoint_without_state_dict_fails(tmp_path):
     router_path = tmp_path / 'router.pt'
     torch.save({'config': {'hidden_dim': 4}}, router_path)
