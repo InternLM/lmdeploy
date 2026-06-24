@@ -468,8 +468,8 @@ class BaseModelAgent:
     ):
         """Model forward."""
         if self.memdecode_agent.is_enabled():
-            if return_logits and inputs.is_chunk:
-                raise RuntimeError('MemDecode does not support full-prompt returned logits for chunked prefill.')
+            if return_logits:
+                raise RuntimeError('MemDecode does not support returned prompt logits yet.')
 
             ret = await self.async_forward(inputs)
             ret = self._postprocess_forward_output(ret, inputs)
@@ -840,6 +840,8 @@ class BaseModelAgent:
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        if self.memdecode_agent.is_enabled() and self.memdecode_agent.cache_engine is not None:
+            cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
