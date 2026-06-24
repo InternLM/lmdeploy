@@ -63,22 +63,36 @@ It does not propose tokens, sample tokens, or run rejection sampling.
 
 Fusion should be explicit engine-side logic, not a model wrapper. It takes sliced base hidden states, sliced memory hidden states, base logits, and memory logits, then returns fused base-vocab logits plus optional routed weights.
 
-Fixed fusion uses the configured `lambda_value`. Adaptive fusion loads the router from `router_path`, validates dimensions against the actual base and memory hidden sizes, and emits per-token log mixing weights.
+Fixed fusion uses `memdecode_config.lambda_value`. Adaptive fusion loads the router from `memdecode_config.router_path`, validates dimensions against the actual base and memory hidden sizes, and emits per-token log mixing weights.
 
 ## Configuration
 
-`ModelConfig` keeps the existing MemDecode fields:
+Keep the base `ModelConfig` clean by storing MemDecode-specific settings in one nested optional config object:
 
-- `memory_model_path`
-- `memory_model_config`
-- `lambda_value`
-- `adaptive_router`
-- `router_path`
-- `lambda_base_only_threshold`
+```python
+@dataclass
+class MemDecodeConfig:
+    memory_model_path: str
+    memory_model_config: ModelConfig
+    lambda_value: float = 1.0
+    adaptive_router: bool = False
+    router_path: str | None = None
+    lambda_base_only_threshold: float = -1.0
+```
 
-These fields configure `MemDecodeAgent` and `MemDecodeFusion`; they should not cause the base HF architecture to become `MemDecodeForCausalLM`.
+`ModelConfig` should have at most one MemDecode-specific field:
 
-If `memory_model_path` is present, MemDecode is enabled.
+```python
+memdecode_config: MemDecodeConfig | None = None
+```
+
+`memory_model_config` remains architecture/cache metadata for the memory model. Fusion policy such as `lambda_value`, `adaptive_router`, and `lambda_base_only_threshold` should not be stored directly on `memory_model_config`, because those settings describe the base+memory fusion pair rather than the memory checkpoint itself.
+
+`memdecode_config` configures `MemDecodeAgent` and `MemDecodeFusion`; it should not cause the base HF architecture to become `MemDecodeForCausalLM`.
+
+If `ModelConfig.memdecode_config` is present, MemDecode is enabled.
+
+External `hf_overrides` may continue to accept flat keys such as `memory_model_path`, `lambda_value`, and `adaptive_router` for CLI usability, but `ModelConfig.from_pretrained()` should normalize them into `MemDecodeConfig`.
 
 The memory model uses the same `attn_tp` as the base model. EP and MoE distribution choices apply to the base model only. The memory model has its own model config and may differ in layer count, hidden size, KV-head count, head dimensions, dtype, cache shapes, and vocab size.
 
@@ -98,7 +112,7 @@ For both prefill and decode, base and memory consume the same accepted token str
 - multimodal and embedding metadata when present
 - mrope metadata when present
 
-The memory agent builds its own `StepContext` using `memory_model_config`, memory KV caches, and memory state caches.
+The memory agent builds its own `StepContext` using `memdecode_config.memory_model_config`, memory KV caches, and memory state caches.
 
 The base forward should return hidden states. The memory forward should return hidden states. The engine slices hidden states to the positions that need logits before calling `get_logits()` for either model.
 
@@ -130,19 +144,19 @@ Before fusion, memory logits are aligned to the base vocab size:
 - if memory vocab is smaller than base vocab, pad missing positions with `-inf`;
 - log a warning during config/build when vocab sizes differ.
 
-Fixed fusion uses a log-prob mixture and must handle `lambda_value` endpoints:
+Fixed fusion uses a log-prob mixture and must handle `memdecode_config.lambda_value` endpoints:
 
-- `lambda_value = 0`: base-only;
-- `lambda_value = 1`: memory-only after base-vocab alignment;
+- `memdecode_config.lambda_value = 0`: base-only;
+- `memdecode_config.lambda_value = 1`: memory-only after base-vocab alignment;
 - intermediate values: logaddexp mixture.
 
 Adaptive router fusion:
 
-- requires `router_path`;
+- requires `memdecode_config.router_path`;
 - requires a memory model;
 - validates router dimensions against base and memory hidden sizes;
 - uses sliced base/memory hidden states and sliced base/memory logits;
-- applies `lambda_base_only_threshold` when configured;
+- applies `memdecode_config.lambda_base_only_threshold` when configured;
 - can return routed weights for existing routed-output plumbing.
 
 ## Cache And Eviction
@@ -179,10 +193,10 @@ State cache rules:
 
 v4 should fail early for unsupported or unsafe configurations:
 
-- `memory_model_path` and speculative decoding cannot both be enabled.
+- `memdecode_config` and speculative decoding cannot both be enabled.
 - Base and memory SSM state presence must match.
-- `lambda_value` must be in `[0, 1]`.
-- Adaptive router requires `router_path`, memory model enabled, and compatible router dimensions.
+- `memdecode_config.lambda_value` must be in `[0, 1]`.
+- Adaptive router requires `memdecode_config.router_path`, memory model enabled, and compatible router dimensions.
 - Memory cache block sizing must succeed with memory model shapes.
 - Sleep and wakeup are unsupported when MemDecode is enabled and should raise a clear error.
 - Full-prompt returned logits for long chunked prefill are unsupported when MemDecode is enabled and should raise a clear error.
@@ -207,7 +221,7 @@ Required useful tests:
 
 - reject MemDecode plus speculative decoding;
 - reject base/memory SSM mismatch;
-- fusion aligns vocab correctly and handles `lambda_value` endpoints;
+- fusion aligns vocab correctly and handles `memdecode_config.lambda_value` endpoints;
 - long prefill does not materialize full-sequence vocab logits before slicing;
 - cache sizing includes memory KV/state bytes;
 - memory model with `num_key_value_heads < tp` produces valid config/cache shapes;
@@ -237,4 +251,4 @@ to ordinary base-model architecture plus MemDecode overrides such as:
 }
 ```
 
-Adaptive mode adds `router_path` and `lambda_base_only_threshold` when needed.
+These flat external overrides are normalized into `ModelConfig.memdecode_config`. Adaptive mode adds `router_path` and `lambda_base_only_threshold` when needed.
