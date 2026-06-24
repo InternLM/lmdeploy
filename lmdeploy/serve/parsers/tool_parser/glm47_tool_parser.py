@@ -83,7 +83,7 @@ class Glm47ToolParser(XmlToolParser):
         func_name, raw_args_dict = self._parse_payload(payload, final=True)
         if not func_name:
             return None
-        args_dict = self._get_coerced_args(func_name, raw_args_dict)
+        args_dict = self._get_coerced_args(func_name, raw_args_dict, use_cache=False)
         return ToolCall(function=FunctionCall(name=func_name, arguments=json.dumps(args_dict, ensure_ascii=False)))
 
     def _validate_tool_payload(self, payload: str) -> bool:

@@ -127,6 +127,36 @@ class TestQwen3_5ResponseParserStreaming:
                 assert call.function.name == exp_function_name
                 assert call.function.arguments == exp_function_arguments
 
+    def test_parse_complete_parallel_tool_calls_keep_distinct_arguments(self):
+        """Regression: parallel tool calls must not reuse the first call's args."""
+        response_parser = _build_response_parser()
+        text = """
+</think>
+
+<tool_call>
+<function=get_current_weather>
+<parameter=location>
+Boston, MA
+</parameter>
+</function>
+</tool_call>
+<tool_call>
+<function=get_current_weather>
+<parameter=location>
+San Francisco, CA
+</parameter>
+</function>
+</tool_call>
+""".strip()
+
+        content, tool_calls, _ = response_parser.parse_complete(text)
+
+        assert (content or '').strip() == ''
+        assert tool_calls is not None
+        assert len(tool_calls) == 2
+        assert json.loads(tool_calls[0].function.arguments) == {'location': 'Boston, MA'}
+        assert json.loads(tool_calls[1].function.arguments) == {'location': 'San Francisco, CA'}
+
     def test_parse_tool_call_complete_treats_params_as_strings(self):
         parser = Qwen3CoderToolParser()
         payload = """

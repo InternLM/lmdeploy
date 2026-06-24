@@ -205,29 +205,32 @@ class XmlToolParser(ToolParser):
 
         return raw_value
 
-    def _get_coerced_args(self, func_name: str | None, raw_args_dict: dict[str, Any]) -> dict[str, Any]:
+    def _get_coerced_args(self,
+                          func_name: str | None,
+                          raw_args_dict: dict[str, Any],
+                          *,
+                          use_cache: bool = True) -> dict[str, Any]:
         if not func_name or not raw_args_dict:
             return raw_args_dict
         param_schemas = self._function_param_schemas.get(func_name, {})
         if not param_schemas:
             return raw_args_dict
 
-        coerced = dict(self._coerced_args)
+        coerced = dict(self._coerced_args) if use_cache else {}
         for key, value in raw_args_dict.items():
-            if key in self._coerced_args:
+            if use_cache and key in self._coerced_args:
                 continue
             if not isinstance(value, str):
-                self._coerced_args[key] = value
-                coerced[key] = value
-                continue
-            schema = param_schemas.get(key)
-            if not isinstance(schema, dict):
-                self._coerced_args[key] = value
-                coerced[key] = value
-                continue
-            schema_type = self._resolve_schema_type(schema)
-            coerced_value = self._coerce_value(value, schema_type)
-            self._coerced_args[key] = coerced_value
+                coerced_value = value
+            else:
+                schema = param_schemas.get(key)
+                if not isinstance(schema, dict):
+                    coerced_value = value
+                else:
+                    schema_type = self._resolve_schema_type(schema)
+                    coerced_value = self._coerce_value(value, schema_type)
+            if use_cache:
+                self._coerced_args[key] = coerced_value
             coerced[key] = coerced_value
         return coerced
 

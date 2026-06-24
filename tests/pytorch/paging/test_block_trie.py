@@ -1414,3 +1414,33 @@ class TestBlockTire:
         block_trie.evict(1)
 
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
+
+    def test_evict_ssm_skips_pinned_state_checkpoint(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size * 2 + [2]
+
+        seq = sess.add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        node = seq.prefix_cache.last_shared_node
+        assert block_trie.reserve_state_checkpoint_for_seq(seq, step=block_size * 2) >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(seq, acquire_save_ref=True)
+        assert node.state_ready
+        assert node.state_ref_count == 1
+        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+
+        block_mgr.free(seq)
+        seq.set_step(0)
+
+        assert block_trie.evict(1) == 0
+        assert node in block_trie.leaves
+        assert node.state_ready
+        assert node.state_ref_count == 1
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+        assert block_trie.release_state_checkpoint_save_for_seq(seq)
+        assert block_trie.evict(1) == 1
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
