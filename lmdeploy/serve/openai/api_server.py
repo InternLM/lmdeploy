@@ -275,6 +275,8 @@ async def health() -> JSONResponse:
                     message='Engine health monitor is not initialized.')
         return JSONResponse(jsonable_encoder(data), status_code=HTTPStatus.SERVICE_UNAVAILABLE)
     data = monitor.snapshot()
+    if data['status'] not in ('healthy', 'sleeping'):
+        data = await monitor.refresh_snapshot()
     status_code = HTTPStatus.OK if data['status'] in ('healthy', 'sleeping') else HTTPStatus.SERVICE_UNAVAILABLE
     return JSONResponse(jsonable_encoder(data), status_code=status_code)
 
