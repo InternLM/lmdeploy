@@ -155,7 +155,18 @@ def update_custom_module_map(module_map_path: str):
 
 def _get_model_class(config, module_map):
     """Get model class."""
-    architectures = getattr(config, 'architectures', []) or []
+    auto_map = getattr(config, 'auto_map', dict())
+    if 'AutoModelForCausalLM' in auto_map:
+        mapname = auto_map['AutoModelForCausalLM']
+        if '.' in mapname:
+            mapname = mapname.split('.')[-1]
+        if mapname in module_map:
+            qualname = module_map[mapname]
+            module_cls = _class_from_qualname(qualname)
+            return module_cls
+        raise RuntimeError(f'Can not found rewrite for auto_map: {mapname}')
+
+    architectures = getattr(config, 'architectures', [])
 
     if architectures is None:
         # only for deepseek-vl2, which has different config formats
@@ -170,17 +181,6 @@ def _get_model_class(config, module_map):
             qualname = module_map[arch]
             module_cls = _class_from_qualname(qualname)
             return module_cls
-
-    auto_map = getattr(config, 'auto_map', dict()) or {}
-    if 'AutoModelForCausalLM' in auto_map:
-        mapname = auto_map['AutoModelForCausalLM']
-        if '.' in mapname:
-            mapname = mapname.split('.')[-1]
-        if mapname in module_map:
-            qualname = module_map[mapname]
-            module_cls = _class_from_qualname(qualname)
-            return module_cls
-        raise RuntimeError(f'Can not found rewrite for auto_map: {mapname}')
 
     raise RuntimeError(f'Can not found rewrite for architectures: {architectures}')
 
