@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import time
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
@@ -43,6 +44,14 @@ from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
 
 logger = get_logger('lmdeploy')
+
+_H2D_TRANSFER_KEY = '_h2d_transfer'
+
+
+@dataclass
+class _H2DTransfer:
+    event: torch.cuda.Event
+    refs: dict[str, Any]
 
 
 @dataclass
@@ -265,6 +274,7 @@ class BaseModelAgent:
         self._out_que = None
         self._background_task = None
         self._preprocess_task = None
+        self._pending_h2d_transfers = deque()
         self.tasks = set()
 
         # cuda stream
@@ -908,12 +918,32 @@ class BaseModelAgent:
 
             while True:
                 forward_inputs = await input_maker.get()
+                h2d_transfer = forward_inputs.pop(_H2D_TRANSFER_KEY, None)
+                if h2d_transfer is not None:
+                    self._keep_h2d_transfer(h2d_transfer)
+                    self.stream.wait_event(h2d_transfer.event)
 
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
                 input_maker.step()
+                self._release_completed_h2d_transfers()
+
+    def _keep_h2d_transfer(self, transfer: _H2DTransfer | None):
+        """Keep H2D source refs alive until their async copies finish."""
+        self._release_completed_h2d_transfers()
+        if transfer is None or transfer.event.query():
+            return
+        self._pending_h2d_transfers.append(transfer)
+
+    def _release_completed_h2d_transfers(self):
+        """Release CPU-side H2D source refs after their async copies finish."""
+        while len(self._pending_h2d_transfers) > 0:
+            transfer = self._pending_h2d_transfers[0]
+            if not transfer.event.query():
+                break
+            self._pending_h2d_transfers.popleft()
 
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
@@ -923,13 +953,16 @@ class BaseModelAgent:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}
             forward_inputs_cuda.update(forward_inputs)
+            h2d_refs = {k: forward_inputs_cuda[k] for k in keys if forward_inputs_cuda.get(k) is not None}
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
                 for k in keys:
                     if k not in forward_inputs_cuda:
                         continue
                     forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
-                self.out_stream.synchronize()
+                h2d_event = torch.cuda.Event()
+                h2d_event.record()
+                forward_inputs_cuda[_H2D_TRANSFER_KEY] = _H2DTransfer(h2d_event, h2d_refs)
             logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs_cuda)
             if forward_event is not None:
@@ -1009,6 +1042,7 @@ class BaseModelAgent:
             await asyncio.gather(*self.tasks, return_exceptions=True)
         except asyncio.CancelledError:
             logger.debug(f'ModelAgent {task.get_name()} task cancelled.')
+        self._release_completed_h2d_transfers()
 
         if self.guided_decoding_manager:
             self.guided_decoding_manager.clear()
@@ -1025,9 +1059,11 @@ class BaseModelAgent:
                 continue
             while not q.empty():
                 try:
-                    q.get_nowait()
+                    item = q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+                if isinstance(item, dict):
+                    self._keep_h2d_transfer(item.pop(_H2D_TRANSFER_KEY, None))
 
     async def get_output_async(self):
         """Async get output."""
@@ -1043,6 +1079,7 @@ class BaseModelAgent:
             event.wait()
             out = out.to_cpu()
             out.new_token_timestamp = time.time()
+        self._release_completed_h2d_transfers()
         return out
 
     def _build_model(self):
@@ -1379,6 +1416,7 @@ class BaseModelAgent:
 
         self._drain_queues()
         torch.cuda.synchronize()
+        self._release_completed_h2d_transfers()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
         self._update_params_ipc_event = None
