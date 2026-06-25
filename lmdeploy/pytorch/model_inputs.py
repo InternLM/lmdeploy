@@ -195,6 +195,7 @@ class ModelInputs:
     vision_inputs: VisionModelInputs | None = None
     model_metas: list[dict[str, Any]] | None = None
     forecast_horizons: list[int | None] | None = None
+    ts_forecasts: list[bool] | None = None
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
@@ -310,6 +311,7 @@ class StepContext:
     kv_quant_policy: QuantPolicy = QuantPolicy.NONE
     model_metas: list[dict[str, Any]] | None = None
     forecast_horizons: list[int | None] | None = None
+    ts_forecasts: list[bool] | None = None
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     # for draft model
@@ -387,6 +389,7 @@ class StepContext:
             kv_quant_policy=kv_quant_policy,
             model_metas=inputs.model_metas,
             forecast_horizons=inputs.forecast_horizons,
+            ts_forecasts=inputs.ts_forecasts,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
             state_caches=state_caches,

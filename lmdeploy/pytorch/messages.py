@@ -125,6 +125,7 @@ class SamplingParam:
 
     # time series forecast
     forecast_horizon: int | None = None
+    ts_forecast: bool = False
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -221,6 +222,7 @@ class SamplingParam:
             repetition_ngram_size=repetition_ngram_size,
             repetition_ngram_threshold=repetition_ngram_threshold,
             forecast_horizon=gen_config.forecast_horizon,
+            ts_forecast=gen_config.enable_forecasting,
         )
 
 

@@ -37,6 +37,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         local_adapter_ids=inputs.local_adapter_ids,
         model_metas=model_metas,
         forecast_horizons=inputs.forecast_horizons,
+        ts_forecasts=inputs.ts_forecasts,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -85,6 +86,13 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         other_horizons = other.forecast_horizons or [None] * other.seq_length.numel()
         forecast_horizons = input_horizons + other_horizons
 
+    # time-series forecast routing
+    ts_forecasts = None
+    if inputs.ts_forecasts is not None or other.ts_forecasts is not None:
+        input_forecasts = inputs.ts_forecasts or [False] * inputs.seq_length.numel()
+        other_forecasts = other.ts_forecasts or [False] * other.seq_length.numel()
+        ts_forecasts = input_forecasts + other_forecasts
+
     # ssm
     state_offsets = None
     if inputs.state_offsets is not None:
@@ -109,6 +117,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         forecast_horizons=forecast_horizons,
+        ts_forecasts=ts_forecasts,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -178,6 +187,11 @@ def index_select_model_inputs(inputs: ModelInputs,
     if forecast_horizons is not None and indice_cpu is not None:
         forecast_horizons = [forecast_horizons[i] for i in indice_cpu]
 
+    # time-series forecast routing
+    ts_forecasts = inputs.ts_forecasts
+    if ts_forecasts is not None and indice_cpu is not None:
+        ts_forecasts = [ts_forecasts[i] for i in indice_cpu]
+
     # for ssm
     state_offsets = inputs.state_offsets
     if state_offsets is not None:
@@ -210,6 +224,7 @@ def index_select_model_inputs(inputs: ModelInputs,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         forecast_horizons=forecast_horizons,
+        ts_forecasts=ts_forecasts,
         state_offsets=state_offsets,
         state_prefix_cache_save_src_offsets=state_prefix_cache_save_src_offsets,
         state_prefix_cache_save_offsets=state_prefix_cache_save_offsets,

@@ -727,7 +727,7 @@ class AsyncEngine:
                         metrics_processor.increase_failed_requests('abort')
                     else:
                         if outputs.multimodal_outputs is not None:
-                            # forecast-only responses finish after <TS_GEN> is hidden from text output.
+                            # forecast-only responses return multimodal payloads with no text tokens.
                             finish_reason = 'stop'
                         elif len(outputs.token_ids) == 0:
                             finish_reason = 'stop'

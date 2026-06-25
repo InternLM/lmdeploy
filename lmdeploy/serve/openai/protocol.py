@@ -190,8 +190,12 @@ class ChatCompletionRequest(BaseModel):
     forecast_horizon: int | None = Field(
         default=None,
         ge=1,
-        description=('Forecast horizon for time-series forecast outputs. This does not trigger forecasting; '
-                     'forecasting is selected only when the first generated token is <TS_GEN>.'),
+        description=('Forecast horizon for time-series forecast outputs. Forecast routing is controlled by '
+                     '`enable_forecasting`.'),
+    )
+    enable_forecasting: bool | None = Field(
+        default=None,
+        description='Whether to route supported time-series requests to forecast output.',
     )
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False

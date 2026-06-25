@@ -500,6 +500,7 @@ class Transformer(nn.Module):
         num_heads: int,
         *,
         cross_attn_kv_dim: int = 0,
+        use_cross_attn_gate: bool = True,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -524,7 +525,10 @@ class Transformer(nn.Module):
             dtype=dtype,
             device=device,
         )
-        self.cross_attn_gate = nn.Parameter(torch.zeros(1, dtype=dtype, device=device))
+        if use_cross_attn_gate:
+            self.cross_attn_gate = nn.Parameter(torch.zeros(1, dtype=dtype, device=device))
+        else:
+            self.cross_attn_gate = None
 
         self.pre_ff_ln = RMSNorm(model_dims, dtype=dtype, device=device)
         self.post_ff_ln = RMSNorm(model_dims, dtype=dtype, device=device)
@@ -564,7 +568,8 @@ class Transformer(nn.Module):
                 self.cross_attn_ln(attn_output),
                 kv=cross_kv,
             )
-            cross_out = torch.tanh(self.cross_attn_gate) * cross_out
+            if self.cross_attn_gate is not None:
+                cross_out = torch.tanh(self.cross_attn_gate) * cross_out
             attn_output = attn_output + cross_out
 
         output_embeddings = (self.post_ff_ln(self.ff1(self.activation(self.ff0(self.pre_ff_ln(attn_output))))) +
@@ -628,6 +633,7 @@ class ForecasterBackbone(nn.Module):
     def __init__(
         self,
         cross_attn_kv_dim: int = 0,
+        use_cross_attn_gate: bool = True,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -646,6 +652,7 @@ class ForecasterBackbone(nn.Module):
 
         xf_kwargs = dict(self._xf_kwargs)
         xf_kwargs['cross_attn_kv_dim'] = int(cross_attn_kv_dim) or self.md
+        xf_kwargs['use_cross_attn_gate'] = bool(use_cross_attn_gate)
 
         self.tokenizer = ResidualBlock(**self._tokenizer_kwargs, dtype=dtype, device=device)
         self.stacked_xf = nn.ModuleList([Transformer(**xf_kwargs, dtype=dtype, device=device) for _ in range(self.x)])
@@ -1076,7 +1083,7 @@ class Aligner(nn.Module):
 
     Two per-modality Q-formers compress the raw hidden-state sequences into a fixed number of query tokens; their
     concatenation is the static KV stream the Forecaster transformer cross-attends to. A small linear *prediction-length
-    head* sits on the LLM Q-former's compressed output and regresses log1p(horizon).
+    head* sits on the LLM Q-former's compressed output and regresses horizon.
     """
 
     def __init__(
@@ -1097,24 +1104,27 @@ class Aligner(nn.Module):
         self.ts_qformer = QFormer(in_dim=config.d_ts_encoder, **qformer_kwargs)
         self.llm_qformer = QFormer(in_dim=config.d_llm, **qformer_kwargs)
 
-        self.horizon_head = nn.Sequential(
-            LayerNorm(config.qformer_hidden_dim, eps=1e-5, dtype=dtype, device=device),
-            build_colwise_linear(
-                config.qformer_hidden_dim,
-                config.qformer_hidden_dim,
-                bias=True,
-                dtype=dtype,
-                device=device,
-            ),
-            nn.SiLU(),
-            build_rowwise_linear(
-                config.qformer_hidden_dim,
-                1,
-                bias=True,
-                dtype=dtype,
-                device=device,
-            ),
-        )
+        if config.use_horizon_head:
+            self.horizon_head = nn.Sequential(
+                LayerNorm(config.qformer_hidden_dim, eps=1e-5, dtype=dtype, device=device),
+                build_colwise_linear(
+                    config.qformer_hidden_dim,
+                    config.qformer_hidden_dim,
+                    bias=True,
+                    dtype=dtype,
+                    device=device,
+                ),
+                nn.SiLU(),
+                build_rowwise_linear(
+                    config.qformer_hidden_dim,
+                    1,
+                    bias=True,
+                    dtype=dtype,
+                    device=device,
+                ),
+            )
+        else:
+            self.horizon_head = None
 
     def forward(
         self,
@@ -1160,14 +1170,17 @@ class Aligner(nn.Module):
         self,
         llm_chunk: Tensor,
     ) -> Tensor:
-        """Predict per-sample forecast horizon in log1p-space from llm_chunk.
+        """Predict per-sample forecast horizon in linear step space from
+        llm_chunk.
 
         Args:
             llm_chunk: (B, Q, qformer_hidden_dim) LLM Q-former output.
 
         Returns:
-            (B,) float32 tensor of predicted log1p(horizon).
+            (B,) float32 tensor of predicted horizon.
         """
+        if self.horizon_head is None:
+            raise RuntimeError('horizon_head is not enabled but predict_horizon was called')
         if llm_chunk.dim() != 3:
             raise ValueError(f"Expected llm_chunk with shape (B, Q, D), got {tuple(llm_chunk.shape)}")
         head_param = next(self.horizon_head.parameters())
@@ -1177,13 +1190,13 @@ class Aligner(nn.Module):
 
     @staticmethod
     def decode_horizon(
-        pred_log_horizon: Tensor,
+        pred_horizon: Tensor,
         min_h: int = 1,
         max_h: int | None = None,
     ) -> Tensor:
-        """Convert log1p-space horizon prediction back to a positive integer
-        tensor."""
-        horizon = torch.expm1(pred_log_horizon).round().clamp_min(float(min_h))
+        """Round the head's linear-space horizon prediction to a positive
+        integer tensor."""
+        horizon = pred_horizon.round().clamp_min(float(min_h))
         if max_h is not None:
             horizon = horizon.clamp_max(float(max_h))
         return horizon.long()
@@ -1243,6 +1256,10 @@ class TSForecasterConfig:
         self.force_flip_invariance = bool(force_flip_invariance)
         self.infer_is_positive = bool(infer_is_positive)
         self.fix_quantile_crossing = bool(fix_quantile_crossing)
+        self.use_horizon_head = bool(use_horizon_head)
+        self.use_cross_attn_gate = bool(use_cross_attn_gate)
+        self.use_continuous_quantile_head = bool(use_continuous_quantile_head)
+        self.return_backcast = bool(return_backcast)
 
 
 
@@ -1255,7 +1272,7 @@ class TSForecasterOutput:
         quantile_forecast: list of (horizon_i, C_i, 10) per-sample quantile
             forecasts (quantile order: [median, 0.1, 0.2, ..., 0.9]).
         predicted_horizon: (B,) long tensor of horizons predicted by the horizon
-            head, or None when a horizon override was given.
+            head, or None when the horizon head is disabled.
     """
 
     point_forecast: list[torch.Tensor] | None = None
@@ -1286,6 +1303,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         self.aligner = Aligner(config, dtype=dtype, device=device)
         self.forecaster = ForecasterBackbone(
             cross_attn_kv_dim=config.cross_attn_kv_dim,
+            use_cross_attn_gate=config.use_cross_attn_gate,
             dtype=dtype,
             device=device,
         )
@@ -1297,7 +1315,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         if config.max_context + config.max_horizon > self.forecaster.context_limit:
             raise ValueError('Context + horizon must be less than the context limit.'
                              f" {config.max_context} + {config.max_horizon} > {self.forecaster.context_limit}.")
-        if config.max_horizon > self.forecaster.os:
+        if config.use_continuous_quantile_head and config.max_horizon > self.forecaster.os:
             raise ValueError(f"Continuous quantile head is not supported for horizons > {self.forecaster.os}.")
 
         self._horizon_max_length = (int(config.horizon_max_length) or int(config.max_horizon))
@@ -1372,11 +1390,16 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
                 pf_outputs = (pf_outputs - flipped_pf_outputs) / 2
                 full_forecast = (full_forecast - flipped_full_forecast) / 2
 
-            for quantile_index in [1, 2, 3, 4, 6, 7, 8, 9]:
-                full_forecast[:, :horizon,
-                              quantile_index] = (quantile_spreads[:, :horizon, quantile_index] -
-                                                 quantile_spreads[:, :horizon, 5] + full_forecast[:, :horizon, 5])
+            if fc.use_continuous_quantile_head:
+                for quantile_index in [1, 2, 3, 4, 6, 7, 8, 9]:
+                    full_forecast[:, :horizon,
+                                  quantile_index] = (quantile_spreads[:, :horizon, quantile_index] -
+                                                     quantile_spreads[:, :horizon, 5] + full_forecast[:, :horizon, 5])
             full_forecast = full_forecast[:, :horizon, :]
+
+            if fc.return_backcast:
+                full_backcast = pf_outputs[:, :-1, :module.p, :].reshape(batch_size, -1, module.q)
+                full_forecast = torch.cat([full_backcast, full_forecast], dim=1)
 
             if fc.fix_quantile_crossing:
                 for i in [4, 3, 2, 1]:
@@ -1509,7 +1532,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
                 (True = valid). Default: all valid.
             override_horizon: optional forecast horizon. An int applies to every
                 sample; a sequence gives one horizon per sample. When omitted, the
-                horizon head predicts it.
+                horizon head predicts it if enabled, otherwise default_pred_len is used.
         Returns:
             :class:`TSForecasterOutput` with per-sample ``point_forecast`` /
             ``quantile_forecast`` lists and the predicted horizon.
@@ -1530,19 +1553,22 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         )
 
         predicted_horizon = None
+        if self.aligner.horizon_head is not None:
+            pred_horizon = self.aligner.predict_horizon(llm_chunk)
+            predicted_horizon = self.aligner.decode_horizon(
+                pred_horizon,
+                min_h=1,
+                max_h=self._horizon_max_length,
+            )
         if override_horizon is not None:
             if isinstance(override_horizon, int):
                 per_sample_horizons = [int(override_horizon)] * batch_size
             else:
                 per_sample_horizons = [int(h) for h in override_horizon]
-        else:
-            pred_log_horizon = self.aligner.predict_horizon(llm_chunk)
-            predicted_horizon = self.aligner.decode_horizon(
-                pred_log_horizon,
-                min_h=1,
-                max_h=self._horizon_max_length,
-            )
+        elif self.aligner.horizon_head is not None:
             per_sample_horizons = [int(v) for v in predicted_horizon.tolist()]
+        else:
+            per_sample_horizons = [int(self.config.default_pred_len)] * batch_size
 
         if len(per_sample_horizons) != batch_size:
             raise ValueError(f"per-sample horizon count ({len(per_sample_horizons)}) does not match"

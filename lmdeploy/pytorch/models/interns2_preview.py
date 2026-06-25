@@ -235,6 +235,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
                 ts_encoder_embedding_mask=ts_context['ts_encoder_embedding_mask'],
                 ts_batch_indices=ts_batch_indices,
                 forecast_horizon=ts_forecast_meta['forecast_horizon'],
+                forecast_indices=ts_forecast_meta['forecast_indices'],
             )
 
         return output
@@ -256,7 +257,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         return padded, mask
 
     def _run_ts_forecaster(self, pending: dict[str, Any], item_indices: torch.Tensor):
-        """Run forecaster for TS items that emitted <TS_GEN>."""
+        """Run forecaster for TS items requested by generation metadata."""
 
         def to_payload(forecast, idx: int):
             # Convert one forecast item from tensors to an API-serializable payload.
@@ -307,19 +308,20 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         output_token_ids: torch.Tensor | None = None,
         stopped: torch.Tensor | None = None,
     ):
-        # Forecast is triggered only when prefill saved TS context and LLM emits <TS_GEN>.
+        # forecast routing is controlled by explicit generation metadata.
         pending = model_outputs.get('pending_ts_forecast')
         if pending is None:
             return output_token_ids, stopped, None
 
-        ts_gen_token_id = self.config.ts_gen_token_id
         ts_batch_indices = pending['ts_batch_indices'].to(device=next_token_ids.device)
-        token_ids = next_token_ids.view(-1)
-        item_indices = (token_ids[ts_batch_indices] == ts_gen_token_id).nonzero().flatten()
+        forecast_indices = pending.get('forecast_indices')
+        if forecast_indices is None:
+            return output_token_ids, stopped, None
+        item_indices = forecast_indices.to(device=next_token_ids.device)
         if item_indices.numel() == 0:
             return output_token_ids, stopped, None
 
-        batch_size = token_ids.numel()
+        batch_size = next_token_ids.numel()
         multimodal_outputs = [None] * batch_size
         payloads = self._run_ts_forecaster(pending, item_indices)
 
@@ -327,7 +329,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         stopped = stopped.clone()
         batch_indices = ts_batch_indices[item_indices]
 
-        # Hide the <TS_GEN> control token and finish these forecast-only responses.
+        # suppress text token output and finish forecast-only responses.
         output_token_ids.view(-1)[batch_indices] = -1
         stopped.view(-1)[batch_indices] = True
 
@@ -365,11 +367,22 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
                         forecast_horizon = [context.forecast_horizons[idx] for idx in batch_indices]
                         if not any(horizon is not None for horizon in forecast_horizon):
                             forecast_horizon = None
-                    ts_forecast_meta = dict(
-                        q_seqlens=context.q_seqlens,
-                        ts_batch_indices=ts_batch_indices,
-                        forecast_horizon=forecast_horizon,
-                    )
+                    forecast_indices = None
+                    if context.ts_forecasts is not None:
+                        forecast_ids = [
+                            item_idx for item_idx, batch_idx in enumerate(batch_indices)
+                            if context.ts_forecasts[batch_idx]
+                        ]
+                        if forecast_ids:
+                            forecast_indices = torch.tensor(
+                                forecast_ids, dtype=torch.long, device=context.input_ids.device)
+                    if forecast_indices is not None:
+                        ts_forecast_meta = dict(
+                            q_seqlens=context.q_seqlens,
+                            ts_batch_indices=ts_batch_indices,
+                            forecast_horizon=forecast_horizon,
+                            forecast_indices=forecast_indices,
+                        )
 
         model_inputs['ts_channels'] = ts_channels
         model_inputs['ts_forecast_meta'] = ts_forecast_meta

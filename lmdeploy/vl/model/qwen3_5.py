@@ -44,6 +44,10 @@ class Qwen3_5Model(Qwen3VLModel):
         self.ts_start_token = getattr(self.processor, 'ts_start_token', None)
         self.ts_end_token = getattr(self.processor, 'ts_end_token', None)
 
+        # time series processing options
+        self.ts_signals_do_normalize = getattr(self.processor, 'ts_signals_do_normalize', True)
+        self.ts_signals_do_truncate = getattr(self.processor, 'ts_signals_do_truncate', True)
+
         # special tokens
         self.mm_tokens = MultimodalSpecialTokens(
             image_token=self.image_token,
@@ -66,13 +70,14 @@ class Qwen3_5Model(Qwen3VLModel):
         if not isinstance(ts_input, np.ndarray):
             ts_input = np.array(ts_input, dtype=np.float32)
 
-        mean = ts_input.mean(axis=0, keepdims=True)
-        std = ts_input.std(axis=0, keepdims=True)
-        ts_input = (ts_input - mean) / (std + 1e-8)
+        if self.ts_signals_do_normalize:
+            mean = ts_input.mean(axis=0, keepdims=True)
+            std = ts_input.std(axis=0, keepdims=True)
+            ts_input = (ts_input - mean) / (std + 1e-8)
 
         # truncate to 240k to avoid OOM
         max_ts_len = 240000
-        if len(ts_input) > max_ts_len:
+        if self.ts_signals_do_truncate and len(ts_input) > max_ts_len:
             ts_input = ts_input[:max_ts_len]
 
         if ts_input.ndim == 1:
@@ -88,10 +93,14 @@ class Qwen3_5Model(Qwen3VLModel):
         # compute num ts tokens
         if getattr(self.hf_config, 'model_type', None) == 'intern_s2_preview':
             chunk_size = getattr(self.processor, 'chunk_size', 12800)
-            patch = max(ts_len / 500, 1.0)
+            num_query = getattr(self.processor, 'num_query', 2)
+            subrate = max(ts_len / 500, 1.0)
+            stride = subrate * num_query
+            patch_size = np.ceil(stride)
             chunk_num = ts_len // chunk_size
-            full_chunk_tokens = (np.ceil(chunk_size / patch) + 1) // 2
-            tail_tokens = (np.ceil((ts_len - chunk_size * chunk_num) / patch) + 1) // 2
+            tail_len = ts_len - chunk_size * chunk_num
+            full_chunk_tokens = (np.ceil((chunk_size - patch_size) / stride + 1) * num_query + 1) // 2
+            tail_tokens = (np.ceil((tail_len - patch_size) / stride + 1) * num_query + 1) // 2
             ts_tokens = int(chunk_num * full_chunk_tokens + tail_tokens)
         else:
             stride = np.floor(160 / ((1 + np.exp(-sampling_rate / 100))**6))

@@ -513,6 +513,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         repetition_ngram_threshold=request.repetition_ngram_threshold,
         return_routed_experts=request.return_routed_experts,
         forecast_horizon=request.forecast_horizon,
+        enable_forecasting=request.enable_forecasting,
     )
 
     # text completion for string input or input_ids

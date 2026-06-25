@@ -237,8 +237,7 @@ class VisionModel(ABC):
         # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
 
-        result = dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
-        return result
+        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
 
     @staticmethod
     def has_input_ids(messages: list[dict]) -> bool:

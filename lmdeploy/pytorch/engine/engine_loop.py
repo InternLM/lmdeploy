@@ -348,7 +348,7 @@ class EngineLoop:
             # logprobs
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
-            # forecast-only steps hide <TS_GEN> as -1, so their token logprobs are not user-visible.
+            # forecast-only steps suppress text output, so token logprobs are not user-visible.
             if logprobs is not None and num_logprobs > 0 and multimodal_outputs[idx] is None:
                 cur_logprobs = list([_dat[:num_logprobs + 1] for _dat in vals_indices]
                                     for vals_indices in all_logprobs[idx])

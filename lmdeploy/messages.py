@@ -110,8 +110,9 @@ class GenerationConfig:
             Must be non-negative; values below 0 are treated as 0.
         repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
             Must be non-negative; values below 0 are treated as 0.
-        forecast_horizon: Forecast horizon for time series forecast outputs. It does not trigger forecasting;
-            forecasting is selected only when the first generated token is <TS_GEN>.
+        forecast_horizon: Optional horizon used by time series forecast outputs.
+            Forecast routing is controlled by ``enable_forecasting``.
+        enable_forecasting: Whether to route supported time-series requests to forecast output.
     """
 
     n: int = 1
@@ -153,6 +154,7 @@ class GenerationConfig:
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
     forecast_horizon: int | None = None
+    enable_forecasting: bool | None = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to

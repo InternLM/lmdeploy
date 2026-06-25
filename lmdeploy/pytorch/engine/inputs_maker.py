@@ -445,6 +445,11 @@ class InputsMakerAsync:
                 or self.config.model_paradigm != 'ar'):
             forecast_horizons = None
 
+        # time-series forecast routing
+        ts_forecasts = [msg.sampling_param.ts_forecast for msg in messages]
+        if not any(ts_forecasts) or self.config.spec_decoding or self.config.model_paradigm != 'ar':
+            ts_forecasts = None
+
         # create model inputs for all required fields
         model_inputs = ModelInputs(
             input_ids=input_ids,
@@ -458,6 +463,7 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
             forecast_horizons=forecast_horizons,
+            ts_forecasts=ts_forecasts,
         )
 
         # adapters
@@ -529,6 +535,10 @@ class InputsMakerAsync:
         if forecast_horizons[0] is None or self.config.spec_decoding or self.config.model_paradigm != 'ar':
             forecast_horizons = None
 
+        ts_forecasts = [seq.sampling_param.ts_forecast]
+        if not ts_forecasts[0] or self.config.spec_decoding or self.config.model_paradigm != 'ar':
+            ts_forecasts = None
+
         kv_seqlens = q_seqlens + history_lens
         max_kv_seqlen = kv_seqlens.item()
         sum_kv_seqlen = max_kv_seqlen
@@ -545,6 +555,7 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
             forecast_horizons=forecast_horizons,
+            ts_forecasts=ts_forecasts,
             is_chunk=True,
         )
 
