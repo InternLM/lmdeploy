@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from lmdeploy.serve.parsers import ResponseParser
 
+import shortuuid
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -451,7 +452,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
-    request_id = str(session.session_id)
+    request_id = f'chatcmpl-{shortuuid.random()}'
     created_time = int(time.time())
 
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
