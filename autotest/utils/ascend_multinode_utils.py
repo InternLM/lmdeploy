@@ -55,8 +55,7 @@ def ascend_needs_rank_table(config: dict[str, Any], parallel_config: dict[str, i
 def _resolve_under_resource_path(config: dict[str, Any], value: str) -> str:
     if os.path.isabs(value):
         return value
-    resource_path = config.get('resource_path') or ''
-    return os.path.join(resource_path, value)
+    return os.path.join(config['resource_path'], value)
 
 
 def _rank_table_file_from_run_config(config: dict[str, Any], run_config: dict[str, Any] | None) -> str | None:
@@ -79,10 +78,9 @@ def _ensure_ascend_rank_table_file_path(
     if not path:
         path = _rank_table_file_from_run_config(config, run_config)
         if not path:
-            resource_path = config.get('resource_path', '')
             raise FileNotFoundError(
                 'Ascend rank table is required but ASCEND_RANK_TABLE_FILE_PATH is unset. '
-                f'Set engine_config.extra.rank-table-file in model yaml (under {resource_path}) '
+                f'Set engine_config.extra.rank-table-file in model yaml (under {config["resource_path"]}) '
                 'or export ASCEND_RANK_TABLE_FILE_PATH.',
             )
         os.environ['ASCEND_RANK_TABLE_FILE_PATH'] = path

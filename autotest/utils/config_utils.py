@@ -81,7 +81,7 @@ def resolve_extra_params(extra_params: dict[str, Any], config: dict[str, Any]) -
         if key in extra_params:
             value = extra_params[key]
             if value and isinstance(value, str) and not os.path.isabs(value):
-                extra_params[key] = os.path.join(config.get('resource_path', ''), value)
+                extra_params[key] = os.path.join(config['resource_path'], value)
 
     for key in model_path_keys:
         if key in extra_params:
