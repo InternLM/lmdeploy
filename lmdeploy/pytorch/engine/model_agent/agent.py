@@ -28,7 +28,7 @@ from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
-from lmdeploy.pytorch.memdecode import MemDecodeFusion, build_memdecode_agent
+from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -344,16 +344,13 @@ class BaseModelAgent:
                                            self.agent_strategy,
                                            misc_config=misc_config,
                                            device=device)
-        self.memdecode_agent = build_memdecode_agent(mem_cfg, backend_config, dist_ctx, device=device)
-        self.memdecode_fusion = None
-        if self.memdecode_agent.is_enabled():
-            self.memdecode_fusion = MemDecodeFusion(
-                mem_cfg,
-                base_hidden_size=model_config.hidden_size,
-                memory_hidden_size=mem_cfg.memory_model_config.hidden_size,
-                base_vocab_size=model_config.vocab_size,
-                dtype=model_config.dtype,
-            )
+        self.memdecode_agent = build_memdecode_agent(
+            mem_cfg,
+            backend_config,
+            dist_ctx,
+            device=device,
+            base_model_config=model_config,
+        )
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
@@ -484,21 +481,12 @@ class BaseModelAgent:
             base_hidden_states = ret['hidden_states']
             base_logits = self.get_logits(base_hidden_states)
 
-            memory_ret = await self.memdecode_agent.async_forward(inputs)
-            memory_ret = self._postprocess_forward_output(memory_ret, inputs)
-            memory_hidden_states = memory_ret['hidden_states']
-            memory_logits = self.memdecode_agent.get_logits(memory_hidden_states)
-
-            logits, routed_info = self.memdecode_fusion(
+            return await self.memdecode_agent.fuse_with_base(
+                inputs=inputs,
+                base_output=ret,
                 base_logits=base_logits,
-                memory_logits=memory_logits,
-                base_hidden_states=base_hidden_states,
-                memory_hidden_states=memory_hidden_states,
+                postprocess_output=self._postprocess_forward_output,
             )
-            ret['logits'] = logits
-            if routed_info is not None:
-                ret['all_routed_experts'] = routed_info
-            return ret
 
         ret = await self.async_forward(inputs)
 

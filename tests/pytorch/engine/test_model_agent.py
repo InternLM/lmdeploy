@@ -406,22 +406,21 @@ class TestMemDecodeModelAgentLifecycle:
             def is_enabled(self):
                 return True
 
-            async def async_forward(self, forward_inputs):
-                calls.append(('memory_forward', forward_inputs))
-                return {'hidden_states': memory_hidden.clone(), 'seq_length': forward_inputs.seq_length}
-
-            def get_logits(self, hidden_states):
-                calls.append(('memory_logits_shape', tuple(hidden_states.shape)))
-                return hidden_states.sum(dim=-1, keepdim=True)
-
-        class _Fusion:
-
-            def __call__(self, **kwargs):
-                calls.append(('fusion_base_hidden_shape', tuple(kwargs['base_hidden_states'].shape)))
-                calls.append(('fusion_memory_hidden_shape', tuple(kwargs['memory_hidden_states'].shape)))
-                fused = kwargs['base_logits'] + kwargs['memory_logits']
+            async def fuse_with_base(self, inputs, base_output, base_logits, postprocess_output):
+                calls.append(('fuse_inputs', inputs))
+                calls.append(('fuse_base_hidden_shape', tuple(base_output['hidden_states'].shape)))
+                calls.append(('fuse_base_logits_shape', tuple(base_logits.shape)))
+                memory_output = {
+                    'hidden_states': memory_hidden.clone(),
+                    'seq_length': inputs.seq_length,
+                }
+                memory_output = postprocess_output(memory_output, inputs)
+                calls.append(('fuse_memory_hidden_shape', tuple(memory_output['hidden_states'].shape)))
+                fused = base_logits + memory_output['hidden_states'].sum(dim=-1, keepdim=True)
                 routed = {'selected_experts': torch.tensor([1, 0])}
-                return fused, routed
+                base_output['logits'] = fused
+                base_output['all_routed_experts'] = routed
+                return base_output
 
         class _Strategy:
 
@@ -439,7 +438,6 @@ class TestMemDecodeModelAgentLifecycle:
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.memdecode_agent = _MemDecodeAgent()
-        agent.memdecode_fusion = _Fusion()
         agent.agent_strategy = _Strategy()
         agent.async_forward = _base_forward
         agent.get_logits = _base_logits
@@ -449,10 +447,10 @@ class TestMemDecodeModelAgentLifecycle:
         assert calls == [
             ('base_forward', inputs),
             ('base_logits_shape', (1, 2, 4)),
-            ('memory_forward', inputs),
-            ('memory_logits_shape', (1, 2, 6)),
-            ('fusion_base_hidden_shape', (1, 2, 4)),
-            ('fusion_memory_hidden_shape', (1, 2, 6)),
+            ('fuse_inputs', inputs),
+            ('fuse_base_hidden_shape', (1, 2, 4)),
+            ('fuse_base_logits_shape', (1, 2, 1)),
+            ('fuse_memory_hidden_shape', (1, 2, 6)),
         ]
         assert torch.equal(output['logits'], torch.tensor([[[73.], [229.]]]))
         assert torch.equal(output['all_routed_experts']['selected_experts'], torch.tensor([1, 0]))

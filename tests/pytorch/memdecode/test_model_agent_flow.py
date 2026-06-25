@@ -5,7 +5,7 @@ import torch
 
 from lmdeploy.pytorch.config import MemDecodeConfig, ModelConfig
 from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
-from lmdeploy.pytorch.memdecode import MemDecodeFusion
+from lmdeploy.pytorch.memdecode import MemDecodeAgent, MemDecodeFusion
 
 
 def _model_config():
@@ -77,9 +77,11 @@ def test_async_model_forward_memdecode_fixed_fusion_uses_sliced_logits():
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.patched_model = base_model
     agent.async_forward = base_model.async_forward
-    agent.memdecode_agent = memory_agent
     agent.agent_strategy = SimpleNamespace(slice_outputs=lambda hidden, seq_length: hidden[-1:])
-    agent.memdecode_fusion = MemDecodeFusion(
+    agent.memdecode_agent = MemDecodeAgent.__new__(MemDecodeAgent)
+    agent.memdecode_agent.async_forward = memory_agent.async_forward
+    agent.memdecode_agent.get_logits = memory_agent.get_logits
+    agent.memdecode_agent.fusion = MemDecodeFusion(
         _memdecode_config(),
         base_hidden_size=config.hidden_size,
         memory_hidden_size=config.hidden_size,

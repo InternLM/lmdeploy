@@ -127,6 +127,60 @@ def test_get_logits_delegates_to_model():
     assert agent.get_logits(hidden_states) is logits
 
 
+def test_fuse_with_base_runs_memory_forward_and_fusion():
+    calls = []
+    inputs = SimpleNamespace(seq_length=torch.tensor([2]))
+    base_hidden = torch.tensor([[[1.0, 2.0]]])
+    base_logits = torch.tensor([[[3.0, 4.0]]])
+    memory_hidden = torch.tensor([[[5.0, 6.0]]])
+    memory_logits = torch.tensor([[[7.0, 8.0]]])
+    fused_logits = torch.tensor([[[10.0, 12.0]]])
+    routed_info = {'log_weights': torch.tensor([[[0.25, 0.75]]])}
+    base_output = {'hidden_states': base_hidden, 'seq_length': inputs.seq_length}
+    memory_output = {'hidden_states': memory_hidden, 'seq_length': inputs.seq_length}
+
+    class _Fusion:
+
+        def __call__(self, **kwargs):
+            calls.append(('fusion', kwargs))
+            return fused_logits, routed_info
+
+    async def _memory_forward(forward_inputs):
+        calls.append(('memory_forward', forward_inputs))
+        return memory_output
+
+    def _postprocess(output, forward_inputs):
+        calls.append(('postprocess', output, forward_inputs))
+        return output
+
+    agent = MemDecodeAgent.__new__(MemDecodeAgent)
+    agent.async_forward = _memory_forward
+    agent.get_logits = lambda hidden_states: memory_logits if hidden_states is memory_hidden else None
+    agent.fusion = _Fusion()
+
+    output = asyncio.run(
+        agent.fuse_with_base(
+            inputs=inputs,
+            base_output=base_output,
+            base_logits=base_logits,
+            postprocess_output=_postprocess,
+        )
+    )
+
+    assert output is base_output
+    assert output['logits'] is fused_logits
+    assert output['all_routed_experts'] is routed_info
+    assert calls[0] == ('memory_forward', inputs)
+    assert calls[1] == ('postprocess', memory_output, inputs)
+    fusion_kwargs = calls[2][1]
+    assert fusion_kwargs == {
+        'base_logits': base_logits,
+        'memory_logits': memory_logits,
+        'base_hidden_states': base_hidden,
+        'memory_hidden_states': memory_hidden,
+    }
+
+
 def test_async_forward_runs_memory_forward_inside_memory_context(monkeypatch):
     events = []
     inputs = SimpleNamespace()
