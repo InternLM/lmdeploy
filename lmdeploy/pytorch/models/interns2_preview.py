@@ -237,7 +237,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
             q_seqlens = ts_forecast_meta['q_seqlens']
             ts_batch_indices = ts_forecast_meta['ts_batch_indices']
             llm_hidden, llm_mask = self._select_ts_llm_hidden(hidden_states, q_seqlens, ts_batch_indices)
-            output['pending_ts_forecast'] = dict(
+            output['ts_forecast_state'] = dict(
                 history=ts_context['ts_history'],
                 llm_embedding_input=llm_hidden,
                 llm_embedding_mask=llm_mask,
@@ -266,7 +266,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         mask = torch.arange(padded.size(1), device=hidden_states.device)[None, :] < lengths[:, None]
         return padded, mask
 
-    def _run_ts_forecaster(self, pending: dict[str, Any], item_indices: torch.Tensor):
+    def _run_ts_forecaster(self, forecast_state: dict[str, Any], item_indices: torch.Tensor):
         """Run forecaster for TS items requested by generation metadata."""
 
         def to_payload(forecast, idx: int):
@@ -281,7 +281,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
             )
 
         item_ids = item_indices.tolist()
-        override_horizon = pending['forecast_horizon']
+        override_horizon = forecast_state['forecast_horizon']
         if override_horizon is not None:
             override_horizon = [override_horizon[int(idx)] for idx in item_ids]
             if all(horizon == override_horizon[0] for horizon in override_horizon):
@@ -291,22 +291,22 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
             payloads = []
             for item_idx, horizon in zip(item_ids, override_horizon):
                 forecast = self.time_series_forecaster(
-                    history=[pending['history'][item_idx]],
-                    llm_embedding_input=pending['llm_embedding_input'][item_idx:item_idx + 1],
-                    llm_embedding_mask=pending['llm_embedding_mask'][item_idx:item_idx + 1],
-                    ts_encoder_embedding_input=pending['ts_encoder_embedding'][item_idx:item_idx + 1],
-                    ts_encoder_embedding_mask=pending['ts_encoder_embedding_mask'][item_idx:item_idx + 1],
+                    history=[forecast_state['history'][item_idx]],
+                    llm_embedding_input=forecast_state['llm_embedding_input'][item_idx:item_idx + 1],
+                    llm_embedding_mask=forecast_state['llm_embedding_mask'][item_idx:item_idx + 1],
+                    ts_encoder_embedding_input=forecast_state['ts_encoder_embedding'][item_idx:item_idx + 1],
+                    ts_encoder_embedding_mask=forecast_state['ts_encoder_embedding_mask'][item_idx:item_idx + 1],
                     override_horizon=horizon,
                 )
                 payloads.append(to_payload(forecast, 0))
             return payloads
 
         forecast = self.time_series_forecaster(
-            history=[pending['history'][idx] for idx in item_ids],
-            llm_embedding_input=pending['llm_embedding_input'][item_indices],
-            llm_embedding_mask=pending['llm_embedding_mask'][item_indices],
-            ts_encoder_embedding_input=pending['ts_encoder_embedding'][item_indices],
-            ts_encoder_embedding_mask=pending['ts_encoder_embedding_mask'][item_indices],
+            history=[forecast_state['history'][idx] for idx in item_ids],
+            llm_embedding_input=forecast_state['llm_embedding_input'][item_indices],
+            llm_embedding_mask=forecast_state['llm_embedding_mask'][item_indices],
+            ts_encoder_embedding_input=forecast_state['ts_encoder_embedding'][item_indices],
+            ts_encoder_embedding_mask=forecast_state['ts_encoder_embedding_mask'][item_indices],
             override_horizon=override_horizon,
         )
         return [to_payload(forecast, idx) for idx in range(len(item_ids))]
@@ -319,12 +319,12 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         stopped: torch.Tensor | None = None,
     ):
         # forecast routing is controlled by explicit generation metadata.
-        pending = model_outputs.get('pending_ts_forecast')
-        if pending is None:
+        forecast_state = model_outputs.get('ts_forecast_state')
+        if forecast_state is None:
             return output_token_ids, stopped, None
 
-        ts_batch_indices = pending['ts_batch_indices'].to(device=next_token_ids.device)
-        forecast_indices = pending.get('forecast_indices')
+        ts_batch_indices = forecast_state['ts_batch_indices'].to(device=next_token_ids.device)
+        forecast_indices = forecast_state.get('forecast_indices')
         if forecast_indices is None:
             return output_token_ids, stopped, None
         item_indices = forecast_indices.to(device=next_token_ids.device)
@@ -333,7 +333,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
 
         batch_size = next_token_ids.numel()
         multimodal_outputs = [None] * batch_size
-        payloads = self._run_ts_forecaster(pending, item_indices)
+        payloads = self._run_ts_forecaster(forecast_state, item_indices)
 
         output_token_ids = output_token_ids.clone()
         stopped = stopped.clone()

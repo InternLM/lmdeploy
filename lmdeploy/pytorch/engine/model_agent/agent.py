@@ -522,31 +522,31 @@ class BaseModelAgent:
 
         llm_hidden = model_outputs.pop('ts_forecast_llm_hidden', None)
         llm_mask = model_outputs.pop('ts_forecast_llm_mask', None)
-        pending = model_outputs.pop('pending_ts_forecast', None)
+        forecast_state = model_outputs.pop('ts_forecast_state', None)
 
         if self._chunk_ts_forecast_state is None:
-            self._chunk_ts_forecast_state = dict(llm_hidden=[], llm_mask=[], pending=None)
-        state = self._chunk_ts_forecast_state
+            self._chunk_ts_forecast_state = dict(llm_hidden=[], llm_mask=[], forecast_state=None)
+        chunk_state = self._chunk_ts_forecast_state
 
         if llm_hidden is not None:
-            state['llm_hidden'].append(llm_hidden)
-            state['llm_mask'].append(llm_mask)
+            chunk_state['llm_hidden'].append(llm_hidden)
+            chunk_state['llm_mask'].append(llm_mask)
 
-        if pending is not None:
-            pending = dict(pending)
-            pending.pop('llm_embedding_input', None)
-            pending.pop('llm_embedding_mask', None)
-            state['pending'] = pending
+        if forecast_state is not None:
+            forecast_state = dict(forecast_state)
+            forecast_state.pop('llm_embedding_input', None)
+            forecast_state.pop('llm_embedding_mask', None)
+            chunk_state['forecast_state'] = forecast_state
 
         if not inputs.is_last_chunk:
             return model_outputs
 
-        pending = state.get('pending')
-        if pending is not None and state['llm_hidden']:
-            pending = dict(pending)
-            pending['llm_embedding_input'] = torch.cat(state['llm_hidden'], dim=1)
-            pending['llm_embedding_mask'] = torch.cat(state['llm_mask'], dim=1)
-            model_outputs['pending_ts_forecast'] = pending
+        forecast_state = chunk_state.get('forecast_state')
+        if forecast_state is not None and chunk_state['llm_hidden']:
+            forecast_state = dict(forecast_state)
+            forecast_state['llm_embedding_input'] = torch.cat(chunk_state['llm_hidden'], dim=1)
+            forecast_state['llm_embedding_mask'] = torch.cat(chunk_state['llm_mask'], dim=1)
+            model_outputs['ts_forecast_state'] = forecast_state
 
         self._chunk_ts_forecast_state = None
         return model_outputs
