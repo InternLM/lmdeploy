@@ -7,6 +7,7 @@ from typing import Any
 
 import utils.constant as constant
 import yaml
+
 from lmdeploy.utils import is_bf16_supported
 
 DepsProfileSelector = str | dict[str, str]
