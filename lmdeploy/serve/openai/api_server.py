@@ -48,6 +48,11 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
 )
 from lmdeploy.serve.anthropic import create_anthropic_router
 from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
+from lmdeploy.serve.core.generation_config import (
+    build_generation_config,
+    extract_request_sampling_values,
+    resolve_server_sampling_defaults,
+)
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
     ChatCompletionRequest,
@@ -111,6 +116,8 @@ class VariableInterface:
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
     response_parser_cls: type[ResponseParser] | None = None
+    server_sampling_defaults: dict = {}
+    override_max_new_tokens: int | None = None
 
     @classmethod
     def create_session(cls, user_session_id: int | None = None) -> Session:
@@ -146,6 +153,23 @@ class VariableInterface:
     @classmethod
     def get_engine_config(cls):
         return cls.async_engine.backend_config
+
+
+def _build_serving_generation_config(request, **extra_kwargs) -> GenerationConfig:
+    """Build ``GenerationConfig`` with server and request sampling merge."""
+    request_values = extract_request_sampling_values(request)
+    max_completion_tokens = getattr(request, 'max_completion_tokens', None)
+    max_tokens = getattr(request, 'max_tokens', None)
+    if max_completion_tokens is None and hasattr(request, 'max_output_tokens'):
+        max_completion_tokens = getattr(request, 'max_output_tokens', None)
+    return build_generation_config(
+        request_values,
+        VariableInterface.server_sampling_defaults,
+        max_completion_tokens=max_completion_tokens,
+        max_tokens=max_tokens,
+        override_max_new_tokens=VariableInterface.override_max_new_tokens,
+        **extra_kwargs,
+    )
 
 
 async def _with_request_cleanup(generator, result_generators, sessions):
@@ -487,14 +511,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     # (e.g. GPT-OSS clears response_format and injects the schema into messages)
     request = response_parser.request
 
-    gen_config = GenerationConfig(
-        max_new_tokens=request.max_completion_tokens,
-        do_sample=True,
+    gen_config = _build_serving_generation_config(
+        request,
         logprobs=gen_logprobs,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         include_stop_str_in_output=request.include_stop_str_in_output,
@@ -502,7 +521,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         response_format=request.response_format,
         logits_processors=logits_processors,
         min_new_tokens=request.min_new_tokens,
-        min_p=request.min_p,
         random_seed=random_seed,
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         migration_request=migration_request,
@@ -829,20 +847,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if isinstance(request.stop, str):
         request.stop = [request.stop]
     random_seed = request.seed if request.seed is not None else None
-    max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
-    gen_config = GenerationConfig(
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
+    gen_config = _build_serving_generation_config(
+        request,
         logprobs=request.logprobs,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
-        min_p=request.min_p,
         random_seed=random_seed,
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         migration_request=migration_request,
@@ -1013,15 +1024,9 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         prompt = [dict(role='user', content=[text_input] + image_input)]
         input_ids = None
 
-    gen_config = GenerationConfig(
-        max_new_tokens=request.max_tokens,
-        do_sample=True,
+    gen_config = _build_serving_generation_config(
+        request,
         logprobs=1 if request.return_logprob else None,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        min_p=request.min_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         stop_token_ids=request.stop_token_ids,
@@ -1547,6 +1552,8 @@ def serve(model_path: str,
           allow_terminate_by_client: bool = False,
           enable_abort_handling: bool = False,
           speculative_config: SpeculativeConfig | None = None,
+          generation_config: str = 'auto',
+          override_generation_config: dict | None = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1608,6 +1615,15 @@ def serve(model_path: str,
     VariableInterface.enable_abort_handling = enable_abort_handling
     from lmdeploy.serve.parsers import validate_parser_names
     reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
+
+    server_defaults, override_max_new_tokens = resolve_server_sampling_defaults(
+        generation_config,
+        override_generation_config,
+        model_path,
+        trust_remote_code,
+    )
+    VariableInterface.server_sampling_defaults = server_defaults
+    VariableInterface.override_max_new_tokens = override_max_new_tokens
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
