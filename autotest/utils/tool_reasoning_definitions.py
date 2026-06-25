@@ -3,11 +3,7 @@ import os
 import re
 
 from openai import OpenAI
-from utils.constant import DEFAULT_PORT
-
-BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
-PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
-BASE_URL = f'{BASE_HTTP_URL}:{PORT}'
+from utils.constant import BASE_URL
 
 #: Think-tag delimiters used by DeepSeek-R1 and QwenQwQ parsers
 THINK_START_TOKEN = '<think>'
@@ -388,7 +384,9 @@ def collect_stream_reasoning(stream):
         finish_reason       – last non-None finish_reason
         finish_reason_count – how many chunks carried a non-None finish_reason
         role                – first non-None role value
-        role_count          – how many chunks carried a non-None role
+        role_count          – number of *distinct* role values in stream order;
+                              consecutive chunks repeating the same ``delta.role``
+                              count once (some LMDeploy backends resend ``role`` every chunk)
         chunk_count         – total number of chunks received
         reasoning_chunks    – number of chunks containing reasoning
         content_chunks      – number of chunks containing content
@@ -406,6 +404,7 @@ def collect_stream_reasoning(stream):
         'content_chunks': 0,
     }
 
+    last_distinct_role = None
     for chunk in stream:
         result['chunk_count'] += 1
         if not chunk.choices:
@@ -418,8 +417,11 @@ def collect_stream_reasoning(stream):
 
         delta = choice.delta
         if delta.role:
-            result['role'] = delta.role
-            result['role_count'] += 1
+            if result['role'] is None:
+                result['role'] = delta.role
+            if last_distinct_role != delta.role:
+                result['role_count'] += 1
+                last_distinct_role = delta.role
 
         # -- reasoning_content (lmdeploy extension field) -------------------
         rc = getattr(delta, 'reasoning_content', None)
