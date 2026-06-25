@@ -75,8 +75,8 @@ def ensure_multimodal_content_hashes(input_mms):
 def make_multimodal_item_content_hash(item: Mapping[str, Any]) -> str:
     """Create a stable content hash for dict-style multimodal items.
 
-    Prompt positions stay outside the content hash so backends can combine the
-    same content identity with block-relative offsets when building cache keys.
+    Prompt positions stay outside the content hash so backends can combine the same content identity with block-relative
+    offsets when building cache keys.
     """
     content_view = {key: value for key, value in item.items() if key not in _POSITION_KEYS}
     hasher = hashlib.sha256()
@@ -85,7 +85,8 @@ def make_multimodal_item_content_hash(item: Mapping[str, Any]) -> str:
 
 
 def ensure_multimodal_item_content_hashes(items: list[dict[str, Any]] | None):
-    """Populate missing ``content_hash`` values on dict-style multimodal data."""
+    """Populate missing ``content_hash`` values on dict-style multimodal
+    data."""
     if not items:
         return items
 
