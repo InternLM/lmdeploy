@@ -239,6 +239,16 @@ class ExecutorBase:
             if self.cache_config.block_size != 64:
                 raise ValueError('Please set block_size to 64 for flash_mla.')
             return
+        # Linear attention requires a kv block size of 128 on ascend.
+        # Other models keep the user-provided block size.
+        uses_linear_attn = len(self.model_config.states_shapes) > 0
+        if (self.cache_config.device_type == 'ascend' and uses_linear_attn and
+                self.cache_config.block_size != 128):
+            logger.warning(f'Force `block_size=128` (was {self.cache_config.block_size}) '
+                           'for linear attention on ascend.')
+            self.cache_config.block_size = 128
+            self.cache_config.kernel_block_size = 128
+            return
         # TODO: support kernel with both large head dim and large block size.
         if self.model_config.k_head_dim >= 512 and self.cache_config.block_size > 32:
             self.cache_config.block_size = 32
