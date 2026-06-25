@@ -241,11 +241,14 @@ class ExecutorBase:
             return
         # Linear attention requires a kv block size of 128 on ascend.
         # Other models keep the user-provided block size.
-        uses_linear_attn = len(self.model_config.states_shapes) > 0
-        if (self.cache_config.device_type == 'ascend' and uses_linear_attn and
-                self.cache_config.block_size != 128):
-            logger.warning(f'Force `block_size=128` (was {self.cache_config.block_size}) '
-                           'for linear attention on ascend.')
+        is_ssm = len(self.model_config.states_shapes) > 0
+        if (self.cache_config.device_type == 'ascend' and is_ssm and
+                (self.cache_config.block_size != 128 or self.cache_config.kernel_block_size != 128)):
+            logger.warning(
+                'Force `block_size=128` and `kernel_block_size=128` '
+                f'(was block_size={self.cache_config.block_size}, '
+                f'kernel_block_size={self.cache_config.kernel_block_size}) '
+                'for linear attention on ascend.')
             self.cache_config.block_size = 128
             self.cache_config.kernel_block_size = 128
             return
