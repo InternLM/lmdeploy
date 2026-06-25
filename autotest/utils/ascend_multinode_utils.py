@@ -13,6 +13,7 @@ See: https://github.com/DeepLink-org/dlinfer/blob/main/docs/ascend_multinodes.md
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 from pathlib import Path
@@ -118,8 +119,71 @@ def _default_socket_ifname() -> str:
     return os.getenv('HCCL_SOCKET_IFNAME') or os.getenv('GLOO_SOCKET_IFNAME') or 'eth0'
 
 
-def _master_addr() -> str:
-    return os.getenv('MASTER_ADDR') or os.getenv('LMDEPLOY_DP_MASTER_ADDR') or socket.gethostbyname(socket.gethostname())
+def _hostname_ip() -> str | None:
+    """First IPv4 from ``hostname -I`` when available."""
+    try:
+        import subprocess
+        out = subprocess.check_output(['hostname', '-I'], text=True, stderr=subprocess.DEVNULL).strip()
+        if out:
+            return out.split()[0]
+    except Exception:
+        pass
+    return None
+
+
+def _rank_table_master_addr(rank_table_path: str | None) -> str | None:
+    if not rank_table_path or not os.path.isfile(rank_table_path):
+        return None
+    try:
+        with open(rank_table_path) as f:
+            rank_table = json.load(f)
+        servers = rank_table.get('server_list') or []
+        if servers and servers[0].get('server_id'):
+            return str(servers[0]['server_id'])
+    except Exception:
+        return None
+    return None
+
+
+def _rank_table_local_addr(rank_table_path: str | None) -> str | None:
+    """Local ``server_id`` from rank table using ``NODE_RANK``."""
+    if not rank_table_path or not os.path.isfile(rank_table_path):
+        return None
+    node_rank = int(os.getenv('NODE_RANK', '0'))
+    try:
+        with open(rank_table_path) as f:
+            rank_table = json.load(f)
+        servers = rank_table.get('server_list') or []
+        if 0 <= node_rank < len(servers) and servers[node_rank].get('server_id'):
+            return str(servers[node_rank]['server_id'])
+    except Exception:
+        return None
+    return None
+
+
+def _master_addr(rank_table_path: str | None = None) -> str:
+    """Address lmdeploy compares to
+    ``rank_table['server_list'][0]['server_id']``."""
+    for key in ('LMDEPLOY_DIST_MASTER_ADDR', 'LMDEPLOY_DP_MASTER_ADDR', 'MASTER_ADDR'):
+        val = os.getenv(key)
+        if val:
+            return val
+    from_table = _rank_table_master_addr(rank_table_path)
+    if from_table:
+        return from_table
+    return _hostname_ip() or socket.gethostbyname(socket.gethostname())
+
+
+def _local_addr(rank_table_path: str | None = None) -> str:
+    """This node's HCCL / Ray bind IP (worker != master)."""
+    for key in ('HCCL_IF_IP', 'RAY_NODE_IP_ADDRESS'):
+        val = os.getenv(key)
+        if val:
+            return val
+    from_table = _rank_table_local_addr(rank_table_path)
+    if from_table:
+        return from_table
+    return _hostname_ip() or socket.gethostbyname(socket.gethostname())
 
 
 def build_ascend_multinode_env(
@@ -140,6 +204,7 @@ def build_ascend_multinode_env(
 
     if dp > 1:
         env.setdefault('LMDEPLOY_EXECUTOR_BACKEND', 'ray')
+        env.setdefault('RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES', '1')
     if dp > 1 or ep > 1:
         env.setdefault('DEVICE', 'ascend')
 
@@ -150,14 +215,17 @@ def build_ascend_multinode_env(
     if rank_table:
         env['ASCEND_RANK_TABLE_FILE_PATH'] = rank_table
 
-    master = _master_addr()
+    master = _master_addr(rank_table)
+    local = _local_addr(rank_table)
     env.setdefault('MASTER_ADDR', master)
     env.setdefault('LMDEPLOY_DP_MASTER_ADDR', master)
+    env.setdefault('LMDEPLOY_DIST_MASTER_ADDR', master)
+    env.setdefault('RAY_NODE_IP_ADDRESS', local)
     ifname = _default_socket_ifname()
     env.setdefault('HCCL_SOCKET_IFNAME', ifname)
     env.setdefault('GLOO_SOCKET_IFNAME', ifname)
     env.setdefault('TP_SOCKET_IFNAME', ifname)
-    env.setdefault('HCCL_IF_IP', master)
+    env.setdefault('HCCL_IF_IP', local)
     return env
 
 

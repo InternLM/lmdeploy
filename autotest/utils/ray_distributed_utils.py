@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import socket
 import subprocess
 import time
@@ -7,7 +8,11 @@ from time import time as time_time
 from typing import Any
 
 import requests
-from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_rank_table
+from utils.ascend_multinode_utils import (
+    _local_addr,
+    build_ascend_multinode_env,
+    ensure_ascend_rank_table,
+)
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
@@ -21,6 +26,12 @@ RAY_PORT = 6379
 HEALTH_CHECK_TIMEOUT = 30
 CONNECTION_CHECK_TIMEOUT = 5
 WORKER_WAIT_INTERVAL = 30
+
+
+def ascend_multinode_enabled() -> bool:
+    if int(os.getenv('NODE_COUNT', '1')) <= 1:
+        return False
+    return os.getenv('DEVICE', '') == 'ascend' or os.getenv('TEST_ENV', '') == 'ascend'
 
 
 def wait_for_model_service_ready(
@@ -142,12 +153,21 @@ class RayLMDeployManager:
 
     def start_ray_cluster(self):
         """Start or join Ray cluster."""
+        local_ip = None
+        if ascend_multinode_enabled():
+            rank_table = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
+            local_ip = _local_addr(rank_table)
+            os.environ.setdefault('RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES', '1')
+
         if self.is_master:
             cmd = ['ray', 'start', '--head', '--port', str(self.ray_port)]
-            print(f'🚀 Master node starting Ray cluster (Port: {self.ray_port})')
+            print(f'🚀 Master node starting Ray cluster (port: {self.ray_port})')
         else:
             cmd = ['ray', 'start', '--address', f'{self.master_addr}:{self.ray_port}']
             print(f'🔌 Worker node {self.node_rank} joining Ray cluster: {self.master_addr}:{self.ray_port}')
+
+        if local_ip:
+            cmd += ['--node-ip-address', local_ip]
 
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -155,6 +175,23 @@ class RayLMDeployManager:
         except subprocess.CalledProcessError as e:
             print(f'💥 Ray startup failed: {e.stderr}')
             raise
+
+        if self.is_master and ascend_multinode_enabled():
+            self._wait_ray_cluster_nodes(self.node_count)
+
+    def _wait_ray_cluster_nodes(self, expected_nodes: int, timeout_seconds: int = 600) -> None:
+        print(f'⏳ Waiting for Ray cluster to reach {expected_nodes} node(s)...')
+        deadline = time_time() + timeout_seconds
+        while time_time() < deadline:
+            proc = subprocess.run(['ray', 'status'], capture_output=True, text=True, check=False)
+            out = f'{proc.stdout}\n{proc.stderr}'
+            match = re.search(r'(\d+)\s+node', out, flags=re.IGNORECASE)
+            if match and int(match.group(1)) >= expected_nodes:
+                print(f'✅ Ray cluster ready ({match.group(1)} node(s))')
+                return
+            time.sleep(10)
+
+        raise RuntimeError(f'Ray cluster did not reach {expected_nodes} node(s) within {timeout_seconds}s')
 
     def start_lmdeploy_api_server(self, config: dict[str, Any], run_config: dict[str, Any]) -> None:
         """

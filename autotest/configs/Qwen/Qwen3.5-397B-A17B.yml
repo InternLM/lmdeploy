@@ -121,8 +121,8 @@ ascend:
   - chat
   - vl
   engine_config:
-    dp: 8
-    ep: 8
+    dp: 32
+    ep: 32
     extra:
       max-batch-size: 64
       cache-max-entry-count: 0.9

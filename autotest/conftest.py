@@ -60,13 +60,11 @@ def shared_ray_manager():
 
 @pytest.fixture(scope='session')
 def shared_proxy_manager():
-    master_addr = DEFAULT_SERVER
-
     manager = ProxyDistributedManager()
 
+    manager.start()
     if manager.is_master:
-        manager.start()
-        print(f'🎯 Master node: LMDeploy Proxy started on {master_addr}:{manager.proxy_port}')
+        print(f'🎯 Master node: LMDeploy Proxy started on {manager.master_addr}:{manager.proxy_port}')
         print('⏳ Waiting for worker nodes to connect...')
 
     yield manager
