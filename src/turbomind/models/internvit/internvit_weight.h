@@ -16,10 +16,7 @@ struct InternVitConfig: ModuleConfig {
 
     DataType data_type{};
     int      hidden_dim{0};
-    int      out_hidden_dim{0};
     int      depth{0};
-    int      head_num{0};
-    int      intermediate_size{0};
     int      patch_in_dim{0};
     int      in_channels{0};
     int      image_height{0};
@@ -28,17 +25,12 @@ struct InternVitConfig: ModuleConfig {
     int      patch_width{0};
     int      num_patches{0};
     int      image_seq_length{0};
-    float    downsample_ratio{0.5f};
-    float    norm_eps{1e-6f};
     NormType norm_type{NormType::kRMSNorm};
 
 #define INTERNVIT_FIELDS(X)                                                                                            \
     X(DataType, data_type)                                                                                             \
     X(int, hidden_dim)                                                                                                 \
-    X(int, out_hidden_dim)                                                                                             \
     X(int, depth)                                                                                                      \
-    X(int, head_num)                                                                                                   \
-    X(int, intermediate_size)                                                                                          \
     X(int, patch_in_dim)                                                                                               \
     X(int, in_channels)                                                                                                \
     X(int, image_height)                                                                                               \
@@ -47,8 +39,6 @@ struct InternVitConfig: ModuleConfig {
     X(int, patch_width)                                                                                                \
     X(int, num_patches)                                                                                                \
     X(int, image_seq_length)                                                                                           \
-    X(float, downsample_ratio, 0.5f)                                                                                   \
-    X(float, norm_eps, 1e-6f)                                                                                          \
     X(NormType, norm_type, NormType::kRMSNorm)
 
     TM_FOR_EACH(InternVitConfig, INTERNVIT_FIELDS)

@@ -48,16 +48,23 @@ def map_interns1_hf_keys(name: str) -> str:
     return name
 
 
+def map_internvl_hf_keys(name: str) -> str:
+    """Map InternVL HF vision keys to the InternVit loader layout."""
+    if name.startswith('vision_tower.') or name.startswith('multi_modal_projector.'):
+        return f'model.{name}'
+    return name
+
+
 def _to_tm_norm_type(norm_type: str):
     if norm_type == 'layer_norm':
         return _tm.NormType.LAYER_NORM
     if norm_type == 'rms_norm':
         return _tm.NormType.RMS_NORM
-    raise ValueError(f'Unsupported Intern-S1 vision norm_type: {norm_type!r}')
+    raise ValueError(f'Unsupported InternVit vision norm_type: {norm_type!r}')
 
 
-class InternS1VisionModel(TextModel):
-    """Intern-S1 ViT weight model rooted at ``ModelRoot.vision_model``."""
+class InternVitVisionModel(TextModel):
+    """InternVit weight model rooted at ``ModelRoot.vision_model``."""
 
     def __init__(self, cfg: PretrainedConfig, *, resolver, parent_cfg: PretrainedConfig):
         super().__init__(cfg, resolver=resolver)
@@ -83,10 +90,9 @@ class InternS1VisionModel(TextModel):
         self._projector_scale = int(round(1.0 / self._downsample_ratio))
         self._projector_in_dim = self._hidden * self._projector_scale * self._projector_scale
 
-    @staticmethod
-    def _tm_tensor(tensor: torch.Tensor):
+    def _tm_tensor(self, tensor: torch.Tensor):
         if not isinstance(tensor, torch.Tensor):
-            raise TypeError(f'Intern-S1 ViT multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
+            raise TypeError(f'InternVit multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
         return _tm.from_dlpack(tensor.contiguous())
 
     def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
@@ -94,7 +100,7 @@ class InternS1VisionModel(TextModel):
         for input_mm in multimodal:
             modality = input_mm.get('modality', Modality.IMAGE)
             if modality not in (Modality.IMAGE, Modality.IMAGE.value, 'image'):
-                raise ValueError(f'Intern-S1 TurboMind does not support modality {modality!r}')
+                raise ValueError(f'InternVit TurboMind does not support modality {modality!r}')
 
             pixel_values = self._tm_tensor(input_mm['pixel_values'])
             token_begin = int(input_mm['offset'])
@@ -138,10 +144,7 @@ class InternS1VisionModel(TextModel):
         cfg = _tm.InternVitConfig()
         cfg.data_type = self._resolver.data_type
         cfg.hidden_dim = self._hidden
-        cfg.out_hidden_dim = self._out_hidden
         cfg.depth = self._depth
-        cfg.head_num = self._heads
-        cfg.intermediate_size = self._inter
         cfg.patch_in_dim = self._patch_in_dim
         cfg.in_channels = self._channels
         cfg.image_height = self._image_h
@@ -150,8 +153,6 @@ class InternS1VisionModel(TextModel):
         cfg.patch_width = self._patch_w
         cfg.num_patches = self._num_patches
         cfg.image_seq_length = self._image_seq_length
-        cfg.downsample_ratio = self._downsample_ratio
-        cfg.norm_eps = self._norm_eps
         cfg.norm_type = self._norm_type
         return cfg
 
@@ -224,7 +225,7 @@ class InternS1VisionModel(TextModel):
         elif self._norm_type == _tm.NormType.RMS_NORM:
             return self._rms_norm(pfx, tp=ParallelGroup(1, None))
         else:
-            raise ValueError(f'Unsupported Intern-S1 vision norm_type: {self._norm_type!r}')
+            raise ValueError(f'Unsupported InternVit vision norm_type: {self._norm_type!r}')
 
     def _rms_norm(self, pfx, tp: ParallelGroup):
         weight = pfx.pop('weight')
@@ -284,14 +285,17 @@ class InternVLModel:
         self.text_model = text_model_cls(llm_cfg, resolver=resolver)
         archs = _cfg_get(cfg, 'architectures') or []
         self._checkpoint_mappings = []
-        if archs and archs[0] == 'InternS1ForConditionalGeneration':
+        arch = archs[0] if archs else None
+        if arch == 'InternS1ForConditionalGeneration':
             self._checkpoint_mappings.append(map_interns1_hf_keys)
+        elif arch == 'InternVLForConditionalGeneration':
+            self._checkpoint_mappings.append(map_internvl_hf_keys)
         vision_cfg = cfg.vision_config if hasattr(cfg, 'vision_config') else None
-        if (not disable_vision_encoder and archs and archs[0] == 'InternS1ForConditionalGeneration'
-                and vision_cfg is not None):
-            self.vision_model = InternS1VisionModel(vision_cfg,
-                                                    resolver=vision_resolver or resolver,
-                                                    parent_cfg=cfg)
+        if (not disable_vision_encoder and vision_cfg is not None
+                and arch in ('InternS1ForConditionalGeneration', 'InternVLForConditionalGeneration')):
+            self.vision_model = InternVitVisionModel(vision_cfg,
+                                                     resolver=vision_resolver or resolver,
+                                                     parent_cfg=cfg)
         else:
             self.vision_model = None
 
@@ -323,7 +327,7 @@ class InternVLModel:
 
     def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
         if self.vision_model is None:
-            raise ValueError('Intern-S1 TurboMind vision encoder is not available.')
+            raise ValueError('InternVL TurboMind vision encoder is not available.')
         return self.vision_model.to_turbomind_multimodal(multimodal)
 
     def model(self, pfx):
