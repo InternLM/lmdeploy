@@ -4,7 +4,15 @@ import gc
 from typing import Any
 
 from lmdeploy.pytorch.backends.selector import get_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -32,6 +40,7 @@ class WorkerWrapperBase:
         device_type: str = 'cuda',
         log_level: int = 30,
         specdecode_config: SpecDecodeConfig = None,
+        memdecode_config: MemDecodeConfig = None,
         trust_remote_code: bool = False
     ):
         self.model_path = model_path
@@ -48,6 +57,7 @@ class WorkerWrapperBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        self.memdecode_config = memdecode_config
         self.trust_remote_code = trust_remote_code
         logger.setLevel(log_level)
         self.out_que: asyncio.Queue = None
@@ -90,6 +100,7 @@ class WorkerWrapperBase:
             dist_ctx=self.dist_ctx,
             adapters=self.adapters,
             specdecode_config=self.specdecode_config,
+            memdecode_config=self.memdecode_config,
             trust_remote_code=self.trust_remote_code
         )
         self.model_agent.build_model()

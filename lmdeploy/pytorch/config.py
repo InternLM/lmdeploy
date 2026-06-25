@@ -409,9 +409,6 @@ class ModelConfig:
     # flags mark if this model use mrope
     use_mrope: bool = False
 
-    # memdecode
-    memdecode_config: MemDecodeConfig | None = None
-
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
@@ -428,18 +425,6 @@ class ModelConfig:
         num_q_heads = self.num_attention_heads // tp
         num_kv_heads = max(self.num_key_value_heads // tp, 1)
         return num_q_heads, num_kv_heads
-
-    def validate_memdecode_config(self):
-        """Validate base and memory model compatibility for MemDecode."""
-        memdecode_config = self.memdecode_config
-        if memdecode_config is None:
-            return
-
-        memory_model_config = memdecode_config.memory_model_config
-        base_has_state = len(self.states_shapes) > 0
-        memory_has_state = len(memory_model_config.states_shapes) > 0
-        if base_has_state != memory_has_state:
-            raise ValueError('Base and memory model must both use SSM state caches or both not use them.')
 
     @classmethod
     def from_pretrained(
@@ -479,34 +464,6 @@ class ModelConfig:
         # update quantization config
         hf_config = _patch_quantization_config(hf_config, model_format=model_format)
 
-        hf_overrides = dict(hf_overrides or {})
-        memory_model_path = hf_overrides.pop('memory_model_path', None)
-        lambda_value = hf_overrides.pop('lambda_value', 1.0)
-        adaptive_router = hf_overrides.pop('adaptive_router', False)
-        router_path = hf_overrides.pop('router_path', None)
-        lambda_base_only_threshold = hf_overrides.pop('lambda_base_only_threshold', -1.0)
-
-        if memory_model_path is not None:
-            memory_model_config = cls.from_pretrained(
-                memory_model_path,
-                trust_remote_code=trust_remote_code,
-                dtype=dtype,
-                dist_config=dist_config,
-                model_format=None,
-                device_type=device_type,
-                block_size=block_size,
-            )
-            memdecode_config = MemDecodeConfig(
-                memory_model_path=memory_model_path,
-                memory_model_config=memory_model_config,
-                lambda_value=lambda_value,
-                adaptive_router=adaptive_router,
-                router_path=router_path,
-                lambda_base_only_threshold=lambda_base_only_threshold,
-            )
-        else:
-            memdecode_config = None
-
         model_config = cls.from_hf_config(
             hf_config,
             pretrained_model_name_or_path,
@@ -517,27 +474,10 @@ class ModelConfig:
             num_spec_tokens=num_spec_tokens,
             device_type=device_type,
         )
-        model_config.memdecode_config = memdecode_config
-        model_config.validate_memdecode_config()
 
         hf_config.trust_remote_code = trust_remote_code
-        if memdecode_config is not None:
-            memory_vocab_size = memdecode_config.memory_model_config.vocab_size
-            if memory_vocab_size > model_config.vocab_size:
-                logger.warning(
-                    'Memory model vocab_size (%s) is larger than base vocab_size (%s); '
-                    'fusion and sampling will use the base vocab only.',
-                    memory_vocab_size,
-                    model_config.vocab_size,
-                )
-            elif memory_vocab_size < model_config.vocab_size:
-                logger.warning(
-                    'Memory model vocab_size (%s) is smaller than base vocab_size (%s); '
-                    'memory-only tokens will be padded with -inf during fusion.',
-                    memory_vocab_size,
-                    model_config.vocab_size,
-                )
 
+        hf_overrides = dict(hf_overrides or {})
         fp32_lm_head = False
         if hf_overrides:
             logger.warning(f'Overriding HF config with {hf_overrides}')

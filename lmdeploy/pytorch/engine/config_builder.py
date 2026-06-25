@@ -7,7 +7,9 @@ from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
     DistConfig,
+    MemDecodeConfig,
     MiscConfig,
+    ModelConfig,
     SchedulerConfig,
     SpecDecodeConfig,
     normalize_cudagraph_capture_batch_sizes,
@@ -105,6 +107,47 @@ class ConfigBuilder:
         """Build misc config."""
         misc_config = MiscConfig.from_engine_config(engine_config)
         return misc_config
+
+    @staticmethod
+    def build_memdecode_config(target_model,
+                               engine_config: PytorchEngineConfig,
+                               cache_config: CacheConfig,
+                               dist_config: DistConfig,
+                               trust_remote_code: bool = False,
+                               ):
+        """Build MemDecode config from engine HF overrides."""
+        hf_overrides = getattr(engine_config, 'hf_overrides', None)
+        if hf_overrides is None:
+            return None
+
+        memory_model_path = hf_overrides.pop('memory_model_path', None)
+        lambda_value = hf_overrides.pop('lambda_value', 1.0)
+        adaptive_router = hf_overrides.pop('adaptive_router', False)
+        router_path = hf_overrides.pop('router_path', None)
+        lambda_base_only_threshold = hf_overrides.pop('lambda_base_only_threshold', -1.0)
+        if memory_model_path is None:
+            return None
+
+        if not os.path.exists(memory_model_path):
+            memory_model_path = get_model(memory_model_path, engine_config.download_dir, engine_config.revision)
+
+        memory_model_config = ModelConfig.from_pretrained(
+            memory_model_path,
+            trust_remote_code=trust_remote_code,
+            dtype=engine_config.dtype,
+            dist_config=dist_config,
+            model_format=None,
+            device_type=engine_config.device_type,
+            block_size=cache_config.block_size,
+        )
+        return MemDecodeConfig(
+            memory_model_path=memory_model_path,
+            memory_model_config=memory_model_config,
+            lambda_value=lambda_value,
+            adaptive_router=adaptive_router,
+            router_path=router_path,
+            lambda_base_only_threshold=lambda_base_only_threshold,
+        )
 
     @staticmethod
     def build_specdecode_config(target_model,

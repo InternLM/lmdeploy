@@ -15,7 +15,15 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -226,6 +234,7 @@ class MPExecutor(ExecutorBase):
                  misc_config: MiscConfig,
                  adapters: dict[str, str] = None,
                  specdecode_config: SpecDecodeConfig = None,
+                 memdecode_config: MemDecodeConfig = None,
                  device_type: str = 'cuda',
                  trust_remote_code: bool = False):
         """Initialize Executor."""
@@ -236,6 +245,7 @@ class MPExecutor(ExecutorBase):
                          dist_config=dist_config,
                          misc_config=misc_config,
                          specdecode_config=specdecode_config,
+                         memdecode_config=memdecode_config,
                          adapters=adapters,
                          device_type=device_type,
                          trust_remote_code=trust_remote_code)
@@ -269,6 +279,7 @@ class MPExecutor(ExecutorBase):
                        dist_config=dist_config,
                        misc_config=misc_config,
                        specdecode_config=specdecode_config,
+                       memdecode_config=memdecode_config,
                        adapters=adapters,
                        device_type=device_type,
                        log_level=logger.level,
@@ -445,6 +456,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
         dist_config: DistConfig,
         misc_config: MiscConfig,
         specdecode_config: SpecDecodeConfig = None,
+        memdecode_config: MemDecodeConfig = None,
         adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
@@ -458,6 +470,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
             dist_config=dist_config,
             misc_config=misc_config,
             specdecode_config=specdecode_config,
+            memdecode_config=memdecode_config,
             adapters=adapters,
             device_type=device_type,
             log_level=log_level,
@@ -510,6 +523,7 @@ class ExecutorProc:
         dist_config: DistConfig,
         misc_config: MiscConfig,
         specdecode_config: SpecDecodeConfig = None,
+        memdecode_config: MemDecodeConfig = None,
         adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
@@ -533,6 +547,7 @@ class ExecutorProc:
                                  dist_config=dist_config,
                                  misc_config=misc_config,
                                  specdecode_config=specdecode_config,
+                                 memdecode_config=memdecode_config,
                                  adapters=adapters,
                                  device_type=device_type,
                                  log_level=log_level,

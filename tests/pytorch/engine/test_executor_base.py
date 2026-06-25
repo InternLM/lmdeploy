@@ -196,7 +196,8 @@ def test_get_cache_block_sizes_includes_nested_memdecode_memory_model(monkeypatc
     memory_model_config = object()
     executor.dist_config = SimpleNamespace(attn_tp=8)
     executor.cache_config = object()
-    executor.model_config = SimpleNamespace(memdecode_config=SimpleNamespace(memory_model_config=memory_model_config))
+    executor.model_config = object()
+    executor.memdecode_config = SimpleNamespace(memory_model_config=memory_model_config)
     executor.specdecode_config = None
     calls = []
 
@@ -219,7 +220,7 @@ def test_get_cache_block_sizes_includes_nested_memdecode_memory_model(monkeypatc
 
 def test_validate_memdecode_configs_rejects_specdecode():
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(memdecode_config=SimpleNamespace(memory_model_config=SimpleNamespace()))
+    executor.memdecode_config = SimpleNamespace(memory_model_config=SimpleNamespace())
     executor.specdecode_config = SimpleNamespace()
 
     with pytest.raises(ValueError, match='MemDecode and speculative decoding cannot be enabled together.'):
@@ -228,10 +229,8 @@ def test_validate_memdecode_configs_rejects_specdecode():
 
 def test_validate_memdecode_configs_rejects_state_cache_mismatch():
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(
-        states_shapes=[],
-        memdecode_config=SimpleNamespace(memory_model_config=SimpleNamespace(states_shapes=[(1, 2, 3)])),
-    )
+    executor.model_config = SimpleNamespace(states_shapes=[])
+    executor.memdecode_config = SimpleNamespace(memory_model_config=SimpleNamespace(states_shapes=[(1, 2, 3)]))
     executor.specdecode_config = None
 
     with pytest.raises(ValueError, match='Base and memory model must both use SSM state caches or both not use them.'):

@@ -13,7 +13,15 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -168,6 +176,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         dtype: str = 'auto',
         log_level: int = 30,
         specdecode_config: SpecDecodeConfig = None,
+        memdecode_config: MemDecodeConfig = None,
         trust_remote_code: bool = False
     ):
         init_backend(device_type)
@@ -184,6 +193,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             device_type=device_type,
             log_level=log_level,
             specdecode_config=specdecode_config,
+            memdecode_config=memdecode_config,
             trust_remote_code=trust_remote_code
         )
         self.node_ip = ray.util.get_node_ip_address()
@@ -245,6 +255,7 @@ class RayExecutor(ExecutorBase):
         device_type: str = 'cuda',
         dtype: str = 'auto',
         specdecode_config: SpecDecodeConfig = None,
+        memdecode_config: MemDecodeConfig = None,
         trust_remote_code: bool = False,
     ):
         """Initialize Executor."""
@@ -258,6 +269,7 @@ class RayExecutor(ExecutorBase):
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            memdecode_config=memdecode_config,
             trust_remote_code=trust_remote_code,
         )
 
@@ -291,6 +303,7 @@ class RayExecutor(ExecutorBase):
                 dtype=dtype,
                 log_level=logger.level,
                 specdecode_config=specdecode_config,
+                memdecode_config=memdecode_config,
                 trust_remote_code=trust_remote_code
             )
 

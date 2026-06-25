@@ -14,7 +14,14 @@ import torch.distributed as dist
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
@@ -250,12 +257,13 @@ class BaseModelAgent:
         device_ctx: DeviceContext,
         adapters: dict[str, str] = None,
         specdecode_config: SpecDecodeConfig = None,
+        memdecode_config: MemDecodeConfig = None,
         trust_remote_code: bool = False
     ):
 
         self.model_config = model_config
         self.cache_config = cache_config
-        mem_cfg = model_config.memdecode_config
+        mem_cfg = memdecode_config
         if mem_cfg is not None and specdecode_config is not None:
             raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         # use raw tokenizer

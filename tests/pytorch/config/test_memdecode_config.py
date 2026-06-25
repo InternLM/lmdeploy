@@ -64,10 +64,10 @@ def test_memdecode_config_dataclass_keeps_fusion_policy_off_model_config():
         lambda_base_only_threshold=0.1,
     )
 
+    assert memdecode_config.lambda_value == 0.25
+    assert memdecode_config.memory_model_config is memory_config
     base_config = _model_config_from_hf(_hf_config(), 'base')
-    base_config.memdecode_config = memdecode_config
-
-    assert base_config.memdecode_config.lambda_value == 0.25
+    assert not hasattr(base_config, 'memdecode_config')
     assert not hasattr(base_config, 'lambda_value')
     assert not hasattr(memory_config, 'lambda_value')
 
@@ -86,51 +86,26 @@ def test_memdecode_config_requires_router_path_for_adaptive_router():
         MemDecodeConfig(memory_model_path='memory', memory_model_config=memory_config, adaptive_router=True)
 
 
-def test_from_pretrained_normalizes_flat_memdecode_overrides(monkeypatch):
+def test_model_config_from_pretrained_does_not_build_memdecode_config(monkeypatch):
     returned_hf_configs = {}
 
     def fake_config_from_pretrained(model_path, trust_remote_code=False):
-        assert model_path in {'base', 'memory'}
+        assert model_path == 'base'
         returned_hf_configs[model_path] = _hf_config()
         return returned_hf_configs[model_path]
 
     monkeypatch.setattr('lmdeploy.pytorch.transformers.config_from_pretrained', fake_config_from_pretrained)
 
-    model_config = ModelConfig.from_pretrained(
-        'base',
-        hf_overrides={
-            'memory_model_path': 'memory',
-            'lambda_value': 0.25,
-            'adaptive_router': True,
-            'router_path': 'router.pt',
-            'lambda_base_only_threshold': 0.1,
-        },
-    )
-
-    memdecode_config = model_config.memdecode_config
-    assert memdecode_config is not None
-    assert memdecode_config.memory_model_path == 'memory'
-    assert memdecode_config.lambda_value == 0.25
-    assert memdecode_config.adaptive_router is True
-    assert memdecode_config.router_path == 'router.pt'
-    assert memdecode_config.lambda_base_only_threshold == 0.1
-    assert memdecode_config.memory_model_config.hf_config is returned_hf_configs['memory']
+    model_config = ModelConfig.from_pretrained('base')
 
     for field_name in _OLD_MEMDECODE_FIELDS:
         assert not hasattr(model_config, field_name)
 
-    for field_name in _FUSION_POLICY_FIELDS:
-        assert not hasattr(model_config.hf_config, field_name)
-        assert not hasattr(memdecode_config.memory_model_config, field_name)
+    assert not hasattr(model_config, 'memdecode_config')
+    assert model_config.hf_config is returned_hf_configs['base']
 
 
-def test_validate_memdecode_config_rejects_ssm_mismatch():
+def test_model_config_has_no_memdecode_validation_method():
     base_config = _model_config_from_hf(_hf_config(), 'base', states_shapes=[((1, 2), torch.float16)])
-    memory_config = _model_config_from_hf(_hf_config(), 'memory')
-    base_config.memdecode_config = MemDecodeConfig(
-        memory_model_path='memory',
-        memory_model_config=memory_config,
-    )
 
-    with pytest.raises(ValueError, match='Base and memory model must both use SSM state caches'):
-        base_config.validate_memdecode_config()
+    assert not hasattr(base_config, 'validate_memdecode_config')

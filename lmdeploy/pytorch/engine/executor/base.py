@@ -4,7 +4,15 @@ import asyncio
 import contextlib
 from typing import Any, NamedTuple
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -39,6 +47,7 @@ class ExecutorBase:
                  misc_config: MiscConfig,
                  adapters: dict[str, str] = None,
                  specdecode_config: SpecDecodeConfig = None,
+                 memdecode_config: MemDecodeConfig = None,
                  device_type: str = 'cuda',
                  trust_remote_code: bool = False):
         """Initialize Executor."""
@@ -62,6 +71,8 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        self.memdecode_config = memdecode_config
+        self._memdecode_vocab_warning_logged = False
 
     def download_models(self):
         """Download model."""
@@ -293,7 +304,7 @@ class ExecutorBase:
 
     def _get_memdecode_config(self):
         """Get MemDecode config if present."""
-        return getattr(self.model_config, 'memdecode_config', None)
+        return getattr(self, 'memdecode_config', None)
 
     def _get_memory_model_config(self):
         """Get nested MemDecode memory model config if present."""
@@ -315,6 +326,28 @@ class ExecutorBase:
         memory_has_states = bool(getattr(memory_model_config, 'states_shapes', None))
         if base_has_states != memory_has_states:
             raise ValueError('Base and memory model must both use SSM state caches or both not use them.')
+
+        if getattr(self, '_memdecode_vocab_warning_logged', False):
+            return
+
+        base_vocab_size = getattr(self.model_config, 'vocab_size', None)
+        memory_vocab_size = getattr(memory_model_config, 'vocab_size', None)
+        if base_vocab_size is not None and memory_vocab_size is not None:
+            if memory_vocab_size > base_vocab_size:
+                logger.warning(
+                    'Memory model vocab_size (%s) is larger than base vocab_size (%s); '
+                    'fusion and sampling will use the base vocab only.',
+                    memory_vocab_size,
+                    base_vocab_size,
+                )
+            elif memory_vocab_size < base_vocab_size:
+                logger.warning(
+                    'Memory model vocab_size (%s) is smaller than base vocab_size (%s); '
+                    'memory-only tokens will be padded with -inf during fusion.',
+                    memory_vocab_size,
+                    base_vocab_size,
+                )
+        self._memdecode_vocab_warning_logged = True
 
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""

@@ -1,7 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -26,6 +34,7 @@ class UniExecutor(ExecutorBase):
         adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         specdecode_config: SpecDecodeConfig = None,
+        memdecode_config: MemDecodeConfig = None,
         trust_remote_code: bool = False
     ):
         """Initialize Executor."""
@@ -38,6 +47,7 @@ class UniExecutor(ExecutorBase):
                          adapters=adapters,
                          device_type=device_type,
                          specdecode_config=specdecode_config,
+                         memdecode_config=memdecode_config,
                          trust_remote_code=trust_remote_code)
 
         self.device_ctx = DeviceContext(device_type=device_type)
@@ -50,6 +60,7 @@ class UniExecutor(ExecutorBase):
             device_ctx=self.device_ctx,
             adapters=adapters,
             specdecode_config=specdecode_config,
+            memdecode_config=memdecode_config,
             trust_remote_code=trust_remote_code,
         )
 

@@ -2,7 +2,15 @@
 from logging import Logger
 
 from lmdeploy.pytorch import envs
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -63,6 +71,7 @@ def build_executor(
     distributed_executor_backend: str = None,
     dtype: str = 'auto',
     specdecode_config: SpecDecodeConfig = None,
+    memdecode_config: MemDecodeConfig = None,
     trust_remote_code: bool = False,
 ) -> ExecutorBase:
     """Build model agent executor."""
@@ -111,6 +120,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            memdecode_config=memdecode_config,
             trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'mp':
@@ -126,6 +136,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            memdecode_config=memdecode_config,
             trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'ray':
@@ -141,6 +152,7 @@ def build_executor(
             device_type=device_type,
             dtype=dtype,
             specdecode_config=specdecode_config,
+            memdecode_config=memdecode_config,
             trust_remote_code=trust_remote_code
         )
     else:

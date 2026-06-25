@@ -1,6 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 
@@ -17,6 +24,7 @@ def build_model_agent(
     device_ctx: DeviceContext = None,
     adapters: dict[str, str] = None,
     specdecode_config: SpecDecodeConfig = None,
+    memdecode_config: MemDecodeConfig = None,
     trust_remote_code: bool = False
 ):
     """Create model agent.
@@ -49,6 +57,7 @@ def build_model_agent(
         dist_ctx=dist_ctx,
         device_ctx=device_ctx,
         specdecode_config=specdecode_config,
+        memdecode_config=memdecode_config,
         trust_remote_code=trust_remote_code
     )
     return model_agent
