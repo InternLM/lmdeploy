@@ -396,6 +396,19 @@ def test_pytorch_restful_distributed_dp4ep16(shared_proxy_manager, config, run_c
 
 @pytest.mark.infer
 @pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 8, 'ep': 8}, func_type='evaluate'))
+def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager)
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dp4ep8
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 4, 'ep': 8}, func_type='evaluate'))
@@ -522,6 +535,15 @@ def test_pytorch_eval_distributed_tp16(config, run_config, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 4, 'ep': 16}, func_type='evaluate'))
 def test_pytorch_eval_distributed_dp4ep16(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 8, 'ep': 8}, func_type='evaluate'))
+def test_pytorch_eval_distributed_dpep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
 
