@@ -68,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--tp', type=int, default=1)
     p.add_argument('--dp', type=int, default=1)
     p.add_argument('--ep', type=int, default=1)
+    p.add_argument('--model-format', default=None)
     p.add_argument('--cache-max-entry-count', type=float, default=0.8)
     p.add_argument('--max-batch-size', type=int, default=4)
     p.add_argument(
@@ -172,6 +173,8 @@ def main() -> int:
         '--log-level', 'INFO',
         '--hf-overrides', json.dumps(hf_overrides),
     ]
+    if args.model_format is not None:
+        cmd.extend(['--model-format', args.model_format])
 
     print('Starting server:')
     print('  ' + ' '.join(cmd))
