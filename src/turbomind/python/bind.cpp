@@ -22,10 +22,14 @@
 #include "src/turbomind/engine/engine_config.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/multimodal_input.h"
+#include "src/turbomind/kernels/norm/norm.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/internvit/internvit_block_weight.h"
+#include "src/turbomind/models/internvit/internvit_input.h"
+#include "src/turbomind/models/internvit/internvit_weight.h"
 #include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/model_weight.h"
@@ -333,10 +337,12 @@ PYBIND11_MODULE(_turbomind, m)
 {
     py::module_ multimodal = m.def_submodule("multimodal");
 
-    using MMInput      = ft::multimodal::Input;
-    using MMModality   = ft::multimodal::Modality;
-    using QwenVitItem  = ft::multimodal::Qwen3_5VitItem;
-    using QwenVitInput = ft::multimodal::Qwen3_5VitInput;
+    using MMInput        = ft::multimodal::Input;
+    using MMModality     = ft::multimodal::Modality;
+    using InternVitItem  = ft::multimodal::InternVitItem;
+    using InternVitInput = ft::multimodal::InternVitInput;
+    using QwenVitItem    = ft::multimodal::Qwen3_5VitItem;
+    using QwenVitInput   = ft::multimodal::Qwen3_5VitInput;
     py::class_<MMInput, std::shared_ptr<MMInput>>(multimodal, "Input");
     py::enum_<MMModality>(multimodal, "Modality")
         .value("IMAGE", MMModality::kImage)
@@ -370,6 +376,26 @@ PYBIND11_MODULE(_turbomind, m)
         .def(py::init<>())
         .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
         .def_readwrite("items", &QwenVitInput::items);
+    py::class_<InternVitItem>(multimodal, "InternVitItem")
+        .def(py::init<>())
+        .def(py::init([](MMModality modality, std::shared_ptr<Tensor> data, int token_begin, int token_end) {
+                 return InternVitItem{modality, *data, token_begin, token_end};
+             }),
+             "modality"_a,
+             "data"_a,
+             "token_begin"_a,
+             "token_end"_a)
+        .def_readwrite("modality", &InternVitItem::modality)
+        .def_property(
+            "data",
+            [](const InternVitItem& self) { return std::make_shared<Tensor>(self.data); },
+            [](InternVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
+        .def_readwrite("token_begin", &InternVitItem::token_begin)
+        .def_readwrite("token_end", &InternVitItem::token_end);
+    py::class_<InternVitInput, MMInput, std::shared_ptr<InternVitInput>>(multimodal, "InternVitInput")
+        .def(py::init<>())
+        .def(py::init<std::vector<InternVitItem>>(), "items"_a)
+        .def_readwrite("items", &InternVitInput::items);
 
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
@@ -440,9 +466,9 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
         .def("consume", [](ft::AtomicRequestState& s) { return s.exchange(nullptr); });
 
-    // data type
     {
         using namespace turbomind;
+        // data type
         py::enum_<ft::DataType>(m, "DataType")
             .value("TYPE_INVALID", kNull)
             .value("TYPE_BOOL", kBool)
@@ -467,6 +493,12 @@ PYBIND11_MODULE(_turbomind, m)
             .value("MEMORY_CPU", ft::DeviceType::kCPU)
             .value("MEMORY_CPU_PINNED", ft::DeviceType::kCPUpinned)
             .value("MEMORY_GPU", ft::DeviceType::kDEVICE);
+
+        // norm type
+        py::enum_<ft::NormType>(m, "NormType")
+            .value("NONE", ft::NormType::kNone)
+            .value("LAYER_NORM", ft::NormType::kLayerNorm)
+            .value("RMS_NORM", ft::NormType::kRMSNorm);
     }
 
     // DataFormat descriptors
@@ -510,6 +542,8 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
     bind_config<turbomind::core::Qwen3_5VitConfig>(m, "Qwen3_5VitConfig");
     bind_config<turbomind::core::Qwen3_5VitBlockConfig>(m, "Qwen3_5VitBlockConfig");
+    bind_config<turbomind::core::InternVitConfig>(m, "InternVitConfig");
+    bind_config<turbomind::core::InternVitBlockConfig>(m, "InternVitBlockConfig");
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")

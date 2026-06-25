@@ -24,6 +24,10 @@ add_library(models STATIC
         qwen3_5vit/qwen3_5vit_block_weight.cc
         qwen3_5vit/qwen3_5vit_weight.cc
         qwen3_5vit/qwen3_5vit.cc
+        internvit/internvit_kernels.cu
+        internvit/internvit_block_weight.cc
+        internvit/internvit_weight.cc
+        internvit/internvit.cc
         llama/LlamaLinear.cu
         llama/BlockManager.cc
         llama/BlockTrie.cc

@@ -210,7 +210,7 @@ class InternVLVisionModel(VisionModel):
             pixel_values = self.processor(image, params)
             image_tokens = (pixel_values.shape[0] * self.image_tokens_per_patch)
             outputs.append(
-                dict(pixel_values=pixel_values,
+                dict(pixel_values=pixel_values.to(self.mm_feature_dtype),
                      image_tokens=image_tokens,
                      image_token_id=self.image_token_id,
                      image_size=image.size))

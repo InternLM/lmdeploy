@@ -45,6 +45,7 @@ class InternVL3VisionModel(InternVLVisionModel):
                  trust_remote_code: bool = False):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         self.arch = self.hf_config.architectures[0]
+        self._turbomind_native_vision = backend == 'turbomind' and self.arch == 'InternS1ForConditionalGeneration'
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
@@ -107,7 +108,7 @@ class InternVL3VisionModel(InternVLVisionModel):
             cur_num_patches = image_num_patches[idx]
             pixel_values = image_pixel_values[cum_num_patches:cum_num_patches + cur_num_patches, ...]
             cum_num_patches += cur_num_patches
-            data = dict(pixel_values=pixel_values,
+            data = dict(pixel_values=pixel_values.to(self.mm_feature_dtype),
                         image_tokens=self.image_tokens_per_patch * cur_num_patches,
                         image_token_id=self.image_token_id)
             outputs.append(data)
