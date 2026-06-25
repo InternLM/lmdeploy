@@ -112,10 +112,6 @@ class BaseMemDecodeAgent:
         """Run memory model forward."""
         return None
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Get memory model logits."""
-        raise RuntimeError('MemDecode is disabled.')
-
     async def fuse_with_base(
         self,
         inputs: ModelInputs,
@@ -133,10 +129,6 @@ class BaseMemDecodeAgent:
     def release(self):
         """Release memory model resources."""
         pass
-
-    def get_model(self):
-        """Get memory model."""
-        return None
 
 
 class MemDecodeAgent(BaseMemDecodeAgent):
@@ -237,10 +229,6 @@ class MemDecodeAgent(BaseMemDecodeAgent):
         await asyncio.sleep(0)
         return output
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Get memory model logits."""
-        return self.model.get_logits(hidden_states)
-
     async def fuse_with_base(
         self,
         inputs: ModelInputs,
@@ -255,7 +243,7 @@ class MemDecodeAgent(BaseMemDecodeAgent):
         memory_output = await self.async_forward(inputs)
         memory_output = postprocess_output(memory_output, inputs)
         memory_hidden_states = memory_output['hidden_states']
-        memory_logits = self.get_logits(memory_hidden_states)
+        memory_logits = self.model.get_logits(memory_hidden_states)
         logits, routed_info = self.fusion(
             base_logits=base_logits,
             memory_logits=memory_logits,
@@ -280,14 +268,6 @@ class MemDecodeAgent(BaseMemDecodeAgent):
         self.model = None
         self.cache_engine = None
         self.state_cache_engine = None
-
-    def get_model(self):
-        """Get memory model."""
-        if self.model is None:
-            return None
-        if hasattr(self.model, 'get_model'):
-            return self.model.get_model()
-        return self.model
 
 
 def build_memdecode_agent(

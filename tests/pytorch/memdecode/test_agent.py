@@ -2,7 +2,6 @@ import asyncio
 from contextlib import contextmanager
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 import lmdeploy.pytorch.memdecode.agent as agent_module
@@ -51,10 +50,7 @@ def test_disabled_agent_is_noop_and_returns_no_model():
     agent.release()
 
     assert agent.is_enabled() is False
-    assert agent.get_model() is None
     assert asyncio.run(agent.async_forward(SimpleNamespace())) is None
-    with pytest.raises(RuntimeError, match='MemDecode is disabled'):
-        agent.get_logits(torch.empty(1, 1))
 
 
 def test_build_memdecode_agent_returns_disabled_agent_for_missing_config():
@@ -108,25 +104,6 @@ def test_reset_graph_runner_runs_inside_memory_context_and_calls_model_reset():
     assert events == ['enter', 'reset', 'exit']
 
 
-def test_get_model_unwraps_graph_runner_when_available():
-    raw_model = object()
-    graph_runner = SimpleNamespace(get_model=lambda: raw_model)
-    agent = MemDecodeAgent.__new__(MemDecodeAgent)
-    agent.model = graph_runner
-
-    assert agent.get_model() is raw_model
-
-
-def test_get_logits_delegates_to_model():
-    hidden_states = torch.randn(1, 2)
-    logits = torch.randn(1, 4)
-    model = SimpleNamespace(get_logits=lambda value: logits if value is hidden_states else None)
-    agent = MemDecodeAgent.__new__(MemDecodeAgent)
-    agent.model = model
-
-    assert agent.get_logits(hidden_states) is logits
-
-
 def test_fuse_with_base_runs_memory_forward_and_fusion():
     calls = []
     inputs = SimpleNamespace(seq_length=torch.tensor([2]))
@@ -155,7 +132,8 @@ def test_fuse_with_base_runs_memory_forward_and_fusion():
 
     agent = MemDecodeAgent.__new__(MemDecodeAgent)
     agent.async_forward = _memory_forward
-    agent.get_logits = lambda hidden_states: memory_logits if hidden_states is memory_hidden else None
+    agent.model = SimpleNamespace(
+        get_logits=lambda hidden_states: memory_logits if hidden_states is memory_hidden else None)
     agent.fusion = _Fusion()
 
     output = asyncio.run(

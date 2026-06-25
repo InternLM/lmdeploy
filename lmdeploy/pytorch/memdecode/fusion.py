@@ -188,7 +188,7 @@ class MemDecodeFusion(nn.Module):
             )
 
         assert self.router is not None
-        router_dtype = self._router_dtype()
+        router_dtype = next(self.router.parameters()).dtype
         router_device = base_log_probs.device
         self.router.to(device=router_device)
         base_hidden_states = base_hidden_states.to(device=router_device, dtype=router_dtype)
@@ -243,12 +243,6 @@ class MemDecodeFusion(nn.Module):
     def _entropy(probs: torch.Tensor, log_probs: torch.Tensor) -> torch.Tensor:
         finite_log_probs = torch.where(torch.isfinite(log_probs), log_probs, torch.zeros_like(log_probs))
         return -(probs * finite_log_probs).sum(dim=-1)
-
-    def _router_dtype(self) -> torch.dtype:
-        assert self.router is not None
-        for parameter in self.router.parameters():
-            return parameter.dtype
-        return torch.float32
 
     @classmethod
     def _resolve_router_config_and_checkpoint(cls, router_path: str) -> tuple[dict[str, Any], Path]:

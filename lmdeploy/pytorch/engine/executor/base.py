@@ -72,7 +72,6 @@ class ExecutorBase:
         self.device_type = device_type
         self.specdecode_config = specdecode_config
         self.memdecode_config = memdecode_config
-        self._memdecode_vocab_warning_logged = False
 
     def download_models(self):
         """Download model."""
@@ -297,57 +296,43 @@ class ExecutorBase:
 
     def _get_mem_state_cache_mem(self) -> int:
         """Get memory-model state cache mem usage for memdecode."""
-        mem_model_config = self._get_memory_model_config()
-        if mem_model_config is None or len(mem_model_config.states_shapes) == 0:
+        if self.memdecode_config is None:
             return 0
-        return self._get_state_cache_mem(mem_model_config.states_shapes, self.cache_config)
-
-    def _get_memdecode_config(self):
-        """Get MemDecode config if present."""
-        return getattr(self, 'memdecode_config', None)
-
-    def _get_memory_model_config(self):
-        """Get nested MemDecode memory model config if present."""
-        memdecode_config = self._get_memdecode_config()
-        if memdecode_config is None:
-            return None
-        return getattr(memdecode_config, 'memory_model_config', None)
+        memory_model_config = self.memdecode_config.memory_model_config
+        if len(memory_model_config.states_shapes) == 0:
+            return 0
+        return self._get_state_cache_mem(memory_model_config.states_shapes, self.cache_config)
 
     def _validate_memdecode_configs(self):
         """Validate MemDecode config compatibility."""
-        memory_model_config = self._get_memory_model_config()
-        if memory_model_config is None:
+        if self.memdecode_config is None:
             return
+        memory_model_config = self.memdecode_config.memory_model_config
 
         if self.specdecode_config is not None:
             raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
 
-        base_has_states = bool(getattr(self.model_config, 'states_shapes', None))
-        memory_has_states = bool(getattr(memory_model_config, 'states_shapes', None))
+        base_has_states = bool(self.model_config.states_shapes)
+        memory_has_states = bool(memory_model_config.states_shapes)
         if base_has_states != memory_has_states:
             raise ValueError('Base and memory model must both use SSM state caches or both not use them.')
 
-        if getattr(self, '_memdecode_vocab_warning_logged', False):
-            return
-
-        base_vocab_size = getattr(self.model_config, 'vocab_size', None)
-        memory_vocab_size = getattr(memory_model_config, 'vocab_size', None)
-        if base_vocab_size is not None and memory_vocab_size is not None:
-            if memory_vocab_size > base_vocab_size:
-                logger.warning(
-                    'Memory model vocab_size (%s) is larger than base vocab_size (%s); '
-                    'fusion and sampling will use the base vocab only.',
-                    memory_vocab_size,
-                    base_vocab_size,
-                )
-            elif memory_vocab_size < base_vocab_size:
-                logger.warning(
-                    'Memory model vocab_size (%s) is smaller than base vocab_size (%s); '
-                    'memory-only tokens will be padded with -inf during fusion.',
-                    memory_vocab_size,
-                    base_vocab_size,
-                )
-        self._memdecode_vocab_warning_logged = True
+        base_vocab_size = self.model_config.vocab_size
+        memory_vocab_size = memory_model_config.vocab_size
+        if memory_vocab_size > base_vocab_size:
+            logger.warning(
+                'Memory model vocab_size (%s) is larger than base vocab_size (%s); '
+                'fusion and sampling will use the base vocab only.',
+                memory_vocab_size,
+                base_vocab_size,
+            )
+        elif memory_vocab_size < base_vocab_size:
+            logger.warning(
+                'Memory model vocab_size (%s) is smaller than base vocab_size (%s); '
+                'memory-only tokens will be padded with -inf during fusion.',
+                memory_vocab_size,
+                base_vocab_size,
+            )
 
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""
@@ -386,8 +371,8 @@ class ExecutorBase:
         cache_block_size = CacheEngine.get_cache_block_size(self.cache_config, self.model_config,
                                                             self.dist_config.attn_tp)
         memory_cache_block_size = 0
-        memory_model_config = self._get_memory_model_config()
-        if memory_model_config is not None:
+        if self.memdecode_config is not None:
+            memory_model_config = self.memdecode_config.memory_model_config
             memory_cache_block_size = CacheEngine.get_cache_block_size(
                 self.cache_config,
                 memory_model_config,
@@ -471,7 +456,7 @@ class ExecutorBase:
         if self.specdecode_config:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
-        if self._get_memdecode_config() is not None:
+        if self.memdecode_config is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
         if self.misc_config.empty_init:

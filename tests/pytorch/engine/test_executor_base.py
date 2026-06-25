@@ -175,6 +175,7 @@ def test_get_cache_block_sizes_uses_spec_tp(monkeypatch):
     executor.cache_config = object()
     executor.model_config = object()
     executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
+    executor.memdecode_config = None
     spec_cache_config = object()
     spec_model_config = object()
     world_sizes = []

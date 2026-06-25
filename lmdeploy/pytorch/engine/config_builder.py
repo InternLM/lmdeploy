@@ -116,7 +116,7 @@ class ConfigBuilder:
                                trust_remote_code: bool = False,
                                ):
         """Build MemDecode config from engine HF overrides."""
-        hf_overrides = getattr(engine_config, 'hf_overrides', None)
+        hf_overrides = engine_config.hf_overrides
         if hf_overrides is None:
             return None
 

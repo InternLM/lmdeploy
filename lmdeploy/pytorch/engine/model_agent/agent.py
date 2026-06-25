@@ -263,8 +263,7 @@ class BaseModelAgent:
 
         self.model_config = model_config
         self.cache_config = cache_config
-        mem_cfg = memdecode_config
-        if mem_cfg is not None and specdecode_config is not None:
+        if memdecode_config is not None and specdecode_config is not None:
             raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         # use raw tokenizer
         if dist_ctx.dist_config.world_size > 1:
@@ -345,7 +344,7 @@ class BaseModelAgent:
                                            misc_config=misc_config,
                                            device=device)
         self.memdecode_agent = build_memdecode_agent(
-            mem_cfg,
+            memdecode_config,
             backend_config,
             dist_ctx,
             device=device,
@@ -836,7 +835,7 @@ class BaseModelAgent:
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-        if self.memdecode_agent.is_enabled() and self.memdecode_agent.cache_engine is not None:
+        if self.memdecode_agent.is_enabled():
             cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
