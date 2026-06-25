@@ -54,9 +54,6 @@ class _FakeMemoryAgent:
         self.hidden_states = torch.tensor([[[5.0, 6.0], [7.0, 8.0]]])
         self.weight = torch.tensor([[2.0, -1.0, 0.5], [1.0, 3.0, -0.5]])
 
-    def is_enabled(self):
-        return True
-
     async def async_forward(self, inputs):
         self.calls.append(('memory_forward', inputs))
         return {'hidden_states': self.hidden_states.clone(), 'seq_length': inputs.seq_length}

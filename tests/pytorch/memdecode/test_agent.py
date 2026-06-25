@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import torch
 
 import lmdeploy.pytorch.memdecode.agent as agent_module
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MemDecodeConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, DistConfig, MemDecodeConfig, ModelConfig
 from lmdeploy.pytorch.distributed import DistContext
-from lmdeploy.pytorch.memdecode.agent import BaseMemDecodeAgent, MemDecodeAgent, build_memdecode_agent
+from lmdeploy.pytorch.memdecode.agent import MemDecodeAgent, build_memdecode_agent
 
 
 def _model_config(states_shapes=None):
@@ -25,10 +25,6 @@ def _model_config(states_shapes=None):
     )
 
 
-def _cache_config():
-    return CacheConfig(max_batches=2, block_size=4, num_cpu_blocks=1, num_gpu_blocks=1)
-
-
 def _dist_ctx():
     return DistContext.build(rank=0, dist_config=DistConfig())
 
@@ -40,32 +36,16 @@ def _memdecode_config(states_shapes=None):
     )
 
 
-def test_disabled_agent_is_noop_and_returns_no_model():
-    agent = BaseMemDecodeAgent(None, BackendConfig(), _dist_ctx())
-    agent.set_cache_config(_cache_config())
-    agent.build_model(empty_init=True, build_model_ctx=object())
-    agent.build_graph_runner()
-    agent.build_cache_engine(cache_stream=None)
-    agent.reset_graph_runner()
-    agent.release()
-
-    assert agent.is_enabled() is False
-    assert asyncio.run(agent.async_forward(SimpleNamespace())) is None
-
-
-def test_build_memdecode_agent_returns_disabled_agent_for_missing_config():
+def test_build_memdecode_agent_returns_none_for_missing_config():
     agent = build_memdecode_agent(None, BackendConfig(), _dist_ctx())
 
-    assert isinstance(agent, BaseMemDecodeAgent)
-    assert not isinstance(agent, MemDecodeAgent)
-    assert agent.is_enabled() is False
+    assert agent is None
 
 
 def test_build_memdecode_agent_returns_enabled_agent_for_config():
     agent = build_memdecode_agent(_memdecode_config(), BackendConfig(), _dist_ctx())
 
     assert isinstance(agent, MemDecodeAgent)
-    assert agent.is_enabled() is True
 
 
 def test_release_clears_model_cache_and_state_cache():
@@ -112,7 +92,6 @@ def test_fuse_with_base_runs_memory_forward_and_fusion():
     memory_hidden = torch.tensor([[[5.0, 6.0]]])
     memory_logits = torch.tensor([[[7.0, 8.0]]])
     fused_logits = torch.tensor([[[10.0, 12.0]]])
-    routed_info = {'log_weights': torch.tensor([[[0.25, 0.75]]])}
     base_output = {'hidden_states': base_hidden, 'seq_length': inputs.seq_length}
     memory_output = {'hidden_states': memory_hidden, 'seq_length': inputs.seq_length}
 
@@ -120,7 +99,7 @@ def test_fuse_with_base_runs_memory_forward_and_fusion():
 
         def __call__(self, **kwargs):
             calls.append(('fusion', kwargs))
-            return fused_logits, routed_info
+            return fused_logits
 
     async def _memory_forward(forward_inputs):
         calls.append(('memory_forward', forward_inputs))
@@ -147,7 +126,7 @@ def test_fuse_with_base_runs_memory_forward_and_fusion():
 
     assert output is base_output
     assert output['logits'] is fused_logits
-    assert output['all_routed_experts'] is routed_info
+    assert 'all_routed_experts' not in output
     assert calls[0] == ('memory_forward', inputs)
     assert calls[1] == ('postprocess', memory_output, inputs)
     fusion_kwargs = calls[2][1]

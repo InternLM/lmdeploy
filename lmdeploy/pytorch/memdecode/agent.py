@@ -60,78 +60,7 @@ def memory_model_forward(
             return output
 
 
-class BaseMemDecodeAgent:
-    """Disabled MemDecode memory model agent."""
-
-    def __init__(
-        self,
-        memdecode_config: MemDecodeConfig | None,
-        backend_config: BackendConfig,
-        dist_ctx: DistContext,
-        device: str = 'cuda',
-        base_model_config: ModelConfig | None = None,
-    ):
-        self.memdecode_config = memdecode_config
-        self.backend_config = backend_config
-        self.dist_ctx = dist_ctx
-        self.device = device
-        self.base_model_config = base_model_config
-        self.model_config = memdecode_config.memory_model_config if memdecode_config is not None else None
-        self.cache_config = None
-        self.cache_engine = None
-        self.state_cache_engine = None
-        self.model = None
-        self.fusion = None
-
-    def is_enabled(self):
-        """Return whether MemDecode is enabled."""
-        return False
-
-    @contextmanager
-    def memory_context(self):
-        """Memory model dist context."""
-        yield
-
-    def set_cache_config(self, cache_config: CacheConfig):
-        """Set cache config."""
-        pass
-
-    def build_model(self, empty_init: bool = False, build_model_ctx=None):
-        """Build memory model."""
-        pass
-
-    def build_graph_runner(self):
-        """Build graph runner."""
-        pass
-
-    def build_cache_engine(self, cache_stream: torch.cuda.Stream):
-        """Build cache engine."""
-        pass
-
-    async def async_forward(self, inputs: ModelInputs):
-        """Run memory model forward."""
-        return None
-
-    async def fuse_with_base(
-        self,
-        inputs: ModelInputs,
-        base_output: dict,
-        base_logits: torch.Tensor,
-        postprocess_output: Callable[[dict, ModelInputs], dict],
-    ):
-        """Fuse memory model output with base model output."""
-        raise RuntimeError('MemDecode is disabled.')
-
-    def reset_graph_runner(self):
-        """Reset graph runner."""
-        pass
-
-    def release(self):
-        """Release memory model resources."""
-        pass
-
-
-class MemDecodeAgent(BaseMemDecodeAgent):
+class MemDecodeAgent:
     """Enabled MemDecode memory model agent."""
 
     def __init__(
@@ -142,7 +71,17 @@ class MemDecodeAgent(BaseMemDecodeAgent):
         device: str = 'cuda',
         base_model_config: ModelConfig | None = None,
     ):
-        super().__init__(memdecode_config, backend_config, dist_ctx, device=device, base_model_config=base_model_config)
+        self.memdecode_config = memdecode_config
+        self.backend_config = backend_config
+        self.dist_ctx = dist_ctx
+        self.device = device
+        self.base_model_config = base_model_config
+        self.model_config = memdecode_config.memory_model_config
+        self.cache_config = None
+        self.cache_engine = None
+        self.state_cache_engine = None
+        self.model = None
+        self.fusion = None
         if base_model_config is not None:
             self.fusion = MemDecodeFusion(
                 memdecode_config,
@@ -151,10 +90,6 @@ class MemDecodeAgent(BaseMemDecodeAgent):
                 base_vocab_size=base_model_config.vocab_size,
                 dtype=base_model_config.dtype,
             )
-
-    def is_enabled(self):
-        """Return whether MemDecode is enabled."""
-        return True
 
     @contextmanager
     def memory_context(self):
@@ -244,15 +179,13 @@ class MemDecodeAgent(BaseMemDecodeAgent):
         memory_output = postprocess_output(memory_output, inputs)
         memory_hidden_states = memory_output['hidden_states']
         memory_logits = self.model.get_logits(memory_hidden_states)
-        logits, routed_info = self.fusion(
+        logits = self.fusion(
             base_logits=base_logits,
             memory_logits=memory_logits,
             base_hidden_states=base_output['hidden_states'],
             memory_hidden_states=memory_hidden_states,
         )
         base_output['logits'] = logits
-        if routed_info is not None:
-            base_output['all_routed_experts'] = routed_info
         return base_output
 
     def reset_graph_runner(self):
@@ -279,13 +212,7 @@ def build_memdecode_agent(
 ):
     """Build MemDecode memory model agent."""
     if memdecode_config is None:
-        return BaseMemDecodeAgent(
-            memdecode_config,
-            backend_config,
-            dist_ctx,
-            device=device,
-            base_model_config=base_model_config,
-        )
+        return None
     return MemDecodeAgent(
         memdecode_config,
         backend_config,

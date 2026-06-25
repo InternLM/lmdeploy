@@ -307,7 +307,7 @@ class TestModelAgentWakeup:
         model_agent.state = SleepWakeupState()
         model_agent.state.is_sleeping = True
         model_agent.dist_config = SimpleNamespace(dp=2)
-        model_agent.memdecode_agent = SimpleNamespace(is_enabled=lambda: False)
+        model_agent.memdecode_agent = None
         model_agent.build_cache_engine = lambda: events.append('build_cache_engine')
 
         def _warmup():
@@ -334,9 +334,6 @@ class TestMemDecodeModelAgentLifecycle:
 
         class _MemDecodeAgent:
 
-            def is_enabled(self):
-                return enabled
-
             def release(self):
                 events.append('memdecode_release')
 
@@ -349,7 +346,7 @@ class TestMemDecodeModelAgentLifecycle:
                 pass
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
-        agent.memdecode_agent = _MemDecodeAgent()
+        agent.memdecode_agent = _MemDecodeAgent() if enabled else None
         agent.spec_agent = _SpecAgent()
         agent.state = SleepWakeupState()
         agent.dist_config = SimpleNamespace(dp=1)
@@ -403,9 +400,6 @@ class TestMemDecodeModelAgentLifecycle:
 
         class _MemDecodeAgent:
 
-            def is_enabled(self):
-                return True
-
             async def fuse_with_base(self, inputs, base_output, base_logits, postprocess_output):
                 calls.append(('fuse_inputs', inputs))
                 calls.append(('fuse_base_hidden_shape', tuple(base_output['hidden_states'].shape)))
@@ -417,9 +411,7 @@ class TestMemDecodeModelAgentLifecycle:
                 memory_output = postprocess_output(memory_output, inputs)
                 calls.append(('fuse_memory_hidden_shape', tuple(memory_output['hidden_states'].shape)))
                 fused = base_logits + memory_output['hidden_states'].sum(dim=-1, keepdim=True)
-                routed = {'selected_experts': torch.tensor([1, 0])}
                 base_output['logits'] = fused
-                base_output['all_routed_experts'] = routed
                 return base_output
 
         class _Strategy:
@@ -453,16 +445,14 @@ class TestMemDecodeModelAgentLifecycle:
             ('fuse_memory_hidden_shape', (1, 2, 6)),
         ]
         assert torch.equal(output['logits'], torch.tensor([[[73.], [229.]]]))
-        assert torch.equal(output['all_routed_experts']['selected_experts'], torch.tensor([1, 0]))
+        assert 'all_routed_experts' not in output
 
     @pytest.mark.parametrize('is_chunk', [False, True])
     def test_async_model_forward_memdecode_rejects_returned_logits(self, event_loop, is_chunk):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
         class _MemDecodeAgent:
-
-            def is_enabled(self):
-                return True
+            pass
 
         async def _base_forward(_inputs):
             raise AssertionError('base forward should not run')
@@ -489,9 +479,6 @@ class TestMemDecodeModelAgentLifecycle:
         class _MemDecodeAgent:
 
             cache_engine = 'memory_cache'
-
-            def is_enabled(self):
-                return True
 
         class _DistManager:
 

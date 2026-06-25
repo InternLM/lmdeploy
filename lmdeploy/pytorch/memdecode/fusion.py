@@ -151,7 +151,7 @@ class MemDecodeFusion(nn.Module):
         memory_logits: torch.Tensor,
         base_hidden_states: torch.Tensor | None = None,
         memory_hidden_states: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
+    ) -> torch.Tensor:
         base_logits = align_logits_to_base(base_logits, self.base_vocab_size)
         memory_logits = align_logits_to_base(memory_logits, self.base_vocab_size)
         base_log_probs = torch.log_softmax(base_logits, dim=-1)
@@ -166,14 +166,14 @@ class MemDecodeFusion(nn.Module):
             )
 
         if self.lambda_value == 0.0:
-            return base_log_probs, None
+            return base_log_probs
         if self.lambda_value == 1.0:
-            return memory_log_probs, None
+            return memory_log_probs
 
         base_log_weight = base_log_probs.new_tensor(math.log1p(-self.lambda_value))
         memory_log_weight = memory_log_probs.new_tensor(math.log(self.lambda_value))
         fused = torch.logaddexp(base_log_probs + base_log_weight, memory_log_probs + memory_log_weight)
-        return fused, None
+        return fused
 
     def _adaptive_fusion(
         self,
@@ -181,7 +181,7 @@ class MemDecodeFusion(nn.Module):
         memory_log_probs: torch.Tensor,
         base_hidden_states: torch.Tensor | None,
         memory_hidden_states: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> torch.Tensor:
         if base_hidden_states is None or memory_hidden_states is None:
             raise ValueError(
                 'base_hidden_states and memory_hidden_states are required when adaptive_router is enabled.'
@@ -201,7 +201,6 @@ class MemDecodeFusion(nn.Module):
         if log_weights.shape[-1] != 2:
             raise ValueError(f'router must produce 2 log mixing weights, got {log_weights.shape[-1]}')
 
-        routing_info: dict[str, torch.Tensor] = {'log_weights': log_weights.detach()}
         if self.lambda_base_only_threshold >= 0.0:
             memory_weight = log_weights[..., 1].exp()
             base_only_mask = memory_weight <= self.lambda_base_only_threshold
@@ -216,11 +215,9 @@ class MemDecodeFusion(nn.Module):
                 torch.full((), -math.inf, device=log_weights.device, dtype=log_weights.dtype),
                 log_weights[..., 1],
             )
-            routing_info['base_only_mask'] = base_only_mask.detach()
-            routing_info['thresholded_log_weights'] = log_weights.detach()
 
         fused = torch.logaddexp(base_log_probs + log_weights[..., 0:1], memory_log_probs + log_weights[..., 1:2])
-        return fused, routing_info
+        return fused
 
     @staticmethod
     def _scalar_features(
