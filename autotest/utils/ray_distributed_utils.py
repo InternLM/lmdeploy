@@ -31,7 +31,7 @@ WORKER_WAIT_INTERVAL = 30
 def ascend_multinode_enabled() -> bool:
     if int(os.getenv('NODE_COUNT', '1')) <= 1:
         return False
-    return os.getenv('DEVICE', '') == 'ascend' or os.getenv('TEST_ENV', '') == 'ascend'
+    return os.getenv('DEVICE', '') == 'ascend'
 
 
 def wait_for_model_service_ready(
@@ -116,6 +116,18 @@ def verify_service_functionality(host: str, api_port: int, model_name: str, chec
         return False
 
 
+def _ray_alive_node_count() -> int:
+    proc = subprocess.run(['ray', 'status'], capture_output=True, text=True, check=False)
+    out = f'{proc.stdout}\n{proc.stderr}'
+    node_ids = set(re.findall(r'node_[a-f0-9]+', out, flags=re.IGNORECASE))
+    if node_ids:
+        return len(node_ids)
+    match = re.search(r'(\d+)\s+node', out, flags=re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
 class RayLMDeployManager:
 
     def __init__(
@@ -169,8 +181,9 @@ class RayLMDeployManager:
         if local_ip:
             cmd += ['--node-ip-address', local_ip]
 
+        ray_env = os.environ.copy()
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            subprocess.run(cmd, capture_output=True, text=True, check=True, env=ray_env)
             print('✅ Ray started successfully')
         except subprocess.CalledProcessError as e:
             print(f'💥 Ray startup failed: {e.stderr}')
@@ -183,11 +196,9 @@ class RayLMDeployManager:
         print(f'⏳ Waiting for Ray cluster to reach {expected_nodes} node(s)...')
         deadline = time_time() + timeout_seconds
         while time_time() < deadline:
-            proc = subprocess.run(['ray', 'status'], capture_output=True, text=True, check=False)
-            out = f'{proc.stdout}\n{proc.stderr}'
-            match = re.search(r'(\d+)\s+node', out, flags=re.IGNORECASE)
-            if match and int(match.group(1)) >= expected_nodes:
-                print(f'✅ Ray cluster ready ({match.group(1)} node(s))')
+            alive = _ray_alive_node_count()
+            if alive >= expected_nodes:
+                print(f'✅ Ray cluster ready ({alive} node(s))')
                 return
             time.sleep(10)
 

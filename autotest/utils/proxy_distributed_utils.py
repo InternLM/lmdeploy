@@ -215,9 +215,9 @@ class ProxyDistributedManager:
         self.proxy_process = None
         self._ray_manager = None
         if ascend_multinode_enabled():
-            os.environ.setdefault('MASTER_ADDR', self.master_addr)
-            os.environ.setdefault('LMDEPLOY_DP_MASTER_ADDR', self.master_addr)
-            os.environ.setdefault('LMDEPLOY_DIST_MASTER_ADDR', self.master_addr)
+            os.environ['MASTER_ADDR'] = self.master_addr
+            os.environ['LMDEPLOY_DP_MASTER_ADDR'] = self.master_addr
+            os.environ['LMDEPLOY_DIST_MASTER_ADDR'] = self.master_addr
             self._ray_manager = RayLMDeployManager(
                 master_addr=self.master_addr,
                 ray_port=self.ray_port,

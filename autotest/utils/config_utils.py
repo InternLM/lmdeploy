@@ -7,7 +7,6 @@ from typing import Any
 
 import utils.constant as constant
 import yaml
-
 from lmdeploy.utils import is_bf16_supported
 
 DepsProfileSelector = str | dict[str, str]
@@ -55,7 +54,6 @@ EMPTY_DEPS_SELECTOR = '__empty__'
 # Autotest-only keys in engine_config.extra (not forwarded to lmdeploy CLI).
 CLI_SKIP_EXTRA_KEYS = frozenset({
     'rank-table-file',
-    'ascend-rank-table-file',
 })
 
 
@@ -77,7 +75,7 @@ def get_model_work_path(config: dict[str, Any]) -> str:
 def resolve_extra_params(extra_params: dict[str, Any], config: dict[str, Any]) -> None:
     """Resolve relative model paths in extra_params."""
     model_path_keys = ['speculative-draft-model']
-    resource_path_keys = ['rank-table-file', 'ascend-rank-table-file']
+    resource_path_keys = ['rank-table-file']
 
     for key in resource_path_keys:
         if key in extra_params:

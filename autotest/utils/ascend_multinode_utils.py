@@ -1,12 +1,9 @@
 """Ascend multi-node helpers (rank table path, HCCL / Ray env for lmdeploy).
 
-Rank table JSON is resolved in order:
-
-1. ``ASCEND_RANK_TABLE_FILE_PATH`` (already set in the environment)
-2. ``run_config['extra_params']['rank-table-file']`` (relative to ``resource_path``)
-3. ``{resource_path}/ascend_rank_table.json`` or ``rank_table.json``
-4. ``{resource_path}/rank_table/rank_table_{NODE_COUNT}x{devices_per_node}.json``
-5. First ``*.json`` under ``{resource_path}/rank_table/``
+Rank table path is taken only from ``ASCEND_RANK_TABLE_FILE_PATH``. When rank
+table is required, set it from the model yaml ``engine_config.extra.rank-table-file``
+(relative to ``resource_path``) before multi-node Ray/proxy startup, or export
+the env var explicitly in the job.
 
 See: https://github.com/DeepLink-org/dlinfer/blob/main/docs/ascend_multinodes.md
 """
@@ -16,22 +13,17 @@ from __future__ import annotations
 import json
 import os
 import socket
-from pathlib import Path
 from typing import Any
 
-DEFAULT_RANK_TABLE_BASENAMES = (
-    'ascend_rank_table.json',
-    'rank_table.json',
-)
+RANK_TABLE_EXTRA_KEY = 'rank-table-file'
 
-RANK_TABLE_EXTRA_KEYS = (
-    'rank-table-file',
-    'ascend-rank-table-file',
-)
+
+def _is_ascend(config: dict[str, Any]) -> bool:
+    return config.get('device') == 'ascend'
 
 
 def _devices_per_node() -> int:
-    explicit = os.getenv('ASCEND_DEVICES_PER_NODE') or os.getenv('PROC_PER_NODE')
+    explicit = os.getenv('ASCEND_DEVICES_PER_NODE')
     if explicit:
         return max(1, int(explicit))
     visible = os.getenv('ASCEND_RT_VISIBLE_DEVICES', '')
@@ -50,8 +42,8 @@ def _parallel_world_size(parallel_config: dict[str, int] | None) -> int:
 
 
 def ascend_needs_rank_table(config: dict[str, Any], parallel_config: dict[str, int] | None = None) -> bool:
-    """Return True when Ascend multi-node rank table is required."""
-    if config.get('device') != 'ascend':
+    """Return True when Ascend rank table is required."""
+    if not _is_ascend(config):
         return False
     node_count = int(os.getenv('NODE_COUNT', '1'))
     if node_count > 1:
@@ -67,56 +59,55 @@ def _resolve_under_resource_path(config: dict[str, Any], value: str) -> str:
     return os.path.join(resource_path, value)
 
 
+def _rank_table_file_from_run_config(config: dict[str, Any], run_config: dict[str, Any] | None) -> str | None:
+    if not run_config:
+        return None
+    extra = run_config.get('extra_params') or {}
+    candidate = extra.get(RANK_TABLE_EXTRA_KEY)
+    if candidate:
+        return _resolve_under_resource_path(config, str(candidate))
+    return None
+
+
+def _ensure_ascend_rank_table_file_path(
+    config: dict[str, Any],
+    run_config: dict[str, Any] | None = None,
+) -> str:
+    """Return rank table path; set ``ASCEND_RANK_TABLE_FILE_PATH`` when
+    missing."""
+    path = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
+    if not path:
+        path = _rank_table_file_from_run_config(config, run_config)
+        if not path:
+            resource_path = config.get('resource_path', '')
+            raise FileNotFoundError(
+                'Ascend rank table is required but ASCEND_RANK_TABLE_FILE_PATH is unset. '
+                f'Set engine_config.extra.rank-table-file in model yaml (under {resource_path}) '
+                'or export ASCEND_RANK_TABLE_FILE_PATH.',
+            )
+        os.environ['ASCEND_RANK_TABLE_FILE_PATH'] = path
+
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f'Ascend rank table not found: {path}')
+    return path
+
+
 def resolve_ascend_rank_table_path(
     config: dict[str, Any],
     run_config: dict[str, Any] | None = None,
     *,
     parallel_config: dict[str, int] | None = None,
 ) -> str | None:
-    """Resolve Ascend rank table JSON path; None if not found."""
-    existing = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
-    if existing:
-        return existing
-
-    if run_config:
-        extra = run_config.get('extra_params') or {}
-        for key in RANK_TABLE_EXTRA_KEYS:
-            candidate = extra.get(key)
-            if candidate:
-                path = _resolve_under_resource_path(config, str(candidate))
-                if os.path.isfile(path):
-                    return path
-                return path
-
-    resource_path = config.get('resource_path') or ''
-    if not resource_path:
-        return None
-
-    for name in DEFAULT_RANK_TABLE_BASENAMES:
-        path = os.path.join(resource_path, name)
-        if os.path.isfile(path):
-            return path
-
-    rank_dir = os.path.join(resource_path, 'rank_table')
-    if os.path.isdir(rank_dir):
-        node_count = int(os.getenv('NODE_COUNT', '1'))
-        devices = _devices_per_node()
-        for name in (
-            f'rank_table_{node_count}x{devices}.json',
-            f'ascend_rank_table_{node_count}x{devices}.json',
-        ):
-            path = os.path.join(rank_dir, name)
-            if os.path.isfile(path):
-                return path
-        json_files = sorted(Path(rank_dir).glob('*.json'))
-        if json_files:
-            return str(json_files[0])
-
-    return None
+    """Return ``ASCEND_RANK_TABLE_FILE_PATH`` when rank table is configured."""
+    _ = parallel_config
+    path = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
+    if path:
+        return path
+    return _rank_table_file_from_run_config(config, run_config)
 
 
 def _default_socket_ifname() -> str:
-    return os.getenv('HCCL_SOCKET_IFNAME') or os.getenv('GLOO_SOCKET_IFNAME') or 'eth0'
+    return os.getenv('HCCL_SOCKET_IFNAME', 'eth0')
 
 
 def _hostname_ip() -> str | None:
@@ -164,26 +155,56 @@ def _rank_table_local_addr(rank_table_path: str | None) -> str | None:
 def _master_addr(rank_table_path: str | None = None) -> str:
     """Address lmdeploy compares to
     ``rank_table['server_list'][0]['server_id']``."""
-    for key in ('LMDEPLOY_DIST_MASTER_ADDR', 'LMDEPLOY_DP_MASTER_ADDR', 'MASTER_ADDR'):
-        val = os.getenv(key)
-        if val:
-            return val
     from_table = _rank_table_master_addr(rank_table_path)
     if from_table:
         return from_table
+    val = os.getenv('MASTER_ADDR')
+    if val:
+        return val
     return _hostname_ip() or socket.gethostbyname(socket.gethostname())
 
 
 def _local_addr(rank_table_path: str | None = None) -> str:
     """This node's HCCL / Ray bind IP (worker != master)."""
-    for key in ('HCCL_IF_IP', 'RAY_NODE_IP_ADDRESS'):
-        val = os.getenv(key)
-        if val:
-            return val
     from_table = _rank_table_local_addr(rank_table_path)
     if from_table:
         return from_table
+    val = os.getenv('HCCL_IF_IP')
+    if val:
+        return val
     return _hostname_ip() or socket.gethostbyname(socket.gethostname())
+
+
+def bootstrap_ascend_session_env(config: dict[str, Any]) -> str | None:
+    """Resolve rank table + Pod IPs before Ray/proxy start (session scope).
+
+    K8s often sets ``MASTER_ADDR`` to a hostname; rank table ``server_id`` must
+    win so worker Ray join and lmdeploy HCCL use routable Pod IPs.
+    """
+    if int(os.getenv('NODE_COUNT', '1')) <= 1:
+        return None
+    if not _is_ascend(config):
+        return None
+
+    rank_table = _ensure_ascend_rank_table_file_path(config)
+
+    master = _rank_table_master_addr(rank_table)
+    local = _rank_table_local_addr(rank_table)
+    if not master or not local:
+        raise ValueError(f'rank table missing server_id entries: {rank_table}')
+
+    os.environ['MASTER_ADDR'] = master
+    os.environ['LMDEPLOY_DP_MASTER_ADDR'] = master
+    os.environ['LMDEPLOY_DIST_MASTER_ADDR'] = master
+    os.environ['HCCL_IF_IP'] = local
+    os.environ['RAY_NODE_IP_ADDRESS'] = local
+    ifname = _default_socket_ifname()
+    os.environ.setdefault('HCCL_SOCKET_IFNAME', ifname)
+    os.environ.setdefault('GLOO_SOCKET_IFNAME', ifname)
+    os.environ.setdefault('TP_SOCKET_IFNAME', ifname)
+    os.environ.setdefault('RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES', '1')
+    os.environ.setdefault('LMDEPLOY_DP_MASTER_PORT', '29555')
+    return rank_table
 
 
 def build_ascend_multinode_env(
@@ -195,25 +216,21 @@ def build_ascend_multinode_env(
 ) -> dict[str, str]:
     """Merge Ascend multi-node env vars into *base_env* (or ``os.environ``)."""
     env = dict(base_env if base_env is not None else os.environ)
-    if config.get('device') != 'ascend':
+    if not _is_ascend(config):
         return env
 
     parallel_config = parallel_config or ((run_config or {}).get('parallel_config') or {})
     dp = int(parallel_config.get('dp', 1) or 1)
-    ep = int(parallel_config.get('ep', 1) or 1)
 
     if dp > 1:
         env.setdefault('LMDEPLOY_EXECUTOR_BACKEND', 'ray')
         env.setdefault('RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES', '1')
-    if dp > 1 or ep > 1:
-        env.setdefault('DEVICE', 'ascend')
 
     if not ascend_needs_rank_table(config, parallel_config):
         return env
 
-    rank_table = resolve_ascend_rank_table_path(config, run_config, parallel_config=parallel_config)
-    if rank_table:
-        env['ASCEND_RANK_TABLE_FILE_PATH'] = rank_table
+    rank_table = _ensure_ascend_rank_table_file_path(config, run_config)
+    env['ASCEND_RANK_TABLE_FILE_PATH'] = rank_table
 
     master = _master_addr(rank_table)
     local = _local_addr(rank_table)
@@ -238,18 +255,7 @@ def ensure_ascend_rank_table(config: dict[str, Any],
     if not ascend_needs_rank_table(config, parallel_config):
         return os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
 
-    rank_table = resolve_ascend_rank_table_path(config, run_config, parallel_config=parallel_config)
-    if not rank_table:
-        node_count = int(os.getenv('NODE_COUNT', '1'))
-        devices = _devices_per_node()
-        resource_path = config.get('resource_path', '')
-        raise FileNotFoundError(
-            'Ascend multi-node job requires a rank table JSON. '
-            f'Place it under {resource_path}/rank_table/rank_table_{node_count}x{devices}.json '
-            'or set ASCEND_RANK_TABLE_FILE_PATH.',
-        )
-    if not os.path.isfile(rank_table):
-        raise FileNotFoundError(f'Ascend rank table not found: {rank_table}')
+    rank_table = _ensure_ascend_rank_table_file_path(config, run_config)
     merged = build_ascend_multinode_env(config, run_config, parallel_config=parallel_config)
     merged['ASCEND_RANK_TABLE_FILE_PATH'] = rank_table
     os.environ.update(merged)

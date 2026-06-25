@@ -2,6 +2,7 @@ import os
 
 import pytest
 import yaml
+from utils.ascend_multinode_utils import bootstrap_ascend_session_env
 from utils.config_utils import get_config
 from utils.constant import DEFAULT_SERVER
 from utils.proxy_distributed_utils import ProxyDistributedManager
@@ -39,8 +40,9 @@ def common_case_config():
 
 
 @pytest.fixture(scope='session')
-def shared_ray_manager():
-    master_addr = DEFAULT_SERVER
+def shared_ray_manager(config):
+    bootstrap_ascend_session_env(config)
+    master_addr = os.getenv('MASTER_ADDR', DEFAULT_SERVER)
     env_config = get_config()
     run_id = os.environ.get('RUN_ID', 'local_run')
     log_dir = os.path.join(env_config.get('server_log_path', '/tmp/lmdeploy_test'), str(run_id).replace('/', '_'))
@@ -59,7 +61,8 @@ def shared_ray_manager():
 
 
 @pytest.fixture(scope='session')
-def shared_proxy_manager():
+def shared_proxy_manager(config):
+    bootstrap_ascend_session_env(config)
     manager = ProxyDistributedManager()
 
     manager.start()
