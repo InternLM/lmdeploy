@@ -3,6 +3,7 @@
 HF-style InternVL/InternS1)."""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import _turbomind as _tm
@@ -24,7 +25,7 @@ from ..builders import (
     make_norm_config,
 )
 from ..builders._base import ParallelGroup
-from ..linear import Linear
+from ..linear import Linear, transform_output_dim
 from ..supported_models import SUPPORTED_ARCHS
 from ..text_model import TextModel
 from ..weight_format import TrivialFormat
@@ -35,6 +36,14 @@ def _cfg_get(cfg, name: str, default=None):
     if isinstance(cfg, dict):
         return cfg.get(name, default)
     return getattr(cfg, name, default)
+
+
+def _to_tm_norm_type(norm_type: str):
+    if norm_type == 'layer_norm':
+        return _tm.NormType.LAYER_NORM
+    if norm_type == 'rms_norm':
+        return _tm.NormType.RMS_NORM
+    raise ValueError(f'Unsupported InternVit vision norm_type: {norm_type!r}')
 
 
 def map_interns1_hf_keys(name: str) -> str:
@@ -55,12 +64,81 @@ def map_internvl_hf_keys(name: str) -> str:
     return name
 
 
-def _to_tm_norm_type(norm_type: str):
-    if norm_type == 'layer_norm':
-        return _tm.NormType.LAYER_NORM
-    if norm_type == 'rms_norm':
-        return _tm.NormType.RMS_NORM
-    raise ValueError(f'Unsupported InternVit vision norm_type: {norm_type!r}')
+def map_legacy_internvl_keys(name: str) -> str:
+    """Map legacy InternVLChatModel ViT keys to the InternVit loader layout."""
+    if name == 'vision_model.embeddings.class_embedding':
+        return 'model.vision_tower.embeddings.cls_token'
+    if name == 'vision_model.embeddings.position_embedding':
+        return 'model.vision_tower.embeddings.position_embeddings'
+
+    patch_embed = 'vision_model.embeddings.patch_embedding.'
+    if name.startswith(patch_embed):
+        suffix = name[len(patch_embed):]
+        return f'model.vision_tower.embeddings.patch_embeddings.projection.{suffix}'
+
+    block_prefix = 'vision_model.encoder.layers.'
+    if name.startswith(block_prefix):
+        rest = name[len(block_prefix):]
+        if '.' not in rest:
+            return name
+        layer_id, rest = rest.split('.', 1)
+        prefix = f'model.vision_tower.encoder.layer.{layer_id}.'
+
+        if rest == 'ls1':
+            return prefix + 'lambda_1'
+        if rest == 'ls2':
+            return prefix + 'lambda_2'
+        if rest.startswith('norm1.'):
+            return prefix + 'layernorm_before.' + rest[len('norm1.'):]
+        if rest.startswith('norm2.'):
+            return prefix + 'layernorm_after.' + rest[len('norm2.'):]
+        if rest.startswith('attn.qkv.'):
+            return prefix + 'attention.qkv.' + rest[len('attn.qkv.'):]
+        if rest.startswith('attn.proj.'):
+            return prefix + 'attention.projection_layer.' + rest[len('attn.proj.'):]
+        if rest.startswith('attn.q_norm.'):
+            return prefix + 'attention.q_norm.' + rest[len('attn.q_norm.'):]
+        if rest.startswith('attn.k_norm.'):
+            return prefix + 'attention.k_norm.' + rest[len('attn.k_norm.'):]
+        if rest.startswith('mlp.'):
+            return prefix + rest
+
+    if name.startswith('mlp1.0.'):
+        return 'model.multi_modal_projector.layer_norm.' + name[len('mlp1.0.'):]
+    if name.startswith('mlp1.1.'):
+        return 'model.multi_modal_projector.linear_1.' + name[len('mlp1.1.'):]
+    if name.startswith('mlp1.3.'):
+        return 'model.multi_modal_projector.linear_2.' + name[len('mlp1.3.'):]
+
+    return name
+
+
+def _validate_legacy_internvl_chat(cfg):
+    cfg = _legacy_namespace(cfg)
+    if getattr(cfg, 'ps_version', None) != 'v2':
+        raise ValueError(
+            f"InternVLChatModel TurboMind native ViT requires ps_version='v2', "
+            f"got {getattr(cfg, 'ps_version', None)!r}.")
+
+
+def _legacy_namespace(cfg):
+    return SimpleNamespace(**cfg) if isinstance(cfg, dict) else cfg
+
+
+def _legacy_square_size(value) -> int:
+    if isinstance(value, (list, tuple)):
+        if len(value) != 2 or value[0] != value[1]:
+            raise ValueError(f'legacy InternVit expects a square size, got {value!r}')
+        value = value[0]
+    return int(value)
+
+
+@transform_output_dim
+def _split_packed_vision_qkv(tensor: torch.Tensor):
+    """Split packed vision QKV layout [Q | K | V] along output dim."""
+    if tensor.shape[-1] % 3 != 0:
+        raise ValueError(f'packed vision qkv output dim is not divisible by 3: {tuple(tensor.shape)}')
+    return tuple(x.contiguous() for x in tensor.chunk(3, dim=-1))
 
 
 class InternVitVisionModel(TextModel):
@@ -90,11 +168,6 @@ class InternVitVisionModel(TextModel):
         self._projector_scale = int(round(1.0 / self._downsample_ratio))
         self._projector_in_dim = self._hidden * self._projector_scale * self._projector_scale
 
-    def _tm_tensor(self, tensor: torch.Tensor):
-        if not isinstance(tensor, torch.Tensor):
-            raise TypeError(f'InternVit multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
-        return _tm.from_dlpack(tensor.contiguous())
-
     def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
         items = []
         for input_mm in multimodal:
@@ -117,10 +190,6 @@ class InternVitVisionModel(TextModel):
 
     def model(self, pfx):
         self._build_vision_model(pfx + 'model.vision_tower', pfx + 'model.multi_modal_projector')
-
-    def _restore_dtype(self, builder):
-        builder.config.data_type = self._resolver.data_type
-        return builder
 
     def _build_vision_model(self, vision_pfx, projector_pfx):
         cfg = self._make_root_cfg()
@@ -176,14 +245,6 @@ class InternVitVisionModel(TextModel):
         cfg.causal = False
         return cfg
 
-    def _patch_embed(self, pfx):
-        weight = pfx.pop('weight')
-        weight = weight.reshape(weight.shape[0], -1).t().contiguous()
-        tensors = {'weight': weight}
-        if pfx.has('bias'):
-            tensors['bias'] = pfx.pop('bias')
-        return Linear(tensors=tensors, weight_format=TrivialFormat())
-
     def vit_blocks(self, pfx):
         blocks = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for i, p in pfx.slices(0, self._depth):
@@ -219,6 +280,23 @@ class InternVitVisionModel(TextModel):
             m.k_norm = self._rms_norm(pfx + 'k_norm', tp=attn_tp)
         return m.build()
 
+    def _tm_tensor(self, tensor: torch.Tensor):
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(f'InternVit multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
+        return _tm.from_dlpack(tensor.contiguous())
+
+    def _restore_dtype(self, builder):
+        builder.config.data_type = self._resolver.data_type
+        return builder
+
+    def _patch_embed(self, pfx):
+        weight = pfx.pop('weight')
+        weight = weight.reshape(weight.shape[0], -1).t().contiguous()
+        tensors = {'weight': weight}
+        if pfx.has('bias'):
+            tensors['bias'] = pfx.pop('bias')
+        return Linear(tensors=tensors, weight_format=TrivialFormat())
+
     def _vision_norm(self, pfx):
         if self._norm_type == _tm.NormType.LAYER_NORM:
             return self._layer_norm(pfx, dim=self._hidden, norm_eps=self._norm_eps)
@@ -251,6 +329,56 @@ class InternVitVisionModel(TextModel):
         cfg = make_layer_norm_config(dim=dim, data_type=self._resolver.data_type, norm_eps=norm_eps)
         m = self._restore_dtype(LayerNormBuilder(cfg, self._ctx))
         m.set_weight(weight, bias=bias)
+        return m.build()
+
+
+class LegacyInternVitVisionModel(InternVitVisionModel):
+    """Legacy InternVLChatModel ViT adapter for the canonical InternVit layout.
+
+    Legacy InternVL stores attention as a single ``attn.qkv`` linear. Other
+    weights are normalized through ``map_legacy_internvl_keys``.
+    """
+
+    def __init__(self, cfg: PretrainedConfig, *, resolver, parent_cfg: PretrainedConfig):
+        cfg = _legacy_namespace(cfg)
+        parent_cfg = _legacy_namespace(parent_cfg)
+        llm_cfg = _legacy_namespace(parent_cfg.llm_config)
+        image_size = _legacy_square_size(cfg.image_size)
+        patch_size = _legacy_square_size(cfg.patch_size)
+        downsample_ratio = float(parent_cfg.downsample_ratio)
+        image_seq_length = int((image_size // patch_size)**2 * (downsample_ratio**2))
+
+        normalized_cfg = SimpleNamespace(
+            hidden_size=cfg.hidden_size,
+            num_attention_heads=cfg.num_attention_heads,
+            num_hidden_layers=cfg.num_hidden_layers,
+            intermediate_size=cfg.intermediate_size,
+            num_channels=cfg.num_channels,
+            image_size=(image_size, image_size),
+            patch_size=(patch_size, patch_size),
+            layer_norm_eps=cfg.layer_norm_eps,
+            norm_type=cfg.norm_type,
+            use_qk_norm=cfg.qk_normalization,
+        )
+        normalized_parent_cfg = SimpleNamespace(
+            downsample_ratio=downsample_ratio,
+            image_seq_length=image_seq_length,
+            text_config=llm_cfg,
+        )
+        super().__init__(normalized_cfg, resolver=resolver, parent_cfg=normalized_parent_cfg)
+
+    def vit_attn(self, pfx):
+        q, k, v = _split_packed_vision_qkv(self._linear(pfx + 'qkv'))
+        o = self._linear(pfx + 'projection_layer')
+
+        cfg = self._make_attn_cfg()
+        attn_tp = self._model_tp if self._heads % self._model_tp.size == 0 else ParallelGroup(1, None)
+        m = self._restore_dtype(AttentionBuilder(cfg, self._ctx, tp=attn_tp))
+        m.add_qkv_proj(q, k, v)
+        m.add_o_proj(o)
+        if self._use_qk_norm and (pfx + 'q_norm').has('weight') and (pfx + 'k_norm').has('weight'):
+            m.q_norm = self._rms_norm(pfx + 'q_norm', tp=attn_tp)
+            m.k_norm = self._rms_norm(pfx + 'k_norm', tp=attn_tp)
         return m.build()
 
 
@@ -290,12 +418,21 @@ class InternVLModel:
             self._checkpoint_mappings.append(map_interns1_hf_keys)
         elif arch == 'InternVLForConditionalGeneration':
             self._checkpoint_mappings.append(map_internvl_hf_keys)
+        elif arch == 'InternVLChatModel':
+            self._checkpoint_mappings.append(map_legacy_internvl_keys)
         vision_cfg = cfg.vision_config if hasattr(cfg, 'vision_config') else None
-        if (not disable_vision_encoder and vision_cfg is not None
-                and arch in ('InternS1ForConditionalGeneration', 'InternVLForConditionalGeneration')):
-            self.vision_model = InternVitVisionModel(vision_cfg,
-                                                     resolver=vision_resolver or resolver,
-                                                     parent_cfg=cfg)
+        if not disable_vision_encoder and vision_cfg is not None:
+            if arch == 'InternVLChatModel':
+                _validate_legacy_internvl_chat(cfg)
+                self.vision_model = LegacyInternVitVisionModel(vision_cfg,
+                                                               resolver=vision_resolver or resolver,
+                                                               parent_cfg=cfg)
+            elif arch in ('InternS1ForConditionalGeneration', 'InternVLForConditionalGeneration'):
+                self.vision_model = InternVitVisionModel(vision_cfg,
+                                                         resolver=vision_resolver or resolver,
+                                                         parent_cfg=cfg)
+            else:
+                raise ValueError(f'InternVL TurboMind vision architecture {arch!r} is not supported.')
         else:
             self.vision_model = None
 

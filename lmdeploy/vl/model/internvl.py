@@ -76,6 +76,7 @@ class InternVLVisionModel(VisionModel):
     """InternVL vision model."""
 
     _arch = 'InternVLChatModel'
+    _turbomind_native_vision = True
 
     def __init__(self,
                  model_path: str,
