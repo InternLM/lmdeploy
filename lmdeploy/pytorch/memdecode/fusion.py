@@ -10,6 +10,15 @@ from torch import nn
 
 from lmdeploy.pytorch.config import MemDecodeConfig
 
+DEFAULT_ROUTER_CONFIG = {
+    'num_layers': 2,
+    'input_mode': 'both',
+    'use_scalars': True,
+    'scalar_proj_dim': 64,
+    'hidden_dim': 128,
+    'dropout': 0.2,
+}
+
 
 def align_logits_to_base(logits: torch.Tensor, base_vocab_size: int) -> torch.Tensor:
     """Align logits to the base model vocabulary size."""
@@ -32,37 +41,37 @@ class RouterNetwork(nn.Module):
     def __init__(self, config: dict[str, Any], base_hidden_size: int, memory_hidden_size: int):
         super().__init__()
         self.config = dict(config)
-        self.input_mode = self.config.get('input_mode', 'both')
+        self.input_mode = self.config.get('input_mode', DEFAULT_ROUTER_CONFIG['input_mode'])
         if self.input_mode not in self._INPUT_MODES:
             raise ValueError(f'unsupported router input_mode: {self.input_mode}')
 
-        self.use_scalars = bool(self.config.get('use_scalars', self.input_mode == 'mem_hidden_both_scalars'))
+        self.use_scalars = bool(self.config.get('use_scalars', DEFAULT_ROUTER_CONFIG['use_scalars']))
         self.num_scalars = self._num_scalars_for_input_mode()
-        scalar_proj_dim = int(self.config.get('scalar_proj_dim', 0) or 0)
-        self.scalar_proj = (
-            nn.Linear(self.num_scalars, scalar_proj_dim) if self.use_scalars and scalar_proj_dim > 0 else None
-        )
+        scalar_proj_dim = int(self.config.get('scalar_proj_dim', DEFAULT_ROUTER_CONFIG['scalar_proj_dim']) or 0)
+        self.scalar_projectors = None
+        if self.use_scalars and scalar_proj_dim > 0:
+            self.scalar_projectors = nn.ModuleList([
+                nn.Sequential(nn.Linear(1, scalar_proj_dim), nn.ReLU()) for _ in range(self.num_scalars)
+            ])
 
-        hidden_dim = int(self.config.get('hidden_dim', max(base_hidden_size, memory_hidden_size)))
-        num_layers = max(int(self.config.get('num_layers', 1)), 1)
-        dropout = float(self.config.get('dropout', 0.0))
+        hidden_dim = int(self.config.get('hidden_dim', DEFAULT_ROUTER_CONFIG['hidden_dim']))
+        num_layers = max(int(self.config.get('num_layers', DEFAULT_ROUTER_CONFIG['num_layers'])), 1)
+        dropout = float(self.config.get('dropout', DEFAULT_ROUTER_CONFIG['dropout']))
         input_dim = self._hidden_input_dim(base_hidden_size, memory_hidden_size)
         if self.use_scalars:
-            input_dim += scalar_proj_dim if self.scalar_proj is not None else self.num_scalars
+            input_dim += self.num_scalars * scalar_proj_dim if self.scalar_projectors is not None else self.num_scalars
 
         layers: list[nn.Module] = []
         if num_layers == 1:
             layers.append(nn.Linear(input_dim, 2))
         else:
             layers.extend([nn.Linear(input_dim, hidden_dim), nn.GELU()])
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
+            layers.append(nn.Dropout(dropout))
             for _ in range(num_layers - 2):
                 layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.GELU()])
-                if dropout > 0:
-                    layers.append(nn.Dropout(dropout))
+                layers.append(nn.Dropout(dropout))
             layers.append(nn.Linear(hidden_dim, 2))
-        self.network = nn.Sequential(*layers)
+        self.mlp = nn.Sequential(*layers)
 
     def forward(
         self,
@@ -74,10 +83,14 @@ class RouterNetwork(nn.Module):
         if self.use_scalars:
             if scalar_features is None:
                 raise ValueError('scalar_features are required for this router configuration.')
-            if self.scalar_proj is not None:
-                scalar_features = self.scalar_proj(scalar_features)
+            if self.scalar_projectors is not None:
+                projected_scalars = [
+                    projector(scalar_features[..., idx:idx + 1])
+                    for idx, projector in enumerate(self.scalar_projectors)
+                ]
+                scalar_features = torch.cat(projected_scalars, dim=-1)
             router_input = torch.cat((router_input, scalar_features), dim=-1)
-        return torch.log_softmax(self.network(router_input), dim=-1)
+        return torch.log_softmax(self.mlp(router_input), dim=-1)
 
     def _hidden_input_dim(self, base_hidden_size: int, memory_hidden_size: int) -> int:
         if self.input_mode == 'both':
@@ -249,12 +262,7 @@ class MemDecodeFusion(nn.Module):
 
         checkpoint_config = cls._router_config_from_checkpoint(checkpoint_path)
         file_config = cls._router_config_from_file(config_path)
-        config = {
-            'num_layers': 1,
-            'input_mode': 'both',
-            'scalar_proj_dim': 0,
-            'dropout': 0.0,
-        }
+        config = dict(DEFAULT_ROUTER_CONFIG)
         config.update(checkpoint_config)
         config.update(file_config)
         return config, checkpoint_path

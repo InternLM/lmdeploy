@@ -139,7 +139,7 @@ def test_fixed_fusion_aligns_mismatched_vocab_sizes_before_fusion():
 
 
 def test_adaptive_router_requires_base_and_memory_hidden_states(tmp_path):
-    router_config = {'num_layers': 1, 'input_mode': 'both', 'hidden_dim': 4, 'dropout': 0.0}
+    router_config = {'num_layers': 1, 'input_mode': 'both', 'use_scalars': False, 'hidden_dim': 4, 'dropout': 0.0}
     router_dir = _write_router_checkpoint(tmp_path / 'router', router_config, output_bias=[0.0, 0.0])
     fusion = _fusion(
         _memdecode_config(adaptive_router=True, router_path=str(router_dir)),
@@ -152,7 +152,7 @@ def test_adaptive_router_requires_base_and_memory_hidden_states(tmp_path):
 
 
 def test_adaptive_router_loads_state_dict_and_fuses(tmp_path):
-    router_config = {'num_layers': 1, 'input_mode': 'both', 'hidden_dim': 4, 'dropout': 0.0}
+    router_config = {'num_layers': 1, 'input_mode': 'both', 'use_scalars': False, 'hidden_dim': 4, 'dropout': 0.0}
     router_dir = _write_router_checkpoint(tmp_path / 'router', router_config, output_bias=[-2.0, 2.0])
     fusion = _fusion(
         _memdecode_config(adaptive_router=True, router_path=str(router_dir)),
@@ -179,8 +179,60 @@ def test_adaptive_router_loads_state_dict_and_fuses(tmp_path):
     assert not routing_info['log_weights'].requires_grad
 
 
+def test_adaptive_router_loads_planned_scalar_projector_checkpoint(tmp_path):
+    router_config = {
+        'num_layers': 2,
+        'input_mode': 'both',
+        'use_scalars': True,
+        'scalar_proj_dim': 2,
+        'hidden_dim': 4,
+        'dropout': 0.0,
+    }
+    router_dir = tmp_path / 'router'
+    router_dir.mkdir()
+    (router_dir / 'router_config.json').write_text(json.dumps(router_config))
+    state_dict = {
+        f'scalar_projectors.{idx}.0.weight': torch.zeros(2, 1)
+        for idx in range(4)
+    }
+    state_dict.update({
+        f'scalar_projectors.{idx}.0.bias': torch.zeros(2)
+        for idx in range(4)
+    })
+    state_dict.update({
+        'mlp.0.weight': torch.zeros(4, 13),
+        'mlp.0.bias': torch.zeros(4),
+        'mlp.3.weight': torch.zeros(2, 4),
+        'mlp.3.bias': torch.tensor([-1.0, 1.0]),
+    })
+    torch.save(state_dict, router_dir / 'router_1.pt')
+    fusion = _fusion(
+        _memdecode_config(adaptive_router=True, router_path=str(router_dir)),
+        base_hidden_size=2,
+        memory_hidden_size=3,
+    )
+
+    _, routing_info = fusion(
+        torch.tensor([[1.0, 0.0, -1.0, -2.0]]),
+        torch.tensor([[-2.0, -1.0, 0.0, 1.0]]),
+        base_hidden_states=torch.randn(1, 2),
+        memory_hidden_states=torch.randn(1, 3),
+    )
+
+    torch.testing.assert_close(
+        routing_info['log_weights'],
+        torch.log_softmax(torch.tensor([[-1.0, 1.0]]), dim=-1),
+    )
+
+
 def test_lambda_base_only_threshold_gates_to_base_only(tmp_path):
-    router_config = {'num_layers': 1, 'input_mode': 'memory_only', 'hidden_dim': 4, 'dropout': 0.0}
+    router_config = {
+        'num_layers': 1,
+        'input_mode': 'memory_only',
+        'use_scalars': False,
+        'hidden_dim': 4,
+        'dropout': 0.0,
+    }
     router_path = _write_router_checkpoint(tmp_path / 'router', router_config, output_bias=[2.0, -2.0])
     fusion = _fusion(
         _memdecode_config(adaptive_router=True, router_path=str(router_path), threshold=0.1),
@@ -285,8 +337,8 @@ def test_memory_only_scalar_router_ignores_base_logits(tmp_path):
     state_dict = router.state_dict()
     for name, value in state_dict.items():
         state_dict[name] = torch.zeros_like(value)
-    state_dict['network.0.weight'][0, 3] = 3.0
-    state_dict['network.0.weight'][1, 4] = -2.0
+    state_dict['mlp.0.weight'][0, 3] = 3.0
+    state_dict['mlp.0.weight'][1, 4] = -2.0
     torch.save({'state_dict': state_dict}, router_dir / 'router_1.pt')
     fusion = _fusion(
         _memdecode_config(adaptive_router=True, router_path=str(router_dir)),
