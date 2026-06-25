@@ -186,6 +186,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         ts_sr: torch.Tensor | None = None,
         ts_channels: torch.Tensor | None = None,
         ts_forecast_meta: dict[str, Any] | None = None,
+        ts_forecast_llm_meta: dict[str, Any] | None = None,
         **kwargs,
     ):
         all_routed_experts = None
@@ -222,6 +223,15 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         output = dict(hidden_states=hidden_states,
                       all_routed_experts=all_routed_experts,
                       target_inputs_embeds=target_inputs_embeds)
+
+        if ts_forecast_llm_meta is not None:
+            llm_hidden, llm_mask = self._select_ts_llm_hidden(
+                hidden_states,
+                ts_forecast_llm_meta['q_seqlens'],
+                ts_forecast_llm_meta['batch_indices'],
+            )
+            output['ts_forecast_llm_hidden'] = llm_hidden
+            output['ts_forecast_llm_mask'] = llm_mask
 
         if need_ts_context:
             q_seqlens = ts_forecast_meta['q_seqlens']
@@ -348,6 +358,15 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
 
         ts_channels = None
         ts_forecast_meta = None
+        ts_forecast_llm_meta = None
+        if (context.is_chunk_multimodal and not context.is_decoding and not self.is_spec_decoding
+                and context.ts_forecasts is not None):
+            forecast_batch_ids = [idx for idx, enabled in enumerate(context.ts_forecasts) if enabled]
+            if forecast_batch_ids:
+                ts_forecast_llm_meta = dict(
+                    q_seqlens=context.q_seqlens,
+                    batch_indices=torch.tensor(forecast_batch_ids, dtype=torch.long, device=context.input_ids.device),
+                )
         if context.input_multimodals is not None:
             mm_inputs = []
             batch_indices = []
@@ -386,6 +405,7 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
 
         model_inputs['ts_channels'] = ts_channels
         model_inputs['ts_forecast_meta'] = ts_forecast_meta
+        model_inputs['ts_forecast_llm_meta'] = ts_forecast_llm_meta
         return model_inputs
 
     def _load_forecaster_in_proj(self, name: str, loaded_weight: torch.Tensor,

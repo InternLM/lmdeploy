@@ -341,6 +341,7 @@ class BaseModelAgent:
 
         # long context
         self._prev_chunk_output: dict = None
+        self._chunk_ts_forecast_state: dict | None = None
         # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
@@ -509,6 +510,46 @@ class BaseModelAgent:
             output_token_ids=output_token_ids,
             stopped=stopped,
         )
+
+    def _update_chunk_ts_forecast_state(self, inputs: ModelInputs, model_outputs: dict):
+        """Carry TS forecast context across chunked long-context prefill."""
+        if not inputs.is_chunk:
+            self._chunk_ts_forecast_state = None
+            return model_outputs
+
+        if inputs.is_first_chunk:
+            self._chunk_ts_forecast_state = None
+
+        llm_hidden = model_outputs.pop('ts_forecast_llm_hidden', None)
+        llm_mask = model_outputs.pop('ts_forecast_llm_mask', None)
+        pending = model_outputs.pop('pending_ts_forecast', None)
+
+        if self._chunk_ts_forecast_state is None:
+            self._chunk_ts_forecast_state = dict(llm_hidden=[], llm_mask=[], pending=None)
+        state = self._chunk_ts_forecast_state
+
+        if llm_hidden is not None:
+            state['llm_hidden'].append(llm_hidden)
+            state['llm_mask'].append(llm_mask)
+
+        if pending is not None:
+            pending = dict(pending)
+            pending.pop('llm_embedding_input', None)
+            pending.pop('llm_embedding_mask', None)
+            state['pending'] = pending
+
+        if not inputs.is_last_chunk:
+            return model_outputs
+
+        pending = state.get('pending')
+        if pending is not None and state['llm_hidden']:
+            pending = dict(pending)
+            pending['llm_embedding_input'] = torch.cat(state['llm_hidden'], dim=1)
+            pending['llm_embedding_mask'] = torch.cat(state['llm_mask'], dim=1)
+            model_outputs['pending_ts_forecast'] = pending
+
+        self._chunk_ts_forecast_state = None
+        return model_outputs
 
     def _push_output(self, output: BatchedOutputs):
         """Push output."""
@@ -708,8 +749,9 @@ class BaseModelAgent:
             inputs=inputs,
             extra_inputs=extra_inputs,
         )
+        model_outputs = self._update_chunk_ts_forecast_state(inputs, model_outputs or {})
         output_token_ids, stopped, multimodal_outputs = self._update_multimodal_outputs(
-            model_outputs or {},
+            model_outputs,
             next_token_ids=next_token_ids,
             output_token_ids=output_token_ids,
             stopped=stopped,
