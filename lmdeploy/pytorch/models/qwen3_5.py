@@ -1178,6 +1178,22 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
+    @staticmethod
+    def _collate_time_series_values(mm_inputs):
+        """Pad variable-length TS inputs before batching."""
+        max_len = max(inp.data.size(1) for inp in mm_inputs)
+        max_channels = max(inp.data.size(2) for inp in mm_inputs)
+        padded_values = []
+        for inp in mm_inputs:
+            data = inp.data
+            if data.size(1) == max_len and data.size(2) == max_channels:
+                padded_values.append(data)
+                continue
+            padded = data.new_zeros((data.size(0), max_len, max_channels))
+            padded[:, :data.size(1), :data.size(2)] = data
+            padded_values.append(padded)
+        return torch.cat(padded_values)
+
     def prepare_inputs_for_generation(
         self,
         past_key_values: list[list[torch.Tensor]],
@@ -1224,7 +1240,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                 multimodal_mask = self.get_multimodal_mask(input_ids, mm_inputs)
 
                 if modality == Modality.TIME_SERIES:
-                    ts_values = torch.cat([inp.data for inp in mm_inputs])
+                    ts_values = self._collate_time_series_values(mm_inputs)
                     ts_lens = torch.cat([inp.meta['ts_lens'] for inp in mm_inputs])
                     ts_sr = torch.cat([inp.meta['ts_sr'] for inp in mm_inputs])
                 else:

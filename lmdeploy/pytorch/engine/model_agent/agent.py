@@ -341,7 +341,7 @@ class BaseModelAgent:
 
         # long context
         self._prev_chunk_output: dict = None
-        self._chunk_ts_forecast_state: dict | None = None
+        self._prev_chunk_ts_forecast_state: dict | None = None
         # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
@@ -514,19 +514,19 @@ class BaseModelAgent:
     def _update_chunk_ts_forecast_state(self, inputs: ModelInputs, model_outputs: dict):
         """Carry TS forecast context across chunked long-context prefill."""
         if not inputs.is_chunk:
-            self._chunk_ts_forecast_state = None
+            self._prev_chunk_ts_forecast_state = None
             return model_outputs
 
         if inputs.is_first_chunk:
-            self._chunk_ts_forecast_state = None
+            self._prev_chunk_ts_forecast_state = None
 
         llm_hidden = model_outputs.pop('ts_forecast_llm_hidden', None)
         llm_mask = model_outputs.pop('ts_forecast_llm_mask', None)
         forecast_state = model_outputs.pop('ts_forecast_state', None)
 
-        if self._chunk_ts_forecast_state is None:
-            self._chunk_ts_forecast_state = dict(llm_hidden=[], llm_mask=[], forecast_state=None)
-        chunk_state = self._chunk_ts_forecast_state
+        if self._prev_chunk_ts_forecast_state is None:
+            self._prev_chunk_ts_forecast_state = dict(llm_hidden=[], llm_mask=[], forecast_state=None)
+        chunk_state = self._prev_chunk_ts_forecast_state
 
         if llm_hidden is not None:
             chunk_state['llm_hidden'].append(llm_hidden)
@@ -548,7 +548,7 @@ class BaseModelAgent:
             forecast_state['llm_embedding_mask'] = torch.cat(chunk_state['llm_mask'], dim=1)
             model_outputs['ts_forecast_state'] = forecast_state
 
-        self._chunk_ts_forecast_state = None
+        self._prev_chunk_ts_forecast_state = None
         return model_outputs
 
     def _push_output(self, output: BatchedOutputs):
