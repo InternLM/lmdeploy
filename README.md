@@ -52,11 +52,11 @@ ______________________________________________________________________
 - \[2024/09\] LMDeploy PyTorchEngine achieves 1.3x faster on Llama3-8B inference by introducing CUDA graph
 - \[2024/08\] LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
 - \[2024/07\] Support Llama3.1 8B, 70B and its TOOLS CALLING
-- \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
+- \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
-- \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
-- \[2024/04\] Support Llama3 and more VLMs, such as InternVL v1.1, v1.2, MiniGemini, InternLMXComposer2.
+- \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5 and LLaVa
+- \[2024/04\] Support Llama3 and more VLMs, such as InternVL v1.1, v1.2 and MiniGemini.
 - \[2024/04\] TurboMind adds online int8/int4 KV cache quantization and inference for all supported devices. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
 - \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
 - \[2024/04\] Support Qwen1.5-MOE and dbrx.
@@ -171,8 +171,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
-  <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
-  <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>

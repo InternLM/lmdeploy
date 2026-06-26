@@ -1558,11 +1558,10 @@ def serve(model_path: str,
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
         model_name (str): the name of the served model. It can be accessed
             by the RESTful API `/v1/models`. If it is not specified,
