@@ -348,12 +348,13 @@ ______________________________________________________________________
 
 ## Time Series
 
-> **Note:** Time series input is currently supported for the **InternS1-Pro** model only.
+> **Note:** Time series understanding is supported for **InternS1-Pro** and **InternS2** models. Time series
+> forecasting is supported for **InternS2** models with a time-series forecaster only.
 
-The `time_series_url` content item requires a `sampling_rate` field (in Hz) alongside the URL.
+The `time_series_url` content item requires a URL. Include `sampling_rate` in Hz when it is known.
 
 <details>
-<summary>Complete example</summary>
+<summary>Time series understanding example</summary>
 
 ```python
 from openai import OpenAI
@@ -386,6 +387,108 @@ response = client.chat.completions.create(
 )
 print(response.choices[0].message.content)
 ```
+
+</details>
+
+<details>
+<summary>InternS2 time series forecast example</summary>
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {
+                'type': 'time_series_url',
+                'time_series_url': {
+                    'url': 'file:///path/to/history.npy',
+                    # Optional when the InternS2 processor can infer a default.
+                    'sampling_rate': 100,
+                },
+            },
+            {
+                'type': 'text',
+                'text': 'Forecast the next 48 time points for this time series.',
+            },
+        ],
+    }],
+    temperature=0.0,
+    max_completion_tokens=32,
+    extra_body={
+        # InternS2 forecast checkpoints route supported TS requests to forecast output.
+        'enable_forecasting': True,
+        # Optional override. If omitted, InternS2 predicts the horizon when supported.
+        'forecast_horizon': 48,
+    },
+)
+
+message = response.model_dump()['choices'][0]['message']
+forecast = message['ts_forecast']
+print('predicted_horizon:', forecast['predicted_horizon'])
+print('point_forecast:', forecast['point_forecast'])
+print('quantile_forecast:', forecast['quantile_forecast'])
+```
+
+The forecast payload contains:
+
+- `predicted_horizon`: the horizon predicted by InternS2. If `forecast_horizon` is set, the returned arrays use the
+  requested horizon.
+- `point_forecast`: the point forecast array.
+- `quantile_forecast`: quantile forecasts in `[median, 0.1, 0.2, ..., 0.9]` order.
+
+</details>
+
+<details>
+<summary>InternS2 streaming forecast example</summary>
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+stream = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {
+                'type': 'time_series_url',
+                'time_series_url': {
+                    'url': 'file:///path/to/history.npy',
+                    'sampling_rate': 100,
+                },
+            },
+            {'type': 'text', 'text': 'Forecast the next 48 time points.'},
+        ],
+    }],
+    temperature=0.0,
+    max_completion_tokens=32,
+    stream=True,
+    extra_body={
+        'enable_forecasting': True,
+        'forecast_horizon': 48,
+    },
+)
+
+forecast = None
+for chunk in stream:
+    delta = chunk.model_dump()['choices'][0].get('delta', {})
+    if delta.get('content'):
+        print(delta['content'], end='', flush=True)
+    if delta.get('ts_forecast') is not None:
+        forecast = delta['ts_forecast']
+
+print('\nforecast:', forecast)
+```
+
+For streaming responses, `ts_forecast` is attached to the final assistant delta.
 
 </details>
 

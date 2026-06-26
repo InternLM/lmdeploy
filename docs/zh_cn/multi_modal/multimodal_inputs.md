@@ -348,12 +348,13 @@ ______________________________________________________________________
 
 ## 时序数据
 
-> **注意：** 时序数据输入目前仅支持 **InternS1-Pro** 模型。
+> **注意：** 时序理解目前支持 **InternS1-Pro** 和 **InternS2** 模型。时序预测仅支持带有时序预测器的
+> **InternS2** 模型。
 
-`time_series_url` 内容项需要在 URL 之外额外提供 `sampling_rate` 字段（单位：Hz）。
+`time_series_url` 内容项需要提供 URL。已知采样率时，可以通过 `sampling_rate` 字段传入，单位为 Hz。
 
 <details>
-<summary>完整示例</summary>
+<summary>时序理解示例</summary>
 
 ```python
 from openai import OpenAI
@@ -385,6 +386,108 @@ response = client.chat.completions.create(
 )
 print(response.choices[0].message.content)
 ```
+
+</details>
+
+<details>
+<summary>InternS2 时序预测示例</summary>
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {
+                'type': 'time_series_url',
+                'time_series_url': {
+                    'url': 'file:///path/to/history.npy',
+                    # 当 InternS2 processor 可以推断默认值时，该字段可选。
+                    'sampling_rate': 100,
+                },
+            },
+            {
+                'type': 'text',
+                'text': '请预测该时序接下来的 48 个时间点。',
+            },
+        ],
+    }],
+    temperature=0.0,
+    max_completion_tokens=32,
+    extra_body={
+        # InternS2 预测 checkpoint 会将支持的时序请求路由到预测输出。
+        'enable_forecasting': True,
+        # 可选覆盖项。如果省略，InternS2 会在支持时预测 horizon。
+        'forecast_horizon': 48,
+    },
+)
+
+message = response.model_dump()['choices'][0]['message']
+forecast = message['ts_forecast']
+print('predicted_horizon:', forecast['predicted_horizon'])
+print('point_forecast:', forecast['point_forecast'])
+print('quantile_forecast:', forecast['quantile_forecast'])
+```
+
+预测结果包含：
+
+- `predicted_horizon`: InternS2 预测出的 horizon。如果设置了 `forecast_horizon`，返回数组会使用请求中的
+  horizon。
+- `point_forecast`: 点预测数组。
+- `quantile_forecast`: 分位数预测，顺序为 `[median, 0.1, 0.2, ..., 0.9]`。
+
+</details>
+
+<details>
+<summary>InternS2 流式预测示例</summary>
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+stream = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {
+                'type': 'time_series_url',
+                'time_series_url': {
+                    'url': 'file:///path/to/history.npy',
+                    'sampling_rate': 100,
+                },
+            },
+            {'type': 'text', 'text': '请预测接下来的 48 个时间点。'},
+        ],
+    }],
+    temperature=0.0,
+    max_completion_tokens=32,
+    stream=True,
+    extra_body={
+        'enable_forecasting': True,
+        'forecast_horizon': 48,
+    },
+)
+
+forecast = None
+for chunk in stream:
+    delta = chunk.model_dump()['choices'][0].get('delta', {})
+    if delta.get('content'):
+        print(delta['content'], end='', flush=True)
+    if delta.get('ts_forecast') is not None:
+        forecast = delta['ts_forecast']
+
+print('\nforecast:', forecast)
+```
+
+对于流式响应，`ts_forecast` 会附加在最后一个 assistant delta 上。
 
 </details>
 
