@@ -196,6 +196,168 @@ class TestBlockTire:
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [4, 3])
 
+    def test_match_recompute_overlap_stays_private_during_allocate(self, block_trie, block_mgr, scheduler):
+        allocator = block_trie.allocator
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3] * block_size + [4]
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        seq = sess.add_sequence(token_ids)
+        seq.prefix_cache.match_recompute_blocks = 1
+        block_trie.stats.reset()
+
+        block_trie.match(seq)
+
+        assert seq.num_history_ids == block_size * 2
+        assert len(seq.logical_blocks) == 2
+        assert seq.prefix_cache.private_recompute_start_step == block_size * 2
+        assert seq.prefix_cache.private_recompute_end_step == block_size * 3
+        assert block_trie.stats.num_query_tokens == len(token_ids)
+        assert block_trie.stats.num_hit_tokens == block_size * 2
+
+        block_mgr.allocate(seq)
+        private_overlap_block = seq.logical_blocks[2]
+        assert private_overlap_block != cached_blocks[2]
+
+        block_trie.allocate(seq)
+
+        assert seq.logical_blocks[2] == private_overlap_block
+        assert seq.prefix_cache.private_recompute_start_step == -1
+        assert seq.prefix_cache.private_recompute_end_step == -1
+        assert allocator.get_ref_count(np.array([cached_blocks[2]])).item() == 2
+        assert allocator.get_ref_count(np.array([private_overlap_block])).item() == 1
+        assert seq.prefix_cache.last_shared_node.num_matched == block_size * 3
+
+    @pytest.mark.parametrize('raw_match_blocks', [1, 2, 5])
+    def test_match_recompute_overlap_boundary_cases(self, block_trie, block_mgr, scheduler, raw_match_blocks):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = []
+        for block_id in range(raw_match_blocks):
+            token_ids.extend([block_id + 1] * block_size)
+        token_ids.append(99)
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        seq = sess.add_sequence(token_ids)
+        seq.prefix_cache.match_recompute_blocks = 1
+
+        block_trie.match(seq)
+
+        expected_history = max(0, raw_match_blocks - 1) * block_size
+        expected_raw = raw_match_blocks * block_size
+        assert seq.num_history_ids == expected_history
+        assert seq.prefix_cache.private_recompute_start_step == expected_history
+        assert seq.prefix_cache.private_recompute_end_step == expected_raw
+
+        block_mgr.allocate(seq)
+        private_blocks = seq.logical_blocks.get_real_blocks()[expected_history // block_size:raw_match_blocks]
+        if len(private_blocks) > 0:
+            assert not np.array_equal(private_blocks, cached_blocks[expected_history // block_size:raw_match_blocks])
+
+        block_trie.allocate(seq)
+
+        assert seq.prefix_cache.private_recompute_start_step == -1
+        assert seq.prefix_cache.private_recompute_end_step == -1
+        assert seq.prefix_cache.last_shared_node.num_matched == expected_raw
+
+    def test_match_recompute_disabled_keeps_ar_full_hit(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3] * block_size + [4]
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+
+        seq = sess.add_sequence(token_ids)
+        block_trie.match(seq)
+
+        assert seq.prefix_cache.match_recompute_blocks == 0
+        assert seq.num_history_ids == block_size * 3
+        assert seq.prefix_cache.private_recompute_start_step == -1
+        assert seq.prefix_cache.private_recompute_end_step == -1
+
+    def test_match_recompute_overlap_expands_to_multimodal_boundary(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        image_start = block_size * 2 + block_size // 2
+        image_end = block_size * 3 + block_size // 2
+        token_ids = [99] * (block_size * 4 + 1)
+        multimodals = self._image_multimodals(image_start, image_end, 1.0)
+
+        cached = sess.add_sequence(token_ids, multimodals=multimodals)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        seq = sess.add_sequence(token_ids, multimodals=self._image_multimodals(image_start, image_end, 1.0))
+        seq.prefix_cache.match_recompute_blocks = 1
+
+        block_trie.match(seq)
+
+        assert seq.num_history_ids == block_size * 2
+        assert seq.prefix_cache.private_recompute_start_step == block_size * 2
+        assert seq.prefix_cache.private_recompute_end_step == block_size * 4
+
+        block_mgr.allocate(seq)
+        private_blocks = seq.logical_blocks.get_real_blocks()[2:4].copy()
+        assert not np.array_equal(private_blocks, cached_blocks[2:4])
+
+        block_trie.allocate(seq)
+
+        assert np.array_equal(seq.logical_blocks.get_real_blocks()[2:4], private_blocks)
+        assert seq.prefix_cache.private_recompute_start_step == -1
+        assert seq.prefix_cache.last_shared_node.num_matched == block_size * 4
+
+    def test_ssm_match_recompute_overlap_extends_from_checkpoint_to_raw_hit(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_mgr = ssm_scheduler.block_manager
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+
+        checkpoint_tokens = [1] * block_size + [2] * block_size
+        checkpoint_seq = sess.add_sequence(checkpoint_tokens)
+        block_mgr.allocate(checkpoint_seq)
+        block_trie.allocate(checkpoint_seq)
+        state_idx = block_trie.reserve_state_checkpoint_for_seq(checkpoint_seq)
+        assert state_idx >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(checkpoint_seq)
+
+        token_ids = checkpoint_tokens + [3] * block_size + [4] * block_size + [5]
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        seq = sess.add_sequence(token_ids)
+        seq.prefix_cache.match_recompute_blocks = 1
+
+        block_trie.match(seq)
+
+        assert seq.num_history_ids == block_size * 2
+        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.private_recompute_start_step == block_size * 2
+        assert seq.prefix_cache.private_recompute_end_step == block_size * 4
+
+        block_mgr.allocate(seq)
+        private_blocks = seq.logical_blocks.get_real_blocks()[2:4].copy()
+        assert not np.array_equal(private_blocks, cached_blocks[2:4])
+
+        block_trie.allocate(seq)
+
+        assert np.array_equal(seq.logical_blocks.get_real_blocks()[2:4], private_blocks)
+        assert seq.prefix_cache.private_recompute_start_step == -1
+        assert seq.prefix_cache.last_shared_node.num_matched == block_size * 4
+
     def test_match_after_sequence_blocks_are_freed(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
