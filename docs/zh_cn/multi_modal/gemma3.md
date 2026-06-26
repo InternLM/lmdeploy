@@ -18,7 +18,7 @@ Gemma 是 Google 推出的轻量级、最先进的开放模型系列，采用与
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 
 if __name__ == "__main__":

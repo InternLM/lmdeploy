@@ -11,7 +11,7 @@ from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn.embedding import ParallelEmbedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
-from lmdeploy.vl.constants import Modality
+from lmdeploy.multimodal.constants import Modality
 
 
 class BaseModelMetaProcessor:

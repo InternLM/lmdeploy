@@ -16,7 +16,7 @@ from lmdeploy.utils import get_logger
 
 from ..config import ModelConfig
 from ..devices import get_device_manager
-from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
+from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP, REMOVED_MODEL_MAP
 
 logger = get_logger('lmdeploy')
 
@@ -153,6 +153,15 @@ def update_custom_module_map(module_map_path: str):
     CUSTOM_MODULE_MAP.update(new_mod_map)
 
 
+def _raise_if_removed_model(arch: str):
+    """Raise a clear error for intentionally removed model families."""
+    family = REMOVED_MODEL_MAP.get(arch)
+    if family is None:
+        return
+    raise RuntimeError(f'{family} ({arch}) support has been removed from LMDeploy. '
+                       'Please use an older LMDeploy release or migrate to a newer supported model family.')
+
+
 def _get_model_class(config, module_map):
     """Get model class."""
     auto_map = getattr(config, 'auto_map', dict())
@@ -160,6 +169,7 @@ def _get_model_class(config, module_map):
         mapname = auto_map['AutoModelForCausalLM']
         if '.' in mapname:
             mapname = mapname.split('.')[-1]
+        _raise_if_removed_model(mapname)
         if mapname in module_map:
             qualname = module_map[mapname]
             module_cls = _class_from_qualname(qualname)
@@ -177,6 +187,7 @@ def _get_model_class(config, module_map):
         return module_cls
 
     for arch in architectures:
+        _raise_if_removed_model(arch)
         if arch in module_map:
             qualname = module_map[arch]
             module_cls = _class_from_qualname(qualname)

@@ -21,7 +21,7 @@ class VLAsyncEngine(AsyncEngine):
                  **kwargs) -> None:
         from lmdeploy.serve.processors import MultimodalProcessor
         from lmdeploy.utils import try_import_deeplink
-        from lmdeploy.vl.engine import ImageEncoder
+        from lmdeploy.multimodal.engine import ImageEncoder
 
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)

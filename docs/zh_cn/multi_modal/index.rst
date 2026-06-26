@@ -1,5 +1,7 @@
-视觉语言模型
+多模态模型
 =================================
+
+请使用 ``lmdeploy.multimodal`` 访问多模态辅助 API，例如媒体加载和本地文件编码。
 
 .. toctree::
    :maxdepth: 2
@@ -8,7 +10,6 @@
    deepseek_vl2.md
    llava.md
    internvl.md
-   xcomposer2d5.md
    cogvlm.md
    minicpmv.md
    phi3.md

@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 import _turbomind as _tm
 import torch
 
-from lmdeploy.vl.constants import Modality
+from lmdeploy.multimodal.constants import Modality
 
 from ..builders import (
     AttentionBuilder,

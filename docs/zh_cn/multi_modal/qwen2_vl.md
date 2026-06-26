@@ -2,10 +2,9 @@
 
 LMDeploy 支持 Qwen-VL 系列模型，具体如下：
 
-|    Model     |  Size  | Supported Inference Engine |
-| :----------: | :----: | :------------------------: |
-| Qwen-VL-Chat |   -    |         TurboMind          |
-|   Qwen2-VL   | 2B, 7B |          PyTorch           |
+|  Model   |  Size  | Supported Inference Engine |
+| :------: | :----: | :------------------------: |
+| Qwen2-VL | 2B, 7B |          PyTorch           |
 
 本文将以[Qwen2-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct)为例，演示使用 LMDeploy 部署 Qwen2-VL 系列模型的方法
 
@@ -37,7 +36,7 @@ docker build --build-arg CUDA_VERSION=cu11 -t openmmlab/lmdeploy:qwen2vl . -f ./
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('Qwen/Qwen2-VL-2B-Instruct')
 

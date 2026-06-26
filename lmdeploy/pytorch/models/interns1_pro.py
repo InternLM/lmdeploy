@@ -10,7 +10,7 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, Prepr
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
-from lmdeploy.vl.constants import Modality
+from lmdeploy.multimodal.constants import Modality
 
 from .interns1_pro_time_series import InternS1ProTimeSeriesModel
 from .patch import add_prefix, get_build_model_context

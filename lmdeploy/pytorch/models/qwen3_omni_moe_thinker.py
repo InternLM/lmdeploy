@@ -18,7 +18,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, FlashAttention, LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
-from lmdeploy.vl.constants import Modality
+from lmdeploy.multimodal.constants import Modality
 
 from .qwen3_vl import Qwen3VLVisionBlock, Qwen3VLVisionPatchEmbed, Qwen3VLVisionRotaryEmbedding
 from .qwen3_vl_moe import Qwen3VLMoeTextModel

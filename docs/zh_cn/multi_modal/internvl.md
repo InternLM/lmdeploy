@@ -9,7 +9,6 @@ LMDeploy 支持 InternVL 系列模型，具体如下：
 |       InternVL2       |      4B       |          PyTorch           |
 |       InternVL2       | 1B-2B, 8B-76B |     TurboMind, PyTorch     |
 | InternVL2.5/2.5-MPO/3 |    1B-78B     |     TurboMind, PyTorch     |
-|     Mono-InternVL     |      2B       |          PyTorch           |
 
 本文将以[InternVL2-8B](https://huggingface.co/OpenGVLab/InternVL2-8B)为例，演示使用 LMDeploy 部署 InternVL 系列模型的方法。
 
@@ -43,7 +42,7 @@ docker build --build-arg CUDA_VERSION=cu11 -t openmmlab/lmdeploy:internvl . -f .
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2-8B')
 
@@ -61,7 +60,7 @@ print(response)
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl.constants import IMAGE_TOKEN
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
 
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
@@ -87,7 +86,7 @@ out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl.constants import IMAGE_TOKEN
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
 
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
@@ -115,8 +114,8 @@ out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 import numpy as np
 from lmdeploy import pipeline, GenerationConfig
 from decord import VideoReader, cpu
-from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl import encode_image_base64
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
+from lmdeploy.multimodal import encode_image_base64
 from PIL import Image
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 

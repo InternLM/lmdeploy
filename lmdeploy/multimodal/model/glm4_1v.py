@@ -1,0 +1,35 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+
+from transformers import AutoConfig
+
+from lmdeploy.utils import get_logger
+from lmdeploy.multimodal.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
+
+logger = get_logger('lmdeploy')
+
+
+@VISION_MODELS.register_module()
+class GLM4_1_VisionModel(VisionModel):
+    """GLM-4.1V-9B-Thinking model."""
+
+    _arch = ['Glm4vForConditionalGeneration']
+
+    @classmethod
+    def match(cls, config: AutoConfig):
+        """Check whether the config match the model."""
+        arch = config.architectures[0] if config.architectures else None
+        if arch in cls._arch and hasattr(config, 'vision_config'):
+            return True
+        return False
+
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        from transformers import AutoProcessor
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
+
+        self.image_token = self.processor.image_token
+        self.image_token_id = self.processor.image_token_id
+
+        self.mm_tokens = MultimodalSpecialTokens(
+            image_token=self.image_token,
+            image_token_id=self.image_token_id
+        )
