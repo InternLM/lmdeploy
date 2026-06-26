@@ -14,7 +14,7 @@ fi
 
 GDRCOPY_VERSION=2.5.1
 DEEP_EP_VERSION=9af0e0d  # v1.2.1
-DEEP_GEMM_VERSION=c9f8b34  # v2.1.1.post3
+DEEP_GEMM_VERSION=88965b0
 FLASH_MLA_VERSION=1408756  # no release, pick the latest commit
 
 # DeepEP
