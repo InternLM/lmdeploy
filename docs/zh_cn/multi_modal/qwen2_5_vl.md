@@ -25,7 +25,7 @@ pip install qwen-vl-utils[decord]==0.0.8
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('Qwen/Qwen2.5-VL-7B-Instruct')
 
@@ -98,8 +98,8 @@ out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 import numpy as np
 from lmdeploy import pipeline, GenerationConfig
 from decord import VideoReader, cpu
-from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl import encode_image_base64
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
+from lmdeploy.multimodal import encode_image_base64
 from PIL import Image
 pipe = pipeline('Qwen/Qwen2.5-VL-7B-Instruct', log_level='INFO')
 

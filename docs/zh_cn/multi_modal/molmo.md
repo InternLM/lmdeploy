@@ -19,7 +19,7 @@ LMDeploy 支持 Molmo 系列模型，具体如下：
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('allenai/Molmo-7B-D-0924')
 

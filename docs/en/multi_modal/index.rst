@@ -1,5 +1,8 @@
-Vision-Language Models
+Multimodal Models
 =================================
+
+Use ``lmdeploy.multimodal`` for multimodal helper APIs such as media loading
+and local-file encoding.
 
 .. toctree::
    :maxdepth: 2

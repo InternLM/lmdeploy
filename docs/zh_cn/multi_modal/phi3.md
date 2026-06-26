@@ -26,7 +26,7 @@ pip install flash-attn
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('microsoft/Phi-3.5-vision-instruct')
 

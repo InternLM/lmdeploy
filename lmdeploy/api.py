@@ -59,7 +59,7 @@ def pipeline(model_path: str,
             print(response)
 
             # VLM
-            from lmdeploy.vl import load_image
+            from lmdeploy.multimodal import load_image
             from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
             pipe = pipeline('liuhaotian/llava-v1.5-7b',
                             backend_config=TurbomindEngineConfig(session_len=8192),
