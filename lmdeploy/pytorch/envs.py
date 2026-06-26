@@ -102,7 +102,6 @@ with set_envs():
 
     # ascend
     ascend_set_rt_visable_devices_by_ray = env_to_bool('ASCEND_SET_RT_VISIBLE_DEVICES_BY_RAY', False)
-    ascend_rank_table_file = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
 
     # dp
     dp_master_addr = os.getenv('LMDEPLOY_DP_MASTER_ADDR', None)
@@ -139,6 +138,12 @@ with set_envs():
 
     # check env
     enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
+
+    # hccl / ascend - passed to ray workers
+    os.getenv('HCCL_BUFFSIZE', None)
+    os.getenv('HCCL_CONNECT_TIMEOUT', None)
+    os.getenv('HCCL_OP_EXPANSION_MODE', None)
+    os.getenv('HCCL_IF_IP', None)
 
     # dlblas
     # we don't need to read this, it would be passed to ray workers
