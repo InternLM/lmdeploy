@@ -2,7 +2,11 @@
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/v1/metrics/stats.py
 
 import time
+from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Lock
 
 import numpy as np
 
@@ -94,6 +98,95 @@ class SchedulerStats:
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
 
 
+class MultimodalStats:
+    """Stats associated with multimodal prompt preprocessing."""
+
+    def __init__(self, enabled: bool = True):
+        """Initialize multimodal preprocessing stats.
+
+        Args:
+            enabled (bool): Whether to record multimodal metrics.
+        """
+        self.enabled = enabled
+        self.start_time = time.perf_counter()
+        self.total_time: float = 0.0
+        self.stage_times: dict[tuple[str, str], float] = defaultdict(float)
+        self.item_counts: dict[str, int] = defaultdict(int)
+        self.failures: dict[tuple[str, str], int] = defaultdict(int)
+        self.finished = False
+        # Avoid duplicate emission if success/error paths both try to record.
+        self._emitted = False
+        # Multimodal item parsing can update this object from executor threads.
+        self._lock = Lock()
+
+    def add_stage(self, stage: str, seconds: float, modality='all') -> None:
+        """Add elapsed time for a multimodal preprocessing stage."""
+        if not self.enabled:
+            return
+        seconds = max(float(seconds), 0.0)
+        with self._lock:
+            self.stage_times[(stage, modality)] += seconds
+
+    def add_item(self, modality, count: int = 1) -> None:
+        """Record multimodal input item count by modality."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self.item_counts[modality] += count
+
+    def record_failure(self, stage: str = 'total', modality='all') -> None:
+        """Record a multimodal preprocessing failure."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self.failures[(stage, modality)] += 1
+
+    @contextmanager
+    def span(self, stage: str, modality='all') -> Iterator[None]:
+        """Measure a multimodal preprocessing stage."""
+        if not self.enabled:
+            yield
+            return
+
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.add_stage(stage, time.perf_counter() - start, modality)
+
+    def finish(self) -> None:
+        """Mark total multimodal preprocessing time."""
+        if not self.enabled:
+            return
+        with self._lock:
+            if not self.finished:
+                self.total_time = time.perf_counter() - self.start_time
+                self.finished = True
+
+    @property
+    def has_data(self) -> bool:
+        """Whether this object contains any multimodal metric data."""
+        with self._lock:
+            return bool(self.item_counts or self.stage_times or self.failures)
+
+    def mark_emitted(self) -> bool:
+        """Mark this stats object as emitted.
+
+        Returns:
+            bool: True if this call marked it for the first time.
+        """
+        with self._lock:
+            if self._emitted or not (self.item_counts or self.stage_times or self.failures):
+                return False
+            self._emitted = True
+            return True
+
+    def snapshot(self) -> tuple[float, dict[tuple[str, str], float], dict[str, int], dict[tuple[str, str], int]]:
+        """Return a thread-safe copy of the collected stats."""
+        with self._lock:
+            return self.total_time, dict(self.stage_times), dict(self.item_counts), dict(self.failures)
+
+
 class RequestStats:
     """Stats associated with a request."""
 
@@ -153,9 +246,6 @@ class RequestStats:
             elif event.type == EventType.SCHEDULED:
                 if self.scheduled_time == 0.0:  # ignore preemptions
                     self.scheduled_time = event.timestamp
-            # FIXME: deal with preempted case
-            # elif event.type == EventType.PREEMPTED:
-            #     self.num_preempted_reqs += 1
 
     @property
     def e2e_latency(self) -> float:
@@ -181,7 +271,7 @@ class RequestStats:
 
         Any preemptions during decode are included.
         """
-        return self.finish_time - self.first_token_time
+        return self.lastest_token_time - self.first_token_time
 
     @property
     def inference_time_interval(self) -> float:
@@ -189,7 +279,7 @@ class RequestStats:
 
         Any preemptions during prefill or decode are included.
         """
-        return self.finish_time - self.scheduled_time
+        return self.lastest_token_time - self.scheduled_time
 
 
 class IterationStats:
@@ -209,6 +299,7 @@ class IterationStats:
         self.iteration_timestamp = time.time()
         self.new_generation_tokens = 0
         self.prompt_tokens = 0
+        self.num_preempted_reqs = 0
         self.ttft: float | None = None
         self.tpot: float | None = None
         self.itl: float | None = None
@@ -218,6 +309,7 @@ class IterationStats:
                 f'  iteration_timestamp={self.iteration_timestamp:.6f},\n'
                 f'  new_generation_tokens={self.new_generation_tokens},\n'
                 f'  prompt_tokens={self.prompt_tokens},\n'
+                f'  num_preempted_reqs={self.num_preempted_reqs},\n'
                 f'  ttft={self.ttft},\n'
                 f'  tpot={self.tpot},\n'
                 f'  itl={self.itl},\n'
@@ -226,6 +318,15 @@ class IterationStats:
     def _time_since(self, start: float) -> float:
         """Calculate an interval relative to this iteration's timestamp."""
         return self.iteration_timestamp - start
+
+    def update_from_events(self, engine_events: list[EngineEvent]):
+        """Update iteration counters from engine events."""
+        # avoid circular dependency
+        from lmdeploy.messages import EventType
+
+        for event in engine_events:
+            if event.type == EventType.PREEMPTED:
+                self.num_preempted_reqs += 1
 
     def update_from_output(self, outputs: EngineOutput, req_stats: RequestStats):
         """Update the iteration statistics.
@@ -237,6 +338,8 @@ class IterationStats:
         if outputs.req_metrics is None:
             # when users visit "/abort_request" endpoint, `req_metrics` might be None
             return
+
+        self.update_from_events(outputs.req_metrics.engine_events)
 
         new_generation_tokens = len(outputs.token_ids)
         if new_generation_tokens == 0:
