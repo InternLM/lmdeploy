@@ -84,7 +84,7 @@ def launch_server(num_nodes: int,
                   model_path: str,
                   backend_config: PytorchEngineConfig | TurbomindEngineConfig,
                   proxy_url: str = None,
-                  server_port: int = 23333,
+                  server_port: int | None = None,
                   **kwargs):
     """Run multiple server processes in dp mode."""
     log_level = kwargs.get('log_level', 'ERROR')
@@ -108,10 +108,11 @@ def launch_server(num_nodes: int,
     server_urls = []
     processes = []
 
-    if proxy_url is not None:
+    if proxy_url is not None and server_port is None:
         server_port_li = find_available_ports(dp_per_node)
     else:
-        server_port_li = [server_port + i for i in range(dp_per_node)]
+        base_port = server_port if server_port is not None else 23333
+        server_port_li = [base_port + i for i in range(dp_per_node)]
         for port in server_port_li:
             if not is_port_available(port):
                 raise ValueError(f'Port {port} is not available')
