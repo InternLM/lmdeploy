@@ -244,6 +244,9 @@ class IterationStats:
                 # time series forecast-only responses can finish without emitting text tokens.
                 req_stats.finish_reason = outputs.status
                 req_stats.finish_time = self.iteration_timestamp
+                if req_stats.first_token_time == 0:
+                    req_stats.first_token_time = self.iteration_timestamp
+                    req_stats.lastest_token_time = self.iteration_timestamp
             return
 
         self.new_generation_tokens = new_generation_tokens
