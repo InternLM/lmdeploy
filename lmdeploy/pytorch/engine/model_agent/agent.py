@@ -403,9 +403,6 @@ class BaseModelAgent:
             if dp > 1:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
-                # prefill warmup must look "globally prefill" so it stays in
-                # eager, matching runtime routing.
-                inputs.dp_meta.dp_is_decoding = False
             logger.debug('Warmup prefill start.')
             self._forward_impl(inputs)
             torch.cuda.synchronize()
@@ -426,11 +423,6 @@ class BaseModelAgent:
                 if dp > 1:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)
-                    # Graph routing keys on global_is_decoding() == dp_is_decoding,
-                    # which build_dp_meta leaves False. Without this the decode
-                    # graphs are never captured during warmup and get captured
-                    # lazily mid-serving (crashes capturing while HCCL is in flight).
-                    inputs.dp_meta.dp_is_decoding = True
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()

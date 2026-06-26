@@ -321,12 +321,8 @@ class Scheduler:
             return running, swap_in_map, swap_out_map, copy_map
 
         waiting = _reorder_waiting()
-        prefill_with_kvcache = True
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
-            if not prefill_with_kvcache and seq.num_new_tokens > 0:
-                break
-            prefill_with_kvcache = False if seq.num_new_tokens == 0 else True
 
             if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
                 break
