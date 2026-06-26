@@ -140,14 +140,9 @@ with set_envs():
     # check env
     enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
 
-    # dlblas
-    # we don't need to read this, it would be passed to ray workers
-    # If Ray is launched from outside, it may fail to access the environment variables.
-    deep_ep_max_tokens_per_rank = env_to_int('DEEPEP_MAX_TOKENS_PER_RANK', 128)
+    # deepep
     os.getenv('DEEPEP_ENABLE_MNNVL', None)
     os.getenv('DEEPEP_MODE', 'auto')
-
-    # deepep
     deep_ep_buffer_num_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', 20)
 
     # deepgemm

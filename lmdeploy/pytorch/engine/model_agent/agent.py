@@ -1065,7 +1065,8 @@ class BaseModelAgent:
                                             quant_config=self.model_config.quant_config,
                                             fp32_lm_head=self.model_config.fp32_lm_head,
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,
-                                            num_spec_tokens=self.spec_agent.num_spec_tokens)
+                                            num_spec_tokens=self.spec_agent.num_spec_tokens,
+                                            max_batch_size=self.cache_config.max_batches)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
