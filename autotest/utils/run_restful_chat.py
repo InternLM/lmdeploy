@@ -9,10 +9,12 @@ import psutil
 import requests
 from openai import APIStatusError, BadRequestError, OpenAI
 from pytest_assume.plugin import assume
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_rank_table
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
     get_cuda_prefix_by_workerid,
+    get_model_path_from_config,
     get_workerid,
     resolve_extra_params,
 )
@@ -36,7 +38,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = os.path.join(config.get('model_path'), model)
+        model_path = get_model_path_from_config(config, model)
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
@@ -44,7 +46,8 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     if 'extra_params' not in run_config:
         run_config['extra_params'] = {}
 
-    resolve_extra_params(run_config['extra_params'], config.get('model_path'))
+    resolve_extra_params(run_config['extra_params'], config)
+    ensure_ascend_rank_table(config, run_config)
 
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
@@ -55,7 +58,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
         get_cli_common_param(run_config), f'--model-name {model_name}'
     ]).strip()
 
-    env = os.environ.copy()
+    env = build_ascend_multinode_env(config, run_config)
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
     env.update(run_config.get('env', {}))
 
@@ -312,7 +315,7 @@ def _video_extra_body(num_frames: int) -> dict:
 
 def _assert_vl_species_response(resp) -> None:
     content = resp.choices[0].message.content
-    finish = resp.choices[0]['finish_reason']
+    finish = resp.choices[0].finish_reason
     assert _vl_video_stream_finish_assert(finish, content), resp
 
 
@@ -684,7 +687,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
         else:
             file.writelines('[video mm_processor non-stream] ' + str(mm_resp).lower() + '\n')
             mm_text = mm_resp.choices[0].message.content
-            mm_fr = mm_resp.choices[0]['finish_reason']
+            mm_fr = mm_resp.choices[0].finish_reason
             with assume:
                 assert _mm_demo_tomb_run_assert(mm_fr, mm_text), (mm_fr, mm_text[:2000])
 
@@ -794,7 +797,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
                 assert ('tiger' in mix_content.lower() or '虎' in mix_content or 'ski' in mix_content.lower()
                         or '滑雪' in mix_content), mix_resp
             with assume:
-                assert _vl_video_stream_finish_assert(mix_resp.choices[0]['finish_reason'], mix_content), mix_resp
+                assert _vl_video_stream_finish_assert(mix_resp.choices[0].finish_reason, mix_content), mix_resp
 
     file.close()
 

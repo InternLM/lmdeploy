@@ -5,6 +5,8 @@ ascend:
   engine_config:
     dp: 64
     ep: 64
+    extra:
+      rank-table-file: rank_table/rank_table_4x16.json
   backends:
   - name: pytorch
     communicators:
