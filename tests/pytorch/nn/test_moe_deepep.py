@@ -2,6 +2,7 @@
 import builtins
 import importlib
 
+import pytest
 import torch
 
 
@@ -101,12 +102,14 @@ def test_deepep_buffer_uses_internal_default_token_limit(monkeypatch):
             return 2
 
     monkeypatch.setenv('DEEPEP_MAX_TOKENS' + '_PER_RANK', '999')
+    monkeypatch.setenv('DEEPEP_BUFFER_NUM_SMS', '13')
     monkeypatch.setattr(td, 'Buffer', FakeBuffer)
     monkeypatch.setattr(td, 'use_deepep', True)
     td.DeepEPBuffer._buffer_common = None
     td.DeepEPBuffer._buffer_normal = None
     td.DeepEPBuffer._buffer_low_latency = None
     td.DeepEPBuffer._explicitly_destroy = False
+    td.DeepEPBuffer._deepep_sms = 20
     td.DeepEPBuffer._num_max_dispatch_tokens_per_rank = 128
     FakeBuffer.build_count = 0
 
@@ -118,9 +121,24 @@ def test_deepep_buffer_uses_internal_default_token_limit(monkeypatch):
     assert FakeBuffer.build_count == 1
     assert reused_buffer is buffer
     assert buffer.kwargs['explicitly_destroy'] is True
+    assert buffer.kwargs['num_qps_per_rank'] == 13
+    assert buffer.num_sms == 13
     assert td.DeepEPBuffer.destroy() is True
     assert buffer.destroyed is True
     assert td.DeepEPBuffer.destroy() is False
+
+
+def test_disposible_tensor_dispose_is_best_effort_with_extra_refs():
+    from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
+
+    tensor = torch.empty(1)
+    wrapped = DisposibleTensor(tensor)
+    extra_refs = [tensor]
+
+    wrapped.dispose()
+
+    assert wrapped.value is tensor
+    assert extra_refs[0] is tensor
 
 
 def test_low_latency_dispatcher_accepts_explicit_token_limit(monkeypatch):
@@ -250,24 +268,26 @@ def test_deepep_token_limit_is_inferred_from_engine_max_batch_size():
     from lmdeploy.pytorch.model_inputs import BuildModelContext
 
     engine_config = PytorchEngineConfig(max_batch_size=32)
-    backend_config = ConfigBuilder.build_backend_config(engine_config)
-    build_ctx = BuildModelContext(max_batch_size=backend_config.max_batch_size, num_spec_tokens=3)
+    cache_config = ConfigBuilder.build_cache_config(engine_config)
+    build_ctx = BuildModelContext(max_batch_size=cache_config.max_batches, num_spec_tokens=3)
 
-    assert backend_config.max_batch_size == 32
+    assert cache_config.max_batches == 32
     assert build_ctx.deep_ep_max_tokens_per_rank == 128
 
 
-def test_imports_do_not_require_removed_blas_package(monkeypatch):
+def test_imports_do_not_require_removed_or_ep_only_packages(monkeypatch):
     real_import = builtins.__import__
     blocked_package = 'dl' + 'blas'
 
     def guarded_import(name, *args, **kwargs):
-        if name == blocked_package or name.startswith(blocked_package + '.'):
-            raise AssertionError(f'unexpected removed blas package import: {name}')
+        if (name == blocked_package or name.startswith(blocked_package + '.') or name == 'deep_gemm'
+                or name.startswith('deep_gemm.')):
+            raise AssertionError(f'unexpected optional package import: {name}')
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, '__import__', guarded_import)
     modules = [
+        'lmdeploy.pytorch.backends.cuda.moe',
         'lmdeploy.pytorch.backends.cuda.moe.default',
         'lmdeploy.pytorch.backends.cuda.moe.blocked_fp8',
         'lmdeploy.pytorch.backends.cuda.graph_runner',
@@ -276,6 +296,18 @@ def test_imports_do_not_require_removed_blas_package(monkeypatch):
     ]
     for module in modules:
         importlib.import_module(module)
+
+
+def test_eplb_global_metadata_uses_explicit_runtime_errors(monkeypatch):
+    from lmdeploy.pytorch.nn import eplb
+
+    monkeypatch.setattr(eplb, '_global_eplb_metadata', None)
+    with pytest.raises(RuntimeError, match='not been initialized'):
+        eplb.get_global_eplb_metadata()
+
+    monkeypatch.setattr(eplb, '_global_eplb_metadata', object())
+    with pytest.raises(RuntimeError, match='already been initialized'):
+        eplb.init_global_eplb_metadata(ep_size=1, num_routed_experts=1, num_hidden_layers=1)
 
 
 def test_fp8_ep_prefill_quant_uses_configured_dtype_and_scale_fmt(monkeypatch):

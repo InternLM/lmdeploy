@@ -4,8 +4,6 @@ import torch
 import triton
 import triton.language as tl
 
-from lmdeploy.pytorch.third_party.deep_gemm import get_mn_major_tma_aligned_tensor
-
 from .activation import silu_and_mul
 from .blocked_gemm_fp8 import per_token_group_quant_fp8
 from .fused_moe_ep import ep_gather
@@ -161,6 +159,7 @@ def fused_moe_v3_fp8(
     all_tokens = sum(num_recv_tokens_per_expert)
     if all_tokens <= 0:
         return hidden_states_fp8.to(torch.bfloat16)
+    from lmdeploy.pytorch.third_party.deep_gemm import get_mn_major_tma_aligned_tensor
     m, k = hidden_states_fp8.size()
     n = w13_weight_fp8[0].size(1)
     block_size = k // hidden_states_scale.size(1)

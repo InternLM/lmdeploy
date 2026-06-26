@@ -249,7 +249,8 @@ _global_eplb_metadata: EPLBMetadata | None = None
 
 def init_global_eplb_metadata(ep_size: int, num_routed_experts: int, num_hidden_layers: int):
     global _global_eplb_metadata
-    assert _global_eplb_metadata is None
+    if _global_eplb_metadata is not None:
+        raise RuntimeError('Global EPLB metadata has already been initialized.')
     _global_eplb_metadata = EPLBMetadata.init(ep_size=ep_size,
                                              num_routed_experts=num_routed_experts,
                                              num_hidden_layers=num_hidden_layers)
@@ -257,14 +258,13 @@ def init_global_eplb_metadata(ep_size: int, num_routed_experts: int, num_hidden_
 
 def get_global_eplb_metadata():
     global _global_eplb_metadata
-    assert _global_eplb_metadata is not None
+    if _global_eplb_metadata is None:
+        raise RuntimeError('Global EPLB metadata has not been initialized.')
     return _global_eplb_metadata
 
 
 def get_eplb_phy2log_metadata_by_layer(layer_idx: int):
-    global _global_eplb_metadata
-    assert _global_eplb_metadata is not None
-    return _global_eplb_metadata.physical_to_logical_map[layer_idx]
+    return get_global_eplb_metadata().physical_to_logical_map[layer_idx]
 
 
 @dataclass

@@ -3,10 +3,10 @@ import os
 import sys
 from enum import Enum
 
+from lmdeploy.pytorch.envs import deep_ep_buffer_num_sms, env_to_int
+
 try:
     from deep_ep import Buffer
-
-    from lmdeploy.pytorch.envs import deep_ep_buffer_num_sms
 
     Buffer.set_num_sms(deep_ep_buffer_num_sms)
     use_deepep = True
@@ -48,9 +48,8 @@ class DisposibleTensor:
 
     def dispose(self, backup_metadata: bool = True):
         assert not self.is_disposed
-        if not torch.compiler.is_compiling():
-            refcount = sys.getrefcount(self._value)
-            assert refcount == 2, f'refcount={refcount}'
+        if not torch.compiler.is_compiling() and sys.getrefcount(self._value) != 2:
+            return
         if backup_metadata:
             self._backup_metadata = {key: getattr(self._value, key) for key in ('shape', 'device', 'dtype')}
         self._value = None
@@ -144,7 +143,7 @@ class DeepEPBuffer:
     def update_parameters(cls, hidden_size: int, num_experts: int):
         cls._hidden_size = hidden_size
         cls._num_experts = num_experts
-        cls._deepep_sms = int(os.getenv('DEEPEP_SMS', cls._deepep_sms))
+        cls._deepep_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', cls._deepep_sms)
         cls._allow_mnnvl = os.getenv('DEEPEP_ENABLE_MNNVL', '1') != '0'
         env_mode = os.getenv('DEEPEP_MODE', 'auto').strip().lower()
         if env_mode == 'normal':
@@ -181,6 +180,7 @@ class DeepEPBuffer:
         hidden_bytes: int,
     ):
         if cls._buffer_common is not None:
+            # Match dlblas/DeepEP's process-wide common buffer lifetime.
             return cls._buffer_common
 
         cls.update_parameters(hidden, num_experts)
