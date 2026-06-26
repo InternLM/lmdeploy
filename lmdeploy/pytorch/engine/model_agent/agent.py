@@ -472,12 +472,15 @@ class BaseModelAgent:
         return_logits: bool,
     ):
         """Model forward."""
-        if self.memdecode_agent is not None:
-            if return_logits:
-                raise RuntimeError('MemDecode does not support returned prompt logits yet.')
+        if self.memdecode_agent is not None and return_logits:
+            raise RuntimeError('MemDecode does not support returned prompt logits yet.')
 
-            ret = await self.async_forward(inputs)
+        ret = await self.async_forward(inputs)
+
+        if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
+
+        if self.memdecode_agent is not None:
             base_hidden_states = ret['hidden_states']
             base_logits = self.get_logits(base_hidden_states)
 
@@ -487,11 +490,6 @@ class BaseModelAgent:
                 base_logits=base_logits,
                 postprocess_output=self._postprocess_forward_output,
             )
-
-        ret = await self.async_forward(inputs)
-
-        if not return_logits:
-            ret = self._postprocess_forward_output(ret, inputs)
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
