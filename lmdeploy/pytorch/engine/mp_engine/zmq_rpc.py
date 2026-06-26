@@ -509,6 +509,7 @@ class AsyncRPCClient:
                                 sess_event: asyncio.Event,
                                 *args,
                                 streaming_startup_notify_kwarg: str | None = None,
+                                local_request_accepted_callback=None,
                                 **kwargs):
         """Streaming call."""
         stream_task = asyncio.create_task(
@@ -558,6 +559,12 @@ class AsyncRPCClient:
         stream_task.add_done_callback(_mark_init_done)
         try:
             stream_id = await asyncio.shield(stream_task)
+            if local_request_accepted_callback is not None:
+                # A stream id here means the engine has accepted the request.
+                try:
+                    local_request_accepted_callback()
+                except Exception:
+                    logger.exception('ZMQ MP request-accepted callback failed.')
             while not stopped:
                 output, stopped = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)
                 if output is not None:

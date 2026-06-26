@@ -88,6 +88,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
+from lmdeploy.serve.utils.mm_preprocess import MultimodalPreprocessGate
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
@@ -104,6 +105,7 @@ class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
     health_monitor: EngineHealthMonitor | None = None
+    mm_preprocess_gate = MultimodalPreprocessGate()
     request_hosts = []
     # following are for registering to proxy server
     proxy_url: str | None = None
@@ -539,7 +541,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         chat_template_kwargs=chat_template_kwargs or None,
         input_ids=resolved_input_ids,
         media_io_kwargs=request.media_io_kwargs,
-        mm_processor_kwargs=request.mm_processor_kwargs)
+        mm_processor_kwargs=request.mm_processor_kwargs,
+        mm_preprocess_gate=VariableInterface.mm_preprocess_gate)
     include_usage = bool(request.stream_options and request.stream_options.include_usage)
 
     def create_stream_response_json(index: int,
@@ -1043,7 +1046,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         sequence_end=True,
         do_preprocess=False,
         media_io_kwargs=request.media_io_kwargs,
-        mm_processor_kwargs=request.mm_processor_kwargs)
+        mm_processor_kwargs=request.mm_processor_kwargs,
+        mm_preprocess_gate=VariableInterface.mm_preprocess_gate)
 
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
         # only output router experts in last chunk
@@ -1632,6 +1636,9 @@ def serve(model_path: str,
                                                     trust_remote_code=trust_remote_code,
                                                     speculative_config=speculative_config,
                                                     **kwargs)
+    vision_config = kwargs.get('vision_config')
+    max_mm_preprocess_concurrency = getattr(vision_config, 'max_mm_preprocess_concurrency', 0)
+    VariableInterface.mm_preprocess_gate = MultimodalPreprocessGate(max_mm_preprocess_concurrency)
     set_parsers(reasoning_parser, tool_call_parser)
 
     # create FastAPI lifespan events
