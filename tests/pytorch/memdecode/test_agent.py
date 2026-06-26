@@ -87,7 +87,7 @@ def test_reset_graph_runner_runs_inside_memory_context_and_calls_model_reset():
 
 def test_fuse_with_base_runs_memory_forward_and_fusion():
     calls = []
-    inputs = SimpleNamespace(seq_length=torch.tensor([2]))
+    inputs = SimpleNamespace(seq_length=torch.tensor([2]), is_chunk=False, is_last_chunk=False)
     base_hidden = torch.tensor([[[1.0, 2.0]]])
     base_logits = torch.tensor([[[3.0, 4.0]]])
     memory_hidden = torch.tensor([[[5.0, 6.0]]])
@@ -137,6 +137,45 @@ def test_fuse_with_base_runs_memory_forward_and_fusion():
         'base_hidden_states': base_hidden,
         'memory_hidden_states': memory_hidden,
     }
+
+
+def test_fuse_with_base_skips_fusion_for_non_final_chunk():
+    calls = []
+    inputs = SimpleNamespace(seq_length=torch.tensor([2]), is_chunk=True, is_last_chunk=False)
+    base_logits = torch.tensor([[[3.0, 4.0]]])
+    base_output = {'hidden_states': torch.tensor([[[1.0, 2.0]]]), 'seq_length': inputs.seq_length}
+    memory_output = {'hidden_states': torch.tensor([[[5.0, 6.0]]]), 'seq_length': inputs.seq_length}
+
+    async def _memory_forward(forward_inputs):
+        calls.append(('memory_forward', forward_inputs))
+        return memory_output
+
+    def _postprocess(*args):
+        raise AssertionError('non-final chunk should not postprocess memory output')
+
+    def _get_logits(*args):
+        raise AssertionError('non-final chunk should not compute memory logits')
+
+    def _fusion(*args, **kwargs):
+        raise AssertionError('non-final chunk should not run fusion')
+
+    agent = MemDecodeAgent.__new__(MemDecodeAgent)
+    agent.async_forward = _memory_forward
+    agent.model = SimpleNamespace(get_logits=_get_logits)
+    agent.fusion = _fusion
+
+    output = asyncio.run(
+        agent.fuse_with_base(
+            inputs=inputs,
+            base_output=base_output,
+            base_logits=base_logits,
+            postprocess_output=_postprocess,
+        )
+    )
+
+    assert output is base_output
+    assert output['logits'] is base_logits
+    assert calls == [('memory_forward', inputs)]
 
 
 def test_async_forward_runs_memory_forward_inside_memory_context(monkeypatch):

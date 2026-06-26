@@ -191,6 +191,10 @@ class MemDecodeAgent:
             raise RuntimeError('MemDecode fusion is not initialized.')
 
         memory_output = await self.async_forward(inputs)
+        if inputs.is_chunk and not inputs.is_last_chunk:
+            base_output['logits'] = base_logits
+            return base_output
+
         memory_output = postprocess_output(memory_output, inputs)
         memory_hidden_states = memory_output['hidden_states']
         memory_logits = self.model.get_logits(memory_hidden_states)
