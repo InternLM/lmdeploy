@@ -5,9 +5,10 @@ from types import SimpleNamespace
 import torch
 
 import lmdeploy.pytorch.memdecode.agent as agent_module
-from lmdeploy.pytorch.config import BackendConfig, DistConfig, MemDecodeConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, DistConfig, MemDecodeConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.memdecode.agent import MemDecodeAgent, build_memdecode_agent
+from lmdeploy.pytorch.model_inputs import BuildModelContext
 
 
 def _model_config(states_shapes=None):
@@ -172,7 +173,7 @@ def test_async_forward_runs_memory_forward_inside_memory_context(monkeypatch):
 
 def test_build_model_honors_supplied_context_and_empty_init(monkeypatch):
     built_model = object()
-    build_model_ctx = object()
+    build_model_ctx = BuildModelContext(disable_vision_encoder=True)
     calls = []
     agent = MemDecodeAgent(_memdecode_config(), BackendConfig(), _dist_ctx(), device='cpu')
 
@@ -189,12 +190,46 @@ def test_build_model_honors_supplied_context_and_empty_init(monkeypatch):
     agent.build_model(empty_init=True, build_model_ctx=build_model_ctx)
 
     assert agent.model is built_model
-    assert calls == [('build', agent.model_config, 'cpu', build_model_ctx)]
+    assert len(calls) == 1
+    assert calls[0][:3] == ('build', agent.model_config, 'cpu')
+    assert calls[0][3] is not build_model_ctx
+    assert calls[0][3].disable_vision_encoder is True
 
     calls.clear()
     agent.build_model(empty_init=False, build_model_ctx=build_model_ctx)
 
-    assert calls == [
-        ('build', agent.model_config, 'cpu', build_model_ctx),
-        ('load', built_model, 'memory-model', 'cpu'),
-    ]
+    assert len(calls) == 2
+    assert calls[0][:3] == ('build', agent.model_config, 'cpu')
+    assert calls[0][3] is not build_model_ctx
+    assert calls[1] == ('load', built_model, 'memory-model', 'cpu')
+
+
+def test_build_model_uses_memory_specific_context_without_quant_or_fp32_head(monkeypatch):
+    built_model = object()
+    calls = []
+    agent = MemDecodeAgent(_memdecode_config(), BackendConfig(), _dist_ctx(), device='cpu')
+    agent.model_config.tie_word_embeddings = True
+    base_quant_config = QuantizationConfig(quant_method='awq')
+    base_build_model_ctx = BuildModelContext(
+        disable_vision_encoder=True,
+        quant_config=base_quant_config,
+        fp32_lm_head=True,
+        tie_word_embeddings=False,
+    )
+
+    def fake_build_patched_model(model_config, device=None, build_model_ctx=None):
+        calls.append(('build', model_config, device, build_model_ctx))
+        return built_model
+
+    monkeypatch.setattr(agent_module, 'build_patched_model', fake_build_patched_model)
+    monkeypatch.setattr(agent_module, 'load_model_weights', lambda *args, **kwargs: None)
+
+    agent.build_model(empty_init=True, build_model_ctx=base_build_model_ctx)
+
+    _, _, _, memory_build_model_ctx = calls[0]
+    assert memory_build_model_ctx is not base_build_model_ctx
+    assert memory_build_model_ctx.disable_vision_encoder is True
+    assert memory_build_model_ctx.quant_config is not base_quant_config
+    assert memory_build_model_ctx.quant_config.quant_method is None
+    assert memory_build_model_ctx.fp32_lm_head is False
+    assert memory_build_model_ctx.tie_word_embeddings is True

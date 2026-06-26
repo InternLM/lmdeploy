@@ -474,12 +474,8 @@ class ModelConfig:
             num_spec_tokens=num_spec_tokens,
             device_type=device_type,
         )
-
-        hf_config.trust_remote_code = trust_remote_code
-
-        hf_overrides = dict(hf_overrides or {})
         fp32_lm_head = False
-        if hf_overrides:
+        if hf_overrides is not None:
             logger.warning(f'Overriding HF config with {hf_overrides}')
             fp32_lm_head = hf_overrides.get('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)

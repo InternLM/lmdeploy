@@ -108,15 +108,30 @@ class MemDecodeAgent:
             if custom_module_map is not None:
                 update_custom_module_map(custom_module_map)
 
-            if build_model_ctx is None:
-                build_model_ctx = BuildModelContext(
-                    quant_config=self.model_config.quant_config,
-                    fp32_lm_head=self.model_config.fp32_lm_head,
-                    tie_word_embeddings=self.model_config.tie_word_embeddings,
-                )
-            self.model = build_patched_model(self.model_config, device=self.device, build_model_ctx=build_model_ctx)
+            memory_build_model_ctx = self._build_model_context(build_model_ctx)
+            self.model = build_patched_model(
+                self.model_config,
+                device=self.device,
+                build_model_ctx=memory_build_model_ctx,
+            )
             if not empty_init:
                 load_model_weights(self.model, self.memdecode_config.memory_model_path, device=self.device)
+
+    def _build_model_context(self, build_model_ctx=None):
+        """Build context for memory model."""
+        kwargs = {}
+        if build_model_ctx is not None:
+            kwargs = dict(
+                disable_vision_encoder=build_model_ctx.disable_vision_encoder,
+                dllm_config=build_model_ctx.dllm_config,
+                strategy_factory=build_model_ctx.strategy_factory,
+                enable_return_routed_experts=build_model_ctx.enable_return_routed_experts,
+                num_spec_tokens=build_model_ctx.num_spec_tokens,
+            )
+        return BuildModelContext(
+            **kwargs,
+            tie_word_embeddings=self.model_config.tie_word_embeddings,
+        )
 
     def build_graph_runner(self):
         """Build graph runner."""
