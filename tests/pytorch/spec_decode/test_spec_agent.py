@@ -47,12 +47,15 @@ class _DummyDraftModel:
     def __init__(self):
         self.meta = self.Meta()
         self.update_inputs_calls = 0
+        self.update_inputs_dp_is_decoding = []
 
     def get_meta(self):
         return self.meta
 
     def update_inputs(self, inputs):
         self.update_inputs_calls += 1
+        if inputs.dp_meta is not None:
+            self.update_inputs_dp_is_decoding.append(inputs.dp_meta.dp_is_decoding)
         return inputs
 
 
@@ -261,6 +264,33 @@ def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatc
     assert agent.proposer.get_outputs_calls == agent.num_spec_tokens
     assert agent.proposer.update_inputs_decoding_calls == 1
     assert agent.proposer.model.update_inputs_calls == agent.num_spec_tokens - 1
+
+
+def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypatch):
+    """Rebuilt draft-loop DPMeta must keep DP-global decode state."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.model_inputs import DPMeta
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(lambda seqlen, num_tokens: DPMeta()))
+    inputs, extra_inputs = _make_non_last_chunk_inputs(dp_meta=DPMeta(dp_batches=[2, 2], dp_is_decoding=True))
+
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _DummyProposer()
+    forward_calls = 0
+
+    def _forward_impl(_inputs):
+        nonlocal forward_calls
+        forward_calls += 1
+        return {'call': forward_calls}
+
+    agent._forward_impl = _forward_impl
+
+    asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
 
 
 def test_slice_sampling_inputs_decode():
