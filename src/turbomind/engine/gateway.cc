@@ -32,11 +32,7 @@ void Gateway::push(std::shared_ptr<Request> r)
 {
     int rank = -1;
 
-    if (TM_UNLIKELY(!r->session.start_flag)) {
-        // route to corresponding rank
-        rank = binding_.find(r->session.id);
-    }
-    else if (TM_LIKELY(size_)) {
+    if (TM_LIKELY(size_)) {
         rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
     }
     else {
@@ -49,7 +45,7 @@ void Gateway::push(std::shared_ptr<Request> r)
         queues_[rank]->push({std::move(r)});
     }
     else {
-        TM_LOG_ERROR("Failed to find a binded queue for {}", r->session.id);
+        TM_LOG_ERROR("Failed to find a queue for {}", r->session.id);
         notify({[r = std::move(r)] { UpdateState(*r, Request::kInvalid, 0); }});
     }
 }
@@ -89,30 +85,7 @@ void Gateway::pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
         abort = data[1];
     }
 
-    // Assign a monotonic increasing id for each infer request
     q.assign_unique_ids(infer_reqs);
-
-    // Bind for stateful inference
-    std::vector<uint64_t> bind_ids;
-    for (const auto& r : infer_reqs) {
-        if (r->session.start_flag && !r->session.end_flag) {  // started but not ended
-            bind_ids.push_back(r->session.id);
-        }
-    }
-
-    /// TODO: fix qid <-> rank mapping
-    if (!bind_ids.empty()) {
-        binding_.bind(bind_ids, qid);
-    }
-
-    // Unbind for stateful kill
-    std::vector<uint64_t> unbind_ids;
-    for (const auto& r : kill_reqs) {
-        unbind_ids.push_back(r->session.id);
-    }
-    if (!unbind_ids.empty()) {
-        binding_.unbind(unbind_ids, qid);
-    }
 }
 
 void Gateway::cancel(std::shared_ptr<Request> r)
@@ -125,19 +98,6 @@ void Gateway::cancel(std::shared_ptr<Request> r)
     }
     else {
         // request is picked up by engine
-    }
-}
-
-void Gateway::kill(std::shared_ptr<Request> r)
-{
-    if (auto rank = binding_.find(r->session.id); rank >= 0) {
-        queues_[rank]->kill(std::move(r));
-    }
-    else {
-        TM_LOG_ERROR("Failed to find a binded queue for {}", r->session.id);
-        notify({[r = std::move(r)] {  //
-            UpdateState(*r, Request::kInvalid, 0);
-        }});
     }
 }
 

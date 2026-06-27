@@ -67,7 +67,7 @@ class OpenAIServingResponses:
         return response_parser, None
 
     def _generate(self, model_name: str, parsed_request, gen_config):
-        session = self.server_context.create_session(-1)
+        session = self.server_context.create_session()
         adapter_name = None if model_name == self.server_context.async_engine.model_name else model_name
         result_generator = self.server_context.async_engine.generate(
             parsed_request.messages,
@@ -75,8 +75,6 @@ class OpenAIServingResponses:
             gen_config=gen_config,
             tools=parsed_request.tools,
             stream_response=True,
-            sequence_start=True,
-            sequence_end=True,
             do_preprocess=True,
             adapter_name=adapter_name,
         )

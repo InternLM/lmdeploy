@@ -145,10 +145,10 @@ class MolmoVisionModel(VisionModel):
         prompt.append(' Assistant:')
         return ''.join(prompt)
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_pytorch(self, messages, chat_template, tokenizer, add_bos, **kwargs):
         assert 0, 'molmo is not supported by pytorch engine'
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_turbomind(self, messages, chat_template, tokenizer, add_bos, **kwargs):
         # results is a list of tuple(input_ids, embeddings)
         results = []
         # Prepend BOS

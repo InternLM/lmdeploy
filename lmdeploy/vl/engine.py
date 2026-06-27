@@ -139,7 +139,7 @@ class ImageEncoder:
         messages: list[dict],
         chat_template,
         tokenizer,
-        sequence_start,
+        add_bos,
         tools: list[object] | None = None,
         chat_template_kwargs: dict | None = None,
     ) -> list[dict]:
@@ -166,7 +166,7 @@ class ImageEncoder:
             result = self.model.to_pytorch(messages,
                                            chat_template,
                                            tokenizer,
-                                           sequence_start,
+                                           add_bos,
                                            tools=tools,
                                            chat_template_kwargs=chat_template_kwargs)
         else:
@@ -182,7 +182,7 @@ class ImageEncoder:
         messages: list[dict],
         chat_template,
         tokenizer,
-        sequence_start,
+        add_bos,
         tools: list[object] | None = None,
         chat_template_kwargs: dict | None = None,
     ) -> dict:
@@ -206,7 +206,7 @@ class ImageEncoder:
         result = self.model.to_turbomind(messages,
                                          chat_template,
                                          tokenizer,
-                                         sequence_start,
+                                         add_bos,
                                          tools=tools,
                                          chat_template_kwargs=chat_template_kwargs)
         # clear data

@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 def check_request(request: CompletionRequest, server_context: 'VariableInterface') -> str:
     engine_config = server_context.get_engine_config()
-    session_manager = server_context.get_session_manager()
     try:
         # Check logprobs settings
         logprobs_mode = engine_config.logprobs_mode
@@ -20,9 +19,6 @@ def check_request(request: CompletionRequest, server_context: 'VariableInterface
             return 'logprobs must be non-negative when logprobs_mode is enabled in engine configuration.'
     except AttributeError:
         pass
-
-    if session_manager.has(request.session_id):
-        return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
     if request.n <= 0:

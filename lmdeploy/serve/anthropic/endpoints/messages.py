@@ -177,8 +177,6 @@ def register(router: APIRouter, server_context) -> None:
             gen_config=to_generation_config(request),
             tools=parsed_request.tools,
             stream_response=True,
-            sequence_start=True,
-            sequence_end=True,
             do_preprocess=False if resolved_input_ids is not None else True,
             adapter_name=adapter_name,
             input_ids=resolved_input_ids,

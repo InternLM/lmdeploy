@@ -179,7 +179,6 @@ class ChatCompletionRequest(BaseModel):
     repetition_penalty: float | None = 1.0
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
-    session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
@@ -378,7 +377,6 @@ class CompletionRequest(BaseModel):
     repetition_penalty: float | None = 1.0
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
-    session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
@@ -495,15 +493,6 @@ class EncodeResponse(BaseModel):
     length: int | list[int]
 
 
-class GenerateResponse(BaseModel):
-    """Generate response."""
-    text: str
-    tokens: int
-    input_tokens: int
-    history_tokens: int
-    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
-
-
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
     serialized_named_tensors: str | list[str] | dict
@@ -540,7 +529,6 @@ class DestroyWeightsUpdateGroupRequest(BaseModel):
 
 # /generate input
 class GenerateReqInput(BaseModel):
-    session_id: int | None = -1
     prompt: str | None = None
     input_ids: list[int] | None = None
     image_data: ImageDataFormat | None = None
@@ -594,5 +582,3 @@ class AbortRequest(BaseModel):
     # The finished reason data
     finished_reason: dict[str, Any] | None = None
     abort_message: str | None = None
-    # The session ID to abort. If `abort_all` is True, this field is ignored.
-    session_id: int | None = -1

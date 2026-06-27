@@ -208,11 +208,6 @@ struct Qwen3_5Vit::Impl {
     {
         const auto& [r, s] = std::tie(*c.req, *c.seq);
         if (r.mm_inputs) {
-            if ((not r.session.start_flag) or (not r.session.end_flag)) {
-                // only support non-interactive inference
-                return Request::kInvalid;
-            }
-
             const auto mm_inputs = std::dynamic_pointer_cast<multimodal::Qwen3_5VitInput>(r.mm_inputs);
             if (!mm_inputs) {
                 return Request::kInvalid;
