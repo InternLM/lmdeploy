@@ -24,6 +24,35 @@ logger = get_logger('lmdeploy')
 
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
 
+LEGACY_REASONING_PARSER_NAMES = ('qwen-qwq', 'intern-s1', 'deepseek-r1')
+
+
+def validate_parser_names(
+    reasoning_parser_name: str | None = None,
+    tool_parser_name: str | None = None,
+    *,
+    warn_legacy: bool = True,
+) -> tuple[str | None, str | None]:
+    """Validate parser registry names before expensive engine startup."""
+    from .reasoning_parser import ReasoningParserManager
+    from .tool_parser import ToolParserManager
+
+    if reasoning_parser_name in LEGACY_REASONING_PARSER_NAMES:
+        if warn_legacy:
+            logger.warning(f'The reasoning parser {reasoning_parser_name} is deprecated, '
+                           'please use the default reasoning parser instead.')
+        reasoning_parser_name = 'default'
+
+    if reasoning_parser_name is not None and reasoning_parser_name not in ReasoningParserManager.module_dict:
+        raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
+                         f'{ReasoningParserManager.module_dict.keys()}')
+
+    if tool_parser_name is not None and tool_parser_name not in ToolParserManager.module_dict:
+        raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
+                         f'{ToolParserManager.module_dict.keys()}')
+
+    return reasoning_parser_name, tool_parser_name
+
 
 def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
     """Return dict-like tool arguments for request message normalization.
@@ -221,27 +250,15 @@ class BaseResponseParser(ResponseParser):
         from .reasoning_parser import ReasoningParserManager
         from .tool_parser import ToolParserManager
 
-        legacy_reasoning_parser_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
-        if reasoning_parser_name in legacy_reasoning_parser_names:
-            logger.warning(f'The reasoning parser {reasoning_parser_name} is deprecated, '
-                           'please use the default reasoning parser instead.')
-            reasoning_parser_name = 'default'
+        reasoning_parser_name, tool_parser_name = validate_parser_names(reasoning_parser_name, tool_parser_name)
 
         if reasoning_parser_name is not None:
-            if reasoning_parser_name in ReasoningParserManager.module_dict:
-                cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
-                if tokenizer is not None:
-                    cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
-            else:
-                raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
-                                 f'{ReasoningParserManager.module_dict.keys()}')
+            cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
+            if tokenizer is not None:
+                cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
 
         if tool_parser_name is not None:
-            if tool_parser_name in ToolParserManager.module_dict:
-                cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
-            else:
-                raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
-                                 f'{ToolParserManager.module_dict.keys()}')
+            cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
 
     @classmethod
     def chat_template_kwargs_from_request(cls, request: ChatCompletionRequest) -> dict:
