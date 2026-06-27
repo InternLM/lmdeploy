@@ -472,6 +472,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
             padding_batch_size = max(dp_meta.dp_batches)
             new_dpmeta = DPMeta.build(inputs.input_ids.numel(), dp_meta.dp_batches)
+            new_dpmeta.dp_is_decoding = dp_meta.dp_is_decoding
             return new_dpmeta, padding_batch_size
 
         def _update_dp_model_inputs(inputs: ModelInputs, dp_meta: DPMeta, padding_batch_size: int | None):
