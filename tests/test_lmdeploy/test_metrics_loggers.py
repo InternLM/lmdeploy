@@ -2,8 +2,8 @@
 
 import pytest
 
-from lmdeploy.metrics.loggers import PrometheusStatLogger
-from lmdeploy.metrics.stats import SpeculativeDecodingStats
+from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
+from lmdeploy.metrics.stats import IterationStats, SchedulerStats, SpeculativeDecodingStats
 
 prometheus_client = pytest.importorskip('prometheus_client')
 
@@ -42,3 +42,32 @@ def test_prometheus_stat_logger_records_specdecode_metrics():
     position_labels = labels | {'position': '2'}
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_per_pos_total', position_labels) == 0
     assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 0
+
+
+def _iteration_stats(prompt_tokens: int) -> IterationStats:
+    stats = IterationStats()
+    stats.prompt_tokens = prompt_tokens
+    return stats
+
+
+def test_logging_stat_logger_reports_interval_prefix_cache_hit_rate(capsys):
+    logger = LoggingStatLogger(dp_rank=0)
+
+    # cumulative engine-side counts; the log line must report the interval hit
+    # rate over the last logging window, not the lifetime average.
+    logger.record_iteration(_iteration_stats(100))
+    logger.record_schedule(SchedulerStats(num_prefix_cache_query_tokens=100, num_prefix_cache_hit_tokens=30))
+    logger.log()
+    assert 'Prefix cache hit rate: 30.0%' in capsys.readouterr().out
+
+    # interval (80-30)/(250-100) = 50/150 = 33.3%, not the lifetime 80/250 = 32%
+    logger.record_iteration(_iteration_stats(150))
+    logger.record_schedule(SchedulerStats(num_prefix_cache_query_tokens=250, num_prefix_cache_hit_tokens=80))
+    logger.log()
+    assert 'Prefix cache hit rate: 33.3%' in capsys.readouterr().out
+
+    # no new queries in the interval -> the line is omitted, no div-by-zero
+    logger.record_iteration(_iteration_stats(10))
+    logger.record_schedule(SchedulerStats(num_prefix_cache_query_tokens=250, num_prefix_cache_hit_tokens=80))
+    logger.log()
+    assert 'Prefix cache hit rate' not in capsys.readouterr().out
