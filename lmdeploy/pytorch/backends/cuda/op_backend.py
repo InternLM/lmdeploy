@@ -49,6 +49,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.SiluAndMul:
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
+        elif layer_type == OpType.SoftmaxTopK:
+            from .moe import CudaSoftmaxTopKBuilder
+            return CudaSoftmaxTopKBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import AwqLinearW4A16Builder
             return AwqLinearW4A16Builder
@@ -118,6 +121,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig, decoding_query_len: int):
         """Update meta for flashmla."""
         import flash_mla
+
         num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
         num_attention_heads *= decoding_query_len
         is_fp8_kvcache = model_config.use_mla_fp8_cache
@@ -140,9 +144,11 @@ class CudaOpsBackend(DefaultOpsBackend):
         from lmdeploy.pytorch.models.utils.cudagraph import _get_meta_flashattn
 
         from .attention import _normalize_sliding_window
+        from .batch_invariant import get_fa3_decode_num_splits
         batch_size = attn_metadata.q_seqlens.size(0)
         max_seqlen_q = step_context.input_ids.size(1) // batch_size
         window_size = _normalize_sliding_window(step_context.model_config.sliding_window)
+        num_splits = get_fa3_decode_num_splits()
         # FA3's mha_fwd internally computes seqlen_k as
         # page_table.size(1) * page_size when cu_seqlens_k is None
         # (paged KV without varlen_k). get_scheduler_metadata must use
@@ -160,10 +166,18 @@ class CudaOpsBackend(DefaultOpsBackend):
             qkv_dtype=step_context.model_config.dtype,
             page_size=step_context.model_config.block_size,
             window_size=window_size,
+            num_splits=num_splits,
         )
         attn_metadata.scheduler_metadata = scheduler_metadata
         attn_metadata.max_kv_seqlen = max_seqlen_k
         return attn_metadata
+
+    @staticmethod
+    def _should_build_fa3_metadata(model_config: ModelConfig):
+        """Return whether FA3 metadata should be built."""
+        from .attention import use_fa3
+
+        return bool(use_fa3 and not model_config.use_flash_mla and model_config.head_dim <= 256)
 
     @classmethod
     def update_chunked_gated_delta_rule_meta(cls, attn_metadata, step_context):
@@ -204,7 +218,8 @@ class CudaOpsBackend(DefaultOpsBackend):
         kv_start_loc = None
         kv_flatten_size = None
         use_flash_mla = step_context.model_config.use_flash_mla
-        use_flash_attn3_decoding = step_context.model_config.model_paradigm == 'ar_spec'
+        use_flash_attn3_decoding = cls._should_build_fa3_metadata(step_context.model_config)
+        requires_flash_attn3_decoding = step_context.model_config.model_paradigm == 'ar_spec' and not use_flash_mla
 
         # pad and cumsum requires 4 kernels, so we fuse seqlens cumsum into one kernel
         seqlens = torch.stack([q_seqlens, kv_seqlens], dim=0)
@@ -235,17 +250,12 @@ class CudaOpsBackend(DefaultOpsBackend):
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
                 cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
             elif use_flash_attn3_decoding:
-                from .attention import use_fa3
-                if not use_fa3:
-                    sm = torch.cuda.get_device_capability()
-                    cuda_ver = torch.version.cuda or 'N/A'
-                    raise RuntimeError(
-                        f'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
-                        f'which needs SM80+ (Ampere and above) with CUDA >= 12.3 and '
-                        f'flash-attn installed. Detected: SM{sm[0]}.{sm[1]}, CUDA {cuda_ver}. '
-                        f'Please ensure your GPU meets SM80+, CUDA >= 12.3, and flash-attn '
-                        f'is installed, or disable speculative decoding.')
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
+            elif requires_flash_attn3_decoding:
+                raise RuntimeError(
+                    'Speculative decoding on CUDA requires FA3 attention. Please ensure FlashAttention-3 is '
+                    'installed, the GPU supports SM80+, CUDA >= 12.3 is available, head_dim <= 256, and the '
+                    'attention configuration supports FA3, or disable speculative decoding.')
 
         # update chunk gated delta indices
         is_gated_delta = step_context.model_config.is_gated_delta
@@ -282,3 +292,9 @@ class CudaOpsBackend(DefaultOpsBackend):
     def support_ray():
         """Support ray."""
         return True
+
+    @staticmethod
+    def apply_backend_policy(backend_config: BackendConfig, validate_device: bool = False):
+        """Apply CUDA backend-specific runtime policy."""
+        from .batch_invariant import apply_batch_invariant_policy
+        apply_batch_invariant_policy(backend_config, validate_device=validate_device)

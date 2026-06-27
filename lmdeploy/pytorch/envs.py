@@ -111,6 +111,9 @@ with set_envs():
     # executor
     executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)
 
+    # backend policy
+    enable_batch_invariant = env_to_bool('LMDEPLOY_ENABLE_BATCH_INVARIANT', False)
+
     # torch profiler
     torch_profile_cpu = env_to_bool('LMDEPLOY_PROFILE_CPU', False)
     torch_profile_cuda = env_to_bool('LMDEPLOY_PROFILE_CUDA', False)

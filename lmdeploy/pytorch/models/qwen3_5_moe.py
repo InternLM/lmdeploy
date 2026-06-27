@@ -10,7 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import RMSNorm
-from lmdeploy.pytorch.nn.moe import build_fused_moe
+from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .interns1_pro_time_series import InternS1ProTimeSeriesModel
@@ -28,6 +28,8 @@ from .qwen3_5 import (
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
 
+_BATCH_INVARIANT_SHARED_EXPERT_GATE_OUT_FEATURES = 8
+
 
 class Qwen3_5MoeTopKRouter(nn.Module):
 
@@ -37,16 +39,48 @@ class Qwen3_5MoeTopKRouter(nn.Module):
         self.num_experts = config.num_experts
         self.hidden_dim = config.hidden_size
         self.weight = nn.Parameter(torch.zeros(self.num_experts, self.hidden_dim, dtype=dtype, device=device))
+        self.softmax_topk = SoftmaxTopK(self.top_k)
 
     def forward(self, hidden_states):
         hidden_states = hidden_states.reshape(-1, self.hidden_dim)
         router_logits = F.linear(hidden_states, self.weight)  # (seq_len, num_experts)
-        router_logits = torch.nn.functional.softmax(router_logits, dtype=torch.float, dim=-1)
-        router_top_value, router_indices = torch.topk(router_logits, self.top_k, dim=-1)  # (seq_len, top_k)
+        router_top_value, router_indices = self.softmax_topk(router_logits)
         router_top_value /= router_top_value.sum(dim=-1, keepdim=True)
         router_top_value = router_top_value.to(router_logits.dtype)
         router_scores = router_top_value
         return router_logits, router_scores, router_indices
+
+
+class Qwen3_5MoeSharedExpertGate(nn.Module):
+    """Shared expert gate with a padded batch-invariant CUDA path."""
+
+    def __init__(self,
+                 hidden_size: int,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None):
+        super().__init__()
+        self.enable_batch_invariant = get_build_model_context().enable_batch_invariant
+        out_features = 1
+        if self.enable_batch_invariant:
+            out_features = _BATCH_INVARIANT_SHARED_EXPERT_GATE_OUT_FEATURES
+        self.weight = nn.Parameter(torch.empty(out_features, hidden_size, dtype=dtype, device=device))
+        if self.enable_batch_invariant:
+            self.weight.weight_loader = self.weight_loader
+
+    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
+        """Load the scalar checkpoint gate into row 0 of the padded gate."""
+        assert loaded_weight.size(0) == 1
+        assert loaded_weight.size(1) == param.size(1)
+        assert param.size(0) >= loaded_weight.size(0)
+        param.data.zero_()
+        param.data[:loaded_weight.size(0)].copy_(loaded_weight)
+
+    def forward(self, hidden_states: torch.Tensor):
+        """Forward."""
+        gate = F.linear(hidden_states, self.weight)
+        if self.enable_batch_invariant:
+            gate = gate[..., :1]
+        return gate.sigmoid()
 
 
 class Qwen3_5MoeSparseMoeBlock(nn.Module):
@@ -94,7 +128,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             all_reduce=False,
             prefix=add_prefix('shared_expert', prefix),
         )
-        self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False, device=device, dtype=dtype)
+        self.shared_expert_gate = Qwen3_5MoeSharedExpertGate(config.hidden_size, device=device, dtype=dtype)
 
         # get all reduce
         dist_ctx = get_dist_manager().current_context()
@@ -119,7 +153,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
         )
 
         shared_states = self.shared_expert(hidden_states)
-        shared_states = self.shared_expert_gate(hidden_states).sigmoid() * shared_states
+        shared_states = self.shared_expert_gate(hidden_states) * shared_states
 
         out_states += shared_states
         out_states = out_states.reshape(batch_size, sequence_length, -1)
