@@ -50,9 +50,7 @@ std::vector<int> CacheBlockPool::SortedIndices() const
             idxs.push_back(i);
         }
     }
-    std::sort(idxs.begin(), idxs.end(), [this](int i, int j) {
-        return blocks_[i].timestamp < blocks_[j].timestamp;
-    });
+    std::sort(idxs.begin(), idxs.end(), [this](int i, int j) { return blocks_[i].timestamp < blocks_[j].timestamp; });
     return idxs;
 }
 

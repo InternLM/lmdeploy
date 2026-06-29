@@ -8,8 +8,8 @@
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 // #include "dbg.h"

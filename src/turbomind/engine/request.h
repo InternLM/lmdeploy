@@ -48,7 +48,8 @@ struct GenerationConfig {
 
     bool return_ppl = false;
 
-    enum OutType {
+    enum OutType
+    {
         kNone       = 0,
         kAll        = 1,
         kGeneration = 2
@@ -90,7 +91,7 @@ struct Request {
     uint64_t id;         // sequence id
     uint64_t unique_id;  // monotonic increasing
 
-    int step;            // KV/output offset (replaces SessionParam session; start/end/kill removed)
+    int step;  // KV/output offset (replaces SessionParam session; start/end/kill removed)
 
     GenerationConfig gen_cfg;
 
@@ -115,15 +116,16 @@ struct Request {
 
     int ec = 0;  // set when disabling conflicting requests
 
-    enum {
+    enum
+    {
         kOk            = 0,
-        kInvalid       = 1,   // Malformed request (e.g. invalid input embeddings) or routing failure
-        kConflict      = 2,   // Concurrent requests to the same sequence id
-        kFail          = 5,   // Internal error during inference
-        kTooLong       = 6,   // history + prompt > session_len
+        kInvalid       = 1,  // Malformed request (e.g. invalid input embeddings) or routing failure
+        kConflict      = 2,  // Concurrent requests to the same sequence id
+        kFail          = 5,  // Internal error during inference
+        kTooLong       = 6,  // history + prompt > session_len
         kFinish        = 7,
         kCancel        = 8,
-        kInconsistency = 9,   // Prefix caching incompatible with nonzero step or all-token logits/hidden-state output
+        kInconsistency = 9,  // Prefix caching incompatible with nonzero step or all-token logits/hidden-state output
         kNoQueue       = 10,
         kOutOfMemory   = 11,
     };
@@ -149,7 +151,8 @@ struct CacheCopy {
 // What set this pass's resume_len. resume_len is a single number, produced by
 // whichever mechanism reached the highest skip position in Scheduler::Resume().
 // Observability-only; the scheduler stays category-agnostic.
-enum class ResumeSource {
+enum class ResumeSource
+{
     kNone = 0,    // resume_len == 0, nothing skipped
     kPrefix,      // contiguous valid prefix-category cache (no checkpoint category)
     kFrontier,    // request's own checkpoint frontier (no restore copy)
@@ -196,7 +199,7 @@ struct Sequence {
     int generation_token_ids_row    = -1;  // owned by Generation, allocated lazily
     int generation_random_state_row = -1;  // owned by Generation, allocated lazily
 
-    int inflight_input_len = 0;   // submitted input tokens not yet reflected into filled_len
+    int inflight_input_len  = 0;  // submitted input tokens not yet reflected into filled_len
     int inflight_new_tokens = 0;  // submitted generated tokens not yet reflected into seq_len
 
     float rope_base = 0.f;
@@ -209,7 +212,8 @@ struct Sequence {
     std::vector<BlockHandle> block_ids;  // logical (each holds one request ref)
 
     std::vector<int> alloc_cache_ids;     // cache ids needing allocation this schedule pass
-    std::vector<int> involved_cache_ids;  // cache ids stamped for eviction protection (= required alloc set); persistent across Continue, rebuilt by Resume
+    std::vector<int> involved_cache_ids;  // cache ids stamped for eviction protection (= required alloc set);
+                                          // persistent across Continue, rebuilt by Resume
 
     std::vector<CacheCopy> restore_copies;  // run before BatchOp::kPrepare
     std::vector<CacheCopy> publish_copies;  // run after BatchOp::kUnprep
@@ -224,14 +228,16 @@ struct Sequence {
     bool         resuming       = false;                // transient: planned by Resume() this pass
     ResumeSource resume_source  = ResumeSource::kNone;  // transient: mechanism that set resume_len
 
-    int frontier_cache_id = 0;  // checkpoint working state for the next forward
-    int frontier_pos      = 0;  // sequence position the frontier corresponds to
-    int publish_cache_id  = 0;  // reserved slot for the next checkpoint publication
-    LogicalBlock* publish_target = nullptr;  // logical block selected for publication this pass
-    int publish_end       = 0;  // sequence position of the pending publication
-    int last_ckpt_pos     = 0;  // end of the last published checkpoint
-    bool prompt_boundary_node = false;  // a reusable prompt-boundary partial node exists; when the boundary policy admits the publish, the producer clamps its forward to prompt_len-1 to populate the node's KV (and publish a checkpoint when the model is recurrent)
-    int  prompt_boundary_publish = -1;  // cached CacheBoundaryPolicy decision: -1 undecided, 0 no, 1 yes
+    int           frontier_cache_id = 0;        // checkpoint working state for the next forward
+    int           frontier_pos      = 0;        // sequence position the frontier corresponds to
+    int           publish_cache_id  = 0;        // reserved slot for the next checkpoint publication
+    LogicalBlock* publish_target    = nullptr;  // logical block selected for publication this pass
+    int           publish_end       = 0;        // sequence position of the pending publication
+    int           last_ckpt_pos     = 0;        // end of the last published checkpoint
+    bool prompt_boundary_node = false;  // a reusable prompt-boundary partial node exists; when the boundary policy
+                                        // admits the publish, the producer clamps its forward to prompt_len-1 to
+                                        // populate the node's KV (and publish a checkpoint when the model is recurrent)
+    int prompt_boundary_publish = -1;   // cached CacheBoundaryPolicy decision: -1 undecided, 0 no, 1 yes
 
     std::vector<int> tokens;
 
@@ -339,8 +345,8 @@ public:
     template<class T, class... Args>
     T& Add(Args&&... args)
     {
-        auto resource = std::make_unique<T>(std::forward<Args>(args)...);
-        auto& ref     = *resource;
+        auto  resource = std::make_unique<T>(std::forward<Args>(args)...);
+        auto& ref      = *resource;
         resources_.push_back(std::move(resource));
         return ref;
     }

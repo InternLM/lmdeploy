@@ -320,7 +320,7 @@ void invokeProcessKV_v2(char**                 blocks,
                                      int64_t                stride_h,                                                  \
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
-                                     int                    cache_block_offset,                                                  \
+                                     int                    cache_block_offset,                                        \
                                      int                    cp_rank,                                                   \
                                      FastDivmod             cp_size,                                                   \
                                      int                    max_q_len,                                                 \
@@ -565,7 +565,7 @@ void invokeFlattenKV_v2(T*                     k,
                                      int64_t                stride_h,                                                  \
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
-                                     int                    cache_block_offset,                                                  \
+                                     int                    cache_block_offset,                                        \
                                      int                    cp_rank,                                                   \
                                      FastDivmod             cp_size,                                                   \
                                      int                    max_seq_len,                                               \

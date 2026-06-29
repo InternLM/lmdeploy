@@ -111,8 +111,14 @@ struct MemoryState {
         }
     }
 
-    char* address_of(int part_slab, SlabSlot s) const { return slabs_[part_slab].AddressOf(s); }
-    void  set_owner(int part_slab, SlabSlot s, object_alloc_t o) { slabs_[part_slab].set_owner(s, o); }
+    char* address_of(int part_slab, SlabSlot s) const
+    {
+        return slabs_[part_slab].AddressOf(s);
+    }
+    void set_owner(int part_slab, SlabSlot s, object_alloc_t o)
+    {
+        slabs_[part_slab].set_owner(s, o);
+    }
 };
 
 // ---- ObjectAllocator::Impl ----
@@ -126,7 +132,10 @@ struct ObjectAllocator::Impl {
 
     explicit Impl(Buffer memory): space_{std::move(memory)} {}
 
-    static size_t align_up(size_t size, size_t align) { return (size + align - 1) / align * align; }
+    static size_t align_up(size_t size, size_t align)
+    {
+        return (size + align - 1) / align * align;
+    }
 
     int slab_for_aligned_size(size_t aligned)
     {
@@ -147,9 +156,9 @@ struct ObjectAllocator::Impl {
         const int  slab = slab_for_aligned_size(aligned);
         const int  id   = static_cast<int>(objects_.size());
         ObjectSpec spec;
-        spec.members        = {{slab, 1}};
-        spec.total_parts    = 1;
-        spec.part_slab      = {slab};
+        spec.members     = {{slab, 1}};
+        spec.total_parts = 1;
+        spec.part_slab   = {slab};
         objects_.push_back(std::move(spec));
         simple_id_[aligned] = id;
         return id;
@@ -243,7 +252,10 @@ struct ObjectAllocator::Impl {
         }
     }
 
-    int part_count(int index) const { return objects_[index].total_parts; }
+    int part_count(int index) const
+    {
+        return objects_[index].total_parts;
+    }
 
     size_t part_bytes(int index, int part) const
     {
@@ -281,7 +293,7 @@ ObjectAllocator::ObjectAllocator()  = default;
 
 ObjectAllocator::ObjectAllocator(Buffer region): impl_{std::make_unique<Impl>(std::move(region))} {}
 
-ObjectAllocator::ObjectAllocator(ObjectAllocator&&) noexcept            = default;
+ObjectAllocator::ObjectAllocator(ObjectAllocator&&) noexcept = default;
 ObjectAllocator& ObjectAllocator::operator=(ObjectAllocator&&) noexcept = default;
 
 int ObjectAllocator::Register(size_t size, size_t alignment)
@@ -328,15 +340,14 @@ MemoryStats ObjectAllocator::Stats() const
 
 // ---- ScratchAllocator public surface ----
 
-ScratchAllocator::ScratchAllocator(const ObjectAllocator& src):
-    impl_{std::make_unique<Impl>(src.impl_->space_, &src)}
+ScratchAllocator::ScratchAllocator(const ObjectAllocator& src): impl_{std::make_unique<Impl>(src.impl_->space_, &src)}
 {
 }
 
-ScratchAllocator::ScratchAllocator(ScratchAllocator&&) noexcept            = default;
+ScratchAllocator::ScratchAllocator(ScratchAllocator&&) noexcept = default;
 ScratchAllocator& ScratchAllocator::operator=(ScratchAllocator&&) noexcept = default;
-ScratchAllocator::ScratchAllocator()  = default;
-ScratchAllocator::~ScratchAllocator() = default;
+ScratchAllocator::ScratchAllocator()                                       = default;
+ScratchAllocator::~ScratchAllocator()                                      = default;
 
 bool ScratchAllocator::Allocate(int object_id)
 {

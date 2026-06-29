@@ -47,26 +47,26 @@ private:
 
     // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
     struct Data {
-        std::vector<int>      input_lens;
-        int                   batch_size = 0;
+        std::vector<int>                         input_lens;
+        int                                      batch_size = 0;
         std::vector<std::pair<uint8_t*, size_t>> reset_ptrs;  // (frontier base, bytes) to clear
-        Buffer_<int>          q_offsets;
-        Buffer_<int>          k_offsets;
-        Buffer_<bool>         finished;
-        Buffer_<void*>        conv_state_ptrs;
-        Buffer_<void*>        recurrent_state_ptrs;
+        Buffer_<int>                             q_offsets;
+        Buffer_<int>                             k_offsets;
+        Buffer_<bool>                            finished;
+        Buffer_<void*>                           conv_state_ptrs;
+        Buffer_<void*>                           recurrent_state_ptrs;
     };
     std::vector<Data> data_;
 
-    int    layer_num_{};          // == weights.size()
-    int    rec_base_{};           // composite part id of layer 0's recurrent state (== 1)
-    int    layers_per_block_{};   // L_b
-    int    heads_per_block_{};    // H_b
-    int    num_head_groups_{};    // ceil(num_v_heads / H_b)
-    int    num_layer_groups_{};   // ceil(layer_num_ / L_b)
-    int    num_blocks_{};         // num_layer_groups_ * num_head_groups_
-    size_t block_bytes_{};        // one recurrent block's bytes (one composite part)
-    size_t conv_total_bytes_{};   // accumulated conv-state bytes (part 0)
+    int    layer_num_{};         // == weights.size()
+    int    rec_base_{};          // composite part id of layer 0's recurrent state (== 1)
+    int    layers_per_block_{};  // L_b
+    int    heads_per_block_{};   // H_b
+    int    num_head_groups_{};   // ceil(num_v_heads / H_b)
+    int    num_layer_groups_{};  // ceil(layer_num_ / L_b)
+    int    num_blocks_{};        // num_layer_groups_ * num_head_groups_
+    size_t block_bytes_{};       // one recurrent block's bytes (one composite part)
+    size_t conv_total_bytes_{};  // accumulated conv-state bytes (part 0)
 
     std::unordered_map<const DeltaNetWeight*, int> layer_index_;  // weight ptr -> GDN-local layer index
 

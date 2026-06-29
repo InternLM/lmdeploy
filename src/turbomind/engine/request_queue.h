@@ -27,10 +27,7 @@ public:
         cv_.notify_one();
     }
 
-    void pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-             unsigned                               max_infer,
-             bool                                   blocking,
-             bool&                                  abort)
+    void pop(std::vector<std::shared_ptr<Request>>& infer_reqs, unsigned max_infer, bool blocking, bool& abort)
     {
         std::unique_lock lock{mutex_};
 

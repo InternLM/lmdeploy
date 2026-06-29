@@ -3,12 +3,12 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "src/turbomind/engine/block.h"
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
+#include "src/turbomind/engine/block.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -32,9 +32,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                                        const EngineParam&           engine,
                                        const Context&               context,
                                        int                          phases):
-    tp_size_{engine.attn_tp_size},
-    state_dtype_{engine.data_type},
-    linear_{*context.linear}
+    tp_size_{engine.attn_tp_size}, state_dtype_{engine.data_type}, linear_{*context.linear}
 {
     TM_CHECK(!weights.empty());
     layer_num_ = static_cast<int>(weights.size());
@@ -42,27 +40,27 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     const auto [l_state_size, c_state_size] = get_lc_state_size(*weights[0], tp_size_);
 
     const int num_v_heads = weights[0]->num_v_heads / tp_size_;
-    const int cell_elems  = weights[0]->key_head_dim * weights[0]->value_head_dim;  // one (layer, head) state, in elements
-    TM_CHECK_EQ(l_state_size, num_v_heads * cell_elems);  // sanity: get_lc_state_size agrees
+    const int cell_elems =
+        weights[0]->key_head_dim * weights[0]->value_head_dim;  // one (layer, head) state, in elements
+    TM_CHECK_EQ(l_state_size, num_v_heads * cell_elems);        // sanity: get_lc_state_size agrees
 
     // Block unit (L_b layers x H_b v_heads). Unset env => one part per layer,
     // no head-grouping == today's behavior.
     int L_b = 1;
     int H_b = num_v_heads;
     if (const char* e = std::getenv("TM_GDN_BLOCK_CONFIG")) {
-        TM_CHECK_EQ(std::sscanf(e, "%d,%d", &L_b, &H_b), 2)
-            << "expected TM_GDN_BLOCK_CONFIG=l,h (e.g. 4,16)";
+        TM_CHECK_EQ(std::sscanf(e, "%d,%d", &L_b, &H_b), 2) << "expected TM_GDN_BLOCK_CONFIG=l,h (e.g. 4,16)";
     }
     TM_CHECK_GT(L_b, 0);
     TM_CHECK_GT(H_b, 0);
 
-    auto cdiv_i        = [](int a, int b) { return (a + b - 1) / b; };
-    layers_per_block_  = L_b;
-    heads_per_block_   = H_b;
-    num_head_groups_   = cdiv_i(num_v_heads, H_b);  // == 1 when H_b >= num_v_heads
-    num_layer_groups_  = cdiv_i(layer_num_, L_b);   // == layer_num_ when L_b == 1
-    num_blocks_        = num_layer_groups_ * num_head_groups_;
-    block_bytes_       = byte_size(state_dtype_, (size_t)L_b * H_b * cell_elems);
+    auto cdiv_i       = [](int a, int b) { return (a + b - 1) / b; };
+    layers_per_block_ = L_b;
+    heads_per_block_  = H_b;
+    num_head_groups_  = cdiv_i(num_v_heads, H_b);  // == 1 when H_b >= num_v_heads
+    num_layer_groups_ = cdiv_i(layer_num_, L_b);   // == layer_num_ when L_b == 1
+    num_blocks_       = num_layer_groups_ * num_head_groups_;
+    block_bytes_      = byte_size(state_dtype_, (size_t)L_b * H_b * cell_elems);
 
     // recurrent: num_blocks_ uniform parts, base part id == 1
     rec_base_ = registry.checkpoint().Register({{block_bytes_, 1, static_cast<size_t>(num_blocks_)}});
@@ -83,8 +81,13 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     // Logger is fmtlib-style ({} placeholders), matching slab.h's TM_LOG_WARN.
     TM_LOG_INFO("[GDN] block config L_b={} H_b={} -> num_layer_groups={} num_head_groups={} "
                 "num_blocks={} block_bytes={} prefix_object_bytes={} ({})",
-                L_b, H_b, num_layer_groups_, num_head_groups_, num_blocks_,
-                block_bytes_, prefix_bytes,
+                L_b,
+                H_b,
+                num_layer_groups_,
+                num_head_groups_,
+                num_blocks_,
+                block_bytes_,
+                prefix_bytes,
                 (prefix_bytes != 0 && block_bytes_ == prefix_bytes) ? "slab-shared" : "separate-slab-class");
 
     for (int L = 0; L < layer_num_; ++L) {
@@ -96,8 +99,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
 
     // Staging buffers: conv stays [batch]; recurrent becomes a [layer_group][batch][head_group] table.
     conv_state_ptrs_buf_      = {engine.max_batch_size, kCPUpinned};
-    recurrent_state_ptrs_buf_ =
-        {(ssize_t)num_layer_groups_ * engine.max_batch_size * num_head_groups_, kCPUpinned};
+    recurrent_state_ptrs_buf_ = {(ssize_t)num_layer_groups_ * engine.max_batch_size * num_head_groups_, kCPUpinned};
 
     for (int i = 0; i < phases; ++i) {
         data_.emplace_back();
@@ -282,9 +284,9 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // Requests are sorted by input_len: decode (seq_len==1) first, prefill last.
         // Find the split point and dispatch each half to its optimal kernel.
         // When both are present, run them concurrently on separate streams.
-        const int lg        = layer_index_.at(p.weights) / layers_per_block_;  // layer-group (block row)
-        auto      layer_rec = pd.recurrent_state_ptrs.slice(lg * pd.batch_size * num_head_groups_,
-                                                            pd.batch_size * num_head_groups_);
+        const int lg = layer_index_.at(p.weights) / layers_per_block_;  // layer-group (block row)
+        auto      layer_rec =
+            pd.recurrent_state_ptrs.slice(lg * pd.batch_size * num_head_groups_, pd.batch_size * num_head_groups_);
         {
             int decode_count = 0;
             for (int i = 0; i < pd.batch_size; ++i) {

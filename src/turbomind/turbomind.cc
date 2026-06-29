@@ -295,9 +295,10 @@ void TurboMind::Impl::CreateEngine(int index)
 
     Buffer cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, core::Context::device_alloc()};
     ObjectAllocator alloc{std::move(cache_region)};
-    CacheRegistry cache_registry;
-    cache_registry.set_checkpoint_min_interval(
-        param.linear_prefix_cache_min_interval > 0 ? param.linear_prefix_cache_min_interval : param.cache_block_seq_len);
+    CacheRegistry   cache_registry;
+    cache_registry.set_checkpoint_min_interval(param.linear_prefix_cache_min_interval > 0 ?
+                                                   param.linear_prefix_cache_min_interval :
+                                                   param.cache_block_seq_len);
 
     // create model
     LanguageModel model{cache_registry, param, ctx, *weights_[index]->text_model_ptr(), phases_};

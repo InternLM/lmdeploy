@@ -1,10 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/memory/common.h"
 #include "src/turbomind/memory/page.h"
 #include "src/turbomind/memory/stats.h"
-#include "src/turbomind/core/logger.h"
 
 #include <algorithm>
 #include <array>
@@ -47,23 +47,53 @@ public:
     void deallocate(const SlabSlot* objects, size_t count)
     {
         for (size_t i = 0; i < count; ++i) {
-            const int slot_id      = objects[i].slot_id;
-            slot_owner_[slot_id]   = {};  // clear reverse link
+            const int slot_id    = objects[i].slot_id;
+            slot_owner_[slot_id] = {};  // clear reverse link
             free_list_.push_back(slot_id);
         }
     }
 
-    void           set_owner(int slot_id, object_alloc_t o) noexcept { slot_owner_[slot_id] = o; }
-    object_alloc_t owner(int slot_id) const noexcept { return slot_owner_[slot_id]; }
+    void set_owner(int slot_id, object_alloc_t o) noexcept
+    {
+        slot_owner_[slot_id] = o;
+    }
+    object_alloc_t owner(int slot_id) const noexcept
+    {
+        return slot_owner_[slot_id];
+    }
 
-    int slab_id() const noexcept { return slab_id_; }
-    bool is_full() const noexcept { return free_list_.empty(); }
-    bool is_empty() const noexcept { return free_list_.size() == static_cast<size_t>(object_count_); }
-    bool is_partial() const noexcept { return !is_full() && !is_empty(); }
-    size_t n_free() const noexcept { return free_list_.size(); }
-    char* base() const noexcept { return base_; }
-    int object_size() const noexcept { return object_size_; }
-    int object_count() const noexcept { return object_count_; }
+    int slab_id() const noexcept
+    {
+        return slab_id_;
+    }
+    bool is_full() const noexcept
+    {
+        return free_list_.empty();
+    }
+    bool is_empty() const noexcept
+    {
+        return free_list_.size() == static_cast<size_t>(object_count_);
+    }
+    bool is_partial() const noexcept
+    {
+        return !is_full() && !is_empty();
+    }
+    size_t n_free() const noexcept
+    {
+        return free_list_.size();
+    }
+    char* base() const noexcept
+    {
+        return base_;
+    }
+    int object_size() const noexcept
+    {
+        return object_size_;
+    }
+    int object_count() const noexcept
+    {
+        return object_count_;
+    }
 
     // Intrusive list links -- directly read/written by SlabAllocator's list helpers.
     int prev_id_ = -1;
@@ -102,7 +132,8 @@ public:
         slab_size_    = size;
         object_count_ = size / object_size;
 
-        TM_LOG_WARN("slab_size {}, object_size {}, object_count {}, ratio {}", slab_size_, object_size_, object_count_, ratio);
+        TM_LOG_WARN(
+            "slab_size {}, object_size {}, object_count {}, ratio {}", slab_size_, object_size_, object_count_, ratio);
 
         slabs_.resize(kFirstSlabId);  // three default-constructed sentinel Slabs
         list_init(kFull);
@@ -181,8 +212,14 @@ public:
         return slab.base() + static_cast<size_t>(h.slot_id) * slab.object_size();
     }
 
-    void           set_owner(SlabSlot h, object_alloc_t o) noexcept { slabs_[h.slab_id].set_owner(h.slot_id, o); }
-    object_alloc_t owner(SlabSlot h) const noexcept { return slabs_[h.slab_id].owner(h.slot_id); }
+    void set_owner(SlabSlot h, object_alloc_t o) noexcept
+    {
+        slabs_[h.slab_id].set_owner(h.slot_id, o);
+    }
+    object_alloc_t owner(SlabSlot h) const noexcept
+    {
+        return slabs_[h.slab_id].owner(h.slot_id);
+    }
 
     size_t object_size() const noexcept
     {
@@ -303,9 +340,9 @@ private:
     size_t slab_size_       = 0;
     size_t max_empty_slabs_ = 0;
 
-    std::vector<Slab>  slabs_;               // [0..2] sentinels; [3..] real slabs (some may be ghosts)
-    std::vector<int>   free_ids_;            // recycled real slab_ids (always >= 3)
-    std::array<int, 3> sizes_{};             // sizes_[kFull|kPartial|kEmpty]
+    std::vector<Slab>  slabs_;     // [0..2] sentinels; [3..] real slabs (some may be ghosts)
+    std::vector<int>   free_ids_;  // recycled real slab_ids (always >= 3)
+    std::array<int, 3> sizes_{};   // sizes_[kFull|kPartial|kEmpty]
 };
 
 }  // namespace turbomind

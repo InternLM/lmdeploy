@@ -60,8 +60,8 @@ struct SamplingData {
 
     Buffer_<int> kept_buf;  // kept sample
 
-    int  generation_size = 0;
-    bool output_logprobs = 0;
+    int                        generation_size = 0;
+    bool                       output_logprobs = 0;
     std::vector<LogprobOutput> logprob_outputs;
 
     Buffer_<float> sampled_logprobs;
@@ -161,15 +161,15 @@ void Sampling::Forward(int phase, TensorMap& args)
     // sample
     {
         SamplingParams params{};
-        params.logits          = logits.data();
-        params.stride          = vocab_size_padded_;
-        params.indices         = indices.data();
-        params.kept            = d.kept_buf.data();
+        params.logits              = logits.data();
+        params.stride              = vocab_size_padded_;
+        params.indices             = indices.data();
+        params.kept                = d.kept_buf.data();
         params.curandstate         = (curandState_t*)args.at("curand_state").raw_data();
         params.curandstate_indices = args.at("curand_state_indices").data<int>();
         params.batch_size          = bsz;
-        params.output_ids      = args.at("output_ids").data<int>();  // (B, 1)
-        params.sequence_length = args.at("sequence_length").data<int>();
+        params.output_ids          = args.at("output_ids").data<int>();  // (B, 1)
+        params.sequence_length     = args.at("sequence_length").data<int>();
 
         if (d.output_logprobs) {
             params.sampled_logprobs = d.sampled_logprobs.data();
@@ -219,8 +219,8 @@ void Sampling::Setup(int phase, TensorMap& env)
     const int bsz = d.generation_size;
     if (bsz == 0) {
         d.max_topk = d.min_topk = 0;
-        d.min_topp = 0.f;
-        d.max_minp = 0.f;
+        d.min_topp              = 0.f;
+        d.max_minp              = 0.f;
         return;
     }
 

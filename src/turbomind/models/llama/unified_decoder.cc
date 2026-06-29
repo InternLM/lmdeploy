@@ -35,8 +35,11 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-UnifiedDecoder::UnifiedDecoder(
-    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, int phases, const ModelWeight& model_weight):
+UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
+                               const EngineParam& engine,
+                               const Context&     ctx,
+                               int                phases,
+                               const ModelWeight& model_weight):
     layer_num_(model_weight.num_layer),
     hidden_units_(model_weight.hidden_units),
     attn_tp_size_(engine.attn_tp_size),

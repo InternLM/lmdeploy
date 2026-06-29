@@ -123,10 +123,9 @@ class TestBackendInference:
     def test_stream_infer_with_session(self, pipe, backend):
         """Multi-turn interactive session.
 
-        PyTorch supports stateful multi-turn inference. TurboMind is
-        stateless-only and rejects any request that is not
-        (sequence_start and sequence_end) with ResponseType.NOT_SUPPORTED,
-        which surfaces as an error string in the response text.
+        PyTorch supports stateful multi-turn inference. TurboMind is stateless-only and rejects any request that is not
+        (sequence_start and sequence_end) with ResponseType.NOT_SUPPORTED, which surfaces as an error string in the
+        response text.
         """
         session = pipe.session()
 

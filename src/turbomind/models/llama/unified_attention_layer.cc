@@ -286,7 +286,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     // const auto& rc  = env.at("batch").data<BatchData*>()[0]->rc;  // active requests
     Buffer_<Sequence*> rc = env.at("requests").buffer();
 
-    const int   bsz = rc.size();
+    const int bsz = rc.size();
 
     auto& d    = *data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];

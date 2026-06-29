@@ -5,23 +5,21 @@
 
 namespace turbomind {
 
-AutoCacheBoundaryPolicy::AutoCacheBoundaryPolicy(int min_interval,
-                                                 bool prompt_boundary,
-                                                 bool generation_boundary):
+AutoCacheBoundaryPolicy::AutoCacheBoundaryPolicy(int min_interval, bool prompt_boundary, bool generation_boundary):
     threshold_{min_interval > 0 ? min_interval / 2 : 0},
     prompt_boundary_{prompt_boundary},
-    generation_boundary_{generation_boundary} {}
+    generation_boundary_{generation_boundary}
+{
+}
 
 bool AutoCacheBoundaryPolicy::PublishPromptBoundary(const Sequence& s) const
 {
-    return prompt_boundary_ && threshold_ > 0
-           && (s.prompt_len - 1) - s.last_ckpt_pos >= threshold_;
+    return prompt_boundary_ && threshold_ > 0 && (s.prompt_len - 1) - s.last_ckpt_pos >= threshold_;
 }
 
 bool AutoCacheBoundaryPolicy::PublishGenerationBoundary(const Sequence& s) const
 {
-    return generation_boundary_ && threshold_ > 0
-           && s.filled_len - s.last_ckpt_pos >= threshold_;
+    return generation_boundary_ && threshold_ > 0 && s.filled_len - s.last_ckpt_pos >= threshold_;
 }
 
 std::unique_ptr<CacheBoundaryPolicy> CreateCacheBoundaryPolicy(const EngineConfig& cfg)
@@ -29,14 +27,12 @@ std::unique_ptr<CacheBoundaryPolicy> CreateCacheBoundaryPolicy(const EngineConfi
     const std::string& name = cfg.cache_boundary_policy;
 
     if (name.empty() || name == "default") {
-        return std::make_unique<DefaultCacheBoundaryPolicy>(cfg.cache_prompt_boundary,
-                                                            cfg.cache_generation_boundary);
+        return std::make_unique<DefaultCacheBoundaryPolicy>(cfg.cache_prompt_boundary, cfg.cache_generation_boundary);
     }
 
     if (name == "auto") {
-        return std::make_unique<AutoCacheBoundaryPolicy>(cfg.linear_prefix_cache_min_interval,
-                                                         cfg.cache_prompt_boundary,
-                                                         cfg.cache_generation_boundary);
+        return std::make_unique<AutoCacheBoundaryPolicy>(
+            cfg.linear_prefix_cache_min_interval, cfg.cache_prompt_boundary, cfg.cache_generation_boundary);
     }
 
     TM_CHECK(false) << "unknown cache_boundary_policy: " << name;

@@ -32,7 +32,7 @@ struct AlignedRegion {
     {
         std::free(ptr_);
     }
-    AlignedRegion(const AlignedRegion&)            = delete;
+    AlignedRegion(const AlignedRegion&) = delete;
     AlignedRegion& operator=(const AlignedRegion&) = delete;
 
     void* data() const
@@ -315,7 +315,7 @@ TEST_CASE("SlabAllocator min_size < object_size", "[memory][slab]")
                        /*max_empty_slabs=*/2};
 
     SlabSlot out[1] = {};
-    int              n      = slab.allocate(out, 1, pages);
+    int      n      = slab.allocate(out, 1, pages);
     REQUIRE(n == 1);
     char* addr = slab.AddressOf(out[0]);
     REQUIRE(addr != nullptr);
@@ -368,9 +368,9 @@ TEST_CASE("SlabAllocator empty-slab reclamation", "[memory][slab]")
                        /*threshold=*/0.0f,
                        /*max_empty_slabs=*/0};
 
-    constexpr int                 kCount = 64 * 3 + 5;
+    constexpr int         kCount = 64 * 3 + 5;
     std::vector<SlabSlot> outs(kCount);
-    int                           got = slab.allocate(outs.data(), kCount, pages);
+    int                   got = slab.allocate(outs.data(), kCount, pages);
     REQUIRE(got == kCount);
 
     // All addresses are distinct (Bug E sanity check on multi-slab path).
@@ -401,7 +401,7 @@ TEST_CASE("SlabAllocator single slab", "[memory][slab]")
 
     SlabAllocator slab{kObj, kPage, kPage, 0.0f, 2};
 
-    constexpr int                 kPerSlab = kPage / kObj;  // 64
+    constexpr int         kPerSlab = kPage / kObj;  // 64
     std::vector<SlabSlot> outs(kPerSlab);
     REQUIRE(slab.allocate(outs.data(), kPerSlab, pages) == kPerSlab);
 
@@ -443,9 +443,9 @@ TEST_CASE("SlabAllocator spans multiple slabs", "[memory][slab]")
 
     SlabAllocator slab{kObj, kPage, kPage, 0.0f, 2};
 
-    constexpr int                 kRequest = kPerSlab * 2 + 3;
+    constexpr int         kRequest = kPerSlab * 2 + 3;
     std::vector<SlabSlot> outs(kRequest);
-    int                           got = slab.allocate(outs.data(), kRequest, pages);
+    int                   got = slab.allocate(outs.data(), kRequest, pages);
     REQUIRE(got == kRequest);
 
     std::vector<char*> addrs;
@@ -474,7 +474,7 @@ TEST_CASE("SlabAllocator round-trip", "[memory][slab]")
     SlabAllocator slab{kObj, kPage, kPage, 0.0f, 2};
 
     for (int round = 0; round < 5; ++round) {
-        constexpr int                 kBatch = 200;
+        constexpr int         kBatch = 200;
         std::vector<SlabSlot> a(kBatch);
         std::vector<SlabSlot> b(kBatch);
         REQUIRE(slab.allocate(a.data(), kBatch, pages) == kBatch);
@@ -515,9 +515,9 @@ TEST_CASE("SlabAllocator stress (random)", "[memory][slab][stress]")
     for (int op = 0; op < kOps; ++op) {
         bool do_alloc = live.empty() ? true : (rng() & 1);
         if (do_alloc) {
-            int                           batch = std::uniform_int_distribution<int>{1, 16}(rng);
+            int                   batch = std::uniform_int_distribution<int>{1, 16}(rng);
             std::vector<SlabSlot> out(batch);
-            int                           got = slab.allocate(out.data(), batch, pages);
+            int                   got = slab.allocate(out.data(), batch, pages);
             for (int i = 0; i < got; ++i) {
                 char* addr = slab.AddressOf(out[i]);
                 REQUIRE(addr >= region.data());
@@ -526,7 +526,7 @@ TEST_CASE("SlabAllocator stress (random)", "[memory][slab][stress]")
             }
         }
         else {
-            int batch = std::uniform_int_distribution<int>{1, std::min<int>(16, live.size())}(rng);
+            int                   batch = std::uniform_int_distribution<int>{1, std::min<int>(16, live.size())}(rng);
             std::vector<SlabSlot> to_free;
             for (int i = 0; i < batch; ++i) {
                 size_t idx = std::uniform_int_distribution<size_t>{0, live.size() - 1}(rng);
@@ -809,10 +809,10 @@ TEST_CASE("ObjectAllocator composite lifecycle", "[memory][object][composite]")
     using core::Allocator;
     using core::Buffer;
 
-    constexpr size_t kBytes = 64UL << 20;   // 64 MiB
-    constexpr size_t kRec   = 65536;        // recurrent part size
-    constexpr size_t kConv  = 131072;       // conv part size (distinct slab class)
-    constexpr int    kN     = 4;            // recurrent parts
+    constexpr size_t kBytes = 64UL << 20;  // 64 MiB
+    constexpr size_t kRec   = 65536;       // recurrent part size
+    constexpr size_t kConv  = 131072;      // conv part size (distinct slab class)
+    constexpr int    kN     = 4;           // recurrent parts
 
     Allocator alloc{kCPU};
     Buffer    buf{kBytes, data_type_v<int8_t>, alloc};
@@ -1053,8 +1053,8 @@ TEST_CASE("ObjectAllocator Allocation pointer is stable across churn", "[memory]
     // Pin one allocation and snapshot its durable entry (single-part: base0).
     object_alloc_t h0{};
     REQUIRE(obj.Allocate(idx, &h0, 1) == 1);
-    const Allocation* const a0     = h0.a;
-    char* const             base0  = h0->base(0);
+    const Allocation* const a0    = h0.a;
+    char* const             base0 = h0->base(0);
     REQUIRE(h0->part_count() == 1);
     REQUIRE(h0->bases.empty());  // inline storage, no heap parts
 

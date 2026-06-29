@@ -46,7 +46,7 @@ public:
         build();
     }
 
-    PageAllocator(const PageAllocator&)            = default;
+    PageAllocator(const PageAllocator&) = default;
     PageAllocator& operator=(const PageAllocator&) = default;
 
     void* allocate(size_t size)

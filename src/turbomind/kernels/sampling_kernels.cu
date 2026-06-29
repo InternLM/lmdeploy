@@ -36,7 +36,7 @@ __global__ void sampling(const T*       logits,
     __shared__ int   selected;
     if (tid == 0) {
         const int state_row = curandstate_indices[batch_id];
-        rand_num_s         = curand_uniform(curandstate + state_row);
+        rand_num_s          = curand_uniform(curandstate + state_row);
     }
     __syncthreads();
 

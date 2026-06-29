@@ -24,8 +24,8 @@ public:
         TM_CHECK_GT(bytes, 0);
         TM_CHECK_GT(alignment, 0);
 
-        auto&                  acc      = parts_[0];  // {bytes, alignment, count=1}
-        constexpr size_t       kMaxSize = std::numeric_limits<size_t>::max();
+        auto&            acc      = parts_[0];  // {bytes, alignment, count=1}
+        constexpr size_t kMaxSize = std::numeric_limits<size_t>::max();
         TM_CHECK_LE(alignment - 1, kMaxSize - acc[0]);
 
         const size_t offset = (acc[0] + alignment - 1) / alignment * alignment;

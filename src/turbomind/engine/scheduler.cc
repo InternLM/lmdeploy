@@ -63,7 +63,7 @@ public:
     {
     }
 
-    EvictingIterator(const EvictingIterator&) noexcept            = default;
+    EvictingIterator(const EvictingIterator&) noexcept = default;
     EvictingIterator& operator=(const EvictingIterator&) noexcept = default;
 
     explicit operator bool() const noexcept
@@ -106,7 +106,7 @@ public:
 
     AllocatingIterator(std::vector<int>&&, const CacheBlockPool&) = delete;
 
-    AllocatingIterator(const AllocatingIterator&)            = delete;
+    AllocatingIterator(const AllocatingIterator&) = delete;
     AllocatingIterator& operator=(const AllocatingIterator&) = delete;
 
     explicit operator bool() const noexcept
@@ -116,10 +116,8 @@ public:
 
     // Idempotent: ids already allocated for real (cached alloc set), or
     // planned by an earlier request in this pass, are skipped.
-    bool Allocate(ScratchAllocator&        scratch,
-                  std::unordered_set<int>& planned,
-                  std::vector<int>&        planned_now,
-                  Replay&                  replay)
+    bool
+    Allocate(ScratchAllocator& scratch, std::unordered_set<int>& planned, std::vector<int>& planned_now, Replay& replay)
     {
         const int   cache_id = *iter_;
         const auto& cache    = cache_[cache_id];
@@ -146,15 +144,25 @@ private:
 const char* ResumeSourceName(ResumeSource src)
 {
     switch (src) {
-        case ResumeSource::kPrefix:     return "prefix";
-        case ResumeSource::kFrontier:   return "frontier";
-        case ResumeSource::kCheckpoint: return "checkpoint";
-        case ResumeSource::kFork:       return "fork";
-        default:                        return "none";
+        case ResumeSource::kPrefix:
+            return "prefix";
+        case ResumeSource::kFrontier:
+            return "frontier";
+        case ResumeSource::kCheckpoint:
+            return "checkpoint";
+        case ResumeSource::kFork:
+            return "fork";
+        default:
+            return "none";
     }
 }
 
-enum class CollisionSite { kAccept, kPromptBoundary, kPublish };
+enum class CollisionSite
+{
+    kAccept,
+    kPromptBoundary,
+    kPublish
+};
 
 // Finalize-event record, filled by PublishGeneration's index loop.
 struct GenStat {
@@ -178,7 +186,8 @@ void LogCollision(const Sequence& s, CollisionSite site, int begin, int end);
 
 }  // namespace
 
-static PerformanceCounter make_perf_counter() {
+static PerformanceCounter make_perf_counter()
+{
     constexpr int kSchedPerfCounters = 32;
     return PerformanceCounter{kSchedPerfCounters};
 }
@@ -186,23 +195,23 @@ static PerformanceCounter make_perf_counter() {
 struct Scheduler::ScheduleState {
     std::vector<Sequence*> requests;
 
-    std::vector<uint64_t>   cutoff;                    // per-request eviction cutoff stamps
-    uint64_t                floor{};                   // pass-start timestamp; inactive < floor <= cutoff[i]
-    Replay                  replay;                    // alloc/evict ops of the current phase
-    size_t                  committed_replay_size{0};  // replay prefix from committed requests (phase 1)
-    std::vector<bool>       committed;
-    std::vector<LogicalBlock*> pending_fork;           // fork_to node per request, nullptr = none
-    std::vector<PublishPlan>   pending_publish;        // checkpoint publication intent per request
-    bool                    has_optionals{false};      // any optional intent recorded => run phase 2
-    std::vector<int>        evict_ids;                 // SortedIndices() snapshot, shared by both phases
-    size_t                  evict_pos{0};              // oldest-first eviction cursor shared by both phases
-    std::unordered_set<int> planned;                   // cache ids planned/reserved for allocation
+    std::vector<uint64_t>      cutoff;                    // per-request eviction cutoff stamps
+    uint64_t                   floor{};                   // pass-start timestamp; inactive < floor <= cutoff[i]
+    Replay                     replay;                    // alloc/evict ops of the current phase
+    size_t                     committed_replay_size{0};  // replay prefix from committed requests (phase 1)
+    std::vector<bool>          committed;
+    std::vector<LogicalBlock*> pending_fork;          // fork_to node per request, nullptr = none
+    std::vector<PublishPlan>   pending_publish;       // checkpoint publication intent per request
+    bool                       has_optionals{false};  // any optional intent recorded => run phase 2
+    std::vector<int>           evict_ids;             // SortedIndices() snapshot, shared by both phases
+    size_t                     evict_pos{0};          // oldest-first eviction cursor shared by both phases
+    std::unordered_set<int>    planned;               // cache ids planned/reserved for allocation
 };
 
 bool Scheduler::PrefixEligible(const Sequence& s) const noexcept
 {
-    return enable_prefix_caching_ && !is_warm_up_ && s.input_embeds.empty()
-        && s.input_embeds_offsets.empty() && s.token_ids != nullptr;
+    return enable_prefix_caching_ && !is_warm_up_ && s.input_embeds.empty() && s.input_embeds_offsets.empty()
+           && s.token_ids != nullptr;
 }
 
 TokenSpan Scheduler::TokenSegment(const Sequence& s, int offset, int size) const
@@ -214,15 +223,14 @@ TokenSpan Scheduler::TokenSegment(const Sequence& s, int offset, int size) const
     return MakeTokenSpan(s.token_ids + offset, size);
 }
 
-
-Scheduler::Scheduler(ObjectAllocator&        alloc,
-        CacheRegistry                        registry,
-        int                                  cache_block_seq_len,
-        bool                                 enable_prefix_caching,
-        bool                                 cache_prompt_boundary,
-        bool                                 cache_generation_boundary,
-        std::unique_ptr<CacheBoundaryPolicy> boundary_policy,
-        const int&                           is_warm_up):
+Scheduler::Scheduler(ObjectAllocator&                     alloc,
+                     CacheRegistry                        registry,
+                     int                                  cache_block_seq_len,
+                     bool                                 enable_prefix_caching,
+                     bool                                 cache_prompt_boundary,
+                     bool                                 cache_generation_boundary,
+                     std::unique_ptr<CacheBoundaryPolicy> boundary_policy,
+                     const int&                           is_warm_up):
     enable_prefix_caching_{enable_prefix_caching},
     cache_prompt_boundary_{cache_prompt_boundary},
     cache_generation_boundary_{cache_generation_boundary},
@@ -237,7 +245,6 @@ Scheduler::Scheduler(ObjectAllocator&        alloc,
 {
     logical_.set_recycle_hook([this](LogicalBlock& b) { trie_.Erase(b); });
 }
-
 
 Scheduler::~Scheduler()
 {
@@ -286,7 +293,7 @@ void Scheduler::Accept(Sequence& s)
     if (!PrefixEligible(s)) {
         return;  // blocks are created lazily by EnsureBlocks
     }
-    AcceptState st{};           // parent defaults to nullptr (root)
+    AcceptState st{};            // parent defaults to nullptr (root)
     MatchPrompt(s, st);          // match full blocks to the first miss
     s.matched_blocks = st.miss;  // leading prompt blocks found in the trie
     CreateMissingBlocks(s, st);  // create + index the remaining prompt blocks
@@ -393,7 +400,7 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
     if (prompt_boundary) {
         if (const int last = all_blocks - 1; prompt % bs != 0 && st.miss < last) {
             const int full_size = prompt - last * bs;  // partial tail length (1..bs-1)
-            const int node_size = full_size - 1;        // exclude the last prompt token
+            const int node_size = full_size - 1;       // exclude the last prompt token
 
             bool have_target = full_size == 1;  // prompt_len-1 is the prior block boundary (full-block node)
 
@@ -407,7 +414,7 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
                 y.key                = next;
                 y.size               = node_size;
                 y.tokens.assign(tokens.begin(), tokens.end());
-                y.prefix_id          = cache_.Create(registry_.prefix().object_id(), vh.get());
+                y.prefix_id = cache_.Create(registry_.prefix().object_id(), vh.get());
                 if (trie_.Insert(y)) {
                     x.fork_to   = std::move(vh);  // edge holds the only ref
                     have_target = true;
@@ -457,16 +464,15 @@ void Scheduler::Resume(Sequence& s)
         if (!x.is_valid || !ValidAlloc(x.prefix_id)) {
             break;
         }
-        const int extent =
-            x.key ? x.size : std::min(std::max(s.filled_len - x.offset, 0), x.capacity);
+        const int extent = x.key ? x.size : std::min(std::max(s.filled_len - x.offset, 0), x.capacity);
         if (extent <= 0) {
             break;
         }
         prefix_end = x.offset + extent;
         if (extent < x.capacity) {
-            break;                  // partial / own-frontier: first writable block
+            break;  // partial / own-frontier: first writable block
         }
-        ++readonly_block_num;       // fully-valid whole block: read-only reusable
+        ++readonly_block_num;  // fully-valid whole block: read-only reusable
     }
     prefix_end           = std::min(prefix_end, upper);  // resume bound, unchanged
     s.readonly_block_num = readonly_block_num;
@@ -623,8 +629,8 @@ Scheduler::ProducerConflict Scheduler::CheckProducers(const Sequence& s, int t0,
 
 Scheduler::PublishStat Scheduler::Publish(Sequence& s, int t0, int end)
 {
-    const int bs   = logical_.block_size();
-    const int last = std::min<int>((end + bs - 1) / bs, s.block_ids.size());
+    const int   bs   = logical_.block_size();
+    const int   last = std::min<int>((end + bs - 1) / bs, s.block_ids.size());
     PublishStat stat{};
     for (int i = 0; i < last; ++i) {
         LogicalBlock& x = *s.block_ids[i];
@@ -778,8 +784,8 @@ void Scheduler::PublishGeneration(Sequence& s)
         // filled_len and it would spuriously block this (safe) adoption.
         // A valid frontier id implies checkpoints are registered (created only
         // under has_checkpoint()), so no separate has_checkpoint() gate here.
-        if (publish_generation_boundary && x.offset + size == s.filled_len
-            && ValidAlloc(s.frontier_cache_id) && x.checkpoint_id == 0) {
+        if (publish_generation_boundary && x.offset + size == s.filled_len && ValidAlloc(s.frontier_cache_id)
+            && x.checkpoint_id == 0) {
 
             const int interval = registry_.checkpoint_min_interval();
 
@@ -802,9 +808,9 @@ void Scheduler::PublishGeneration(Sequence& s)
             }
 
             if (!blocked) {
-                const int f       = std::exchange(s.frontier_cache_id, 0);
-                x.checkpoint_id   = f;
-                cache_[f].owner   = up;
+                const int f     = std::exchange(s.frontier_cache_id, 0);
+                x.checkpoint_id = f;
+                cache_[f].owner = up;
                 logical_.Retain(up);  // ref held by the live allocation
                 gen.terminal_ckpt = true;
 
@@ -820,8 +826,8 @@ void Scheduler::PublishGeneration(Sequence& s)
                     if (pos > s.prompt_len) {
                         if (const int c = p.checkpoint_id; ValidAlloc(c)) {
                             cache_.Deallocate(alloc_, c);  // free memory + drop the alloc ref
-                            logical_.Drop(&p);             // block stays (request + index refs); slot left as evicted leftover
-                            ++gen.dropped;                 // observability only (LogFinalized)
+                            logical_.Drop(&p);  // block stays (request + index refs); slot left as evicted leftover
+                            ++gen.dropped;      // observability only (LogFinalized)
                         }
                     }
                 }
@@ -922,7 +928,7 @@ void Scheduler::Schedule(std::vector<Sequence*> requests, Resource& resource)
     counter_.tick(0);
 
     ScheduleState pass{std::move(requests)};
-    PlanRequests(pass);                    // Resume/Continue, sort, stamp involved + restore srcs, pass.floor
+    PlanRequests(pass);  // Resume/Continue, sort, stamp involved + restore srcs, pass.floor
 
     counter_.tick(1);
 
@@ -930,27 +936,27 @@ void Scheduler::Schedule(std::vector<Sequence*> requests, Resource& resource)
 
     counter_.tick(2);
 
-    ReplayMemory(pass);                    // commit phase 1; clears pass.replay
+    ReplayMemory(pass);  // commit phase 1; clears pass.replay
 
     counter_.tick(3);
 
     if (pass.has_optionals) {
         counter_.tick(10);
 
-        RunOptionalAdmission(pass);   // allocate intents from inactive memory; fill pass.replay
+        RunOptionalAdmission(pass);  // allocate intents from inactive memory; fill pass.replay
 
         counter_.tick(11);
 
-        ReplayMemory(pass);            // commit phase 2; clears pass.replay
+        ReplayMemory(pass);  // commit phase 2; clears pass.replay
 
         counter_.tick(12);
     }
     counter_.tick(4);
 
-    CommitResults(pass);                   // publication attach, fork_to populate, Publish
+    CommitResults(pass);  // publication attach, fork_to populate, Publish
 
     counter_.tick(5);
-    
+
     interv_ += counter_;
 
 #if TM_SCHED_PROFILE
@@ -1012,7 +1018,7 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
 
     EvictingIterator evict_pos{pass.evict_ids, cache_};
 
-    uint64_t        max_evict_ts = 0;
+    uint64_t max_evict_ts = 0;
 
     ScratchAllocator scratch{alloc_};
 
@@ -1050,13 +1056,14 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
 
         // Consult the policy only on the pass that can reach prompt_len-1; >= so an
         // exact landing isn't truncated away. On a veto, skip the clamp.
-        const bool is_prompt_boundary = s.prompt_boundary_node && begin < prompt_boundary_pos && desired >= prompt_boundary_pos;
-        const bool publish_prompt     = is_prompt_boundary && ResolvePublishPromptBoundary(s);
+        const bool is_prompt_boundary =
+            s.prompt_boundary_node && begin < prompt_boundary_pos && desired >= prompt_boundary_pos;
+        const bool publish_prompt = is_prompt_boundary && ResolvePublishPromptBoundary(s);
 
         if (publish_prompt) {
             desired = prompt_boundary_pos;  // land exactly on prompt_len-1
         }
-        else if (desired < ctx_end) {       // partial chunk: truncate to a block boundary
+        else if (desired < ctx_end) {  // partial chunk: truncate to a block boundary
             desired = desired / bs * bs;
         }
 
@@ -1115,7 +1122,7 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
             PlanPromptBoundaryPublication(pass, i, s, end);  // fork_to KV + prompt-boundary checkpoint
         }
         else {
-            PlanFullBlockPublication(pass, i, s, end);       // full-block checkpoint (coverage only)
+            PlanFullBlockPublication(pass, i, s, end);  // full-block checkpoint (coverage only)
         }
 
         SetProducers(s, begin, end);
@@ -1201,8 +1208,8 @@ void Scheduler::ReplayMemory(ScheduleState& pass)
     for (const auto& op : pass.replay) {
         std::visit(
             [&](const auto& item) {
-                using T  = std::decay_t<decltype(item)>;
-                auto& c  = cache_[item.cache_id];
+                using T = std::decay_t<decltype(item)>;
+                auto& c = cache_[item.cache_id];
                 if constexpr (std::is_same_v<T, EvictReplay>) {
                     const bool is_prefix = c.object_id == registry_.prefix().object_id_or_negative();
                     cache_.Deallocate(alloc_, item.cache_id);  // clears allocation; owner persists
@@ -1215,9 +1222,9 @@ void Scheduler::ReplayMemory(ScheduleState& pass)
                 }
                 else {
                     c.allocation = alloc_.Allocate(c.object_id);  // single-object; {nullptr} on OOM
-                    TM_CHECK(c.allocation.a);                      // admission guarantees capacity
-                    c.alloc_key = c.allocation->key;               // snapshot for stale detection
-                    logical_.Retain(c.owner);  // no-op when owner == nullptr (request-owned)
+                    TM_CHECK(c.allocation.a);                     // admission guarantees capacity
+                    c.alloc_key = c.allocation->key;              // snapshot for stale detection
+                    logical_.Retain(c.owner);                     // no-op when owner == nullptr (request-owned)
                 }
             },
             op);
@@ -1312,13 +1319,14 @@ void Scheduler::CommitResults(ScheduleState& pass)
     }
 }
 
-void Scheduler::LogProfile(const PerformanceCounter& counter) const {
+void Scheduler::LogProfile(const PerformanceCounter& counter) const
+{
 #if TM_SCHED_PROFILE
     // TODO: Gate TP rank
 
     fmt::memory_buffer buf;
 
-    fmt::format_to(std::back_inserter(buf), 
+    fmt::format_to(std::back_inserter(buf),
                    "\n[sched] total {:.2f}, plan {:.2f}, required {:.2f}, replay {:.2f}, commit {:.2f}",
                    counter.dist(0, 5),
                    counter.dist(0, 1),
@@ -1328,13 +1336,13 @@ void Scheduler::LogProfile(const PerformanceCounter& counter) const {
 
     if (counter.passes[10]) {
         fmt::format_to(std::back_inserter(buf),
-                    "\n[sched]   optional {:.2f}, replay {:.2f}",
-                    counter.dist(10, 11),
-                    counter.dist(11, 12));
+                       "\n[sched]   optional {:.2f}, replay {:.2f}",
+                       counter.dist(10, 11),
+                       counter.dist(11, 12));
     }
 
     fmt::format_to(std::back_inserter(buf),
-                   "\n[sched]   sort {:.2f}, scratch {:.2f}, loop {:.2f}, ~scratch {:.2f}", 
+                   "\n[sched]   sort {:.2f}, scratch {:.2f}, loop {:.2f}, ~scratch {:.2f}",
                    counter.dist(20, 21),
                    counter.dist(21, 22),
                    counter.dist(22, 23),
@@ -1350,53 +1358,85 @@ using turbomind::core::Logger;
 
 void LogAccept(const Sequence& s, int bs)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) { return; }
-    const int prompt = s.prompt_len, full = prompt / bs, all = (prompt + bs - 1) / bs;
-    const int matched = s.matched_blocks, M = matched * bs;
+    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
+        return;
+    }
+    const int   prompt = s.prompt_len, full = prompt / bs, all = (prompt + bs - 1) / bs;
+    const int   matched = s.matched_blocks, M = matched * bs;
     std::string mtail, clast, ctail;
     if (matched < (int)s.block_ids.size() && s.block_ids[matched]->fork_from) {
         const LogicalBlock& y = *s.block_ids[matched]->fork_from;
-        mtail = fmt::format(", fork_from@{}", y.offset + y.size);    // matched-side partial reuse
+        mtail                 = fmt::format(", fork_from@{}", y.offset + y.size);  // matched-side partial reuse
     }
     if (all - matched > 0 && prompt % bs) {
-        clast = fmt::format(", last {}/{}", prompt - full * bs, bs); // created-side partial tail
+        clast = fmt::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
     }
     if (!s.block_ids.empty() && s.block_ids.back()->fork_to) {
         const LogicalBlock& ft = *s.block_ids.back()->fork_to;
-        ctail = fmt::format(", fork_to@{}", ft.offset + ft.size);   // created-side publish node end
+        ctail                  = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
     }
     TM_LOG_INFO("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
-                s.req->id, s.req->unique_id, M, matched, mtail, M, prompt, all - matched, clast, ctail);
+                s.req->id,
+                s.req->unique_id,
+                M,
+                matched,
+                mtail,
+                M,
+                prompt,
+                all - matched,
+                clast,
+                ctail);
 }
 
 void LogResume(const Sequence& s)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) { return; }
-    if (!s.resuming) { return; }
+    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
+        return;
+    }
+    if (!s.resuming) {
+        return;
+    }
     const int begin = s.history_len + s.inflight_input_len;
     const int end   = begin + s.input_len;
     const int total = s.seq_len + s.inflight_new_tokens;
     const int pct   = total > 0 ? 100 * s.history_len / total : 0;
     TM_LOG_INFO("req {} (uid {}) resume [0,{}) {} blk ro ({}%) source={} | computed [{},{}) {} tok",
-                s.req->id, s.req->unique_id, s.history_len, s.readonly_block_num, pct,
-                ResumeSourceName(s.resume_source), begin, end, s.input_len);
+                s.req->id,
+                s.req->unique_id,
+                s.history_len,
+                s.readonly_block_num,
+                pct,
+                ResumeSourceName(s.resume_source),
+                begin,
+                end,
+                s.input_len);
 }
 
 void LogDeferred(const Sequence& s, int bs, const Scheduler::ProducerConflict& c)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) { return; }
+    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
+        return;
+    }
     const int begin = s.resume_len + s.inflight_input_len;
     const int end   = begin + s.input_len;
     const int b0    = std::max(begin, c.block * bs);
     const int b1    = std::min(end, (c.block + 1) * bs);
     TM_LOG_INFO("req {} (uid {}) deferred: tok [{},{}) held by producer uid {}",
-                s.req->id, s.req->unique_id, b0, b1, c.producer);
+                s.req->id,
+                s.req->unique_id,
+                b0,
+                b1,
+                c.producer);
 }
 
 void LogPublished(const Sequence& s, int bs, const Scheduler::PublishStat& p)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) { return; }
-    if (!(p.reusable_blocks > 0 || p.forked || p.ckpt)) { return; }
+    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
+        return;
+    }
+    if (!(p.reusable_blocks > 0 || p.forked || p.ckpt)) {
+        return;
+    }
     const int   end = s.history_len + s.inflight_input_len + s.input_len;  // forward end this pass
     std::string body;
     auto        add = [&](std::string c) { body += body.empty() ? c : ", " + c; };
@@ -1415,28 +1455,53 @@ void LogPublished(const Sequence& s, int bs, const Scheduler::PublishStat& p)
 
 void LogFinalized(const Sequence& s, int bs, const GenStat& g)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) { return; }
-    if (!(g.indexed > 0 || g.terminal_ckpt)) { return; }   // terminal_ckpt implies indexed > 0
+    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
+        return;
+    }
+    if (!(g.indexed > 0 || g.terminal_ckpt)) {
+        return;
+    }  // terminal_ckpt implies indexed > 0
     std::string tail = (g.last_size < bs) ? fmt::format(", last {}/{}", g.last_size, bs) : "";
-    std::string ckpt = g.terminal_ckpt
-                           ? (g.dropped ? fmt::format(", terminal ckpt (dropped {})", g.dropped) : ", terminal ckpt")
-                           : "";
+    std::string ckpt =
+        g.terminal_ckpt ? (g.dropped ? fmt::format(", terminal ckpt (dropped {})", g.dropped) : ", terminal ckpt") : "";
     TM_LOG_INFO("req {} (uid {}) finalized gen [{},{}) ({} blk{}){}",
-                s.req->id, s.req->unique_id, g.first_offset, s.filled_len, g.indexed, tail, ckpt);
+                s.req->id,
+                s.req->unique_id,
+                g.first_offset,
+                s.filled_len,
+                g.indexed,
+                tail,
+                ckpt);
 }
 
 void LogCollision(const Sequence& s, CollisionSite site, int begin, int end)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) { return; }
+    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
+        return;
+    }
     const char* where = "";
     const char* note  = "";
     switch (site) {
-        case CollisionSite::kAccept:         where = "accept";          note = "";              break;
-        case CollisionSite::kPromptBoundary: where = "prompt boundary"; note = " (no fork_to)"; break;
-        case CollisionSite::kPublish:        where = "publish";         note = ", stop";        break;
+        case CollisionSite::kAccept:
+            where = "accept";
+            note  = "";
+            break;
+        case CollisionSite::kPromptBoundary:
+            where = "prompt boundary";
+            note  = " (no fork_to)";
+            break;
+        case CollisionSite::kPublish:
+            where = "publish";
+            note  = ", stop";
+            break;
     }
     TM_LOG_INFO("req {} (uid {}) collision at {}: tok [{},{}) → private{}",
-                s.req->id, s.req->unique_id, where, begin, end, note);
+                s.req->id,
+                s.req->unique_id,
+                where,
+                begin,
+                end,
+                note);
 }
 
 }  // namespace

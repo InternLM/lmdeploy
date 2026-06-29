@@ -14,8 +14,8 @@ namespace turbomind {
 // handle (object_alloc_t) is a pointer to this. A compactor rewrites base0 /
 // bases[] in place; every cached handle then sees the new address.
 struct Allocation {
-    uint64_t key{};   // unique, monotonic; set on Acquire, 0 while free (ABA stale check)
-    int      n{0};    // part count; 0 == free
+    uint64_t key{};  // unique, monotonic; set on Acquire, 0 while free (ABA stale check)
+    int      n{0};   // part count; 0 == free
 
     // Inline storage for the dominant single-part (simple) object: no heap.
     char*    base0{};
@@ -25,8 +25,14 @@ struct Allocation {
     std::vector<char*>    bases;
     std::vector<SlabSlot> slots;
 
-    char* base(int p) const noexcept { return n == 1 ? base0 : bases[p]; }
-    int   part_count() const noexcept { return n; }
+    char* base(int p) const noexcept
+    {
+        return n == 1 ? base0 : bases[p];
+    }
+    int part_count() const noexcept
+    {
+        return n;
+    }
 };
 
 class ObjectAllocator {
@@ -37,7 +43,7 @@ public:
     explicit ObjectAllocator(Buffer region);
 
     // No longer copyable: trials use ScratchAllocator (copies only capacity).
-    ObjectAllocator(const ObjectAllocator&)            = delete;
+    ObjectAllocator(const ObjectAllocator&) = delete;
     ObjectAllocator& operator=(const ObjectAllocator&) = delete;
     ObjectAllocator(ObjectAllocator&&) noexcept;
     ObjectAllocator& operator=(ObjectAllocator&&) noexcept;
@@ -81,7 +87,7 @@ public:
     explicit ScratchAllocator(const ObjectAllocator& src);
     ~ScratchAllocator();
 
-    ScratchAllocator(const ScratchAllocator&)            = delete;
+    ScratchAllocator(const ScratchAllocator&) = delete;
     ScratchAllocator& operator=(const ScratchAllocator&) = delete;
     ScratchAllocator(ScratchAllocator&&) noexcept;
     ScratchAllocator& operator=(ScratchAllocator&&) noexcept;

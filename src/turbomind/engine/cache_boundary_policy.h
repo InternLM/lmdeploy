@@ -33,10 +33,18 @@ public:
 class DefaultCacheBoundaryPolicy: public CacheBoundaryPolicy {
 public:
     DefaultCacheBoundaryPolicy(bool prompt_boundary, bool generation_boundary):
-        prompt_boundary_{prompt_boundary}, generation_boundary_{generation_boundary} {}
+        prompt_boundary_{prompt_boundary}, generation_boundary_{generation_boundary}
+    {
+    }
 
-    bool PublishPromptBoundary(const Sequence&) const override { return prompt_boundary_; }
-    bool PublishGenerationBoundary(const Sequence&) const override { return generation_boundary_; }
+    bool PublishPromptBoundary(const Sequence&) const override
+    {
+        return prompt_boundary_;
+    }
+    bool PublishGenerationBoundary(const Sequence&) const override
+    {
+        return generation_boundary_;
+    }
 
 private:
     bool prompt_boundary_;

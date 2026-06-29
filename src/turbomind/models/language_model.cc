@@ -103,7 +103,8 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
+    Impl(
+        CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
     Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
@@ -482,11 +483,8 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(CacheRegistry&      registry,
-                             const EngineParam&  engine,
-                             const Context&      ctx,
-                             const ModelWeight&  weights,
-                             int                 phases)
+LanguageModel::LanguageModel(
+    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
 {
     impl_ = std::make_unique<Impl>(registry, engine, ctx, weights, phases);
 }

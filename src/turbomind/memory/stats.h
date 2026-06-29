@@ -7,7 +7,7 @@
 namespace turbomind {
 
 struct PageStats {
-    int              pages;       // real pages in the region
+    int              pages;  // real pages in the region
     size_t           page_size;
     int              free_pages;  // sum over orders of (count << order)
     int              used_pages;  // pages - free_pages
@@ -16,9 +16,9 @@ struct PageStats {
 };
 
 struct SlabStats {
-    size_t object_size;    // bytes per object (the size class)
-    size_t slab_size;      // bytes per slab
-    size_t object_count;   // objects per slab
+    size_t object_size;   // bytes per object (the size class)
+    size_t slab_size;     // bytes per slab
+    size_t object_count;  // objects per slab
     int    n_full;
     int    n_partial;
     int    n_empty;

@@ -24,9 +24,9 @@
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/models/llama/context_token_resource.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -50,9 +50,9 @@ struct RequestData {
 template<class Archive>
 void serdes(Archive& ar, RequestData& r)
 {
-    ar & r.infer;
-    ar & r.cancel;
-    ar & r.abort;
+    ar& r.infer;
+    ar& r.cancel;
+    ar& r.abort;
 }
 
 struct Engine::Impl {
@@ -137,7 +137,7 @@ struct Engine::Impl {
     int& is_warm_up_;
 
     ObjectAllocator object_allocator_;
-    Scheduler        scheduler_;
+    Scheduler       scheduler_;
 
     Queue<unique_ptr<BatchData>> inbound_;
     Queue<unique_ptr<BatchData>> outbound_;
@@ -173,7 +173,8 @@ struct Engine::Impl {
 
     vector<State> states_;
 
-    struct Data {};
+    struct Data {
+    };
     vector<Data> data_;
 };
 
@@ -276,8 +277,7 @@ void Engine::Impl::Validate(Requests& infer_reqs)
                 r->ec = Request::kInconsistency;
             }
             else if (r->gen_cfg.output_logits == GenerationConfig::kAll
-                     || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll
-                     || r->gen_cfg.return_ppl) {
+                     || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll || r->gen_cfg.return_ppl) {
                 TM_LOG_ERROR("Skip inconsistent infer request for ID {}: prefix caching cannot "
                              "output logits/last_hidden_states for all tokens or ppl",
                              r->id);
@@ -309,7 +309,7 @@ vector<int> Engine::Impl::GetCanceled()
 
 void Engine::Impl::Interrupt(Sequence& c)
 {
-    Sequence* p = &c;
+    Sequence*          p = &c;
     Buffer_<Sequence*> rs{&p, 1, kCPU};
     Run(BatchOp::kDel, -1, TensorMap{{"requests", rs}});
 
@@ -339,8 +339,8 @@ void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
         }
 
         c->is_canceled = true;
-        c->retiring = true;
-        c->done     = true;
+        c->retiring    = true;
+        c->done        = true;
         signals.push_back([r = c->req, l = c->seq_len] { UpdateState(*r, Request::kCancel, l); });
     }
 }
@@ -519,7 +519,7 @@ void Engine::Impl::Schedule()
     // dbg(inv);
 
     vector<unique_ptr<Sequence>> rc;
-    vector<int>                      perm;
+    vector<int>                  perm;
     rc.reserve(s.size());
     perm.reserve(s.size());
     for (int i = 0; i < idxs.size(); ++i) {
@@ -537,7 +537,7 @@ void Engine::Impl::Schedule()
     s.rc.swap(rc);
     s.perm.swap(perm);
 
-    s.bs0     = std::exchange(s.active, active.size());
+    s.bs0 = std::exchange(s.active, active.size());
     if (cache_log_interval_ && schedule_counter_ % cache_log_interval_ == 0) {
         TM_LOG_WARN("dp{} total: {}, eligible: {}, active: {}", dp_rank_, s.size(), eligible.size(), s.bs0);
     }
@@ -568,15 +568,15 @@ void Engine::Impl::Setup(BatchData& d)
     d.restore_copies.clear();
     d.publish_copies.clear();
     {
-        const ObjectAllocator& alloc = scheduler_.allocator();
-        auto resolve = [&](std::vector<CacheCopy>& in, std::vector<ResolvedCopy>& out) {
+        const ObjectAllocator& alloc   = scheduler_.allocator();
+        auto                   resolve = [&](std::vector<CacheCopy>& in, std::vector<ResolvedCopy>& out) {
             for (const auto& [src, dst] : in) {
                 const auto& cs = scheduler_.cache()[src];
                 const auto& cd = scheduler_.cache()[dst];
-                TM_CHECK_NOTNULL(cs.allocation.a);             // validity (resolved allocation) on both ends
+                TM_CHECK_NOTNULL(cs.allocation.a);  // validity (resolved allocation) on both ends
                 TM_CHECK_NOTNULL(cd.allocation.a);
-                TM_CHECK_EQ(cs.object_id, cd.object_id);       // same object => same part layout
-                TM_CHECK_EQ(cs.part_count(), cd.part_count()); // both replay-populated to the same layout
+                TM_CHECK_EQ(cs.object_id, cd.object_id);        // same object => same part layout
+                TM_CHECK_EQ(cs.part_count(), cd.part_count());  // both replay-populated to the same layout
                 TM_CHECK_EQ(cs.part_count(), alloc.PartCount(cs.object_id));
                 for (int p = 0; p < cs.part_count(); ++p) {
                     out.push_back({cs.base(p), cd.base(p), alloc.PartBytes(cs.object_id, p)});
@@ -648,7 +648,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
     for (int i = 0; i < s.size(); ++i) {
         int j = perm[i];
         if (j < b.bsz) {
-            auto& c = *TM_CHECK_NOTNULL(s.rc[i]);
+            auto& c      = *TM_CHECK_NOTNULL(s.rc[i]);
             c.filled_len = generating[j] ? sequence_length[j] - 1 : sequence_length[j];
             if (c.retiring) {
                 continue;
@@ -683,7 +683,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
         for (int i = 0; i < size; ++i) {
             auto& c = *s.rc[i];
             if (i < s.active) {
-                c.inflight_input_len = c.input_len;
+                c.inflight_input_len  = c.input_len;
                 c.inflight_new_tokens = c.generating;
             }
             else {
@@ -812,8 +812,8 @@ void Engine::Impl::InternalThreadEntry()
 
 Engine::~Engine() = default;
 
-Engine::Engine()                             = default;
-Engine::Engine(Engine&&) noexcept            = default;
+Engine::Engine()                  = default;
+Engine::Engine(Engine&&) noexcept = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
 Engine::Engine(EngineParam                  param,

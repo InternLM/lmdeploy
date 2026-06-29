@@ -14,11 +14,20 @@ struct Allocation;  // defined in object.h; the handle is just a pointer to it
 // by this pointer.
 struct object_alloc_t {
     const Allocation* a{};
-    const Allocation* operator->() const noexcept { return a; }
+    const Allocation* operator->() const noexcept
+    {
+        return a;
+    }
 };
 
-inline bool operator==(object_alloc_t x, object_alloc_t y) noexcept { return x.a == y.a; }
-inline bool operator!=(object_alloc_t x, object_alloc_t y) noexcept { return x.a != y.a; }
+inline bool operator==(object_alloc_t x, object_alloc_t y) noexcept
+{
+    return x.a == y.a;
+}
+inline bool operator!=(object_alloc_t x, object_alloc_t y) noexcept
+{
+    return x.a != y.a;
+}
 inline bool operator<(object_alloc_t x, object_alloc_t y) noexcept
 {
     return std::less<const Allocation*>{}(x.a, y.a);

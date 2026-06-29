@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <functional>
+#include <memory_resource>
 #include <utility>
 #include <vector>
 
@@ -14,7 +14,7 @@
 namespace turbomind {
 
 struct LogicalBlock;
-class  LogicalBlockPool;
+class LogicalBlockPool;
 
 // Intrusive, non-atomic strong handle to a logical block (engine-thread only).
 // Holds one ref for its lifetime; copy retains, destruction drops.
@@ -63,9 +63,18 @@ struct CacheBlock {
     LogicalBlock* owner{};
 
     // Base of part `p`; `part` indexes the resolved Allocation.
-    char* base(int part) const { return allocation->base(part); }
-    int   part_count() const { return allocation->part_count(); }
-    bool  valid() const noexcept { return allocation.a != nullptr; }
+    char* base(int part) const
+    {
+        return allocation->base(part);
+    }
+    int part_count() const
+    {
+        return allocation->part_count();
+    }
+    bool valid() const noexcept
+    {
+        return allocation.a != nullptr;
+    }
 };
 
 class CacheBlockPool {
@@ -99,11 +108,12 @@ public:
     {
         return blocks_[index];
     }
-    
-    size_t size() const noexcept {
+
+    size_t size() const noexcept
+    {
         return blocks_.size() - free_list_.size();
     }
-    
+
 private:
     uint64_t next_timestamp_{1};
 
@@ -126,8 +136,8 @@ struct LogicalBlock {
     int checkpoint_id{0};
 
     // Prefix trie node state (mutated only via the trie methods)
-    const LogicalBlock* parent{};       // nullptr = root; non-owning identity
-    PrefixKey           key{};          // empty => not (yet) a prefix node
+    const LogicalBlock* parent{};  // nullptr = root; non-owning identity
+    PrefixKey           key{};     // empty => not (yet) a prefix node
     std::vector<int>    tokens;
     bool                indexed{false};  // present in the trie index
 
@@ -189,7 +199,8 @@ public:
         }
     }
 
-    size_t size() const noexcept {
+    size_t size() const noexcept
+    {
         return live_;
     }
 

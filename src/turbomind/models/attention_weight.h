@@ -127,7 +127,6 @@ public:
 
     // Set by runtime layer
     size_t cache_block_offset{};
-
 };
 
 }  // namespace turbomind

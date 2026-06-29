@@ -10,15 +10,16 @@
 
 namespace turbomind {
 
-enum class BatchOp {
-    kAdd,       //  Request -> Seq    H        Sched
-    kSetup,     //  Seq -> (B  -> D)  H2D      Sched
-    kPrepare,   // (D  ->  St)        D        Exec
-    kForward,   //  St ->  St         D        Exec
-    kUnprep,    // (St ->  D)         D        Exec
-    kFetch,     // (D  ->  B)         D2H      Sched
-    kUpdate,    //  B  ->  Seq        H        Sched
-    kDel,       //  Seq ->  Request   H        Sched
+enum class BatchOp
+{
+    kAdd,      //  Request -> Seq    H        Sched
+    kSetup,    //  Seq -> (B  -> D)  H2D      Sched
+    kPrepare,  // (D  ->  St)        D        Exec
+    kForward,  //  St ->  St         D        Exec
+    kUnprep,   // (St ->  D)         D        Exec
+    kFetch,    // (D  ->  B)         D2H      Sched
+    kUpdate,   //  B  ->  Seq        H        Sched
+    kDel,      //  Seq ->  Request   H        Sched
 };
 
 // Request -> Seq -> (B -> D) -> St -> (D -> B) -> Seq -> Request
@@ -53,9 +54,9 @@ struct BatchData {
         next  = Event::create();
     }
 
-    BatchData(const BatchData&)                = delete;
-    BatchData(BatchData&&) noexcept            = delete;
-    BatchData& operator=(const BatchData&)     = delete;
+    BatchData(const BatchData&)     = delete;
+    BatchData(BatchData&&) noexcept = delete;
+    BatchData& operator=(const BatchData&) = delete;
     BatchData& operator=(BatchData&&) noexcept = delete;
 
     BatchData* self;

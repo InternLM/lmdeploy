@@ -5,12 +5,12 @@
 #include <utility>
 #include <vector>
 
-#include "src/turbomind/core/check.h"
 #include "src/turbomind/comm/env.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/engine/block.h"
 #include "src/turbomind/engine/cache_boundary_policy.h"
-#include "src/turbomind/engine/prefix_trie.h"
 #include "src/turbomind/engine/cache_registry.h"
+#include "src/turbomind/engine/prefix_trie.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/memory/object.h"
 
@@ -27,22 +27,28 @@ struct PerformanceCounter {
     PerformanceCounter() = default;
     explicit PerformanceCounter(int capacity): timestamps(capacity), passes(capacity) {}
 
-    float dist(int i, int j) const noexcept {
+    float dist(int i, int j) const noexcept
+    {
         if (passes[i]) {
             // TM_CHECK_EQ(passes[i], passes[j]);
-            return static_cast<float>(std::chrono::duration_cast<std::chrono::nanoseconds>(timestamps[j] - timestamps[i]).count()) * 0.001f / passes[i];
-        } else {
+            return static_cast<float>(
+                       std::chrono::duration_cast<std::chrono::nanoseconds>(timestamps[j] - timestamps[i]).count())
+                   * 0.001f / passes[i];
+        }
+        else {
             return 0.f;
         }
     }
 
-    void tick(int index) {
+    void tick(int index)
+    {
         // TM_CHECK(passes[index] == 0);
         timestamps[index] = std::chrono::high_resolution_clock::now();
-        passes[index] = 1;
+        passes[index]     = 1;
     }
 
-    PerformanceCounter& operator+=(const PerformanceCounter& other) {
+    PerformanceCounter& operator+=(const PerformanceCounter& other)
+    {
         for (size_t i = 0; i < timestamps.size(); ++i) {
             if (other.passes[i]) {
                 timestamps[i] += (other.timestamps[i] - other.timestamps[0]);
@@ -52,16 +58,28 @@ struct PerformanceCounter {
         return *this;
     }
 
-    explicit operator bool() const noexcept { return passes[0] > 0; }
+    explicit operator bool() const noexcept
+    {
+        return passes[0] > 0;
+    }
 };
-#else 
+#else
 struct PerformanceCounter {
     PerformanceCounter() = default;
     explicit PerformanceCounter(int) {}
-    void tick(int ) {}
-    PerformanceCounter& operator+=(const PerformanceCounter&) { return *this; }
-    float dist(int, int) const noexcept { return 0.f; }
-    explicit operator bool() const noexcept { return false; }
+    void                tick(int) {}
+    PerformanceCounter& operator+=(const PerformanceCounter&)
+    {
+        return *this;
+    }
+    float dist(int, int) const noexcept
+    {
+        return 0.f;
+    }
+    explicit operator bool() const noexcept
+    {
+        return false;
+    }
 };
 #endif
 
@@ -173,7 +191,7 @@ private:
     // the indexed blocks that became cross-request reusable this pass.
     PublishStat Publish(Sequence& s, int t0, int end);
 
-    void SetProducers(Sequence& s, int t0, int end);
+    void             SetProducers(Sequence& s, int t0, int end);
     ProducerConflict CheckProducers(const Sequence& s, int t0, int end) const;
 
     // Admission-loop helpers (called from Schedule only, after input_len is
@@ -181,9 +199,9 @@ private:
     // the optional admission phase. PlanForkToPopulation reserves the fork-to
     // node's prefix_id in `planned` to dedup intent across requests.
     LogicalBlock* PlanForkToPopulation(Sequence& s, int end, std::unordered_set<int>& planned);
-    void PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end);
-    void PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end);
-    bool ResolvePublishPromptBoundary(Sequence& s);
+    void          PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end);
+    void          PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end);
+    bool          ResolvePublishPromptBoundary(Sequence& s);
 
     void EnsureBlocks(Sequence& s);
     void ReleaseCacheId(int cache_id);
@@ -206,11 +224,11 @@ private:
     bool                                 cache_generation_boundary_{false};
     std::unique_ptr<CacheBoundaryPolicy> boundary_policy_;
     const int&                           is_warm_up_;
-    ObjectAllocator& alloc_;     // owned by Engine; also used outside the scheduler
-    CacheRegistry    registry_;  // owned: registration is closed before construction
-    CacheBlockPool   cache_;
-    LogicalBlockPool logical_;
-    PrefixTrie       trie_;
+    ObjectAllocator&                     alloc_;     // owned by Engine; also used outside the scheduler
+    CacheRegistry                        registry_;  // owned: registration is closed before construction
+    CacheBlockPool                       cache_;
+    LogicalBlockPool                     logical_;
+    PrefixTrie                           trie_;
 
     PerformanceCounter counter_;
     PerformanceCounter interv_;

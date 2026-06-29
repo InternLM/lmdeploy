@@ -10,8 +10,8 @@ namespace {
 std::string human_bytes(size_t n)
 {
     constexpr const char* kU[] = {"B", "KiB", "MiB", "GiB", "TiB"};
-    double v = static_cast<double>(n);
-    int    i = 0;
+    double                v    = static_cast<double>(n);
+    int                   i    = 0;
     while (v >= 1024.0 && i < 4) {
         v /= 1024.0;
         ++i;

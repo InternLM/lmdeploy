@@ -49,7 +49,7 @@ struct Generation::Impl {
     unique_ptr<GuidedDecoding>  guided_decoding_;
 
     // persistent
-    Tensor_<int> token_ids_;
+    Tensor_<int>     token_ids_;
     Tensor_<uint8_t> random_states_;
 
     // scheduling states
@@ -155,7 +155,7 @@ struct Generation::Impl {
 
                 random_init_buf_[c.generation_random_state_row] = true;
                 random_seed_buf_[c.generation_random_state_row] = c.gen_cfg.random_seed;
-                d.random_init_needed = true;
+                d.random_init_needed                            = true;
             }
 
             if (c.generation_token_ids_row < 0) {
@@ -259,8 +259,8 @@ struct Generation::Impl {
                                    stream);
         }
 
-        env.emplace("output_ids", output_ids_);              // out
-        env.emplace("curand_state", random_states_);         // inout
+        env.emplace("output_ids", output_ids_);       // out
+        env.emplace("curand_state", random_states_);  // inout
 
         if (const int gs = d.generation_size) {
 

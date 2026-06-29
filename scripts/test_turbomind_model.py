@@ -284,7 +284,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         epilog="""\
 stdout sections: --- setup ---, --- timing ---, --- tokens ---, --- response N begin/end ---
 Optional prompts: --prompt, --prompt-file, --prompt-ids
-Optional engine params: --max-new-tokens, --async, --session-len, --max-batch-size, --enable-prefix-caching, --max-prefill-token-num, --linear-prefix-cache-min-interval, --cache-prompt-boundary, --cache-generation-boundary, --cache-boundary-policy
+Optional engine params:
+    --max-new-tokens
+    --async
+    --session-len
+    --max-batch-size
+    --enable-prefix-caching
+    --max-prefill-token-num
+    --linear-prefix-cache-min-interval
+    --cache-prompt-boundary
+    --cache-generation-boundary
+    --cache-boundary-policy
 Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit 2: usage error.
 """,
     )
