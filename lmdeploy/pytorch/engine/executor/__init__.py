@@ -2,14 +2,7 @@
 from logging import Logger
 
 from lmdeploy.pytorch import envs
-from lmdeploy.pytorch.config import (
-    BackendConfig,
-    CacheConfig,
-    DistConfig,
-    MiscConfig,
-    ModelConfig,
-    SpecDecodeConfig,
-)
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase

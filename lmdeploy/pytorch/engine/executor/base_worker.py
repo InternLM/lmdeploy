@@ -4,14 +4,7 @@ import gc
 from typing import Any
 
 from lmdeploy.pytorch.backends.selector import get_backend
-from lmdeploy.pytorch.config import (
-    BackendConfig,
-    CacheConfig,
-    DistConfig,
-    MiscConfig,
-    ModelConfig,
-    SpecDecodeConfig,
-)
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch

@@ -13,14 +13,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import (
-    BackendConfig,
-    CacheConfig,
-    DistConfig,
-    MiscConfig,
-    ModelConfig,
-    SpecDecodeConfig,
-)
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch

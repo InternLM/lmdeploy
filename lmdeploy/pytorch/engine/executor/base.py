@@ -4,14 +4,7 @@ import asyncio
 import contextlib
 from typing import Any, NamedTuple
 
-from lmdeploy.pytorch.config import (
-    BackendConfig,
-    CacheConfig,
-    DistConfig,
-    MiscConfig,
-    ModelConfig,
-    SpecDecodeConfig,
-)
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch

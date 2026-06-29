@@ -15,14 +15,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import (
-    BackendConfig,
-    CacheConfig,
-    DistConfig,
-    MiscConfig,
-    ModelConfig,
-    SpecDecodeConfig,
-)
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
