@@ -120,9 +120,27 @@ class TestBackendInference:
             full_text = ''.join([c.text for c in chunks])
             assert len(full_text) > 0
 
-    def test_stream_infer_with_session(self, pipe):
-        """Test stream_infer with session for multi-turn context."""
+    def test_stream_infer_with_session(self, pipe, backend):
+        """Multi-turn interactive session.
+
+        PyTorch supports stateful multi-turn inference. TurboMind is
+        stateless-only and rejects any request that is not
+        (sequence_start and sequence_end) with ResponseType.NOT_SUPPORTED,
+        which surfaces as an error string in the response text.
+        """
         session = pipe.session()
+
+        if backend == 'turbomind':
+            generator = pipe.stream_infer(prompts='Hello! My name is Alice.',
+                                          sessions=session,
+                                          gen_config=GenerationConfig(max_new_tokens=30),
+                                          sequence_start=True,
+                                          sequence_end=False,
+                                          enable_thinking=False)
+            text = ''.join(out.text for out in generator if out.text)
+            assert 'NOT_SUPPORTED' in text
+            return
+
         prompt1 = 'Hello! My name is Alice.'
         step = 0
 

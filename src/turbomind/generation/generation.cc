@@ -7,7 +7,6 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
@@ -30,9 +29,9 @@ using std::shared_ptr;
 using std::vector;
 
 struct GenerationData {
-    Buffer_<uint8_t>  random_state;
     Buffer_<uint64_t> random_seed;
     Buffer_<bool>     random_init;
+    Buffer_<int>      random_state_indices;
     Buffer_<int>      max_seq_len;
     Buffer_<int*>     token_ids_ptrs;
     Buffer_<int>      output_ids;
@@ -51,13 +50,11 @@ struct Generation::Impl {
 
     // persistent
     Tensor_<int> token_ids_;
+    Tensor_<uint8_t> random_states_;
 
     // scheduling states
-    vector<int*> h_token_ids_ptrs_;
-    vector<int*> h_token_ids_free_;
-
-    // execution states
-    State random_state_;
+    vector<int> free_token_rows_;
+    vector<int> free_random_state_rows_;
 
     // immutable states
     Buffer_<int> output_ids_;
@@ -65,15 +62,22 @@ struct Generation::Impl {
     std::vector<std::unique_ptr<GenerationData>> data_;
 
     // staging buffers
-    Buffer_<uint8_t>  random_state_buf_;
     Buffer_<uint64_t> random_seed_buf_;
     Buffer_<bool>     random_init_buf_;
+    Buffer_<int>      random_state_indices_buf_;
     Buffer_<int*>     token_ids_ptrs_buf_;
     Buffer_<int>      token_ids_buf_;
     Buffer_<int>      output_ids_buf_;
 
     const int max_batch_size_;
     const int session_len_;
+
+    int* RowPtr(int row)
+    {
+        TM_CHECK_GE(row, 0);
+        TM_CHECK_LT(row, max_batch_size_);
+        return token_ids_.data() + row * token_ids_.stride(0);
+    }
 
     Impl(DataType              dtype,
          int                   max_batch_size,
@@ -87,22 +91,22 @@ struct Generation::Impl {
         TM_CHECK_EQ(dtype, kFloat32);
         BaseGenerationParam base{max_batch_size, vocab_size, vocab_size_padded};
         logits_processor_ = std::make_unique<LogitsProcessor>(base, phases);
-        sampling_         = std::make_unique<Sampling>(base, phases);
+        sampling_         = std::make_unique<Sampling>(base, phases, tp_group->rank());
         stop_criteria_    = std::make_unique<StopCriteria>(base, phases);
         guided_decoding_  = std::make_unique<GuidedDecoding>(base, tp_group, phases);
 
         static_assert(sizeof(curandState_t) % alignof(curandState_t) == 0);
-        random_state_ = {{max_batch_size_, (int)sizeof(curandState_t)}, kUint8, kDEVICE};
-        token_ids_    = {{max_batch_size_, session_len_}, kDEVICE};
-        output_ids_   = {max_batch_size_, kDEVICE};
+        random_states_ = {{max_batch_size_, (int)sizeof(curandState_t)}, kDEVICE};
+        token_ids_     = {{max_batch_size_, session_len_}, kDEVICE};
+        output_ids_    = {max_batch_size_, kDEVICE};
         for (int i = 0; i < max_batch_size_; ++i) {
-            h_token_ids_free_.push_back(token_ids_.data() + i * token_ids_.stride(0));
+            free_token_rows_.push_back(i);
+            free_random_state_rows_.push_back(i);
         }
-        h_token_ids_ptrs_.resize(max_batch_size_);
 
-        random_state_buf_ = {max_batch_size_ * (int)sizeof(curandState_t), kCPUpinned};
-        random_seed_buf_  = {max_batch_size_, kCPUpinned};
-        random_init_buf_  = {max_batch_size_, kCPUpinned};
+        random_seed_buf_          = {max_batch_size_, kCPUpinned};
+        random_init_buf_          = {max_batch_size_, kCPUpinned};
+        random_state_indices_buf_ = {max_batch_size_, kCPUpinned};
 
         token_ids_ptrs_buf_ = {max_batch_size_, kCPUpinned};
         token_ids_buf_      = {max_batch_size_ * (ssize_t)session_len_, kCPUpinned};
@@ -112,11 +116,11 @@ struct Generation::Impl {
         for (int i = 0; i < phases; ++i) {
             auto d = std::make_unique<GenerationData>();
 
-            d->random_state   = empty_like(random_state_buf_, kDEVICE);
-            d->random_seed    = empty_like(random_seed_buf_, kDEVICE);
-            d->random_init    = empty_like(random_init_buf_, kDEVICE);
-            d->token_ids_ptrs = empty_like(token_ids_ptrs_buf_, kDEVICE);
-            d->output_ids     = empty_like(output_ids_, kDEVICE);
+            d->random_seed          = empty_like(random_seed_buf_, kDEVICE);
+            d->random_init          = empty_like(random_init_buf_, kDEVICE);
+            d->random_state_indices = empty_like(random_state_indices_buf_, kDEVICE);
+            d->token_ids_ptrs       = empty_like(token_ids_ptrs_buf_, kDEVICE);
+            d->output_ids           = empty_like(output_ids_, kDEVICE);
 
             data_.push_back(std::move(d));
         }
@@ -127,73 +131,57 @@ struct Generation::Impl {
         TM_FUNCTION_SCOPE();
         auto& d = *data_.at(phase);
 
-        auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-        const auto& rc = b.rc;
+        Buffer_<Sequence*> rc = env.at("requests").buffer();
 
         // random states
         d.random_init_needed = false;
-        for (int i = 0; i < b.perm.size(); ++i) {
-            const auto& c = *rc[i];
-            if (TM_LIKELY(b.perm[i] < b.bs0)) {  // existing
-                random_init_buf_[i] = false;
-            }
-            else if (c.random_state) {  // already initialized
-                std::copy_n(
-                    c.random_state, sizeof(curandState_t), random_state_buf_.data() + i * sizeof(curandState_t));
-            }
-            else {  // uninitialized
-                d.random_init_needed = true;
-                random_init_buf_[i]  = true;
-                random_seed_buf_[i]  = rc[i]->gen_cfg.random_seed;
-            }
-        }
-        copy(random_state_buf_, b.bsz, d.random_state);
-        if (d.random_init_needed) {
-            copy(random_init_buf_, b.bsz, d.random_init);
-            copy(random_seed_buf_, b.bsz, d.random_seed);
-        }
+        std::fill_n(random_init_buf_.data(), max_batch_size_, false);
 
-        vector<int> used(b.bs0);
-        for (int i = 0; i < b.bsz; ++i) {
-            if (b.perm[i] < b.bs0) {
-                used[b.perm[i]] = 1;
-            }
-        }
-        for (int i = 0; i < b.bs0; ++i) {
-            if (!used[i]) {  // free unused chunks
-                h_token_ids_free_.push_back(h_token_ids_ptrs_[i]);
-            }
-        }
-        // swap-in token_ids
-        int* token_ids_buf = token_ids_buf_.data();
+        int* token_ids_buf   = token_ids_buf_.data();
+        int  generation_size = 0;
         for (int i = 0; i < rc.size(); ++i) {
-            if (const auto& c = *rc[i]; TM_UNLIKELY(b.perm[i] >= b.bs0)) {
-                // allocation
-                TM_CHECK(!h_token_ids_free_.empty());
-                token_ids_ptrs_buf_[i] = h_token_ids_free_.back();
-                h_token_ids_free_.pop_back();
-                // copy to staging buffer
+            auto& c = *rc[i];
+            if (!c.generating) {
+                continue;
+            }
+
+            if (c.generation_random_state_row < 0) {
+                TM_CHECK(!free_random_state_rows_.empty());
+
+                c.generation_random_state_row = free_random_state_rows_.back();
+                free_random_state_rows_.pop_back();
+
+                random_init_buf_[c.generation_random_state_row] = true;
+                random_seed_buf_[c.generation_random_state_row] = c.gen_cfg.random_seed;
+                d.random_init_needed = true;
+            }
+
+            if (c.generation_token_ids_row < 0) {
+                TM_CHECK(!free_token_rows_.empty());
+
+                c.generation_token_ids_row = free_token_rows_.back();
+                free_token_rows_.pop_back();
+
+                auto* dst = RowPtr(c.generation_token_ids_row);
                 std::copy_n(c.token_ids, c.seq_len, token_ids_buf);
-                copy(token_ids_buf, c.seq_len, token_ids_ptrs_buf_[i]);
+                copy(token_ids_buf, c.seq_len, dst);
                 token_ids_buf += c.seq_len;
             }
-            else {
-                token_ids_ptrs_buf_[i] = h_token_ids_ptrs_[b.perm[i]];
-            }
+
+            random_state_indices_buf_[generation_size] = c.generation_random_state_row;
+            token_ids_ptrs_buf_[generation_size++]     = RowPtr(c.generation_token_ids_row);
         }
 
-        copy(token_ids_ptrs_buf_, b.bsz, d.token_ids_ptrs);
-
-        // update `h_token_ids_ptrs_`
-        std::copy_n(token_ids_ptrs_buf_.data(), b.bsz, h_token_ids_ptrs_.data());
-
-        d.generation_size = 0;
-        for (int i = 0; i < rc.size(); ++i) {
-            const auto& c = *rc[i];
-            d.generation_size += c.generating;
+        if (d.random_init_needed) {
+            copy(random_init_buf_, max_batch_size_, d.random_init);
+            copy(random_seed_buf_, max_batch_size_, d.random_seed);
         }
+
+        copy(token_ids_ptrs_buf_, generation_size, d.token_ids_ptrs);
+        copy(random_state_indices_buf_, generation_size, d.random_state_indices);
+        d.generation_size = generation_size;
         // dbg(d.generation_size);
 
         logits_processor_->Setup(phase, env);
@@ -202,18 +190,30 @@ struct Generation::Impl {
         guided_decoding_->Setup(phase, env);
     }
 
+    void Del(TensorMap& env)
+    {
+        Buffer_<Sequence*> rc = env.at("requests").buffer();
+
+        for (int i = 0; i < rc.size(); ++i) {
+            auto& token_row = rc[i]->generation_token_ids_row;
+            if (token_row >= 0) {
+                free_token_rows_.push_back(token_row);
+                token_row = -1;
+            }
+
+            auto& random_row = rc[i]->generation_random_state_row;
+            if (random_row >= 0) {
+                free_random_state_rows_.push_back(random_row);
+                random_row = -1;
+            }
+        }
+    }
+
     void Prepare(int phase, TensorMap& env)
     {
         TM_FUNCTION_SCOPE();
-        auto& d = *data_.at(phase);
-
-        auto& b    = *env.at("batch").data<BatchData*>()[0];
-        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
-
-        if (auto g = copy.group()) {
-            Warp(random_state_.front(), d.random_state, b.bs0, b.perm, random_state_.back(), copy);
-            random_state_.Swap();
-        }
+        (void)phase;
+        (void)env;
     }
 
     void Unprep(int phase, TensorMap& env)
@@ -223,8 +223,6 @@ struct Generation::Impl {
         auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-        // state -> data
-        copy(random_state_.front().buffer(), b.bsz * sizeof(curandState_t), d.random_state);
         copy(output_ids_, b.bsz, d.output_ids);
     }
 
@@ -233,9 +231,6 @@ struct Generation::Impl {
         TM_FUNCTION_SCOPE();
         auto& d    = *data_.at(phase);
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
-
-        copy(d.random_state, d.random_state.size(), random_state_buf_);
-        env.produce("random_state", random_state_buf_);
 
         copy(d.output_ids, d.output_ids.size(), output_ids_buf_);
         env.produce("output_ids", output_ids_buf_);
@@ -253,24 +248,24 @@ struct Generation::Impl {
     {
         TM_FUNCTION_SCOPE();
         auto& d = *data_.at(phase);
-        auto& b = *env.at("batch").data<BatchData*>()[0];
 
         const auto stream = core::Context::stream().handle();
 
         if (d.random_init_needed) {
-            InitializeRandomStates((curandState_t*)random_state_.front().raw_data(),
+            InitializeRandomStates((curandState_t*)random_states_.raw_data(),
                                    d.random_seed.data(),
                                    d.random_init.data(),
-                                   b.bsz,
+                                   max_batch_size_,
                                    stream);
         }
 
         env.emplace("output_ids", output_ids_);              // out
-        env.emplace("curand_state", random_state_.front());  // inout
+        env.emplace("curand_state", random_states_);         // inout
 
         if (const int gs = d.generation_size) {
 
             env.emplace("token_ids_ptrs", d.token_ids_ptrs.slice(0, gs));
+            env.emplace("curand_state_indices", d.random_state_indices.slice(0, gs));
 
             auto logits = env.consume("logits");
 
@@ -318,6 +313,9 @@ void Generation::Run(BatchOp op, int phase, TensorMap& env)
 {
     if (op == BatchOp::kSetup) {
         return impl_->Setup(phase, env);
+    }
+    else if (op == BatchOp::kDel) {
+        return impl_->Del(env);
     }
     else if (op == BatchOp::kPrepare) {
         return impl_->Prepare(phase, env);

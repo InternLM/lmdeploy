@@ -107,6 +107,26 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 由于前缀缓存对 k/v 重复利用的最小粒度是block，如果相同prompt前缀不足一个block（前缀长度\<`cache_block_seq_len`），则推理性能不会有提升。
 
+### 非整块边界复用
+
+有两个开关控制是否在 prompt 与生成边界处发布非整块（partial-block）前缀节点。二者都需要开启 `enable_prefix_caching`，且适用于所有开启前缀缓存的模型：所发布的节点携带该非整块的 k/v；对于循环/混合模型（例如包含 GatedDeltaNet 层的模型），该节点还会额外携带循环状态 checkpoint。默认均为 `False`。
+
+当同一 prompt 会被反复处理（多次采样解码、共享/系统 prompt 或图像 prompt）时，开启 `cache_prompt_boundary`；当需要从生成的精确末端恢复（例如多轮对话）时，开启 `cache_generation_boundary`。如果很少出现此类复用，则建议关闭，因为非整块节点会带来额外的显存与拷贝带宽开销，而在附近已有整块边界时这些开销未必划算。
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(
+    enable_prefix_caching=True,
+    cache_prompt_boundary=True,
+    cache_generation_boundary=True,
+)
+pipe = pipeline('your-model', backend_config=backend_config)
+```
+
+- `cache_prompt_boundary`：在 `prompt_len - 1` 处发布可复用的非整块节点，使重复 prompt（例如对同一 prompt 多次采样，或包含图像 token 的 prompt）跳过 prefill。该节点携带非整块的 k/v；对于循环/混合模型还会额外发布循环状态 checkpoint。代价是产生该节点的请求需要额外一次 prefill 前向计算，以及一个非整块缓存块（partial 块）。
+- `cache_generation_boundary`：在请求正常结束时索引末端的非整块生成块，使得可以从生成的精确末端恢复（例如多轮对话）；对于循环/混合模型还会额外将末端循环状态写入该块。代价是一个非整块缓存块（partial 块）。无论该开关如何设置，块边界处的整块 checkpoint 始终会发布。
+
 ### kv 量化推理开关
 
 `quant_policy`是 kv 量化和推理开关。

@@ -27,20 +27,7 @@ public:
         cv_.notify_one();
     }
 
-    void kill(std::shared_ptr<Request> r)
-    {
-        {
-            std::lock_guard lock{mutex_};
-            if (closed_) {
-                throw std::runtime_error("Queue is closed");
-            }
-            kill_.push_back(std::move(r));
-        }
-        cv_.notify_one();
-    }
-
     void pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-             std::vector<std::shared_ptr<Request>>& kill_reqs,
              unsigned                               max_infer,
              bool                                   blocking,
              bool&                                  abort)
@@ -48,7 +35,7 @@ public:
         std::unique_lock lock{mutex_};
 
         if (blocking) {
-            cv_.wait(lock, [this] { return !(queue_.empty() && kill_.empty()) || closed_; });
+            cv_.wait(lock, [this] { return !queue_.empty() || closed_; });
         }
 
         if (closed_) {
@@ -62,9 +49,6 @@ public:
             }
             queue_.pop_front();
         }
-
-        kill_reqs.insert(kill_reqs.end(), kill_.begin(), kill_.end());
-        kill_.clear();
     }
 
     void close()
@@ -89,12 +73,10 @@ public:
     }
 
 private:
-    std::atomic<uint64_t> unique_id_{};
+    std::atomic<uint64_t> unique_id_{1};
 
     std::pmr::unsynchronized_pool_resource   pool_;
     std::pmr::list<std::shared_ptr<Request>> queue_;
-
-    std::vector<std::shared_ptr<Request>> kill_;
 
     std::mutex              mutex_;
     std::condition_variable cv_;

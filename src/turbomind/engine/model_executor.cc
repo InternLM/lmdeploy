@@ -8,8 +8,8 @@
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/vision_model.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 // #include "dbg.h"
@@ -22,7 +22,7 @@ using std::unique_ptr;
 struct ModelExecutor::Impl {
 
     LanguageModel& model_;
-    VisionModel*   vision_model_;  // nullable
+    VisionModel*   vision_model_;  // nullable: only set for VLM checkpoints
     LlamaLinear&   linear_;
 
     const int device_id_;
@@ -56,19 +56,32 @@ struct ModelExecutor::Impl {
         }
     }
 
+    static void RunCopies(std::vector<ResolvedCopy>& copies)
+    {
+        for (const auto& c : copies) {
+            Copy(Buffer_<uint8_t>{static_cast<uint8_t*>(c.src), static_cast<ssize_t>(c.bytes), kDEVICE},
+                 Buffer_<uint8_t>{static_cast<uint8_t*>(c.dst), static_cast<ssize_t>(c.bytes), kDEVICE});
+        }
+        copies.clear();
+    }
+
     void Run(BatchData& d)
     {
         TM_FUNCTION_SCOPE();
-        auto batch = &d;
 
         BatchCopy copy;
         TensorMap env{{"batch", d.buf()}, {"copy", copy.buf()}};
 
+        // Restore copies first so kPrepare may post-process restored content
+        // (a module reset overrides whatever a whole-object restore wrote).
+        RunCopies(d.restore_copies);
+
+        // Vision sub-graph runs before the language model in each phase so its
+        // env outputs (image embeddings, mrope tensors) are visible downstream.
         if (vision_model_) {
             vision_model_->Run(BatchOp::kPrepare, d.phase, env);
         }
         model_.Run(BatchOp::kPrepare, d.phase, env);
-        // dbg(copy);
         copy.Run();
 
         if (vision_model_) {
@@ -77,10 +90,12 @@ struct ModelExecutor::Impl {
         model_.Run(BatchOp::kForward, d.phase, env);
 
         model_.Run(BatchOp::kUnprep, d.phase, env);
-        // dbg(copy);
         copy.Run();
 
-        // TM_CHECK(0);
+        // Publication copies last: kUnprep is the module's final chance to
+        // finalize frontier contents before the snapshot.
+        RunCopies(d.publish_copies);
+
         AnomalyHandler::instance().Summarize([](...) {});
         AnomalyHandler::instance().Reset();
     }
@@ -125,12 +140,7 @@ ModelExecutor::ModelExecutor(LanguageModel&                model,
                              int                           device_id,
                              Queue<unique_ptr<BatchData>>& inbound,
                              Queue<unique_ptr<BatchData>>& outbound):
-    impl_{std::make_unique<Impl>(model,  //
-                                 vision_model,
-                                 context,
-                                 device_id,
-                                 inbound,
-                                 outbound)}
+    impl_{std::make_unique<Impl>(model, vision_model, context, device_id, inbound, outbound)}
 {
 }
 

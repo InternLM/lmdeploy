@@ -105,6 +105,26 @@ Prefix caching feature is mainly applicable to scenarios where multiple requests
 
 Since k/v block is the smallest granularity for reuse in prefix caching, if the identical prompt prefix is less than one block (prefix length \< cache_block_seq_len), there will be no improvement in inference performance.
 
+### Partial-block boundary reuse
+
+Two flags control whether partial-block prefix nodes are published at the prompt and generation boundaries. Both require `enable_prefix_caching` and apply to any prefix-cached model: the published node carries the partial block's k/v, and on a recurrent/hybrid model (e.g. those with GatedDeltaNet layers) it additionally carries a recurrent-state checkpoint. Both default to `False`.
+
+Enable `cache_prompt_boundary` when the same prompt is processed repeatedly (multi-sample decoding, shared/system or vision prompts), and `cache_generation_boundary` when you need to resume from the exact generation end (e.g. multi-turn chat). Leave them off when such reuse is rare, since the partial-block node costs extra VRAM and copy bandwidth that may not pay off when a nearby full-block boundary already exists.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(
+    enable_prefix_caching=True,
+    cache_prompt_boundary=True,
+    cache_generation_boundary=True,
+)
+pipe = pipeline('your-model', backend_config=backend_config)
+```
+
+- `cache_prompt_boundary`: publish a reusable partial-block node at `prompt_len - 1` so a duplicate prompt (e.g. sampling multiple outputs, or image-token prompts) skips prefill. The node carries the partial block's k/v; a recurrent/hybrid model additionally publishes a recurrent-state checkpoint onto it. Costs one extra prefill forward for the producing request and one partial cache block.
+- `cache_generation_boundary`: index the terminal partial generated block on normal finish so the exact generation end can be resumed (e.g. multi-round conversation); a recurrent/hybrid model additionally adopts the terminal recurrent frontier checkpoint onto it. Costs one partial cache block. Full-block checkpoints at block boundaries are always published regardless of this flag.
+
 ### kv quantization and inference switch
 
 - `quant_policy=4` means 4bit k/v quantization and inference

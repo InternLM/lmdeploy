@@ -238,6 +238,10 @@ class TurboMind:
         ec.cache_max_block_count = engine_config.cache_max_entry_count
         ec.cache_chunk_size = engine_config.cache_chunk_size
         ec.enable_prefix_caching = engine_config.enable_prefix_caching
+        ec.linear_prefix_cache_min_interval = engine_config.linear_prefix_cache_min_interval
+        ec.cache_prompt_boundary = engine_config.cache_prompt_boundary
+        ec.cache_generation_boundary = engine_config.cache_generation_boundary
+        ec.cache_boundary_policy = engine_config.cache_boundary_policy
         ec.enable_metrics = engine_config.enable_metrics
         ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
         ec.max_prefill_iters = engine_config.max_prefill_iters
@@ -391,6 +395,11 @@ class TurboMind:
     def get_schedule_metrics(self):
         # TODO: support dp
         tm_metrics = self.model_comm.get_schedule_metrics(0)
+        if tm_metrics is None:
+            # ScheduleMetrics is not yet wired onto the new scheduler (metrics revival is
+            # deferred). Report no metrics so consumers (health probe / metrics logger)
+            # degrade gracefully instead of dereferencing a missing metrics object.
+            return None
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
@@ -568,13 +577,11 @@ class TurboMindInstance:
             0: ResponseType.SUCCESS,
             1: ResponseType.SESSION_NOT_EXIST,
             2: ResponseType.SESSION_REPEAT,
-            3: ResponseType.SESSION_REPEAT,
-            4: ResponseType.INTERNAL_ENGINE_ERROR,
             5: ResponseType.INTERNAL_ENGINE_ERROR,
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
             8: ResponseType.CANCEL,
-            9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            9: ResponseType.PREFIX_CACHE_CONFLICT,
             10: ResponseType.NO_QUEUE,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
@@ -671,15 +678,9 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
-    def async_end_cb(self, fut: asyncio.Future, status: int):
-        """Executing on engine's signaling thread."""
-        logger.info(f'[async_end_cb] session ended, status = {status}')
-        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
-
     async def async_end(self, session_id):
-        fut = asyncio.get_running_loop().create_future()
-        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
-        await fut
+        """TurboMind is stateless; there is no engine-side session to end."""
+        return
 
     def async_signal_cb(self, s: StreamingSemaphore):
         """Executing on engine's signaling thread."""
@@ -706,15 +707,21 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
+            sequence_start (bool): must be True; TurboMind is stateless-only
+            sequence_end (bool): must be True; TurboMind is stateless-only
             step (int): the offset of the k/v cache
-            stop (bool): indicator for cancelling the session
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
         logger.info(f'[async_stream_infer] session {session_id} start')
+        if not (sequence_start and sequence_end):
+            logger.error(f'[async_stream_infer] session {session_id}: TurboMind supports only '
+                         f'stateless requests; stateful/interactive inference '
+                         f'(sequence_start={sequence_start}, sequence_end={sequence_end}) is not '
+                         f'supported - use prefix caching instead')
+            yield EngineOutput(ResponseType.NOT_SUPPORTED, [])
+            return
         gen_cfg = self._get_generation_config(gen_config)
 
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
@@ -758,7 +765,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
+        session = _tm.SessionParam(id=session_id, step=step)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)
