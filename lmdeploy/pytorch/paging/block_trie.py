@@ -514,6 +514,15 @@ class BlockTrie:
         return (node.block >= 0 and len(node.children) == 0
                 and (node.parent is None or BlockTrie._is_attached_node(node)))
 
+    def _is_attached_cursor(self, node: Node):
+        """Check whether a sequence cursor still reaches the adapter root."""
+        if node.parent is None:
+            return node.block < 0 and self._roots.get(node.adapter_name) is node
+        nodes = self._get_node_blocks(node)
+        if len(nodes) * self.block_size != node.num_matched:
+            return False
+        return all(self._is_attached_node(node) for node in nodes)
+
     def reserve_state_checkpoint_for_seq(self,
                                          seq: SchedulerSequence,
                                          step: int = None,
@@ -1156,7 +1165,7 @@ class BlockTrie:
         block_size = self.block_size
         logical_blocks = seq.logical_blocks
         node: Node = seq.prefix_cache.last_shared_node
-        if node is None:
+        if node is None or not self._is_attached_cursor(node):
             node = self.get_root(seq.adapter_name)
             seq.prefix_cache.last_shared_node = node
 
@@ -1200,8 +1209,10 @@ class BlockTrie:
                 # trie-owned block and release this sequence's duplicate block.
                 node = child
                 self._try_cache_node_routed_experts(node, seq, start, end)
-                free_blocks.append(block)
-                logical_blocks[block_id] = node.block
+                if block != node.block:
+                    free_blocks.append(block)
+                    logical_blocks[block_id] = node.block
+                    blocks.append(node.block)
             else:
                 routed_experts = self._get_routed_experts_for_range(seq, start, end)
                 node = Node(hash_key=hash_key,
@@ -1212,7 +1223,7 @@ class BlockTrie:
                             routed_experts=routed_experts,
                             adapter_name=seq.adapter_name)
                 node.parent = parent
-            blocks.append(node.block)
+                blocks.append(node.block)
             num_matched += block_size
             block_id += 1
 

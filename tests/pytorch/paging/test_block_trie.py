@@ -233,6 +233,36 @@ class TestBlockTire:
         assert allocator.get_ref_count(np.array([private_overlap_block])).item() == 1
         assert seq.prefix_cache.last_shared_node.num_matched == block_size * 3
 
+    def test_private_recompute_cursor_rebuilds_after_overlap_eviction(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3] * block_size + [4]
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_overlap_leaf = cached.prefix_cache.last_shared_node
+        block_mgr.free(cached)
+
+        seq = sess.add_sequence(token_ids)
+        seq.prefix_cache.match_recompute_blocks = 1
+        block_trie.match(seq)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        assert seq.prefix_cache.last_shared_node is cached_overlap_leaf
+        assert block_trie.evict(1) == 1
+        assert cached_overlap_leaf.parent is None
+
+        seq.update_token_ids([5] * (block_size - 1), mode=UpdateTokenMode.INPUTS)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        new_node = seq.prefix_cache.last_shared_node
+        assert new_node.num_matched == block_size * 4
+        assert new_node.parent is not cached_overlap_leaf
+        assert block_trie._is_attached_cursor(new_node)
+
     @pytest.mark.parametrize('raw_match_blocks', [1, 2, 5])
     def test_match_recompute_overlap_boundary_cases(self, block_trie, block_mgr, scheduler, raw_match_blocks):
         sess = scheduler.add_session(0)
