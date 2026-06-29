@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from contextlib import closing
-
 import fire
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
@@ -16,9 +14,6 @@ def input_prompt():
 
 def build_pipe(model_path, backend, trust_remote_code=False, **kwargs):
     engine_config = None
-    if kwargs.get('enable_prefix_caching', False):
-        print('interactive chat cannot be used when prefix caching is enabled')
-        exit(-1)
     if backend == 'turbomind':
         engine_config = TurbomindEngineConfig()
         for key, value in kwargs.items():
@@ -74,35 +69,49 @@ def main(model_path, backend, trust_remote_code=False, **kwargs):
         # set auto backend mode
         backend = autoget_backend(model_path, trust_remote_code=trust_remote_code)
     quit = False
+    messages = []
     with build_pipe(model_path, backend, trust_remote_code=trust_remote_code, **kwargs) as pipe:
         gen_config = build_gen_config(**kwargs)
         adapter_name = get_adapter_name(**kwargs)
         while not quit:
-            with closing(pipe.session()) as sess:
-                while True:
-                    try:
-                        prompt = input_prompt()
-                    except KeyboardInterrupt:
-                        quit = True
-                        break
-                    if prompt == 'end':
-                        sess.close()
-                        break
-                    if prompt == 'exit':
-                        quit = True
-                        break
-                    if prompt.strip() == '':
-                        continue
-                    resps = pipe.chat(prompt,
-                                      session=sess,
+            try:
+                prompt = input_prompt()
+            except KeyboardInterrupt:
+                quit = True
+                continue
+            if prompt == 'end':
+                messages.clear()
+                continue
+            if prompt == 'exit':
+                quit = True
+                continue
+            if prompt.strip() == '':
+                continue
+
+            messages.append({'role': 'user', 'content': prompt})
+            request_messages = [message.copy() for message in messages]
+            # This session is only a per-request cancellation handle; the
+            # conversation state lives in the Python transcript above.
+            request_session = pipe.session()
+            response_text = ''
+            resps = pipe.stream_infer(request_messages,
+                                      sessions=request_session,
                                       gen_config=gen_config,
                                       adapter_name=adapter_name,
-                                      stream_response=True)
-                    try:
-                        for resp in resps:
-                            print(resp.text, end='', flush=True)
-                    except KeyboardInterrupt:
-                        sess.abort()
+                                      stream_response=True,
+                                      sequence_start=True,
+                                      sequence_end=True)
+            try:
+                for resp in resps:
+                    print(resp.text, end='', flush=True)
+                    response_text += resp.text
+            except KeyboardInterrupt:
+                request_session.abort()
+                messages.pop()
+                print()
+                continue
+
+            messages.append({'role': 'assistant', 'content': response_text})
         else:
             print('exiting...')
 
