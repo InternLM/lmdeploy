@@ -70,11 +70,6 @@ def test_concurrent_refresh_snapshot_serializes_probes():
 
 
 async def _run_health_endpoint_refreshes_cached_unhealthy_snapshot():
-    import openai.types.responses.response_create_params as response_create_params
-
-    if not hasattr(response_create_params, 'StreamOptions'):
-        response_create_params.StreamOptions = dict
-
     from lmdeploy.serve.openai.api_server import VariableInterface, health
 
     class _FakeMonitor:
@@ -104,3 +99,35 @@ async def _run_health_endpoint_refreshes_cached_unhealthy_snapshot():
 
 def test_health_endpoint_refreshes_cached_unhealthy_snapshot():
     asyncio.run(_run_health_endpoint_refreshes_cached_unhealthy_snapshot())
+
+
+async def _run_health_endpoint_does_not_refresh_initializing_snapshot():
+    from lmdeploy.serve.openai.api_server import VariableInterface, health
+
+    class _FakeMonitor:
+
+        def __init__(self):
+            self.refresh_calls = 0
+
+        def snapshot(self):
+            return dict(status='initializing', message='Engine health monitor is starting.')
+
+        async def refresh_snapshot(self):
+            self.refresh_calls += 1
+            return dict(status='healthy', message='fresh probe succeeded')
+
+    monitor = _FakeMonitor()
+    original_monitor = VariableInterface.health_monitor
+    VariableInterface.health_monitor = monitor
+    try:
+        response = await health()
+    finally:
+        VariableInterface.health_monitor = original_monitor
+
+    assert response.status_code == 503
+    assert json.loads(response.body) == dict(status='initializing', message='Engine health monitor is starting.')
+    assert monitor.refresh_calls == 0
+
+
+def test_health_endpoint_does_not_refresh_initializing_snapshot():
+    asyncio.run(_run_health_endpoint_does_not_refresh_initializing_snapshot())
