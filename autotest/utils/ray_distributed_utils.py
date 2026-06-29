@@ -8,11 +8,7 @@ from time import time as time_time
 from typing import Any
 
 import requests
-from utils.ascend_multinode_utils import (
-    _local_addr,
-    build_ascend_multinode_env,
-    ensure_ascend_rank_table,
-)
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env, resolve_hccl_if_ip
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
@@ -165,11 +161,7 @@ class RayLMDeployManager:
 
     def start_ray_cluster(self):
         """Start or join Ray cluster."""
-        local_ip = None
-        if ascend_multinode_enabled():
-            rank_table = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
-            local_ip = _local_addr(rank_table)
-            os.environ.setdefault('RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES', '1')
+        local_ip = resolve_hccl_if_ip() if ascend_multinode_enabled() else None
 
         if self.is_master:
             cmd = ['ray', 'start', '--head', '--port', str(self.ray_port)]
@@ -214,7 +206,7 @@ class RayLMDeployManager:
 
         extra_params = run_config.get('extra_params', {})
         resolve_extra_params(extra_params, config)
-        ensure_ascend_rank_table(config, run_config)
+        ensure_ascend_multinode_env(config, run_config)
 
         # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
         case_name = get_case_str_by_config(run_config)

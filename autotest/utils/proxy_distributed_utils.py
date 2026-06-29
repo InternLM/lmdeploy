@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 import requests
-from utils.ascend_multinode_utils import _master_addr, build_ascend_multinode_env, ensure_ascend_rank_table
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
@@ -201,11 +201,7 @@ def proxy_worker_node_wait(manager, timeout_minutes: int = 120):
 class ProxyDistributedManager:
 
     def __init__(self):
-        rank_table = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
-        if ascend_multinode_enabled():
-            self.master_addr = _master_addr(rank_table)
-        else:
-            self.master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
+        self.master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
         self.node_rank = int(os.getenv('NODE_RANK', '0'))
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proxy_port = int(os.getenv('PROXY_PORT', str(DEFAULT_PROXY_PORT)))
@@ -215,9 +211,6 @@ class ProxyDistributedManager:
         self.proxy_process = None
         self._ray_manager = None
         if ascend_multinode_enabled():
-            os.environ['MASTER_ADDR'] = self.master_addr
-            os.environ['LMDEPLOY_DP_MASTER_ADDR'] = self.master_addr
-            os.environ['LMDEPLOY_DIST_MASTER_ADDR'] = self.master_addr
             self._ray_manager = RayLMDeployManager(
                 master_addr=self.master_addr,
                 ray_port=self.ray_port,
@@ -281,7 +274,7 @@ class ApiServerPerTest:
 
         extra_params = self.run_config.get('extra_params', {})
         resolve_extra_params(extra_params, self.config)
-        ensure_ascend_rank_table(self.config, self.run_config)
+        ensure_ascend_multinode_env(self.config, self.run_config)
 
         # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
         case_name = get_case_str_by_config(self.run_config)

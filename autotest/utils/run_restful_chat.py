@@ -9,7 +9,7 @@ import psutil
 import requests
 from openai import APIStatusError, BadRequestError, OpenAI
 from pytest_assume.plugin import assume
-from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_rank_table
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
@@ -46,7 +46,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
         run_config['extra_params'] = {}
 
     resolve_extra_params(run_config['extra_params'], config)
-    ensure_ascend_rank_table(config, run_config)
+    ensure_ascend_multinode_env(config, run_config)
 
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None

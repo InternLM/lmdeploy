@@ -53,9 +53,7 @@ PROFILE_TO_MODEL_TYPE_KEY = {
 DEPS_PROFILE_ENV = 'DEPS_PROFILE'
 EMPTY_DEPS_SELECTOR = '__empty__'
 # Autotest-only keys in engine_config.extra (not forwarded to lmdeploy CLI).
-CLI_SKIP_EXTRA_KEYS = frozenset({
-    'rank-table-file',
-})
+CLI_SKIP_EXTRA_KEYS = frozenset()
 
 
 def get_model_path_from_config(config: dict[str, Any], model_id: str) -> str:
@@ -76,13 +74,6 @@ def get_model_work_path(config: dict[str, Any]) -> str:
 def resolve_extra_params(extra_params: dict[str, Any], config: dict[str, Any]) -> None:
     """Resolve relative model paths in extra_params."""
     model_path_keys = ['speculative-draft-model']
-    resource_path_keys = ['rank-table-file']
-
-    for key in resource_path_keys:
-        if key in extra_params:
-            value = extra_params[key]
-            if value and isinstance(value, str) and not os.path.isabs(value):
-                extra_params[key] = os.path.join(config['resource_path'], value)
 
     for key in model_path_keys:
         if key in extra_params:

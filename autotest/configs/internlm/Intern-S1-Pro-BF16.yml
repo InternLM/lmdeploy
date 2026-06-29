@@ -6,7 +6,8 @@ ascend:
     dp: 64
     ep: 64
     extra:
-      rank-table-file: rank_table/rank_table_4x16.json
+      session-len: 65536
+      max-batch-size: 128
   backends:
   - name: pytorch
     communicators:

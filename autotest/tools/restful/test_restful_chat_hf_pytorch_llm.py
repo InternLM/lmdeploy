@@ -137,6 +137,19 @@ def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, run_confi
 
 
 @pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api_pytorch
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_distributed_dpep32
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'dp': 32, 'ep': 32}))
+def test_restful_chat_distributed_dpep32(shared_proxy_manager, config, run_config, common_case_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                common_case_config=common_case_config,
+                                manager=shared_proxy_manager)
+
+
+@pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra=_PREFIX_CACHE_EXTRA))
