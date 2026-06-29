@@ -17,14 +17,10 @@ from openai.types.responses import (
 )
 from openai.types.responses.response import IncompleteDetails as ResponseIncompleteDetails
 from openai.types.responses.response import ToolChoice as ResponseToolChoice
+from openai.types.responses.response_create_params import StreamOptions as ResponseStreamOptions
 from openai.types.responses.tool import Tool as ResponseTool
 from openai.types.shared import Metadata, Reasoning
 from pydantic import BaseModel, ConfigDict, Field
-
-try:
-    from openai.types.responses.response_create_params import StreamOptions as ResponseStreamOptions
-except ImportError:
-    ResponseStreamOptions: TypeAlias = dict[str, Any]
 
 ResponseInputOutputItem: TypeAlias = ResponseInputItemParam | ResponseOutputItem
 

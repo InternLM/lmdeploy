@@ -2,10 +2,16 @@
 import json
 import random
 from dataclasses import dataclass
-from os import getenv
 
 import torch
 import torch.nn.functional as F
+
+from lmdeploy.pytorch.envs import (
+    eplb_experts_statistic_file,
+    eplb_num_groups,
+    eplb_num_redundant_experts,
+    eplb_ranks_per_node,
+)
 
 
 def balanced_packing(weight: torch.Tensor, num_packs: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -211,10 +217,10 @@ class EPLBMetadata:
 
     @staticmethod
     def init(ep_size: int, num_routed_experts: int, num_hidden_layers: int):
-        num_groups = int(getenv('EPLB_NUM_GROUPS', 4))
-        weight_path = getenv('EPLB_EXPERTS_STATISTIC_FILE', None)
-        ranks_per_node = int(getenv('RANKS_PER_NODES', 8))
-        num_redundant_experts = int(getenv('EPLB_NUM_REDUNDANT_EXPERTS', 32))
+        num_groups = eplb_num_groups
+        weight_path = eplb_experts_statistic_file
+        ranks_per_node = eplb_ranks_per_node
+        num_redundant_experts = eplb_num_redundant_experts
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if weight_path is None:
             experts_statistic = torch.arange(num_routed_experts, dtype=torch.int32,

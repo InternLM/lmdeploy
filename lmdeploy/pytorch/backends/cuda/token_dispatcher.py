@@ -774,7 +774,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> torch.Tensor:
         combined_hidden_states, event, hook = (self.get_buffer().low_latency_combine(
             hidden_states,
             topk_idx,
