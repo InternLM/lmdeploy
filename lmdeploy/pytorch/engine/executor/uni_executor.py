@@ -5,7 +5,6 @@ from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
     DistConfig,
-    MemDecodeConfig,
     MiscConfig,
     ModelConfig,
     SpecDecodeConfig,
@@ -34,7 +33,6 @@ class UniExecutor(ExecutorBase):
         adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         specdecode_config: SpecDecodeConfig = None,
-        memdecode_config: MemDecodeConfig = None,
         trust_remote_code: bool = False
     ):
         """Initialize Executor."""
@@ -47,7 +45,6 @@ class UniExecutor(ExecutorBase):
                          adapters=adapters,
                          device_type=device_type,
                          specdecode_config=specdecode_config,
-                         memdecode_config=memdecode_config,
                          trust_remote_code=trust_remote_code)
 
         self.device_ctx = DeviceContext(device_type=device_type)
@@ -60,7 +57,6 @@ class UniExecutor(ExecutorBase):
             device_ctx=self.device_ctx,
             adapters=adapters,
             specdecode_config=specdecode_config,
-            memdecode_config=memdecode_config,
             trust_remote_code=trust_remote_code,
         )
 

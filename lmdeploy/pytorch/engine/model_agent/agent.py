@@ -17,7 +17,6 @@ from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
-    MemDecodeConfig,
     MiscConfig,
     ModelConfig,
     SpecDecodeConfig,
@@ -257,12 +256,12 @@ class BaseModelAgent:
         device_ctx: DeviceContext,
         adapters: dict[str, str] = None,
         specdecode_config: SpecDecodeConfig = None,
-        memdecode_config: MemDecodeConfig = None,
         trust_remote_code: bool = False
     ):
 
         self.model_config = model_config
         self.cache_config = cache_config
+        memdecode_config = misc_config.memdecode_config
         if memdecode_config is not None and specdecode_config is not None:
             raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         # use raw tokenizer

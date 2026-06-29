@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from lmdeploy.pytorch.config import DistConfig, MemDecodeConfig, ModelConfig
+from lmdeploy.pytorch.config import DistConfig, MemDecodeConfig, MiscConfig, ModelConfig
 
 _OLD_MEMDECODE_FIELDS = (
     'base_model_path',
@@ -84,6 +84,15 @@ def test_memdecode_config_requires_router_path_for_adaptive_router():
 
     with pytest.raises(ValueError, match='router_path is required when adaptive_router is enabled'):
         MemDecodeConfig(memory_model_path='memory', memory_model_config=memory_config, adaptive_router=True)
+
+
+def test_misc_config_can_own_memdecode_config():
+    memory_config = _model_config_from_hf(_hf_config(), 'memory')
+    memdecode_config = MemDecodeConfig(memory_model_path='memory', memory_model_config=memory_config)
+
+    misc_config = MiscConfig(memdecode_config=memdecode_config)
+
+    assert misc_config.memdecode_config is memdecode_config
 
 
 def test_model_config_from_pretrained_does_not_build_memdecode_config(monkeypatch):

@@ -589,6 +589,7 @@ class MiscConfig:
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
     enable_chunked_prefill: bool = False
+    memdecode_config: MemDecodeConfig = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):

@@ -41,6 +41,35 @@ def _make_agent_with_queues():
     return agent
 
 
+def test_build_model_agent_keeps_memdecode_config_inside_misc_config(monkeypatch):
+    import lmdeploy.pytorch.engine.model_agent as model_agent_module
+
+    calls = {}
+
+    class _BaseModelAgent:
+
+        def __init__(self, *args, **kwargs):
+            calls['kwargs'] = kwargs
+
+    monkeypatch.setattr(model_agent_module, 'BaseModelAgent', _BaseModelAgent)
+    memdecode_config = object()
+    misc_config = SimpleNamespace(memdecode_config=memdecode_config)
+
+    agent = model_agent_module.build_model_agent(
+        model_path='base',
+        model_config=object(),
+        cache_config=object(),
+        backend_config=object(),
+        misc_config=misc_config,
+        dist_ctx=object(),
+        device_ctx=object(),
+    )
+
+    assert isinstance(agent, _BaseModelAgent)
+    assert calls['kwargs']['misc_config'] is misc_config
+    assert 'memdecode_config' not in calls['kwargs']
+
+
 class TestDrainQueues:
 
     def test_drain_empty_queues(self):

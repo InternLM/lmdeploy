@@ -8,7 +8,6 @@ from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
     DistConfig,
-    MemDecodeConfig,
     MiscConfig,
     ModelConfig,
     SpecDecodeConfig,
@@ -47,7 +46,6 @@ class ExecutorBase:
                  misc_config: MiscConfig,
                  adapters: dict[str, str] = None,
                  specdecode_config: SpecDecodeConfig = None,
-                 memdecode_config: MemDecodeConfig = None,
                  device_type: str = 'cuda',
                  trust_remote_code: bool = False):
         """Initialize Executor."""
@@ -71,7 +69,6 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
-        self.memdecode_config = memdecode_config
 
     def download_models(self):
         """Download model."""
@@ -296,18 +293,20 @@ class ExecutorBase:
 
     def _get_mem_state_cache_mem(self) -> int:
         """Get memory-model state cache mem usage for memdecode."""
-        if self.memdecode_config is None:
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is None:
             return 0
-        memory_model_config = self.memdecode_config.memory_model_config
+        memory_model_config = memdecode_config.memory_model_config
         if len(memory_model_config.states_shapes) == 0:
             return 0
         return self._get_state_cache_mem(memory_model_config.states_shapes, self.cache_config)
 
     def _validate_memdecode_configs(self):
         """Validate MemDecode config compatibility."""
-        if self.memdecode_config is None:
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is None:
             return
-        memory_model_config = self.memdecode_config.memory_model_config
+        memory_model_config = memdecode_config.memory_model_config
 
         if self.specdecode_config is not None:
             raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
@@ -371,8 +370,9 @@ class ExecutorBase:
         cache_block_size = CacheEngine.get_cache_block_size(self.cache_config, self.model_config,
                                                             self.dist_config.attn_tp)
         memory_cache_block_size = 0
-        if self.memdecode_config is not None:
-            memory_model_config = self.memdecode_config.memory_model_config
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is not None:
+            memory_model_config = memdecode_config.memory_model_config
             memory_cache_block_size = CacheEngine.get_cache_block_size(
                 self.cache_config,
                 memory_model_config,
@@ -456,7 +456,7 @@ class ExecutorBase:
         if self.specdecode_config:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
-        if self.memdecode_config is not None:
+        if self.misc_config.memdecode_config is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
         if self.misc_config.empty_init:

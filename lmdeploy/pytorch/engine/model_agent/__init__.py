@@ -3,7 +3,6 @@
 from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
-    MemDecodeConfig,
     MiscConfig,
     ModelConfig,
     SpecDecodeConfig,
@@ -24,7 +23,6 @@ def build_model_agent(
     device_ctx: DeviceContext = None,
     adapters: dict[str, str] = None,
     specdecode_config: SpecDecodeConfig = None,
-    memdecode_config: MemDecodeConfig = None,
     trust_remote_code: bool = False
 ):
     """Create model agent.
@@ -57,7 +55,6 @@ def build_model_agent(
         dist_ctx=dist_ctx,
         device_ctx=device_ctx,
         specdecode_config=specdecode_config,
-        memdecode_config=memdecode_config,
         trust_remote_code=trust_remote_code
     )
     return model_agent
