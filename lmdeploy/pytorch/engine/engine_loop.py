@@ -212,7 +212,8 @@ class EngineLoop:
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
-                                logprobs=logprobs))
+                                logprobs=logprobs,
+                                ce_loss=out.ce_loss))
 
     @staticmethod
     def _update_logprobs(step_outputs: list[InferOutput]):
@@ -299,12 +300,14 @@ class EngineLoop:
 
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
+        ce_loss = batched_outputs.ce_loss
 
         if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
+            seq.append_ce_loss(ce_loss, finish=False)
             self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
             return dict()
 
@@ -353,7 +356,10 @@ class EngineLoop:
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
-            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
+            req_metrics = RequestMetrics(new_token_timestamp,
+                                         msg.engine_events,
+                                         spec_info=spec_info,
+                                         cached_tokens=msg.cached_tokens)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -363,6 +369,12 @@ class EngineLoop:
                               logprobs=cur_logprobs,
                               routed_experts=msg.routed_experts)
             outputs[session_id] = out
+
+            if msg.return_ce_loss:
+                if ce_loss is not None:
+                    msg.append_ce_loss(ce_loss[idx], finish=True)
+                if finish:
+                    outputs[session_id].ce_loss = msg.ce_loss
 
             if msg.return_logits:
                 logit = __get_logit(msg, logits, seq_length, idx)

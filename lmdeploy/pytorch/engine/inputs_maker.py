@@ -603,9 +603,15 @@ class InputsMakerAsync:
         else:
             num_ignored_history = torch.zeros(len(valid_seqs), dtype=torch.long)
 
+        # num_all_ids can be one decode step stale here: EngineLoop prefetches
+        # the next inputs before _finish_forward_output() advances the sequence,
+        # so +max_q_seqlen recovers this forward's kv length. The bug was adding
+        # max_q_seqlen AGAIN in the reductions, plus using batch_size (which
+        # counts scheduler-dropped invalid seqs) instead of reducing over the
+        # valid seqs only (#4024).
         kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
-        sum_kv_seqlen = sum(kv_seqlens) + batch_size * max_q_seqlen
-        max_kv_seqlen = max(kv_seqlens) + max_q_seqlen
+        sum_kv_seqlen = sum(kv_seqlens)
+        max_kv_seqlen = max(kv_seqlens)
 
         output = ModelInputsDelta(
             indices=None,
@@ -650,13 +656,15 @@ class InputsMakerAsync:
 
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
         max_q_seqlen = num_decode_tokens
+        # Keep +max_q_seqlen (num_all_ids may be one decode step stale), but do
+        # not add it a second time in the reductions or use batch_size (#4024).
         kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
         if len(kv_seqlens) == 0:
             sum_kv_seqlen = 0
             max_kv_seqlen = 0
         else:
-            sum_kv_seqlen = sum(kv_seqlens) + batch_size * max_q_seqlen
-            max_kv_seqlen = max(kv_seqlens) + max_q_seqlen
+            sum_kv_seqlen = sum(kv_seqlens)
+            max_kv_seqlen = max(kv_seqlens)
 
         output = ModelInputsDelta(
             indices=None,
@@ -713,6 +721,10 @@ class InputsMakerAsync:
         def __need_routed_experts(seqs: 'SeqList'):
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
+
+        def __need_ce_loss(seqs: 'SeqList'):
+            """Need input cross-entropy loss."""
+            return any(seq.return_ce_loss for seq in seqs)
 
         def __create_model_inputs(seqs):
             """Createe model inputs."""
@@ -824,6 +836,7 @@ class InputsMakerAsync:
 
         return_logits = __need_logits(running)
         return_routed_experts = __need_routed_experts(running)
+        return_ce_loss = __need_ce_loss(running)
 
         return dict(
             running=running,
@@ -836,6 +849,7 @@ class InputsMakerAsync:
             return_logits=return_logits,
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
+            return_ce_loss=return_ce_loss,
         )
 
     def do_prefill_pnode(self):

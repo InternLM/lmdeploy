@@ -87,6 +87,10 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
         add(outputs_, "logits", data_type_, kCPU, len, vocab_size_);
     }
 
+    if (param.gen_cfg.return_ppl) {
+        add(outputs_, "ce_loss", data_type_v<float>, kCPU, 1);
+    }
+
     if (param.gen_cfg.output_last_hidden_state) {
         const int len = param.gen_cfg.output_last_hidden_state == GenerationConfig::kAll ? max_in_out_len : max_out_len;
         add(outputs_, "last_hidden_state", data_type_, kCPU, len, hidden_dim_);

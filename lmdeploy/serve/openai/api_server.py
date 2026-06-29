@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from lmdeploy.serve.parsers import ResponseParser
 
+import shortuuid
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -78,6 +79,8 @@ from lmdeploy.serve.openai.protocol import (
     ModelPermission,
     PoolingRequest,
     PoolingResponse,
+    PPLRequest,
+    PPLResponse,
     TopLogprob,
     UpdateParamsRequest,
     UpdateWeightsFromDistributedRequest,
@@ -449,7 +452,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
-    request_id = str(session.session_id)
+    request_id = f'chatcmpl-{shortuuid.random()}'
     created_time = int(time.time())
 
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
@@ -587,11 +590,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_logprob:
                 output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
-                total_tokens = sum([res.input_token_len, res.generate_token_len])
-                final_usage = UsageInfo(
+                final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
-                    total_tokens=total_tokens,
+                    cached_tokens=res.cached_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
             stream_deltas = response_parser.stream_chunk(
@@ -725,11 +727,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-    usage = UsageInfo(
+    usage = UsageInfo.build(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
+        cached_tokens=final_res.cached_tokens,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -1187,7 +1188,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
-    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    usage = UsageInfo.build(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
 
     data = []
     for i, score in enumerate(batch_scores):
@@ -1198,6 +1199,38 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
         })
 
     response = PoolingResponse(model=model_name, data=data, usage=usage)
+    return response.model_dump()
+
+
+@router.post('/get_ppl', dependencies=[Depends(validate_json_request)])
+async def get_ppl(request: PPLRequest, raw_request: Request = None):
+    """Get the perplexity (mean cross-entropy loss) of the input prompt.
+
+    The request should be a JSON object with the following fields:
+
+    - **input** (str | list[int]): the input to score, either raw text or token
+      ids. Text is tokenized with ``tokenizer.encode`` (no chat template is
+      applied).
+    """
+    async_engine = VariableInterface.async_engine
+
+    request_input = request.input
+
+    # pydantic already validated `input` as `str | list[int]`; text ->
+    # tokenizer.encode, otherwise the token ids are used as-is
+    if isinstance(request_input, str):
+        input_ids = async_engine.tokenizer.encode(request_input)
+    else:
+        input_ids = request_input
+    if not input_ids:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must not be empty.')
+
+    try:
+        ppl = await async_engine.async_get_ppl(input_ids)
+    except ValueError as e:
+        return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
+
+    response = PPLResponse(ppl=ppl)
     return response.model_dump()
 
 

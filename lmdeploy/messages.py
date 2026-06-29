@@ -136,6 +136,9 @@ class GenerationConfig:
     output_last_hidden_state: Literal['all', 'generation'] = None
     include_stop_str_in_output: bool = False
 
+    # return the perplexity (mean cross-entropy loss) of the input prompt,
+    return_ppl: bool = False
+
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
@@ -558,6 +561,7 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
+    cached_tokens: int = 0
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -673,6 +677,7 @@ class RequestMetrics:
     token_timestamp: float = 0.0
     engine_events: list[EngineEvent] = field(default_factory=list)
     spec_info: dict[str, Any] | None = None
+    cached_tokens: int = 0
 
 
 @dataclass
@@ -687,6 +692,8 @@ class EngineOutput:
         cache_block_ids: send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
         req_metrics: request metrics information
+        ce_loss: the summed, unnormalized cross-entropy (NLL) of the input
+            prompt, available when ``GenerationConfig.return_ppl`` is set.
     """
     status: ResponseType
     token_ids: list[int]
@@ -696,6 +703,7 @@ class EngineOutput:
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
+    ce_loss: float = None
 
 
 @dataclass

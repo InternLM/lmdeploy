@@ -50,11 +50,28 @@ class ModelList(BaseModel):
     data: list[ModelCard] = []
 
 
+class PromptTokensDetails(BaseModel):
+    """Prompt token usage details."""
+
+    cached_tokens: int = 0
+
+
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: int | None = 0
+    prompt_tokens_details: PromptTokensDetails | None = None
+
+    @classmethod
+    def build(cls, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> 'UsageInfo':
+        """Build OpenAI-compatible usage with prefix-cache details."""
+        return cls(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+        )
 
 
 class Function(BaseModel):
@@ -446,6 +463,23 @@ class PoolingResponse(BaseModel):
     model: str = None
     data: list[dict[str, Any]]
     usage: UsageInfo
+
+
+class PPLRequest(BaseModel):
+    """Get perplexity request.
+
+    The input may be raw text or token ids. Text is tokenized with
+    ``tokenizer.encode`` (no chat template applied).
+    """
+    input: str | list[int]
+
+
+class PPLResponse(BaseModel):
+    """Get perplexity response.
+
+    ``ppl`` is the perplexity (mean cross-entropy loss) of the input.
+    """
+    ppl: float
 
 
 class EncodeRequest(BaseModel):

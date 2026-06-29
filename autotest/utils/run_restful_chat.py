@@ -21,6 +21,7 @@ from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.openai.api_client import APIClient
+from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 
@@ -1074,7 +1075,9 @@ def test_qwen_multiple_round_prompt(client, model):
     messages.append(response.choices[0].message)
 
     for tool_call in response.choices[0].message.tool_calls:
-        tool_call_args = json.loads(tool_call.function.arguments)
+        tool_call_args = _parse_tool_call_arguments_dict(tool_call.function.arguments)
+        assert tool_call_args is not None, (
+            f'tool call arguments must be a JSON object string, got {tool_call.function.arguments!r}')
         tool_call_result = get_function_by_name(tool_call.function.name)(**tool_call_args)
         messages.append({
             'role': 'tool',

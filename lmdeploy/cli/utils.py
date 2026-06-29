@@ -7,10 +7,6 @@ import sys
 from collections import defaultdict
 from typing import Any
 
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
-
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
     """Formatter to output default value and type in help information."""
@@ -68,12 +64,12 @@ def get_lora_adapters(adapters: list[str]):
     return output
 
 
-def get_chat_template(chat_template: str, model_path: str = None):
+def get_chat_template(chat_template: str | None, model_path: str | None = None):
     """Get chat template config.
 
     Args:
-        chat_template(str): it could be a builtin chat template name, or a chat template json file
-        model_path(str): the model path, used to check deprecated chat template names
+        chat_template(str | None): it could be a builtin chat template name, or a chat template json file
+        model_path(str | None): the model path, passed through to the chat template config
     """
     import os
 
@@ -82,14 +78,7 @@ def get_chat_template(chat_template: str, model_path: str = None):
         if os.path.isfile(chat_template):
             return ChatTemplateConfig.from_json(chat_template)
         else:
-            from lmdeploy.model import DEPRECATED_CHAT_TEMPLATE_NAMES, MODELS, REMOVED_CHAT_TEMPLATE_NAMES
-            if chat_template in REMOVED_CHAT_TEMPLATE_NAMES:
-                raise ValueError(f"The chat template '{chat_template}' has been removed. "
-                                 f'Please refer to the latest chat templates in '
-                                 f'https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html')
-            if chat_template in DEPRECATED_CHAT_TEMPLATE_NAMES:
-                logger.warning(f"The chat template '{chat_template}' is deprecated and fallback to hf chat template.")
-                chat_template = 'hf'
+            from lmdeploy.model import MODELS
             assert chat_template in MODELS.module_dict.keys(), \
                 f"chat template '{chat_template}' is not " \
                 f'registered. The builtin chat templates are: ' \
