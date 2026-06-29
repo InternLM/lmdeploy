@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 //
 // Standalone test for invokeMropePositionIds. Builds segment descriptors with the same
-// logic the production Qwen3_5Vit::Impl::Setup() uses, runs the device kernel, and
+// logic the production QwenVit::Impl::Setup() uses, runs the device kernel, and
 // compares against a CPU reference that replicates the pre-refactor scalar loop.
 
 #include <algorithm>
@@ -13,7 +13,7 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/models/qwen3_5vit/mrope_position_ids.h"
+#include "src/turbomind/models/qwenvit/qwenvit_kernels.h"
 
 using namespace turbomind;
 
@@ -45,7 +45,6 @@ struct RequestSpec {
 
 // Pre-refactor scalar reference: builds the full (seq_len, 3) row for each request,
 // then we read out the [active_start, active_end) slice to compare against kernel output.
-// Mirrors qwen3_5vit.cc:440-516 (pre-refactor) exactly.
 std::vector<int> cpu_reference_full_row(const RequestSpec& r, int S, int& out_delta)
 {
     std::vector<int> row(r.seq_len * 3, 0);
@@ -96,7 +95,7 @@ std::vector<int> cpu_reference_full_row(const RequestSpec& r, int S, int& out_de
     return row;
 }
 
-// Mirrors the host walk in qwen3_5vit.cc Setup() - same logic, returns the segment list.
+// Mirrors the host walk in qwenvit.cc Setup() - same logic, returns the segment list.
 void emit_segments(const RequestSpec& r, int q_offset, int S, std::vector<MropeSegment>& out)
 {
     if (r.autoregres || r.images.empty()) {

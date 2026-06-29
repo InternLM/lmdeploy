@@ -170,7 +170,7 @@ class _BaseQwen2VisionModel(TextModel):
             grid_thw = self._grid_thw(input_mm['image_grid_thw'])
             token_begin, token_end = self._token_range(input_mm)
             items.append(
-                _tm.multimodal.Qwen2VitItem(
+                _tm.multimodal.QwenVitItem(
                     modality=_tm.multimodal.Modality.IMAGE,
                     data=data,
                     token_begin=token_begin,
@@ -178,7 +178,7 @@ class _BaseQwen2VisionModel(TextModel):
                     grid_thw=grid_thw,
                 ))
 
-        return _tm.multimodal.Qwen2VitInput(items)
+        return _tm.multimodal.QwenVitInput(items)
 
     def model(self, pfx):
         self._build_vision_model(pfx + 'visual')
@@ -188,7 +188,7 @@ class _BaseQwen2VisionModel(TextModel):
         return builder
 
     def _make_vision_root_cfg(self):
-        cfg = _tm.Qwen2VitConfig()
+        cfg = _tm.QwenVitConfig()
         cfg.data_type = self._resolver.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.out_hidden_dim = self._vis_out_hidden
@@ -235,7 +235,7 @@ class _BaseQwen2VisionModel(TextModel):
 
     def vit_block(self, pfx):
         inter_size = self._padded_inter_size()
-        cfg = _tm.Qwen2VitBlockConfig()
+        cfg = _tm.QwenVitBlockConfig()
         cfg.data_type = self._resolver.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.head_num = self._vis_heads

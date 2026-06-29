@@ -1,25 +1,21 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/models/qwen2_vit/qwen2_vit.h"
+#include "src/turbomind/models/qwenvit/qwenvit.h"
 
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/attention/attention.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/kernels/norm/layer_norm.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/norm_weight.h"
-#include "src/turbomind/models/qwen2_vit/qwen2_vit_block_weight.h"
-#include "src/turbomind/models/qwen2_vit/qwen2_vit_input.h"
-#include "src/turbomind/models/qwen2_vit/qwen2_vit_kernels.h"
-#include "src/turbomind/models/qwen2_vit/qwen2_vit_weight.h"
-#include "src/turbomind/models/qwen3_5vit/bias_gelu.h"
-#include "src/turbomind/models/qwen3_5vit/fast_rotary_pos_emb.h"
-#include "src/turbomind/models/qwen3_5vit/grid_mapping.h"
-#include "src/turbomind/models/qwen3_5vit/mrope_position_ids.h"
-#include "src/turbomind/models/qwen3_5vit/qkv_preprocess.h"
+#include "src/turbomind/models/qwenvit/qwenvit_block_weight.h"
+#include "src/turbomind/models/qwenvit/qwenvit_input.h"
+#include "src/turbomind/models/qwenvit/qwenvit_kernels.h"
+#include "src/turbomind/models/qwenvit/qwenvit_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -28,9 +24,9 @@
 
 namespace turbomind {
 
-struct Qwen2Vit::Impl {
-    const Qwen2VitWeight&       weights_;
-    const core::Qwen2VitConfig& config_;
+struct QwenVit::Impl {
+    const QwenVitWeight&        weights_;
+    const core::QwenVitConfig&  config_;
     LlamaLinear&                linear_;
     const comm::HostComm&       h_tp_group;
     comm::DeviceCommImpl* const d_comm_;
@@ -50,7 +46,7 @@ struct Qwen2Vit::Impl {
         std::vector<std::pair<int, int>> image_embeds_coords;  // (size, pos) for image embeddings
         std::vector<std::pair<int, int>> input_embeds_coords;  // (size, pos) for input embeddings
 
-        // for RoPE
+        // for RoPE / pos-embed interpolation
         Tensor_<int> grid_thws;
         Tensor_<int> grid_offsets;
         Tensor_<int> mapped_idx;
@@ -102,7 +98,7 @@ struct Qwen2Vit::Impl {
 
     std::vector<Data> data_;
 
-    Impl(const EngineParam& engine, const Context& ctx, const Qwen2VitWeight& weights, int phases):
+    Impl(const EngineParam& engine, const Context& ctx, const QwenVitWeight& weights, int phases):
         weights_{weights},
         config_{weights.config()},
         linear_{*ctx.linear},
@@ -398,7 +394,7 @@ struct Qwen2Vit::Impl {
                 break;
             }
             default:
-                TM_LOG_FATAL("unsupported Qwen2Vit norm type: {}", (int)norm_type);
+                TM_LOG_FATAL("unsupported QwenVit norm type: {}", (int)norm_type);
         }
         TM_CUDA_CHECK(cudaGetLastError());
     }
@@ -439,9 +435,43 @@ struct Qwen2Vit::Impl {
                 break;
             }
             default:
-                TM_LOG_FATAL("unsupported Qwen2Vit norm type: {}", (int)norm_type);
+                TM_LOG_FATAL("unsupported QwenVit norm type: {}", (int)norm_type);
         }
         TM_CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Qwen3.5: precompute the bilinear-interpolation gather indices/weights for the
+    // learned position-embedding table, then gather the 4 neighbour rows. Consumed by
+    // `invokeFusedPosEmbedMerge` in Forward(). No-op for models without pos_embed.
+    void FastPosEmbedInterpolate(Data& d, TensorMap& env)
+    {
+        auto& cfg    = weights_.config();
+        auto  stream = core::Context::stream().handle();
+
+        const int num_grid_per_side = (int)std::sqrt(cfg.num_position_embeddings);
+        TM_CHECK_EQ(num_grid_per_side * num_grid_per_side, cfg.num_position_embeddings);
+        TM_CHECK_EQ(weights_.pos_embed.shape(0), cfg.num_position_embeddings);
+        TM_CHECK_EQ(weights_.pos_embed.shape(1), cfg.hidden_dim);
+
+        Buffer_<int> pos_embed_idx     = {d.total_hw * 4, kDEVICE};
+        Tensor       pos_embed_weights = {{d.total_hw, 4}, cfg.data_type, kDEVICE};
+        invokeFastPosEmbedIdxWeight(pos_embed_idx.data(),
+                                    pos_embed_weights.raw_data(),
+                                    cfg.data_type,
+                                    d.grid_thws.data(),
+                                    d.grid_offsets.data(),
+                                    d.grid_thws.shape(0),
+                                    d.total_hw,
+                                    num_grid_per_side,
+                                    stream);
+        TM_CUDA_CHECK(cudaGetLastError());
+
+        Tensor pos_embeds = {{d.total_hw * 4, cfg.hidden_dim}, cfg.data_type, kDEVICE};
+        invokeEmbeddingLookup(pos_embeds, pos_embed_idx, weights_.pos_embed, stream);
+        TM_CUDA_CHECK(cudaGetLastError());
+
+        env.produce("pos_embeds", pos_embeds);
+        env.produce("pos_embed_weights", pos_embed_weights);
     }
 
     void RotPosEmb(Data& d, TensorMap& env)
@@ -453,15 +483,15 @@ struct Qwen2Vit::Impl {
         // keyed by the same natural flat index that `mapped_idx` already carries. Vision q/k
         // are reordered into this adjacent-pair layout at export time.
         Tensor rotary_pos_emb = {{d.total_hw, head_dim}, cfg.data_type, kDEVICE};
-        invokeQwen3VitRotaryPosEmb(rotary_pos_emb.raw_data(),
-                                   cfg.data_type,
-                                   d.grid_thws.data(),
-                                   d.grid_offsets.data(),
-                                   (int)d.grid_thws_host.size(),
-                                   d.total_hw,
-                                   head_dim,
-                                   /*theta=*/10000.0f,
-                                   core::Context::stream().handle());
+        invokeQwenVitRotaryPosEmb(rotary_pos_emb.raw_data(),
+                                  cfg.data_type,
+                                  d.grid_thws.data(),
+                                  d.grid_offsets.data(),
+                                  (int)d.grid_thws_host.size(),
+                                  d.total_hw,
+                                  head_dim,
+                                  /*theta=*/10000.0f,
+                                  core::Context::stream().handle());
         TM_CUDA_CHECK(cudaGetLastError());
         env.produce("rotary_pos_emb", rotary_pos_emb);
     }
@@ -488,7 +518,7 @@ struct Qwen2Vit::Impl {
                 return Request::kInvalid;
             }
 
-            const auto mm_inputs = std::dynamic_pointer_cast<multimodal::Qwen2VitInput>(r.mm_inputs);
+            const auto mm_inputs = std::dynamic_pointer_cast<multimodal::QwenVitInput>(r.mm_inputs);
             if (!mm_inputs) {
                 return Request::kInvalid;
             }
@@ -689,12 +719,17 @@ struct Qwen2Vit::Impl {
                                     config_.spatial_merge_size,
                                     stream);
         if (config_.use_window_attention) {
-            invokeQwen2VitBuildWindowMappedIdx(d.window_mapped_idx.data(),
-                                               d.mapped_idx.data(),
-                                               d.window_idx.data(),
-                                               config_.spatial_merge_size * config_.spatial_merge_size,
-                                               d.merge_unit_count,
-                                               stream);
+            invokeQwenVitBuildWindowMappedIdx(d.window_mapped_idx.data(),
+                                              d.mapped_idx.data(),
+                                              d.window_idx.data(),
+                                              config_.spatial_merge_size * config_.spatial_merge_size,
+                                              d.merge_unit_count,
+                                              stream);
+        }
+
+        // Qwen3.5 learned positional embedding (bilinear interpolation of a fixed grid).
+        if (config_.num_position_embeddings > 0) {
+            FastPosEmbedInterpolate(d, env);
         }
 
         RotPosEmb(d, env);
@@ -713,14 +748,31 @@ struct Qwen2Vit::Impl {
         auto rotary_pos_emb = args.consume("rotary_pos_emb");
         auto stream         = core::Context::stream().handle();
 
+        // Qwen3.5: fused pos-embed gather/merge into the patch_embed output (with bias folded in):
+        //   residual[pos, d] += Σ_k w[k] * pos_embeds[mapped*4+k, d] + bias[d]
+        if (cfg.num_position_embeddings > 0) {
+            auto pos_embeds        = args.consume("pos_embeds");
+            auto pos_embed_weights = args.consume("pos_embed_weights");
+            invokeFusedPosEmbedMerge(residual.raw_data(),
+                                     pos_embeds.raw_data(),
+                                     pos_embed_weights.raw_data(),
+                                     d.mapped_idx.data(),
+                                     weights_.patch_embed->bias ? weights_.patch_embed->bias.raw_data() : nullptr,
+                                     d.batch_size,
+                                     cfg.hidden_dim,
+                                     cfg.data_type,
+                                     stream);
+            TM_CUDA_CHECK(cudaGetLastError());
+        }
+
         if (cfg.use_window_attention) {
             Tensor reordered{{d.batch_size, cfg.hidden_dim}, cfg.data_type, kDEVICE};
-            invokeQwen2VitWindowReorder(reordered,
-                                        residual,
-                                        d.window_idx.data(),
-                                        cfg.spatial_merge_size * cfg.spatial_merge_size,
-                                        d.merge_unit_count,
-                                        stream);
+            invokeQwenVitWindowReorder(reordered,
+                                       residual,
+                                       d.window_idx.data(),
+                                       cfg.spatial_merge_size * cfg.spatial_merge_size,
+                                       d.merge_unit_count,
+                                       stream);
             residual = std::move(reordered);
         }
 
@@ -765,7 +817,7 @@ struct Qwen2Vit::Impl {
         Tensor image_embeds = Merger(hidden_states);
         if (cfg.use_window_attention) {
             Tensor reordered{{d.merge_unit_count, cfg.out_hidden_dim}, image_embeds.dtype(), kDEVICE};
-            invokeQwen2VitReverseWindow(reordered, image_embeds, d.window_idx.data(), d.merge_unit_count, stream);
+            invokeQwenVitReverseWindow(reordered, image_embeds, d.window_idx.data(), d.merge_unit_count, stream);
             image_embeds = std::move(reordered);
         }
 
@@ -860,17 +912,17 @@ struct Qwen2Vit::Impl {
         const int* mapped_idx = (config_.use_window_attention ? d.window_mapped_idx.data() : d.mapped_idx.data());
 
         Tensor tmp_kv{{local_head_num, 2, d.batch_size, head_dim}, qkv.dtype(), qkv.device()};
-        invokeQwen3_5VitPrepareQKV(qkv.raw_data(),
-                                   tmp_kv.raw_data(),
-                                   attn->w_qkv->bias.raw_data(),
-                                   rotary_pos_emb.raw_data(),
-                                   mapped_idx,
-                                   qkv.dtype(),
-                                   token_num,
-                                   local_head_num,
-                                   head_dim,
-                                   rope_head_dim,
-                                   core::Context::stream().handle());
+        invokeQwenVitPrepareQKV(qkv.raw_data(),
+                                tmp_kv.raw_data(),
+                                attn->w_qkv->bias.raw_data(),
+                                rotary_pos_emb.raw_data(),
+                                mapped_idx,
+                                qkv.dtype(),
+                                token_num,
+                                local_head_num,
+                                head_dim,
+                                rope_head_dim,
+                                core::Context::stream().handle());
         TM_CUDA_CHECK(cudaGetLastError());
 
         Tensor attn_output{{token_num, local_head_num * head_dim}, qkv.dtype(), qkv.device()};
@@ -907,7 +959,9 @@ struct Qwen2Vit::Impl {
             TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, inter));
             TM_CUDA_CHECK(cudaGetLastError());
 
-            invokeQwen3_5VitBiasActivation(inter, block->mlp_fc1->bias, ActivationType::kGelu, stream);
+            // Qwen2-VL/2.5 use the erf GELU; Qwen3.5 uses the tanh approximation.
+            const ActivationType act = config_.gelu_tanh ? ActivationType::kGeluPytorchTanh : ActivationType::kGelu;
+            invokeAddBiasActivation(inter, block->mlp_fc1->bias, act, stream);
             TM_CUDA_CHECK(cudaGetLastError());
 
             TM_SCOPE_CALL(linear_.Forward(inter, *block->mlp_fc2, output));
@@ -927,7 +981,7 @@ struct Qwen2Vit::Impl {
         TM_SCOPE_CALL(linear_.Forward(merged_input, *weights_.merger_fc1, inter));
         TM_CUDA_CHECK(cudaGetLastError());
 
-        invokeQwen3_5VitBiasActivation(inter, weights_.merger_fc1->bias, ActivationType::kGelu, stream);
+        invokeAddBiasActivation(inter, weights_.merger_fc1->bias, ActivationType::kGelu, stream);
         TM_CUDA_CHECK(cudaGetLastError());
 
         Tensor output;
@@ -943,14 +997,14 @@ struct Qwen2Vit::Impl {
     }
 };
 
-Qwen2Vit::Qwen2Vit(const EngineParam& engine, const Context& ctx, const Qwen2VitWeight& weights, int phases):
+QwenVit::QwenVit(const EngineParam& engine, const Context& ctx, const QwenVitWeight& weights, int phases):
     impl_{std::make_unique<Impl>(engine, ctx, weights, phases)}
 {
 }
 
-Qwen2Vit::~Qwen2Vit() = default;
+QwenVit::~QwenVit() = default;
 
-void Qwen2Vit::Run(BatchOp op, int phase, TensorMap& env)
+void QwenVit::Run(BatchOp op, int phase, TensorMap& env)
 {
     TM_FUNCTION_SCOPE();
     switch (op) {

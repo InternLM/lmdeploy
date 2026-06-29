@@ -4,6 +4,7 @@
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/engine/request.h"
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/norm/layer_norm.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
@@ -16,7 +17,6 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/norm_weight.h"
-#include "src/turbomind/models/qwen3_5vit/bias_gelu.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -435,7 +435,7 @@ struct InternVit::Impl {
         TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, inter));
         TM_CUDA_CHECK(cudaGetLastError());
 
-        invokeQwen3_5VitBiasActivation(inter, block->mlp_fc1->bias, ActivationType::kGelu, stream);
+        invokeAddBiasActivation(inter, block->mlp_fc1->bias, ActivationType::kGelu, stream);
 
         TM_SCOPE_CALL(linear_.Forward(inter, *block->mlp_fc2, output));
         TM_CUDA_CHECK(cudaGetLastError());
@@ -467,7 +467,7 @@ struct InternVit::Impl {
         TM_SCOPE_CALL(linear_.Forward(projector_normed, *weights_.projector_fc1, inter));
         TM_CUDA_CHECK(cudaGetLastError());
 
-        invokeQwen3_5VitBiasActivation(inter, weights_.projector_fc1->bias, ActivationType::kGelu, stream);
+        invokeAddBiasActivation(inter, weights_.projector_fc1->bias, ActivationType::kGelu, stream);
 
         Tensor output;
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.projector_fc2, output));

@@ -20,4 +20,9 @@ void Activation(Tensor&             gate_up,  //
                 ActivationType      type,
                 cudaStream_t        stream);
 
+// In-place add-bias + unary activation: x <- activation(x + bias).
+// `x` is a 2D tensor; `bias` (optional) broadcasts over the last dim.
+// Supports kGelu (erf) and kGeluPytorchTanh (tanh approximation).
+void invokeAddBiasActivation(Tensor& x, const Tensor& bias, ActivationType type, cudaStream_t stream);
+
 }  // namespace turbomind
