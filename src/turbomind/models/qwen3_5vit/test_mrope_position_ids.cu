@@ -19,6 +19,15 @@ using namespace turbomind;
 
 namespace {
 
+#define CHECK_CUDA(call)                                                                                               \
+    do {                                                                                                               \
+        const cudaError_t err = (call);                                                                                \
+        if (err != cudaSuccess) {                                                                                      \
+            std::printf("[CUDA] %s failed: %s\n", #call, cudaGetErrorString(err));                                     \
+            return 1;                                                                                                  \
+        }                                                                                                              \
+    } while (0)
+
 struct ImageSpec {
     int seq_start;
     int t;
@@ -87,8 +96,8 @@ std::vector<int> cpu_reference_full_row(const RequestSpec& r, int S, int& out_de
     return row;
 }
 
-// Mirrors the host walk in qwen3_5vit.cc Setup() — same logic, returns the segment list.
-void emit_segments(const RequestSpec& r, int request_idx, int S, std::vector<MropeSegment>& out)
+// Mirrors the host walk in qwen3_5vit.cc Setup() - same logic, returns the segment list.
+void emit_segments(const RequestSpec& r, int q_offset, int S, std::vector<MropeSegment>& out)
 {
     if (r.autoregres || r.images.empty()) {
         return;
@@ -102,8 +111,7 @@ void emit_segments(const RequestSpec& r, int request_idx, int S, std::vector<Mro
         }
         const int    local_off = a - run_start;
         MropeSegment seg{};
-        seg.dst_row    = request_idx;
-        seg.dst_offset = a;
+        seg.dst_offset = q_offset + (a - r.active_start);
         seg.n_tok      = b - a;
         seg.base_pos   = (h2 == 0) ? run_base + local_off : run_base;
         seg.h2         = h2;
@@ -132,49 +140,49 @@ void emit_segments(const RequestSpec& r, int request_idx, int S, std::vector<Mro
 
 int run_case(const std::string& name, const std::vector<RequestSpec>& batch, int S)
 {
-    const int bsz            = (int)batch.size();
-    int       max_active_end = 0;
-    int       max_seg_len    = 0;
-    bool      any_table      = false;
+    const int        bsz = (int)batch.size();
+    std::vector<int> q_offsets(bsz + 1, 0);
+    int              max_seg_len = 0;
+    bool             any_table   = false;
 
     std::vector<MropeSegment> segs;
     for (int i = 0; i < bsz; ++i) {
+        q_offsets[i + 1]    = q_offsets[i] + (batch[i].autoregres ? 1 : batch[i].active_end - batch[i].active_start);
         const size_t before = segs.size();
-        emit_segments(batch[i], i, S, segs);
+        emit_segments(batch[i], q_offsets[i], S, segs);
         for (size_t j = before; j < segs.size(); ++j) {
             max_seg_len = std::max(max_seg_len, segs[j].n_tok);
         }
         if (!batch[i].autoregres && !batch[i].images.empty()) {
-            max_active_end = std::max(max_active_end, batch[i].active_end);
-            any_table      = true;
+            any_table = true;
         }
     }
 
     // Run kernel
     std::vector<int> kernel_out;
     if (any_table) {
-        const ssize_t pos_ids_count = (ssize_t)bsz * max_active_end * 3;
+        const ssize_t pos_ids_count = (ssize_t)q_offsets.back() * 3;
         int*          d_pos_ids     = nullptr;
-        cudaMalloc(&d_pos_ids, pos_ids_count * sizeof(int));
-        cudaMemset(d_pos_ids, 0xCC, pos_ids_count * sizeof(int));  // poison
+        CHECK_CUDA(cudaMalloc(&d_pos_ids, pos_ids_count * sizeof(int)));
+        CHECK_CUDA(cudaMemset(d_pos_ids, 0xCC, pos_ids_count * sizeof(int)));  // poison
 
         MropeSegment* d_segs = nullptr;
-        cudaMalloc(&d_segs, segs.size() * sizeof(MropeSegment));
-        cudaMemcpy(d_segs, segs.data(), segs.size() * sizeof(MropeSegment), cudaMemcpyHostToDevice);
+        CHECK_CUDA(cudaMalloc(&d_segs, segs.size() * sizeof(MropeSegment)));
+        CHECK_CUDA(cudaMemcpy(d_segs, segs.data(), segs.size() * sizeof(MropeSegment), cudaMemcpyHostToDevice));
 
         invokeMropePositionIds(d_pos_ids,
-                               max_active_end * 3,
                                d_segs,
                                (int)segs.size(),
                                max_seg_len,
                                /*stream=*/0);
-        cudaDeviceSynchronize();
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
 
         kernel_out.resize(pos_ids_count);
-        cudaMemcpy(kernel_out.data(), d_pos_ids, pos_ids_count * sizeof(int), cudaMemcpyDeviceToHost);
+        CHECK_CUDA(cudaMemcpy(kernel_out.data(), d_pos_ids, pos_ids_count * sizeof(int), cudaMemcpyDeviceToHost));
 
-        cudaFree(d_pos_ids);
-        cudaFree(d_segs);
+        CHECK_CUDA(cudaFree(d_pos_ids));
+        CHECK_CUDA(cudaFree(d_segs));
     }
 
     // Compare against CPU reference within each request's active range
@@ -188,7 +196,7 @@ int run_case(const std::string& name, const std::vector<RequestSpec>& batch, int
         }
         for (int k = r.active_start; k < r.active_end; ++k) {
             for (int c = 0; c < 3; ++c) {
-                const int got = kernel_out[(size_t)i * max_active_end * 3 + (size_t)k * 3 + c];
+                const int got = kernel_out[((size_t)q_offsets[i] + k - r.active_start) * 3 + c];
                 const int ref = full_row[k * 3 + c];
                 if (got != ref) {
                     if (errors < 16) {
@@ -202,10 +210,10 @@ int run_case(const std::string& name, const std::vector<RequestSpec>& batch, int
     }
 
     if (errors == 0) {
-        std::printf("[PASS] %s — bsz=%d segs=%zu max_active_end=%d\n", name.c_str(), bsz, segs.size(), max_active_end);
+        std::printf("[PASS] %s - bsz=%d segs=%zu q_tokens=%d\n", name.c_str(), bsz, segs.size(), q_offsets.back());
     }
     else {
-        std::printf("[FAIL] %s — %d mismatches\n", name.c_str(), errors);
+        std::printf("[FAIL] %s - %d mismatches\n", name.c_str(), errors);
     }
     return errors;
 }
@@ -217,7 +225,7 @@ int main()
     const int S      = 2;  // spatial_merge_size
     int       errors = 0;
 
-    // (a) Decode-only batch — no table writes expected.
+    // (a) Decode-only batch - no table writes expected.
     errors += run_case("decode_only",
                        {RequestSpec{/*seq_len=*/64,
                                     /*active_start=*/64,
@@ -226,7 +234,7 @@ int main()
                                     /*images=*/{}}},
                        S);
 
-    // (b) Pure-text prefill — empty images, identity positions.
+    // (b) Pure-text prefill - empty images, identity positions.
     errors += run_case("pure_text", {RequestSpec{32, 0, 32, false, {}}}, S);
 
     // (c) Single-image prefill (image in the middle).
@@ -249,7 +257,7 @@ int main()
                         RequestSpec{30, 0, 30, false, {{6, 1, 6, 4}}}},  // image prefill
                        S);
 
-    // (g) Chunked prefill — second chunk, history_len > 0, active range mid-prompt.
+    // (g) Chunked prefill - second chunk, history_len > 0, active range mid-prompt.
     //     Image overlaps both chunks.
     errors += run_case("chunked_prefill",
                        {RequestSpec{60, 16, 32, false, {{8, 1, 8, 8}}}},  // image spans 8..24
@@ -258,10 +266,15 @@ int main()
     // (h) Multi-image with clipping.
     errors += run_case("multi_image_clip", {RequestSpec{80, 10, 50, false, {{6, 1, 4, 4}, {30, 2, 4, 4}}}}, S);
 
+    // (i) Chunked prefill fully after image tokens - validates post-image delta/table rows.
+    errors += run_case("chunked_after_image",
+                       {RequestSpec{80, 48, 72, false, {{8, 1, 8, 8}}}},  // image spans 8..24
+                       S);
+
     if (errors == 0) {
         std::printf("All cases passed.\n");
         return 0;
     }
-    std::printf("FAILED — %d total mismatches.\n", errors);
+    std::printf("FAILED - %d total mismatches.\n", errors);
     return 1;
 }
