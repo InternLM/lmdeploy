@@ -4,7 +4,7 @@ import functools
 
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata
@@ -327,7 +327,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         kv_seqlens = attn_metadata.kv_seqlens
         block_offsets = attn_metadata.block_offsets
         kv_flatten_size = attn_metadata.kv_flatten_size
-        quant_policy = attn_metadata.quant_policy
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         BLOCK_BS = k_cache.size(1)
 
@@ -361,7 +361,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 out_dtype=out_dtype,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
-                quant_policy=quant_policy,
+                kv_cache_dtype=kv_cache_dtype,
                 flatten_kv_layout=flatten_kv_layout,
             )
 
@@ -405,8 +405,8 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         block_offsets = attn_metadata.block_offsets
         kv_seqlens = attn_metadata.kv_seqlens
-        quant_policy = attn_metadata.quant_policy
-        assert quant_policy == QuantPolicy.NONE
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
+        assert kv_cache_dtype == KVCacheDType.AUTO
 
         # fill seqlen args
         fill_seqlens, fill_max_q_seqlen, fill_q_start_loc = self._get_fill_meta(

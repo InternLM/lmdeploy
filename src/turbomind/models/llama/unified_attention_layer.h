@@ -55,7 +55,7 @@ public:
 
     ~UnifiedAttentionLayer();
 
-    UnifiedAttentionLayer(int                           quant_policy,
+    UnifiedAttentionLayer(int                           kv_cache_dtype,
                           const std::vector<int>&       layer_types,
                           int                           layer_num,
                           std::vector<AttentionWeight*> attn_weights,
@@ -80,7 +80,7 @@ private:
     void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
-    const int              quant_policy_;
+    const int              kv_cache_dtype_;
     const core::RopeConfig rope_;
     const EngineParam      engine_param_;
     const Context&         context_;

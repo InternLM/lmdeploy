@@ -2,7 +2,7 @@
 """TurboQuant quantization utilities.
 
 This module provides:
-- Hadamard transform (orthogonal rotation) for quant_policy==QuantPolicy.TURBO_QUANT
+- Hadamard transform (orthogonal rotation) for kv_cache_dtype==KVCacheDType.TURBO_QUANT
 - Lloyd-Max codebook for 2-bit (V cache) and 3-bit (K cache) quantization
 """
 import logging

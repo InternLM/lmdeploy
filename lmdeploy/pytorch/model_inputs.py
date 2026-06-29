@@ -10,7 +10,7 @@ from torch.profiler import record_function
 
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
@@ -306,7 +306,7 @@ class StepContext:
     input_multimodals: list[MultiModalData] | None = None
     vision_inputs: VisionModelInputs | None = None
     attn_metadata: Any = None
-    kv_quant_policy: QuantPolicy = QuantPolicy.NONE
+    kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO
     model_metas: list[dict[str, Any]] | None = None
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
@@ -334,7 +334,7 @@ class StepContext:
         cache_config: CacheConfig,
         kv_caches: list | None = None,
         state_caches: list | None = None,
-        kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
+        kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO,
     ):
         """Build step context.
 
@@ -382,7 +382,7 @@ class StepContext:
             max_kv_seqlen=inputs.max_kv_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
-            kv_quant_policy=kv_quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
             model_metas=inputs.model_metas,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
@@ -478,7 +478,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         cache_config: CacheConfig,
         kv_caches: list | None = None,
         state_caches: list | None = None,
-        kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
+        kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO,
     ):
         """Build context."""
         return StepContext.new(
@@ -487,7 +487,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
             cache_config,
             kv_caches,
             state_caches,
-            kv_quant_policy,
+            kv_cache_dtype,
         )
 
 

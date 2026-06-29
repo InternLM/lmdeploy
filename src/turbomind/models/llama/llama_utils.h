@@ -9,7 +9,7 @@
 
 namespace turbomind {
 
-enum QuantPolicy
+enum KVCacheDType
 {
     kNone = 0x00,
     // reserve 0x01 and 0x02 for backward compatibility

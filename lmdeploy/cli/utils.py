@@ -264,27 +264,15 @@ class ArgumentHelper:
                                    'automatically set it according to the device')
 
     @staticmethod
-    def quant_policy(parser, default: int = 0):
-        """Add argument quant_policy to parser."""
+    def kv_cache_dtype(parser, default: int = 0):
+        """Add argument kv_cache_dtype to parser."""
 
-        from lmdeploy.messages import QuantPolicy
+        from lmdeploy.messages import normalize_kv_cache_dtype
 
-        _aliases = {p.name.lower(): p.value for p in QuantPolicy}
-        _aliases['fp8_e4m3'] = QuantPolicy.FP8.value
-
-        def _parse(x):
-            key = x.lower()
-            if key in _aliases:
-                return _aliases[key]
-            v = int(x)
-            if v not in list(QuantPolicy):
-                raise ValueError(f'invalid quant_policy: {x!r}')
-            return v
-
-        return parser.add_argument('--quant-policy',
-                                   type=_parse,
-                                   default=default,
-                                   help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
+        return parser.add_argument('--kv-cache-dtype',
+                                   type=normalize_kv_cache_dtype,
+                                   default=normalize_kv_cache_dtype(default),
+                                   help='KV cache dtype: auto/int4/int8/fp8/fp8_e4m3/fp8_e5m2/'
                                    'turbo_quant (or 0/4/8/16/17/42). fp8 defaults to fp8_e4m3.')
 
     @staticmethod

@@ -20,7 +20,7 @@ from lmdeploy.pytorch.disagg.messages import (
 )
 from lmdeploy.utils import get_logger
 
-from ...messages import QuantPolicy
+from ...messages import KVCacheDType
 from ..config import CacheConfig, ModelConfig
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
@@ -46,43 +46,43 @@ class CacheDesc:
         self.aligned_size = round_up(self.size, self.alignment)
 
 
-def _get_kv_cache_dtype(model_config: ModelConfig):
-    kv_cache_dtype = model_config.dtype
+def _get_kv_cache_tensor_dtype(model_config: ModelConfig):
+    kv_cache_tensor_dtype = model_config.dtype
     if model_config.use_mla_fp8_cache:
-        kv_cache_dtype = torch.float8_e4m3fn
-    return kv_cache_dtype
+        kv_cache_tensor_dtype = torch.float8_e4m3fn
+    return kv_cache_tensor_dtype
 
 
-_FP8_CACHE_DTYPES = {
-    QuantPolicy.FP8: torch.float8_e4m3fn,
-    QuantPolicy.FP8_E5M2: torch.float8_e5m2,
+_FP8_CACHE_TENSOR_DTYPES = {
+    KVCacheDType.FP8: torch.float8_e4m3fn,
+    KVCacheDType.FP8_E5M2: torch.float8_e5m2,
 }
 
-_KV_CACHE_QUANT_POLICY_DESCS = {
-    QuantPolicy.FP8: 'fp8_e4m3 KV cache',
-    QuantPolicy.FP8_E5M2: 'fp8_e5m2 KV cache',
-    QuantPolicy.INT4: 'int4 KV cache',
-    QuantPolicy.INT8: 'int8 KV cache',
-    QuantPolicy.TURBO_QUANT: 'TurboQuant KV cache',
+_KV_CACHE_DTYPE_DESCS = {
+    KVCacheDType.FP8: 'fp8_e4m3 KV cache',
+    KVCacheDType.FP8_E5M2: 'fp8_e5m2 KV cache',
+    KVCacheDType.INT4: 'int4 KV cache',
+    KVCacheDType.INT8: 'int8 KV cache',
+    KVCacheDType.TURBO_QUANT: 'TurboQuant KV cache',
 }
 
 
-def _is_fp8_quant_policy(quant_policy: QuantPolicy):
-    """Return whether quant policy stores KV payload as torch FP8."""
-    return quant_policy in _FP8_CACHE_DTYPES
+def _is_fp8_kv_cache_dtype(kv_cache_dtype: KVCacheDType):
+    """Return whether the KV cache payload is stored as torch FP8."""
+    return kv_cache_dtype in _FP8_CACHE_TENSOR_DTYPES
 
 
-def _get_fp8_cache_dtype(quant_policy: QuantPolicy):
-    """Get the cache tensor dtype for an FP8 KV-cache quant policy."""
+def _get_fp8_cache_tensor_dtype(kv_cache_dtype: KVCacheDType):
+    """Get the cache tensor dtype for an FP8 KV cache dtype."""
     try:
-        return _FP8_CACHE_DTYPES[quant_policy]
+        return _FP8_CACHE_TENSOR_DTYPES[kv_cache_dtype]
     except KeyError as e:
-        raise ValueError(f'Not an FP8 quant policy: {quant_policy}') from e
+        raise ValueError(f'Not an FP8 KV cache dtype: {kv_cache_dtype}') from e
 
 
-def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy):
-    """Describe the active KV-cache quantization policy for logs."""
-    return _KV_CACHE_QUANT_POLICY_DESCS.get(quant_policy)
+def _describe_kv_cache_dtype(kv_cache_dtype: KVCacheDType):
+    """Describe the active KV cache dtype for logs."""
+    return _KV_CACHE_DTYPE_DESCS.get(kv_cache_dtype)
 
 
 # 512*1 + 4*4 + 64*2 = 656
@@ -119,26 +119,26 @@ class CacheEngine:
 
         self.block_size = cache_config.kernel_block_size
         self.num_layers = model_config.num_layers
-        self.kv_cache_dtype = _get_kv_cache_dtype(self.model_config)
+        self.kv_cache_tensor_dtype = _get_kv_cache_tensor_dtype(self.model_config)
 
         if self.model_config.use_mla_fp8_cache:
-            cache_config.quant_policy = 0
+            cache_config.kv_cache_dtype = KVCacheDType.AUTO
 
-        if _is_fp8_quant_policy(cache_config.quant_policy):
-            self.kv_cache_dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+        if _is_fp8_kv_cache_dtype(cache_config.kv_cache_dtype):
+            self.kv_cache_tensor_dtype = _get_fp8_cache_tensor_dtype(cache_config.kv_cache_dtype)
             assert self.cache_config.device_type in ['cuda'], \
                 f'FP8 quantization is only supported on CUDA device, but got {self.cache_config.device_type}.'
-        elif cache_config.quant_policy > 0:
+        elif cache_config.kv_cache_dtype > 0:
             if self.cache_config.device_type in ['cuda']:
-                self.kv_cache_dtype = torch.uint8
+                self.kv_cache_tensor_dtype = torch.uint8
             elif self.cache_config.device_type in ['ascend', 'npu']:
-                self.kv_cache_dtype = torch.int8
+                self.kv_cache_tensor_dtype = torch.int8
             else:
                 raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
 
-        quant_desc = _describe_kv_cache_quant_policy(cache_config.quant_policy)
-        if quant_desc is not None:
-            logger.info('Using %s.', quant_desc)
+        dtype_desc = _describe_kv_cache_dtype(cache_config.kv_cache_dtype)
+        if dtype_desc is not None:
+            logger.info('Using %s.', dtype_desc)
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -183,7 +183,7 @@ class CacheEngine:
                                   block_size: int,
                                   head_size: int,
                                   world_size: int = 1,
-                                  quant_policy: QuantPolicy = QuantPolicy.NONE):
+                                  kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO):
         """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
@@ -199,9 +199,9 @@ class CacheEngine:
             return (block_size, num_heads, MLA_FP8_HEAD_DIM)
 
         # pack head_dim to uint8 (4-bit)
-        if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.INT4 or kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             assert head_size % 2 == 0, \
-                f'head_size: {head_size}, quant_policy: {quant_policy}'
+                f'head_size: {head_size}, kv_cache_dtype: {kv_cache_dtype}'
             head_size = head_size // 2
         return attn_backend.get_k_block_shape(block_size, num_heads, head_size, dtype)
 
@@ -211,7 +211,7 @@ class CacheEngine:
                                     block_size: int,
                                     head_size: int,
                                     world_size: int = 1,
-                                    quant_policy: QuantPolicy = QuantPolicy.NONE):
+                                    kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO):
         """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
@@ -227,13 +227,13 @@ class CacheEngine:
             # flash mla shared key and value
             return (block_size, num_heads, 0)
 
-        if quant_policy == QuantPolicy.TURBO_QUANT:  # pack head_dim to uint8 (2-bit for V cache)
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:  # pack head_dim to uint8 (2-bit for V cache)
             assert head_size % 4 == 0, \
-                f'head_size: {head_size}, quant_policy: {quant_policy}'
+                f'head_size: {head_size}, kv_cache_dtype: {kv_cache_dtype}'
             head_size = head_size // 4
-        elif quant_policy == QuantPolicy.INT4:  # pack head_dim to uint8 (4-bit)
+        elif kv_cache_dtype == KVCacheDType.INT4:  # pack head_dim to uint8 (4-bit)
             assert head_size % 2 == 0, \
-                f'head_size: {head_size}, quant_policy: {quant_policy}'
+                f'head_size: {head_size}, kv_cache_dtype: {kv_cache_dtype}'
             head_size = head_size // 2
 
         return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
@@ -249,13 +249,13 @@ class CacheEngine:
             block_size=cache_config.kernel_block_size,
             head_size=head_size,
             world_size=world_size,
-            quant_policy=cache_config.quant_policy,
+            kv_cache_dtype=cache_config.kv_cache_dtype,
         )
         shape = list(shape)
-        dtype = _get_kv_cache_dtype(model_config)
-        if _is_fp8_quant_policy(cache_config.quant_policy):
-            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
-        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        dtype = _get_kv_cache_tensor_dtype(model_config)
+        if _is_fp8_kv_cache_dtype(cache_config.kv_cache_dtype):
+            dtype = _get_fp8_cache_tensor_dtype(cache_config.kv_cache_dtype)
+        elif cache_config.kv_cache_dtype in (KVCacheDType.INT4, KVCacheDType.INT8, KVCacheDType.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -270,13 +270,13 @@ class CacheEngine:
             block_size=cache_config.kernel_block_size,
             head_size=head_size,
             world_size=world_size,
-            quant_policy=cache_config.quant_policy,
+            kv_cache_dtype=cache_config.kv_cache_dtype,
         )
         shape = list(shape)
-        dtype = _get_kv_cache_dtype(model_config)
-        if _is_fp8_quant_policy(cache_config.quant_policy):
-            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
-        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        dtype = _get_kv_cache_tensor_dtype(model_config)
+        if _is_fp8_kv_cache_dtype(cache_config.kv_cache_dtype):
+            dtype = _get_fp8_cache_tensor_dtype(cache_config.kv_cache_dtype)
+        elif cache_config.kv_cache_dtype in (KVCacheDType.INT4, KVCacheDType.INT8, KVCacheDType.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -284,17 +284,17 @@ class CacheEngine:
     def get_quant_cache_descs(cls, k_cache_desc: CacheDesc, v_cache_desc: CacheDesc, model_config: ModelConfig,
                               cache_config: CacheConfig):
         """Get quant cache descs."""
-        if cache_config.quant_policy == QuantPolicy.NONE:
+        if cache_config.kv_cache_dtype == KVCacheDType.AUTO:
             return []
-        if _is_fp8_quant_policy(cache_config.quant_policy):
+        if _is_fp8_kv_cache_dtype(cache_config.kv_cache_dtype):
             # Regular FP8 KV cache uses fixed scalar scales from Attention, not
             # per-token scale/zero cache tensors.
             return []
 
         dtype = model_config.dtype
-        # For quant_policy==QuantPolicy.TURBO_QUANT, K uses 4-bit quantization (has MSE norm and QJL norm),
+        # For kv_cache_dtype==KVCacheDType.TURBO_QUANT, K uses 4-bit quantization (has MSE norm and QJL norm),
         # V uses 2-bit quantization (only has MSE norm)
-        if cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
+        if cache_config.kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
             val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
         else:

@@ -231,7 +231,7 @@ class TurboMind:
         ec = _tm.EngineConfig()
         ec.data_type = dtype_map[engine_config.dtype]
         ec.cache_block_seq_len = engine_config.cache_block_seq_len
-        ec.quant_policy = engine_config.quant_policy
+        ec.kv_cache_dtype = int(engine_config.kv_cache_dtype)
         ec.max_batch_size = engine_config.max_batch_size
         ec.max_prefill_token_num = engine_config.max_prefill_token_num
         ec.session_len = engine_config.session_len

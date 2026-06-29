@@ -92,7 +92,7 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
     aux_stream_             = {};
 }
 
-UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant_policy,
+UnifiedAttentionLayer::UnifiedAttentionLayer(int                           kv_cache_dtype,
                                              const std::vector<int>&       layer_types,
                                              int                           layer_num,
                                              std::vector<AttentionWeight*> attn_weights,
@@ -100,7 +100,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant
                                              const Context&                ctx,
                                              int                           phases,
                                              bool                          init):
-    quant_policy_{quant_policy},
+    kv_cache_dtype_{kv_cache_dtype},
     rope_{attn_weights[0]->rope},
     engine_param_{engine},
     cp_fn_ctx_{ctx.comm.d_comm, ctx.comm.d_cp_group},
@@ -567,7 +567,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.arch   = arch_;
         params.stream = stream;
 
-        params.quant_policy = quant_policy_;
+        params.kv_cache_dtype = kv_cache_dtype_;
         return params;
     };
 

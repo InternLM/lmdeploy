@@ -139,16 +139,18 @@ def _best_effort_runtime_cleanup(pipe=None, device: str | None = None) -> None:
 def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bool = False):
     backend = run_config.get('backend')
     communicator = run_config.get('communicator')
-    quant_policy = run_config.get('quant_policy')
+    kv_cache_dtype = run_config.get('kv_cache_dtype')
     extra_params = run_config.get('extra_params', {})
     parallel_config = run_config.get('parallel_config', {})
 
     if 'pytorch' == backend:
-        backend_config = PytorchEngineConfig(session_len=65152, quant_policy=quant_policy, cache_max_entry_count=0.6)
+        backend_config = PytorchEngineConfig(session_len=65152,
+                                             kv_cache_dtype=kv_cache_dtype,
+                                             cache_max_entry_count=0.6)
     else:
         backend_config = TurbomindEngineConfig(session_len=65152,
                                                communicator=communicator,
-                                               quant_policy=quant_policy,
+                                               kv_cache_dtype=kv_cache_dtype,
                                                cache_max_entry_count=0.6)
 
     # quant format

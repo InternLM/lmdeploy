@@ -79,7 +79,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                 const size_t                       block_seq_len,
                 const size_t                       batch_size,
                 const int                          rope_dim,
-                int                                quant_policy)
+                int                                kv_cache_dtype)
 {
     const size_t seq_len  = k_cache.size() / (head_dim * head_num * batch_size);
     const size_t n_blocks = (seq_len + block_seq_len - 1) / block_seq_len;
@@ -165,7 +165,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                                          head_num,
                                          head_dim,
                                          batch_size,
-                                         quant_policy));
+                                         kv_cache_dtype));
     }
 
     thrust::universal_vector<T> kv_cache_2(kv_cache.size());
@@ -191,7 +191,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                                          head_num,
                                          head_dim,
                                          batch_size,
-                                         quant_policy));
+                                         kv_cache_dtype));
     }
 
     cudaDeviceSynchronize();
@@ -280,19 +280,19 @@ int test_attention()
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz     = 64;
+    constexpr int kBlockSz      = 64;
 
 #endif
 
 #if KV_INT8
-    using Tkv                  = uint8_t;
-    constexpr int kQuantPolicy = QuantPolicy::kCacheKVInt8;
+    using Tkv                   = uint8_t;
+    constexpr int kKVCacheDType = KVCacheDType::kCacheKVInt8;
 #elif KV_INT4
-    using Tkv                  = uint4_t;
-    constexpr int kQuantPolicy = QuantPolicy::kCacheKVInt4;
+    using Tkv                   = uint4_t;
+    constexpr int kKVCacheDType = KVCacheDType::kCacheKVInt4;
 #else
-    using Tkv                  = T;
-    constexpr int kQuantPolicy = 0;
+    using Tkv                   = T;
+    constexpr int kKVCacheDType = 0;
 #endif
 
     static_assert(KvHeadNum > 0);
@@ -377,7 +377,7 @@ int test_attention()
                     kBlockSz,
                     kBatchSize,
                     kRoPEDim,
-                    kQuantPolicy);
+                    kKVCacheDType);
 
     thrust::universal_vector<T>     output_ref = output;
     thrust::universal_vector<void*> k_cache_ref_ptrs(kBatchSize);
@@ -430,7 +430,7 @@ int test_attention()
                                                      int(2 * kBatchSize * kContextLen * kHeadDim),
                                                      int(kBatchSize * kContextLen * kHeadDim)};
 
-    params.quant_policy = kQuantPolicy;
+    params.kv_cache_dtype = kKVCacheDType;
 
     params.finished   = finished.data().get();
     params.rope_theta = rope_base.data().get();
@@ -578,7 +578,7 @@ int test_attention()
                                      KvHeadNum,
                                      kHeadDim,
                                      kBatchSize,
-                                     kQuantPolicy));
+                                     kKVCacheDType));
     cudaDeviceSynchronize();
 
     const size_t effective_context_len = Causal ? std::min(kContextLen, (size_t)params.window_size) : kContextLen;

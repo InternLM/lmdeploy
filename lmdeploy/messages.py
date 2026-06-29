@@ -17,14 +17,42 @@ from .utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-class QuantPolicy(enum.IntEnum):
-    """Quantization policy constants for KV cache."""
-    NONE = 0
+class KVCacheDType(enum.IntEnum):
+    """KV cache dtype constants."""
+    AUTO = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
     FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
     FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
+
+
+_KV_CACHE_DTYPE_ALIASES = {
+    dtype.name.lower(): dtype
+    for dtype in KVCacheDType
+}
+_KV_CACHE_DTYPE_ALIASES['fp8_e4m3'] = KVCacheDType.FP8
+
+
+def normalize_kv_cache_dtype(kv_cache_dtype: KVCacheDType | int | str) -> KVCacheDType:
+    """Normalize KV cache dtype config values."""
+    if isinstance(kv_cache_dtype, KVCacheDType):
+        return kv_cache_dtype
+
+    if isinstance(kv_cache_dtype, str):
+        key = kv_cache_dtype.lower()
+        if key in _KV_CACHE_DTYPE_ALIASES:
+            return _KV_CACHE_DTYPE_ALIASES[key]
+        try:
+            kv_cache_dtype = int(kv_cache_dtype)
+        except ValueError as e:
+            raise ValueError(f'invalid kv_cache_dtype: {kv_cache_dtype}') from e
+
+    try:
+        return KVCacheDType(kv_cache_dtype)
+    except ValueError as e:
+        raise ValueError(f'invalid kv_cache_dtype: {kv_cache_dtype}') from e
+
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -205,7 +233,7 @@ class GenerationConfig:
             self.repetition_ngram_threshold = 0
 
 
-@pydantic_dataclass
+@pydantic_dataclass(config={'extra': 'forbid'})
 class TurbomindEngineConfig:
     """TurboMind Engine config.
 
@@ -247,7 +275,7 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
-        quant_policy: default to 0. For TurboMind, when k/v is quantized
+        kv_cache_dtype: default to 0. For TurboMind, when k/v is quantized
             into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
             default to 0. TurboMind follows the implementation of transformer
@@ -297,7 +325,7 @@ class TurbomindEngineConfig:
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
-    quant_policy: int = 0
+    kv_cache_dtype: KVCacheDType | int | str = KVCacheDType.AUTO
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
     download_dir: str | None = None
@@ -318,14 +346,11 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
-        try:
-            self.quant_policy = QuantPolicy(self.quant_policy)
-        except ValueError as e:
-            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
-        assert self.quant_policy not in (
-            QuantPolicy.FP8,
-            QuantPolicy.FP8_E5M2,
-        ), 'invalid quant_policy for TurboMind, FP8 quantization is not supported'
+        self.kv_cache_dtype = normalize_kv_cache_dtype(self.kv_cache_dtype)
+        assert self.kv_cache_dtype not in (
+            KVCacheDType.FP8,
+            KVCacheDType.FP8_E5M2,
+        ), 'invalid kv_cache_dtype for TurboMind, FP8 quantization is not supported'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
@@ -391,7 +416,7 @@ class PytorchEngineConfig:
         revision: The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
-        quant_policy: default to 0. When k/v is quantized into int4,
+        kv_cache_dtype: default to 0. When k/v is quantized into int4,
             int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
             respectively
         distributed_executor_backend: backend of distributed backend,
@@ -449,7 +474,7 @@ class PytorchEngineConfig:
     custom_module_map: dict[str, str] = None
     download_dir: str = None
     revision: str = None
-    quant_policy: QuantPolicy = QuantPolicy.NONE
+    kv_cache_dtype: KVCacheDType | int | str = KVCacheDType.AUTO
     distributed_executor_backend: str = None
     empty_init: bool = False
     enable_microbatch: bool = False
@@ -490,10 +515,7 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
-        try:
-            self.quant_policy = QuantPolicy(self.quant_policy)
-        except ValueError as e:
-            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
+        self.kv_cache_dtype = normalize_kv_cache_dtype(self.kv_cache_dtype)
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.kernel_block_size >= 16 and \
                (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
@@ -506,7 +528,7 @@ class PytorchEngineConfig:
         if self.prefix_cache_decode_state_interval > 0:
             assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
                 'prefix_cache_decode_state_interval must be a multiple of block_size')
-        if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
+        if self.kv_cache_dtype > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
         if self.device_type == 'camb' and self.block_size != 16:

@@ -380,15 +380,15 @@ def _quant_cfg_for_entry(entry: dict[str, Any]) -> dict[str, list[str]]:
 def _is_kvint_enabled_in_entry(
     backend: str,
     base_model: str,
-    quant_policy: int,
+    kv_cache_dtype: int,
     quant_cfg: dict[str, list[str]],
 ) -> bool:
-    if quant_policy == 0:
+    if kv_cache_dtype == 0:
         return True
     enabled = set(quant_cfg.get(backend) or [])
-    if quant_policy in (4, 8):
-        return f'kvint{quant_policy}' in enabled
-    if quant_policy == 42:
+    if kv_cache_dtype in (4, 8):
+        return f'kvint{kv_cache_dtype}' in enabled
+    if kv_cache_dtype == 42:
         return 'kvint42' in enabled
     return False
 
@@ -427,7 +427,7 @@ def _build_run_config_entry(
     backend: str,
     communicator: str,
     parallel_config: dict[str, int],
-    quant_policy: int,
+    kv_cache_dtype: int,
     config: dict[str, Any],
     func_type: str,
     extra: dict[str, Any] | None,
@@ -447,7 +447,7 @@ def _build_run_config_entry(
         'model': model_id,
         'backend': backend,
         'communicator': communicator,
-        'quant_policy': quant_policy,
+        'kv_cache_dtype': kv_cache_dtype,
         'parallel_config': copy.deepcopy(parallel_config),
         'extra_params': merged_extra,
     }
@@ -503,11 +503,11 @@ def _get_func_config_list_per_model(
 
         for model in models_for_quant:
             qcfg = quant_cfg
-            for quant_policy in [0, 4, 8, 42]:
-                if not _is_kvint_enabled_in_entry(backend, _base_model_name(model), quant_policy, qcfg):
+            for kv_cache_dtype in [0, 4, 8, 42]:
+                if not _is_kvint_enabled_in_entry(backend, _base_model_name(model), kv_cache_dtype, qcfg):
                     continue
                 for communicator in backend_map[backend]:
-                    sig = (model, communicator, quant_policy, launch_extra_sig, '')
+                    sig = (model, communicator, kv_cache_dtype, launch_extra_sig, '')
                     if sig in seen:
                         continue
                     seen.add(sig)
@@ -517,7 +517,7 @@ def _get_func_config_list_per_model(
                         backend,
                         communicator,
                         parallel_config,
-                        quant_policy,
+                        kv_cache_dtype,
                         config,
                         func_type,
                         extra,
@@ -525,14 +525,14 @@ def _get_func_config_list_per_model(
                     run_configs.append(run_config)
 
                     # Runtime fp8 (--model-format fp8) is a separate case at
-                    # quant_policy 0, mirroring legacy flat-yaml fp8_model_list.
+                    # kv_cache_dtype 0, mirroring legacy flat-yaml fp8_model_list.
                     if (
-                        quant_policy == 0
+                        kv_cache_dtype == 0
                         and _is_fp8_enabled_in_entry(backend, qcfg)
                         and 'fp8' not in model.lower()
                         and run_config.get('extra_params', {}).get('model-format') is None
                     ):
-                        fp8_sig = (model, communicator, quant_policy, launch_extra_sig, 'fp8')
+                        fp8_sig = (model, communicator, kv_cache_dtype, launch_extra_sig, 'fp8')
                         if fp8_sig not in seen:
                             seen.add(fp8_sig)
                             fp8_config = copy.deepcopy(run_config)
@@ -561,14 +561,14 @@ def get_cli_common_param(run_config: dict[str, Any]) -> str:
     backend = run_config.get('backend')
     model = run_config.get('model')
     communicator = run_config.get('communicator')
-    quant_policy = run_config.get('quant_policy')
+    kv_cache_dtype = run_config.get('kv_cache_dtype')
     extra_params = run_config.get('extra_params', {})
     parallel_config = run_config.get('parallel_config', {})
 
     cli_params = [f'--backend {backend}', f'--communicator {communicator}']
     # Optional params
-    if quant_policy != 0:
-        cli_params.append(f'--quant-policy {quant_policy}')
+    if kv_cache_dtype != 0:
+        cli_params.append(f'--kv-cache-dtype {kv_cache_dtype}')
 
     # quant format
     model_lower = model.lower()
@@ -697,9 +697,9 @@ def get_model_list(config: dict[str, Any],
     return [m for m in typed_models if _base_model_name(m) in chat_bases]
 
 
-def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_policy: int) -> bool:
-    """Check KV quant policy support via per-model ``quantization`` blocks."""
-    if quant_policy == 0:
+def _is_kvint_model(config: dict[str, Any], backend: str, model: str, kv_cache_dtype: int) -> bool:
+    """Check KV cache dtype support via per-model ``quantization`` blocks."""
+    if kv_cache_dtype == 0:
         return True
     env_key = _model_matrix_env_key(config)
     deps_profile = get_deps_profile_selector()
@@ -710,7 +710,7 @@ def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_poli
         layout = _parallel_layout(_entry_engine_config(entry))
         if backend not in _normalize_entry_backends(entry, config, layout):
             continue
-        return _is_kvint_enabled_in_entry(backend, base, quant_policy, _quant_cfg_for_entry(entry))
+        return _is_kvint_enabled_in_entry(backend, base, kv_cache_dtype, _quant_cfg_for_entry(entry))
     return False
 
 def _base_model_name(model: str) -> str:
@@ -987,7 +987,7 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
     model_name = run_config['model']
     backend_type = run_config['backend']
     communicator = run_config.get('communicator', 'nccl')
-    quant_policy = run_config.get('quant_policy', 0)
+    kv_cache_dtype = run_config.get('kv_cache_dtype', 0)
     parallel_config = run_config.get('parallel_config', {'tp': 1})
     extra_params = run_config.get('extra_params', {})
 
@@ -1010,7 +1010,7 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
             else:
                 extra_params_case += f'_{k}{v}'.replace('_', '-').replace('/', '-').replace('.', '-')
 
-    return f'{backend_type}_{pure_model_name}_{communicator}_{parallel_str}_{quant_policy}{extra_params_case}'
+    return f'{backend_type}_{pure_model_name}_{communicator}_{parallel_str}_{kv_cache_dtype}{extra_params_case}'
 
 
 def parse_config_by_case(case_str: str) -> dict[str, Any]:
@@ -1029,9 +1029,9 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
             quant_idx = i
             break
     if quant_idx is None:
-        raise ValueError(f'No numeric quant policy found in case string: {case_str}')
+        raise ValueError(f'No numeric KV cache dtype found in case string: {case_str}')
 
-    quant_policy = int(case_parts[quant_idx])
+    kv_cache_dtype = int(case_parts[quant_idx])
     parallel_parts = case_parts[3:quant_idx]
 
     # Convert parallel str to dict, e.g: ['tp1','dp2'] -> {'tp':1, 'dp':2}
@@ -1049,5 +1049,5 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
         'model': model,
         'communicator': communicator,
         'parallel_config': parallel_config,
-        'quant_policy': quant_policy,
+        'kv_cache_dtype': kv_cache_dtype,
     }
