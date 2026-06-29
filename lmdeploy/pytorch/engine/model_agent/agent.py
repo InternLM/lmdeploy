@@ -41,6 +41,7 @@ from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
 from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
+from .ts_forecast import TSForecastPostprocessor
 
 logger = get_logger('lmdeploy')
 
@@ -341,9 +342,11 @@ class BaseModelAgent:
 
         # long context
         self._prev_chunk_output: dict = None
-        self._prev_chunk_ts_forecast_state: dict | None = None
         # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
         self._prev_chunk_last_logit: torch.Tensor | None = None
+
+        # time series forecast postprocessor
+        self.ts_forecast_postprocessor = TSForecastPostprocessor()
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
@@ -493,63 +496,6 @@ class BaseModelAgent:
         next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, logits, next_token_ids,
                                                                              extra_inputs)
         return next_token_ids, logprobs, next_token_ids, extra_inputs
-
-    def _update_multimodal_outputs(
-        self,
-        model_outputs: dict,
-        next_token_ids: torch.Tensor,
-        output_token_ids: torch.Tensor | None = None,
-        stopped: torch.Tensor | None = None,
-    ):
-        model = self.patched_model.get_model()
-        if not hasattr(model, 'update_multimodal_outputs'):
-            return output_token_ids, stopped, None
-        return model.update_multimodal_outputs(
-            model_outputs=model_outputs,
-            next_token_ids=next_token_ids,
-            output_token_ids=output_token_ids,
-            stopped=stopped,
-        )
-
-    def _update_chunk_ts_forecast_state(self, inputs: ModelInputs, model_outputs: dict):
-        """Carry TS forecast context across chunked long-context prefill."""
-        if not inputs.is_chunk:
-            self._prev_chunk_ts_forecast_state = None
-            return model_outputs
-
-        if inputs.is_first_chunk:
-            self._prev_chunk_ts_forecast_state = None
-
-        llm_hidden = model_outputs.pop('ts_forecast_llm_hidden', None)
-        llm_mask = model_outputs.pop('ts_forecast_llm_mask', None)
-        forecast_state = model_outputs.pop('ts_forecast_state', None)
-
-        if self._prev_chunk_ts_forecast_state is None:
-            self._prev_chunk_ts_forecast_state = dict(llm_hidden=[], llm_mask=[], forecast_state=None)
-        chunk_state = self._prev_chunk_ts_forecast_state
-
-        if llm_hidden is not None:
-            chunk_state['llm_hidden'].append(llm_hidden)
-            chunk_state['llm_mask'].append(llm_mask)
-
-        if forecast_state is not None:
-            forecast_state = dict(forecast_state)
-            forecast_state.pop('llm_embedding_input', None)
-            forecast_state.pop('llm_embedding_mask', None)
-            chunk_state['forecast_state'] = forecast_state
-
-        if not inputs.is_last_chunk:
-            return model_outputs
-
-        forecast_state = chunk_state.get('forecast_state')
-        if forecast_state is not None and chunk_state['llm_hidden']:
-            forecast_state = dict(forecast_state)
-            forecast_state['llm_embedding_input'] = torch.cat(chunk_state['llm_hidden'], dim=1)
-            forecast_state['llm_embedding_mask'] = torch.cat(chunk_state['llm_mask'], dim=1)
-            model_outputs['ts_forecast_state'] = forecast_state
-
-        self._prev_chunk_ts_forecast_state = None
-        return model_outputs
 
     def _push_output(self, output: BatchedOutputs):
         """Push output."""
@@ -749,10 +695,14 @@ class BaseModelAgent:
             inputs=inputs,
             extra_inputs=extra_inputs,
         )
-        model_outputs = self._update_chunk_ts_forecast_state(inputs, model_outputs or {})
-        output_token_ids, stopped, multimodal_outputs = self._update_multimodal_outputs(
-            model_outputs,
-            next_token_ids=next_token_ids,
+        model_outputs = self.ts_forecast_postprocessor.update_chunk_state(inputs, model_outputs or {})
+        (
+            output_token_ids,
+            stopped,
+            multimodal_outputs,
+        ) = self.ts_forecast_postprocessor.maybe_update_outputs_after_sampling(
+            model=self.patched_model.get_model(),
+            model_outputs=model_outputs,
             output_token_ids=output_token_ids,
             stopped=stopped,
         )

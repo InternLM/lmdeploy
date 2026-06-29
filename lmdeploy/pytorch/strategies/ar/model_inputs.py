@@ -36,8 +36,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
         local_adapter_ids=inputs.local_adapter_ids,
         model_metas=model_metas,
-        forecast_horizons=inputs.forecast_horizons,
-        ts_forecasts=inputs.ts_forecasts,
+        multimodal_output_metas=inputs.multimodal_output_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -79,19 +78,12 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     if inputs.model_metas is not None and other.model_metas is not None:
         model_metas = inputs.model_metas + other.model_metas
 
-    # forecast horizons
-    forecast_horizons = None
-    if inputs.forecast_horizons is not None or other.forecast_horizons is not None:
-        input_horizons = inputs.forecast_horizons or [None] * inputs.seq_length.numel()
-        other_horizons = other.forecast_horizons or [None] * other.seq_length.numel()
-        forecast_horizons = input_horizons + other_horizons
-
-    # time-series forecast routing
-    ts_forecasts = None
-    if inputs.ts_forecasts is not None or other.ts_forecasts is not None:
-        input_forecasts = inputs.ts_forecasts or [False] * inputs.seq_length.numel()
-        other_forecasts = other.ts_forecasts or [False] * other.seq_length.numel()
-        ts_forecasts = input_forecasts + other_forecasts
+    # multimodal output routing
+    multimodal_output_metas = None
+    if inputs.multimodal_output_metas is not None or other.multimodal_output_metas is not None:
+        input_metas = inputs.multimodal_output_metas or [None] * inputs.seq_length.numel()
+        other_metas = other.multimodal_output_metas or [None] * other.seq_length.numel()
+        multimodal_output_metas = input_metas + other_metas
 
     # ssm
     state_offsets = None
@@ -116,8 +108,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         sum_kv_seqlen=inputs.sum_kv_seqlen + other.sum_kv_seqlen,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
-        forecast_horizons=forecast_horizons,
-        ts_forecasts=ts_forecasts,
+        multimodal_output_metas=multimodal_output_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -182,15 +173,10 @@ def index_select_model_inputs(inputs: ModelInputs,
     if model_metas is not None and indice_cpu is not None:
         model_metas = [model_metas[i] for i in indice_cpu]
 
-    # forecast horizons
-    forecast_horizons = inputs.forecast_horizons
-    if forecast_horizons is not None and indice_cpu is not None:
-        forecast_horizons = [forecast_horizons[i] for i in indice_cpu]
-
-    # time-series forecast routing
-    ts_forecasts = inputs.ts_forecasts
-    if ts_forecasts is not None and indice_cpu is not None:
-        ts_forecasts = [ts_forecasts[i] for i in indice_cpu]
+    # multimodal output routing
+    multimodal_output_metas = inputs.multimodal_output_metas
+    if multimodal_output_metas is not None and indice_cpu is not None:
+        multimodal_output_metas = [multimodal_output_metas[i] for i in indice_cpu]
 
     # for ssm
     state_offsets = inputs.state_offsets
@@ -223,8 +209,7 @@ def index_select_model_inputs(inputs: ModelInputs,
         sum_kv_seqlen=sum_kv_seqlen,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
-        forecast_horizons=forecast_horizons,
-        ts_forecasts=ts_forecasts,
+        multimodal_output_metas=multimodal_output_metas,
         state_offsets=state_offsets,
         state_prefix_cache_save_src_offsets=state_prefix_cache_save_src_offsets,
         state_prefix_cache_save_offsets=state_prefix_cache_save_offsets,

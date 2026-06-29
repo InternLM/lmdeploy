@@ -375,6 +375,24 @@ class InputsMakerAsync:
         local_adapter_ids = model_inputs.seq_length.new_tensor(local_adapter_ids)
         model_inputs.local_adapter_ids = local_adapter_ids
 
+    def _make_multimodal_output_metas(self, messages: 'SeqList'):
+        """Build per-request multimodal output metadata."""
+        if self.config.spec_decoding or self.config.model_paradigm != 'ar':
+            return None
+
+        output_metas = []
+        for msg in messages:
+            sampling_param = msg.sampling_param
+            output_meta = None
+            if sampling_param.ts_forecast:
+                output_meta = dict(
+                    time_series_forecast=dict(
+                        enabled=True,
+                        forecast_horizon=sampling_param.forecast_horizon,
+                    ))
+            output_metas.append(output_meta)
+        return output_metas if any(meta is not None for meta in output_metas) else None
+
     def _map_to_kernel_block_offsets(self, block_offsets: torch.Tensor):
         """Converts manager block_offsets to kernel block_offsets.
 
@@ -439,16 +457,8 @@ class InputsMakerAsync:
         # model_metas
         model_metas = [msg.model_meta for msg in messages]
 
-        # forecast horizons
-        forecast_horizons = [msg.sampling_param.forecast_horizon for msg in messages]
-        if (not any(horizon is not None for horizon in forecast_horizons) or self.config.spec_decoding
-                or self.config.model_paradigm != 'ar'):
-            forecast_horizons = None
-
-        # time-series forecast routing
-        ts_forecasts = [msg.sampling_param.ts_forecast for msg in messages]
-        if not any(ts_forecasts) or self.config.spec_decoding or self.config.model_paradigm != 'ar':
-            ts_forecasts = None
+        # multimodal output metas
+        multimodal_output_metas = self._make_multimodal_output_metas(messages)
 
         # create model inputs for all required fields
         model_inputs = ModelInputs(
@@ -462,8 +472,7 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
-            forecast_horizons=forecast_horizons,
-            ts_forecasts=ts_forecasts,
+            multimodal_output_metas=multimodal_output_metas,
         )
 
         # adapters
@@ -530,14 +539,8 @@ class InputsMakerAsync:
         # model_metas
         model_metas = [seq.model_meta]
 
-        # forecast horizons
-        forecast_horizons = [seq.sampling_param.forecast_horizon]
-        if forecast_horizons[0] is None or self.config.spec_decoding or self.config.model_paradigm != 'ar':
-            forecast_horizons = None
-
-        ts_forecasts = [seq.sampling_param.ts_forecast]
-        if not ts_forecasts[0] or self.config.spec_decoding or self.config.model_paradigm != 'ar':
-            ts_forecasts = None
+        # multimodal output metas
+        multimodal_output_metas = self._make_multimodal_output_metas([seq])
 
         kv_seqlens = q_seqlens + history_lens
         max_kv_seqlen = kv_seqlens.item()
@@ -554,8 +557,7 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
-            forecast_horizons=forecast_horizons,
-            ts_forecasts=ts_forecasts,
+            multimodal_output_metas=multimodal_output_metas,
             is_chunk=True,
         )
 

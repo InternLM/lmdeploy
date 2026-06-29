@@ -311,42 +311,31 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         )
         return [to_payload(forecast, idx) for idx in range(len(item_ids))]
 
-    def update_multimodal_outputs(
+    def run_ts_forecast_from_state(
         self,
-        model_outputs: dict[str, Any],
-        next_token_ids: torch.Tensor,
-        output_token_ids: torch.Tensor | None = None,
-        stopped: torch.Tensor | None = None,
+        forecast_state: dict[str, Any],
+        item_indices: torch.Tensor,
     ):
-        # forecast routing is controlled by explicit generation metadata.
-        forecast_state = model_outputs.get('ts_forecast_state')
-        if forecast_state is None:
-            return output_token_ids, stopped, None
-
-        ts_batch_indices = forecast_state['ts_batch_indices'].to(device=next_token_ids.device)
-        forecast_indices = forecast_state.get('forecast_indices')
-        if forecast_indices is None:
-            return output_token_ids, stopped, None
-        item_indices = forecast_indices.to(device=next_token_ids.device)
-        if item_indices.numel() == 0:
-            return output_token_ids, stopped, None
-
-        batch_size = next_token_ids.numel()
-        multimodal_outputs = [None] * batch_size
+        """Run TS forecaster for manually-enabled forecast items."""
+        ts_batch_indices = forecast_state['ts_batch_indices'].to(device=item_indices.device)
         payloads = self._run_ts_forecaster(forecast_state, item_indices)
-
-        output_token_ids = output_token_ids.clone()
-        stopped = stopped.clone()
         batch_indices = ts_batch_indices[item_indices]
+        return payloads, batch_indices
 
-        # suppress text token output and finish forecast-only responses.
-        output_token_ids.view(-1)[batch_indices] = -1
-        stopped.view(-1)[batch_indices] = True
-
-        for batch_idx, payload in zip(batch_indices.tolist(), payloads):
-            multimodal_outputs[int(batch_idx)] = dict(time_series_forecast=payload)
-
-        return output_token_ids, stopped, multimodal_outputs
+    @staticmethod
+    def _get_ts_forecast_cfg(
+        multimodal_output_metas: list[dict[str, Any] | None] | None,
+        batch_idx: int,
+    ):
+        if multimodal_output_metas is None:
+            return None
+        output_meta = multimodal_output_metas[batch_idx]
+        if output_meta is None:
+            return None
+        ts_forecast_cfg = output_meta.get('time_series_forecast')
+        if ts_forecast_cfg is None or not ts_forecast_cfg.get('enabled', False):
+            return None
+        return ts_forecast_cfg
 
     def prepare_inputs_for_generation(
         self,
@@ -359,9 +348,14 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         ts_channels = None
         ts_forecast_meta = None
         ts_forecast_llm_meta = None
+        multimodal_output_metas = context.multimodal_output_metas
+
         if (context.is_chunk_multimodal and not context.is_decoding and not self.is_spec_decoding
-                and context.ts_forecasts is not None):
-            forecast_batch_ids = [idx for idx, enabled in enumerate(context.ts_forecasts) if enabled]
+                and multimodal_output_metas is not None):
+            forecast_batch_ids = [
+                idx for idx in range(len(multimodal_output_metas))
+                if self._get_ts_forecast_cfg(multimodal_output_metas, idx)
+            ]
             if forecast_batch_ids:
                 ts_forecast_llm_meta = dict(
                     q_seqlens=context.q_seqlens,
@@ -381,20 +375,20 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
                 ts_channels = torch.cat([inp.meta['ts_channels'] for inp in mm_inputs])
                 ts_batch_indices = torch.tensor(batch_indices, dtype=torch.long, device=context.input_ids.device)
                 if not context.is_decoding and not self.is_spec_decoding:
-                    forecast_horizon = None
-                    if context.forecast_horizons is not None:
-                        forecast_horizon = [context.forecast_horizons[idx] for idx in batch_indices]
-                        if not any(horizon is not None for horizon in forecast_horizon):
-                            forecast_horizon = None
+                    forecast_horizon = []
+                    forecast_ids = []
+                    for item_idx, batch_idx in enumerate(batch_indices):
+                        ts_forecast_cfg = self._get_ts_forecast_cfg(multimodal_output_metas, batch_idx)
+                        if ts_forecast_cfg is None:
+                            forecast_horizon.append(None)
+                            continue
+                        forecast_horizon.append(ts_forecast_cfg.get('forecast_horizon'))
+                        forecast_ids.append(item_idx)
+                    if not any(horizon is not None for horizon in forecast_horizon):
+                        forecast_horizon = None
                     forecast_indices = None
-                    if context.ts_forecasts is not None:
-                        forecast_ids = [
-                            item_idx for item_idx, batch_idx in enumerate(batch_indices)
-                            if context.ts_forecasts[batch_idx]
-                        ]
-                        if forecast_ids:
-                            forecast_indices = torch.tensor(
-                                forecast_ids, dtype=torch.long, device=context.input_ids.device)
+                    if forecast_ids:
+                        forecast_indices = torch.tensor(forecast_ids, dtype=torch.long, device=context.input_ids.device)
                     if forecast_indices is not None:
                         ts_forecast_meta = dict(
                             q_seqlens=context.q_seqlens,
