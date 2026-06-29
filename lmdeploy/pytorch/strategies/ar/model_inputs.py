@@ -78,7 +78,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     if inputs.model_metas is not None and other.model_metas is not None:
         model_metas = inputs.model_metas + other.model_metas
 
-    # multimodal output routing
+    # multimodal output metas
     multimodal_output_metas = None
     if inputs.multimodal_output_metas is not None or other.multimodal_output_metas is not None:
         input_metas = inputs.multimodal_output_metas or [None] * inputs.seq_length.numel()
@@ -173,7 +173,7 @@ def index_select_model_inputs(inputs: ModelInputs,
     if model_metas is not None and indice_cpu is not None:
         model_metas = [model_metas[i] for i in indice_cpu]
 
-    # multimodal output routing
+    # multimodal output metas
     multimodal_output_metas = inputs.multimodal_output_metas
     if multimodal_output_metas is not None and indice_cpu is not None:
         multimodal_output_metas = [multimodal_output_metas[i] for i in indice_cpu]

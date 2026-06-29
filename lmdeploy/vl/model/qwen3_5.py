@@ -44,10 +44,6 @@ class Qwen3_5Model(Qwen3VLModel):
         self.ts_start_token = getattr(self.processor, 'ts_start_token', None)
         self.ts_end_token = getattr(self.processor, 'ts_end_token', None)
 
-        # time series processing options
-        self.ts_signals_do_normalize = getattr(self.processor, 'ts_signals_do_normalize', True)
-        self.ts_signals_do_truncate = getattr(self.processor, 'ts_signals_do_truncate', True)
-
         # special tokens
         self.mm_tokens = MultimodalSpecialTokens(
             image_token=self.image_token,
@@ -57,6 +53,10 @@ class Qwen3_5Model(Qwen3VLModel):
             video_token_id=self.video_token_id,
             ts_token_id=self.ts_token_id
         )
+
+        # time series processing options
+        self.ts_signals_do_normalize = getattr(self.processor, 'ts_signals_do_normalize', True)
+        self.ts_signals_do_truncate = getattr(self.processor, 'ts_signals_do_truncate', True)
 
     def time_series_processor(self,
                               text: list[str],
@@ -91,7 +91,9 @@ class Qwen3_5Model(Qwen3VLModel):
             sampling_rate = max(ts_len / 4, 1.0)
 
         # compute num ts tokens
-        if getattr(self.hf_config, 'model_type', None) == 'intern_s2_preview':
+        # intern s2 computes ts tokens more accurately and handles long time series better.
+        # TODO: zhouxinyu, adapt to interns2
+        if self.hf_config.model_type == 'intern_s2_preview':
             chunk_size = getattr(self.processor, 'chunk_size', 12800)
             num_query = getattr(self.processor, 'num_query', 2)
             subrate = max(ts_len / 500, 1.0)

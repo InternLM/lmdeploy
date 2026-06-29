@@ -153,6 +153,8 @@ class GenerationConfig:
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
+
+    # time series forecasting
     forecast_horizon: int | None = None
     enable_forecasting: bool | None = None
 
