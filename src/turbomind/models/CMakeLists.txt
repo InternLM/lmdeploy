@@ -18,12 +18,17 @@ add_library(models STATIC
         qwen3_5vit/fast_pos_embed.cu
         qwen3_5vit/fast_rotary_pos_emb.cu
         qwen3_5vit/fused_embed_merge.cu
+        qwen3_5vit/grid_mapping.cu
         qwen3_5vit/qkv_preprocess.cu
         qwen3_5vit/mrope_position_ids.cu
         qwen3_5vit/bias_gelu.cu
         qwen3_5vit/qwen3_5vit_block_weight.cc
         qwen3_5vit/qwen3_5vit_weight.cc
         qwen3_5vit/qwen3_5vit.cc
+        qwen2_vit/qwen2_vit_kernels.cu
+        qwen2_vit/qwen2_vit_block_weight.cc
+        qwen2_vit/qwen2_vit_weight.cc
+        qwen2_vit/qwen2_vit.cc
         internvit/internvit_kernels.cu
         internvit/internvit_block_weight.cc
         internvit/internvit_weight.cc

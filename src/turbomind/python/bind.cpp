@@ -35,6 +35,9 @@
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
+#include "src/turbomind/models/qwen2_vit/qwen2_vit_block_weight.h"
+#include "src/turbomind/models/qwen2_vit/qwen2_vit_input.h"
+#include "src/turbomind/models/qwen2_vit/qwen2_vit_weight.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_input.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
@@ -341,6 +344,8 @@ PYBIND11_MODULE(_turbomind, m)
     using MMModality     = ft::multimodal::Modality;
     using InternVitItem  = ft::multimodal::InternVitItem;
     using InternVitInput = ft::multimodal::InternVitInput;
+    using Qwen2VitItem   = ft::multimodal::Qwen2VitItem;
+    using Qwen2VitInput  = ft::multimodal::Qwen2VitInput;
     using QwenVitItem    = ft::multimodal::Qwen3_5VitItem;
     using QwenVitInput   = ft::multimodal::Qwen3_5VitInput;
     py::class_<MMInput, std::shared_ptr<MMInput>>(multimodal, "Input");
@@ -376,6 +381,32 @@ PYBIND11_MODULE(_turbomind, m)
         .def(py::init<>())
         .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
         .def_readwrite("items", &QwenVitInput::items);
+    py::class_<Qwen2VitItem>(multimodal, "Qwen2VitItem")
+        .def(py::init<>())
+        .def(py::init([](MMModality              modality,
+                         std::shared_ptr<Tensor> data,
+                         int                     token_begin,
+                         int                     token_end,
+                         std::array<int, 3>      grid_thw) {
+                 return Qwen2VitItem{modality, *data, token_begin, token_end, grid_thw};
+             }),
+             "modality"_a,
+             "data"_a,
+             "token_begin"_a,
+             "token_end"_a,
+             "grid_thw"_a)
+        .def_readwrite("modality", &Qwen2VitItem::modality)
+        .def_property(
+            "data",
+            [](const Qwen2VitItem& self) { return std::make_shared<Tensor>(self.data); },
+            [](Qwen2VitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
+        .def_readwrite("token_begin", &Qwen2VitItem::token_begin)
+        .def_readwrite("token_end", &Qwen2VitItem::token_end)
+        .def_readwrite("grid_thw", &Qwen2VitItem::grid_thw);
+    py::class_<Qwen2VitInput, MMInput, std::shared_ptr<Qwen2VitInput>>(multimodal, "Qwen2VitInput")
+        .def(py::init<>())
+        .def(py::init<std::vector<Qwen2VitItem>>(), "items"_a)
+        .def_readwrite("items", &Qwen2VitInput::items);
     py::class_<InternVitItem>(multimodal, "InternVitItem")
         .def(py::init<>())
         .def(py::init([](MMModality modality, std::shared_ptr<Tensor> data, int token_begin, int token_end) {
@@ -540,6 +571,8 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
     bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
     bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
+    bind_config<turbomind::core::Qwen2VitConfig>(m, "Qwen2VitConfig");
+    bind_config<turbomind::core::Qwen2VitBlockConfig>(m, "Qwen2VitBlockConfig");
     bind_config<turbomind::core::Qwen3_5VitConfig>(m, "Qwen3_5VitConfig");
     bind_config<turbomind::core::Qwen3_5VitBlockConfig>(m, "Qwen3_5VitBlockConfig");
     bind_config<turbomind::core::InternVitConfig>(m, "InternVitConfig");

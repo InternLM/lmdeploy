@@ -5,6 +5,8 @@
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/models/internvit/internvit.h"
 #include "src/turbomind/models/internvit/internvit_weight.h"
+#include "src/turbomind/models/qwen2_vit/qwen2_vit.h"
+#include "src/turbomind/models/qwen2_vit/qwen2_vit_weight.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit.h"
 #include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
 
@@ -19,6 +21,9 @@ std::unique_ptr<VisionModel> CreateVisionModel(const VisionModelWeight& weights,
 {
     if (std::string_view{weights.type()} == "Qwen3_5VitWeight") {
         return std::make_unique<Qwen3_5Vit>(engine, ctx, static_cast<const Qwen3_5VitWeight&>(weights), phases);
+    }
+    if (std::string_view{weights.type()} == "Qwen2VitWeight") {
+        return std::make_unique<Qwen2Vit>(engine, ctx, static_cast<const Qwen2VitWeight&>(weights), phases);
     }
     if (std::string_view{weights.type()} == "InternVitWeight") {
         return std::make_unique<InternVit>(engine, ctx, static_cast<const InternVitWeight&>(weights), phases);
