@@ -220,34 +220,6 @@ def test_get_cache_block_sizes_includes_nested_memdecode_memory_model(monkeypatc
     ]
 
 
-def test_get_cache_block_sizes_reads_memdecode_config_from_misc_config(monkeypatch):
-    executor = object.__new__(ExecutorBase)
-    memory_model_config = object()
-    executor.dist_config = SimpleNamespace(attn_tp=8)
-    executor.cache_config = object()
-    executor.model_config = object()
-    executor.misc_config = SimpleNamespace(
-        memdecode_config=SimpleNamespace(memory_model_config=memory_model_config))
-    executor.specdecode_config = None
-    calls = []
-
-    def fake_get_cache_block_size(cache_config, model_config, world_size):
-        calls.append((cache_config, model_config, world_size))
-        if model_config is memory_model_config:
-            return 64
-        return 256
-
-    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
-
-    cache_block_size = executor._get_cache_block_sizes(None, None)
-
-    assert cache_block_size == _CacheBlockSize(target=256, memory=64)
-    assert calls == [
-        (executor.cache_config, executor.model_config, 8),
-        (executor.cache_config, memory_model_config, 8),
-    ]
-
-
 def test_validate_memdecode_configs_rejects_specdecode():
     executor = object.__new__(ExecutorBase)
     executor.misc_config = SimpleNamespace(

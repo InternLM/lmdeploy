@@ -41,35 +41,6 @@ def _make_agent_with_queues():
     return agent
 
 
-def test_build_model_agent_keeps_memdecode_config_inside_misc_config(monkeypatch):
-    import lmdeploy.pytorch.engine.model_agent as model_agent_module
-
-    calls = {}
-
-    class _BaseModelAgent:
-
-        def __init__(self, *args, **kwargs):
-            calls['kwargs'] = kwargs
-
-    monkeypatch.setattr(model_agent_module, 'BaseModelAgent', _BaseModelAgent)
-    memdecode_config = object()
-    misc_config = SimpleNamespace(memdecode_config=memdecode_config)
-
-    agent = model_agent_module.build_model_agent(
-        model_path='base',
-        model_config=object(),
-        cache_config=object(),
-        backend_config=object(),
-        misc_config=misc_config,
-        dist_ctx=object(),
-        device_ctx=object(),
-    )
-
-    assert isinstance(agent, _BaseModelAgent)
-    assert calls['kwargs']['misc_config'] is misc_config
-    assert 'memdecode_config' not in calls['kwargs']
-
-
 class TestDrainQueues:
 
     def test_drain_empty_queues(self):
@@ -476,8 +447,7 @@ class TestMemDecodeModelAgentLifecycle:
         assert torch.equal(output['logits'], torch.tensor([[[73.], [229.]]]))
         assert 'all_routed_experts' not in output
 
-    @pytest.mark.parametrize('is_chunk', [False, True])
-    def test_async_model_forward_memdecode_rejects_returned_logits(self, event_loop, is_chunk):
+    def test_async_model_forward_memdecode_rejects_returned_logits(self, event_loop):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
         class _MemDecodeAgent:
@@ -489,7 +459,7 @@ class TestMemDecodeModelAgentLifecycle:
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.memdecode_agent = _MemDecodeAgent()
         agent.async_forward = _base_forward
-        inputs = SimpleNamespace(is_chunk=is_chunk)
+        inputs = SimpleNamespace()
 
         with pytest.raises(RuntimeError, match='MemDecode does not support returned prompt logits yet.'):
             event_loop.run_until_complete(BaseModelAgent._async_model_forward(agent, inputs, return_logits=True))

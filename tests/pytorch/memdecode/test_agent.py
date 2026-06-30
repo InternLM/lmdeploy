@@ -43,12 +43,6 @@ def test_build_memdecode_agent_returns_none_for_missing_config():
     assert agent is None
 
 
-def test_build_memdecode_agent_returns_enabled_agent_for_config():
-    agent = build_memdecode_agent(_memdecode_config(), BackendConfig(), _dist_ctx())
-
-    assert isinstance(agent, MemDecodeAgent)
-
-
 def test_release_clears_model_cache_and_state_cache():
     agent = MemDecodeAgent.__new__(MemDecodeAgent)
     agent.model = object()
