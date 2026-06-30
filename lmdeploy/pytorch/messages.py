@@ -10,9 +10,8 @@ from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
+from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs, make_multimodal_content_hash
 from lmdeploy.utils import get_logger
-from lmdeploy.vl import hasher as mm_hasher
 from lmdeploy.vl.constants import Modality
 
 from .block import LogicalTokenBlocks
@@ -1039,8 +1038,8 @@ class SchedulerSequence:
                     # Most request paths precompute the hash after model
                     # preprocessing.  Keep this fallback for unit tests and
                     # defensive correctness if a processor omits it.
-                    content_hash = mm_hasher.make_multimodal_content_hash(modal_data.data, modal_data.meta,
-                                                                          modal_data.mrope_pos_ids)
+                    content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
+                                                                modal_data.mrope_pos_ids)
                 self.prefix_cache.metas.append(
                     PrefixCacheMeta(start=modal_data.start,
                                     end=modal_data.end,
