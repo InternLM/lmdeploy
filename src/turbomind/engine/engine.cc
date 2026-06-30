@@ -290,14 +290,6 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     std::pmr::monotonic_buffer_resource    mbr;
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
 
-    bool has_linear_attention = false;
-    for (auto t : weights_.layer_types) {
-        if (t == 1) {
-            has_linear_attention = true;
-            break;
-        }
-    }
-
     auto count = [&occur](const auto& reqs) {
         for (const auto& r : reqs) {
             ++occur[r->id];
@@ -310,21 +302,9 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
                 TM_LOG_ERROR("Skip conflicting {} request for ID {}", type, r->id);
                 r->ec = Request::kConflict;
             }
-            if (!r->ec && is_infer && has_linear_attention && !r->session.end_flag) {
-                TM_LOG_ERROR("Skip inconsistent {} request for ID {}. Linear attention only supports stateless "
-                             "requests",
-                             type,
-                             r->id);
-                r->ec = Request::kInconsistency;
-            }
             if (param_.enable_prefix_caching) {
-                if (r->session.step != 0) {
-                    // Prefix caching is incompatible with interactive mode
-                    TM_LOG_ERROR("Skip inconsistent {} request for ID {} step {}", type, r->id, r->session.step);
-                    r->ec = Request::kInconsistency;
-                }
-                else if (r->gen_cfg.output_logits == GenerationConfig::kAll
-                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll || r->gen_cfg.return_ppl) {
+                if (r->gen_cfg.output_logits == GenerationConfig::kAll
+                    || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll || r->gen_cfg.return_ppl) {
                     // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
                     TM_LOG_ERROR("Skip inconsistent {} request for ID {}. It cannot output logits or "
                                  "last_hidden_states for all tokens or ppl",
@@ -390,25 +370,10 @@ void Engine::Impl::Kill(const Requests& kills, vector<Signal>& signals)
 void Engine::Impl::Interrupt(RequestCache& c)
 {
     auto& s = *TM_CHECK_NOTNULL(c.seq);
-    if (c.req->session.end_flag) {
-        if (!is_warm_up_ && s.status != Sequence::kCached) {  // At least `Locked` status is required for caching
-            seq_mgr_->CacheGeneration(s);
-        }
-        TM_CHECK(seq_mgr_->Erase(c.req->id));
+    if (!is_warm_up_ && s.status != Sequence::kCached) {
+        seq_mgr_->CacheGeneration(s);
     }
-    else {
-        if (s.recurrent_states && c.seq_len != s.cache_len) {
-            TM_LOG_WARN(
-                "[Engine][Interrupt] Invalidating cache for ID {} due to linear-state/cache mismatch ({} vs {})",
-                s.id,
-                c.seq_len,
-                s.cache_len);
-            seq_mgr_->InvalidateStatesAndCache(s);
-        }
-        else {
-            seq_mgr_->UpdateAndSetUnlock(s);
-        }
-    }
+    TM_CHECK(seq_mgr_->Erase(c.req->id));
     c.seq = nullptr;
 }
 
@@ -448,25 +413,13 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             continue;
         }
 
-        auto ptr = r->session.start_flag ? seq_mgr_->Create(r->id) : seq_mgr_->Get(r->id);
+        auto ptr = seq_mgr_->Create(r->id);
         if (!ptr) {
             signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
             continue;
         }
 
-        const int step = [&] {
-            int s = r->session.step;
-            if (s < 0) {
-                s = ptr->tokens.size();
-            }
-            else if (s > ptr->tokens.size()) {
-                if (tp_rank_ == 0) {
-                    TM_LOG_WARN("Skipping invalid step ({}) setting for ID {}", s, ptr->id);
-                }
-                s = ptr->tokens.size();
-            }
-            return s;
-        }();
+        const int step = 0;
 
         if (step + input_len > session_len_trunc_) {
             signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
@@ -474,7 +427,6 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         }
 
         if (step && param_.enable_prefix_caching) {
-            // step not supported in prefix-caching mode
             signals.push_back([r] { UpdateState(*r, Request::kInconsistency, 0); });
             continue;
         }
@@ -510,7 +462,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         c->prompt_len = c->seq_len = token_ids - c->token_ids;  // all known tokens
 
         // Only prefix cache needs prompt data
-        if (param_.enable_prefix_caching && input_len && r->session.start_flag) {
+        if (param_.enable_prefix_caching && input_len) {
             seq.prompt.insert(seq.prompt.end(), input_ids.data<int>(), input_ids.data<int>() + input_len);
         }
 

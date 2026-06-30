@@ -574,7 +574,7 @@ class TurboMindInstance:
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
             8: ResponseType.CANCEL,
-            9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            9: ResponseType.INTERNAL_ENGINE_ERROR,  # kInconsistency, e.g. prefix caching + output_logits/return_ppl
             10: ResponseType.NO_QUEUE,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
@@ -671,16 +671,6 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
-    def async_end_cb(self, fut: asyncio.Future, status: int):
-        """Executing on engine's signaling thread."""
-        logger.info(f'[async_end_cb] session ended, status = {status}')
-        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
-
-    async def async_end(self, session_id):
-        fut = asyncio.get_running_loop().create_future()
-        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
-        await fut
-
     def async_signal_cb(self, s: StreamingSemaphore):
         """Executing on engine's signaling thread."""
         s.loop.call_soon_threadsafe(s.release)
@@ -692,28 +682,10 @@ class TurboMindInstance:
                                  input_embedding_ranges=None,
                                  input_meta: dict[str, Any] = None,
                                  multimodal: list[dict[str, Any]] = None,
-                                 sequence_start: bool = True,
-                                 sequence_end: bool = False,
-                                 step=0,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
-        """Perform model inference.
-
-        Args:
-            session_id (int): the id of a session
-            input_ids (numpy.ndarray): the token ids of a prompt
-            input_embeddings (list[numpy.ndarray]): embeddings features
-            input_embedding_ranges (list[tuple[int,int]]): the begin/end
-              offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            step (int): the offset of the k/v cache
-            stop (bool): indicator for cancelling the session
-            gen_config (GenerationConfig): generation config
-            stream_output (bool): indicator for stream output
-            kwargs (dict): kwargs for backward compatibility
-        """
+        """Perform model inference."""
         logger.info(f'[async_stream_infer] session {session_id} start')
         gen_cfg = self._get_generation_config(gen_config)
 
@@ -758,7 +730,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
+        session = _tm.SessionParam(id=session_id)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)
@@ -779,7 +751,7 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        prev_len = step + input_len
+        prev_len = input_len
         try:
             while True:
                 await sem.acquire()

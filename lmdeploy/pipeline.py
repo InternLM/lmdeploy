@@ -177,6 +177,17 @@ class Pipeline:
         self.internal_thread.close()
         self.async_engine.close()
 
+    @staticmethod
+    def _history_to_messages(history: list[tuple]) -> list[dict]:
+        messages = []
+        for user, assistant in history:
+            if isinstance(user, str):
+                messages.append(dict(role='user', content=user))
+            elif isinstance(user, list):
+                messages.extend(user)
+            messages.append(dict(role='assistant', content=assistant))
+        return messages
+
     def chat(self,
              prompt: str | tuple[str, Image | list[Image]],
              session=None,
@@ -201,18 +212,21 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        prompt = MultimodalProcessor.format_prompts(prompt)
+        formatted = MultimodalProcessor.format_prompts(prompt)
+        messages = self._history_to_messages(session.history)
+        if isinstance(formatted[0], str):
+            messages.append(dict(role='user', content=formatted[0]))
+        elif isinstance(formatted[0], list):
+            messages.extend(formatted[0])
+        else:
+            messages.extend(formatted)
 
-        sequence_start = session.step == 0
-        generator = self.stream_infer(prompts=prompt,
+        generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
                                       adapter_name=adapter_name,
                                       multiplex=True,
-                                      sequence_start=sequence_start,
-                                      sequence_end=False,
-                                      step=session.step,
                                       **kwargs)
 
         def _gen():
@@ -226,7 +240,6 @@ class Pipeline:
                 raise
             else:
                 session.response = resp
-                session.step += resp.generate_token_len + resp.input_token_len
                 session.history.append((session.prompt, resp.text))
 
         if stream_response:

@@ -22,7 +22,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
-from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
+from ..messages import MessageStatus, SchedulerSequence
 from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
 from ..strategies import build_strategy_factory
@@ -331,10 +331,14 @@ class Engine(EngineBase):
                     if _resp is not None:
                         stopped_resp_ids.add(id(_resp))
                 self.scheduler.stop_session(session_id)
+                msgs = list(session.sequences.values())
+                preserve = msgs and msgs[0].preserve_cache
                 for seq in session.sequences.values():
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None and id(_resp) not in stopped_resp_ids:
                         self.req_manager.reject_request(_resp)
+                if not preserve:
+                    self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -451,30 +455,19 @@ class Engine(EngineBase):
                 continue
             # TODO: support 1 session n sequence
             sampling_param = req.data['sampling_param']
-            if len(sess.sequences) == 0:
-                migration_request = req.data.get('migration_request')
-                assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
-                sess.add_sequence(req.data['token_ids'],
-                                  sampling_param=sampling_param,
-                                  adapter_name=req.data['adapter_name'],
-                                  multimodals=req.data.get('input_multimodals'),
-                                  input_embeddings=req.data.get('input_embeddings', ),
-                                  migration_request=migration_request,
-                                  resp_cache=req.data.get('with_cache'),
-                                  preserve_cache=req.data.get('preserve_cache'))
-                msg = next(iter(sess.sequences.values()))
-                if migration_request:
-                    self.migration_event.set()
-            else:
-                msg = next(iter(sess.sequences.values()))
-                msg.update_token_ids(
-                    req.data['token_ids'],
-                    multimodals=req.data.get('input_multimodals'),
-                    embeddings=req.data.get('input_embeddings'),
-                    mode=UpdateTokenMode.INPUTS,
-                )
-                msg.sampling_param = sampling_param
-                msg.state.activate()
+            assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
+            migration_request = req.data.get('migration_request')
+            sess.add_sequence(req.data['token_ids'],
+                              sampling_param=sampling_param,
+                              adapter_name=req.data['adapter_name'],
+                              multimodals=req.data.get('input_multimodals'),
+                              input_embeddings=req.data.get('input_embeddings', ),
+                              migration_request=migration_request,
+                              resp_cache=req.data.get('with_cache'),
+                              preserve_cache=req.data.get('preserve_cache'))
+            msg = next(iter(sess.sequences.values()))
+            if migration_request:
+                self.migration_event.set()
 
             __update_max_new_tokens(msg)
             msg.resp = req.resp
