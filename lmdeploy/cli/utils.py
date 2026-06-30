@@ -7,10 +7,6 @@ import sys
 from collections import defaultdict
 from typing import Any
 
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
-
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
     """Formatter to output default value and type in help information."""
@@ -68,12 +64,12 @@ def get_lora_adapters(adapters: list[str]):
     return output
 
 
-def get_chat_template(chat_template: str, model_path: str = None):
+def get_chat_template(chat_template: str | None, model_path: str | None = None):
     """Get chat template config.
 
     Args:
-        chat_template(str): it could be a builtin chat template name, or a chat template json file
-        model_path(str): the model path, used to check deprecated chat template names
+        chat_template(str | None): it could be a builtin chat template name, or a chat template json file
+        model_path(str | None): the model path, passed through to the chat template config
     """
     import os
 
@@ -82,14 +78,7 @@ def get_chat_template(chat_template: str, model_path: str = None):
         if os.path.isfile(chat_template):
             return ChatTemplateConfig.from_json(chat_template)
         else:
-            from lmdeploy.model import DEPRECATED_CHAT_TEMPLATE_NAMES, MODELS, REMOVED_CHAT_TEMPLATE_NAMES
-            if chat_template in REMOVED_CHAT_TEMPLATE_NAMES:
-                raise ValueError(f"The chat template '{chat_template}' has been removed. "
-                                 f'Please refer to the latest chat templates in '
-                                 f'https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html')
-            if chat_template in DEPRECATED_CHAT_TEMPLATE_NAMES:
-                logger.warning(f"The chat template '{chat_template}' is deprecated and fallback to hf chat template.")
-                chat_template = 'hf'
+            from lmdeploy.model import MODELS
             assert chat_template in MODELS.module_dict.keys(), \
                 f"chat template '{chat_template}' is not " \
                 f'registered. The builtin chat templates are: ' \
@@ -586,6 +575,30 @@ class ArgumentHelper:
                                    help='Enable cache and match prefix')
 
     @staticmethod
+    def prefix_cache_state_budget(parser):
+        """Add argument prefix_cache_state_budget to parser."""
+
+        return parser.add_argument('--prefix-cache-state-budget',
+                                   type=int,
+                                   default=0,
+                                   help='Extra SSM state-cache slots budgeted for prefix-cache checkpoints. '
+                                   '0 adds no extra slots, but checkpoints may borrow idle runtime state slots. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
+    def prefix_cache_decode_state_interval(parser):
+        """Add argument prefix_cache_decode_state_interval to parser."""
+
+        return parser.add_argument('--prefix-cache-decode-state-interval',
+                                   type=int,
+                                   default=0,
+                                   help='Token interval for SSM decode-state prefix-cache checkpoints. '
+                                   '0 disables decode checkpoint saves while keeping prefill/chunk checkpoints. '
+                                   'Use a positive multiple of block size only for long SSM decoding where later '
+                                   'requests can reuse decode prefixes; smaller values improve hit granularity '
+                                   'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,
@@ -615,6 +628,16 @@ class ArgumentHelper:
                                    type=int,
                                    default=8192,
                                    help='the max number of tokens per iteration during prefill')
+
+    @staticmethod
+    def cudagraph_capture_batch_sizes(parser):
+        return parser.add_argument('--cudagraph-capture-batch-sizes',
+                                   type=int,
+                                   nargs='+',
+                                   default=None,
+                                   help='Batch sizes to capture CUDA graphs for in the PyTorch engine. '
+                                   'If not specified, the engine infers them from max_batch_size. '
+                                   'max_batch_size is always captured')
 
     @staticmethod
     def vision_max_batch_size(parser):

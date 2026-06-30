@@ -602,7 +602,8 @@ def _reduce_split_kernel(
 
     m_k = tl.load(acc_ptr + offs_mi)
     l_k = tl.load(acc_ptr + offs_mi + 1)
-    acc_k = tl.load(acc_ptr + offs_acc, mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')), other=0.0)
+    # (m_k[:, None] > -float('inf')) produce invalid mask for triton 3.5.1
+    acc_k = tl.load(acc_ptr + offs_acc, mask=mask_dv[None, :] & (m_k > -float('inf'))[:, None], other=0.0)
 
     m_max = tl.max(m_k, 0)
     alpha = tl_exp2(m_k - m_max)
@@ -715,7 +716,7 @@ def _fused_reduce_hadamard_kernel(
     m_k = tl.load(acc_ptr + offs_mi)
     l_k = tl.load(acc_ptr + offs_mi + 1)
     acc_k = tl.load(acc_ptr + offs_acc,
-                    mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')),
+                    mask=mask_dv[None, :] & (m_k > -float('inf'))[:, None],
                     other=0.0)
 
     m_max = tl.max(m_k, 0)

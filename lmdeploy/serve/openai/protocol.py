@@ -50,11 +50,28 @@ class ModelList(BaseModel):
     data: list[ModelCard] = []
 
 
+class PromptTokensDetails(BaseModel):
+    """Prompt token usage details."""
+
+    cached_tokens: int = 0
+
+
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: int | None = 0
+    prompt_tokens_details: PromptTokensDetails | None = None
+
+    @classmethod
+    def build(cls, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> 'UsageInfo':
+        """Build OpenAI-compatible usage with prefix-cache details."""
+        return cls(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+        )
 
 
 class Function(BaseModel):
@@ -448,6 +465,23 @@ class PoolingResponse(BaseModel):
     usage: UsageInfo
 
 
+class PPLRequest(BaseModel):
+    """Get perplexity request.
+
+    The input may be raw text or token ids. Text is tokenized with
+    ``tokenizer.encode`` (no chat template applied).
+    """
+    input: str | list[int]
+
+
+class PPLResponse(BaseModel):
+    """Get perplexity response.
+
+    ``ppl`` is the perplexity (mean cross-entropy loss) of the input.
+    """
+    ppl: float
+
+
 class EncodeRequest(BaseModel):
     """Encode request."""
     input: str | list[str]
@@ -476,6 +510,32 @@ class UpdateParamsRequest(BaseModel):
     load_format: str | None = None  # 'flattened_bucket' or None
     finished: bool = False
 
+
+class InitWeightsUpdateGroupRequest(BaseModel):
+    """Initialize a torch.distributed process group used to broadcast weights
+    from an external trainer into the rollout engine."""
+    master_address: str
+    master_port: int
+    rank_offset: int
+    world_size: int
+    group_name: str
+    backend: str = 'nccl'
+
+
+class UpdateWeightsFromDistributedRequest(BaseModel):
+    """Receive weights through a previously initialized distributed group and
+    load them into the running model."""
+    names: list[str]
+    dtypes: list[str]
+    shapes: list[list[int]]
+    group_name: str
+    load_format: str | None = None  # 'flattened_bucket' or None
+    finished: bool = False  # trigger mod.update_weights() finalization when True
+
+
+class DestroyWeightsUpdateGroupRequest(BaseModel):
+    """Tear down a previously initialized weights-update process group."""
+    group_name: str
 
 
 # /generate input
