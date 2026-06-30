@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .deepseek_v32_tool_parser import DeepSeekV32ToolParser
 from .deepseek_v4_tool_parser import DeepSeekV4ToolParser
+from .deepseek_v32_tool_parser import DeepSeekV32ToolParser
 from .glm47_tool_parser import Glm47ToolParser
 from .internlm2_tool_parser import Internlm2ToolParser
 from .interns2preview_tool_parser import InternS2PreviewToolParser
