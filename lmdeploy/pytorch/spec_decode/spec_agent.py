@@ -542,6 +542,20 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""
+
+        def add_warmup_dp_meta(inputs: ModelInputs, is_decoding: bool):
+            dist_config = self.draft_dist_ctx.dist_config
+            if dist_config.dp <= 1:
+                return
+
+            num_tokens = inputs.input_ids.numel()
+            batch_size = inputs.seq_length.numel()
+            world_size = dist_config.world_size
+            with self.draft_context():
+                inputs.build_dp_meta([num_tokens] * world_size)
+            inputs.dp_meta.dp_batches = [batch_size] * world_size
+            inputs.dp_meta.dp_is_decoding = is_decoding
+
         target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
         # warmup prefill
@@ -552,6 +566,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  target_hidden_size=target_hidden_size,
                                                  target_dtype=self.model_config.dtype,
                                                  meta=self.make_dummy_meta)
+        add_warmup_dp_meta(inputs, is_decoding=False)
 
         # warmup prefill
         self._forward_impl(inputs)
@@ -570,6 +585,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                     target_hidden_size=target_hidden_size,
                                                     target_dtype=self.model_config.dtype,
                                                     meta=self.make_dummy_meta)
+            add_warmup_dp_meta(inputs, is_decoding=True)
             self._forward_impl(inputs)
             # decode 1 tokens per sequence
             inputs = self.inputs_strategy.make_dummy(batch_size,
@@ -580,11 +596,13 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                     target_hidden_size=self.model_config.hidden_size,
                                                     target_dtype=self.model_config.dtype,
                                                     meta=self.make_dummy_meta)
+            add_warmup_dp_meta(inputs, is_decoding=True)
             self._forward_impl(inputs)
 
     def reset_graph_runner(self):
         """Reset graph runner."""
         with self.draft_context():
+            self._prev_chunk_last.clear()
             if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
                 self.proposer.model.reset()
 

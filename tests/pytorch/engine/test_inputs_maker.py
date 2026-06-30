@@ -168,6 +168,41 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     assert not block_trie.pinned
 
 
+def test_engine_loop_sleep_drain_clears_long_context_chunker():
+    seq = _DummySeq(
+        history_ids=512,
+        token_ids=2048,
+        all_multimodals={},
+        input_multimodals={},
+    )
+    seq.status = MessageStatus.RUNNING
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.long_context_chunker.set_seq(seq)
+    assert maker.long_context_chunker.enabled()
+
+    async def _run_sleep_drain():
+        loop = EngineLoop.__new__(EngineLoop)
+        loop.stop_event = asyncio.Event()
+        loop.has_runable_event = asyncio.Event()
+        loop._sleep_requested = True
+        loop._main_sleep_drain_event = asyncio.Event()
+        loop._sleep_resume_event = asyncio.Event()
+        loop.scheduler = SimpleNamespace()
+        loop.inputs_maker = maker
+
+        task = asyncio.create_task(loop.main_loop())
+        await asyncio.wait_for(loop._main_sleep_drain_event.wait(), timeout=1)
+        loop.stop_event.set()
+        loop._sleep_resume_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(_run_sleep_drain())
+
+    assert not maker.long_context_chunker.enabled()
+
+
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():
     image = _DummyMultiModal(start=512, end=5888)
     seq = _DummySeq(
