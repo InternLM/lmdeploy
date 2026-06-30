@@ -2,11 +2,11 @@ import numpy as np
 import pytest
 import torch
 
+from lmdeploy.pytorch import messages as messages_module
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import SamplingParam, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging import Scheduler
-from lmdeploy.vl import hasher as mm_hasher
 from lmdeploy.vl.constants import Modality
 
 
@@ -405,7 +405,7 @@ class TestBlockTire:
         def _fail_hash(*args, **kwargs):
             raise AssertionError('disabled prefix cache should not hash multimodal payloads')
 
-        monkeypatch.setattr(mm_hasher, 'make_multimodal_content_hash', _fail_hash)
+        monkeypatch.setattr(messages_module, 'make_multimodal_content_hash', _fail_hash)
 
         sess = scheduler.add_session(0)
         seq = sess.add_sequence([99] * sess.seq_meta.block_size,
