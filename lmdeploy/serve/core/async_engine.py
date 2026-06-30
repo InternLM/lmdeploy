@@ -480,7 +480,7 @@ class AsyncEngine:
             session_id: int | Session,
             gen_config: GenerationConfig | None = None,
             tools: list[object] | None = None,
-            reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+            reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
             stream_response: bool = True,
             sequence_start: bool = True,
             sequence_end: bool = True,  # no interactive mode by default

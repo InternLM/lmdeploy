@@ -73,7 +73,7 @@ class ToolParser:
         """Decode incremental tool payload emitted between tool tags."""
         raise NotImplementedError('ToolParser.decode_tool_incremental has not been implemented!')
 
-    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
+    def parse_tool_call_complete(self, payload: str) -> ToolCall | list[ToolCall] | None:
         """Parse one complete tool payload into OpenAI tool call object."""
         raise NotImplementedError('ToolParser.parse_tool_call_complete has not been implemented!')
 

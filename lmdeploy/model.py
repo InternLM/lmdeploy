@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import json
+import os
 import uuid
 from typing import Literal
 
@@ -581,68 +582,82 @@ class DeepseekVL2(BaseChatTemplate):
 
 @MODELS.register_module(name=['deepseek-v4'])
 class DeepseekV4ChatTemplate(BaseChatTemplate):
-    """Chat template for DeepSeek-V4.
+    """Chat template of DeepSeek-V4 models."""
 
-    Produces prompts that match the official DeepSeek-V4 encoding format:
-    - <｜begin▁of▁sentence｜> (BOS)
-    - <｜User｜> (user role prefix)
-    - content
-    - <｜Assistant｜> (assistant role prefix)
-    - <think> (thinking token - no content for user messages in chat mode)
-    - <｜end▁of▁sentence｜> (EOS)
-    """
+    def __init__(self, eoa='<｜end▁of▁sentence｜>', stop_words=['<｜end▁of▁sentence｜>'], **kwargs):
+        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
 
-    def __init__(
-            self,
-            meta_instruction='',
-            eosys='',
-            user='<｜User｜>',
-            eoh='',
-            assistant='<｜Assistant｜>',
-            eoa='<｜end▁of▁sentence｜>',
-            **kwargs):
-        super().__init__(meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         **kwargs)
+    def get_prompt(self, prompt, sequence_start=True, **kwargs):
+        messages = [{'role': 'user', 'content': prompt}]
+        return self.messages2prompt(messages, sequence_start, **kwargs)
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        from lmdeploy.deepseek_v4_encoding import encode_messages
+
         if isinstance(messages, str):
             messages = [{'role': 'user', 'content': messages}]
 
-        prompt = '<｜begin▁of▁sentence｜>'
+        tools = self._normalize_tools(kwargs.pop('tools', None))
+        messages = self._with_tools(messages, tools) if tools else list(messages)
 
-        for i, msg in enumerate(messages):
-            role = msg.get('role')
-            content = msg.get('content', '')
-            is_last = i == len(messages) - 1
+        reasoning_effort = kwargs.pop('reasoning_effort', None)
+        if reasoning_effort not in ('high', 'max'):
+            reasoning_effort = None
 
-            if role == 'user':
-                prompt += '<｜User｜>'
-                prompt += content
-                prompt += '<｜Assistant｜>'
-                if is_last:
-                    prompt += '<think>'
-            elif role == 'assistant':
-                prompt += '</think>'
-                prompt += content
-                prompt += '<｜end▁of▁sentence｜>'
-            elif role == 'system':
-                prompt += content
+        thinking = kwargs.pop('thinking', False)
+        enable_thinking = kwargs.pop('enable_thinking', False)
+        thinking = thinking or enable_thinking
 
-        return prompt
+        drop_thinking = kwargs.pop('drop_thinking', True)
+        return encode_messages(messages,
+                               thinking_mode='thinking' if thinking else 'chat',
+                               drop_thinking=drop_thinking,
+                               add_default_bos_token=sequence_start,
+                               reasoning_effort=reasoning_effort)
 
-    def get_prompt(self, prompt, sequence_start=True, **kwargs):
-        return self.messages2prompt([{'role': 'user', 'content': prompt}], sequence_start, **kwargs)
+    @staticmethod
+    def _normalize_tools(tools):
+        if not tools:
+            return None
+
+        normalized = []
+        for tool in tools:
+            if hasattr(tool, 'model_dump'):
+                tool = tool.model_dump()
+            if not isinstance(tool, dict):
+                continue
+            if 'function' in tool:
+                normalized.append(tool)
+            else:
+                normalized.append({'type': 'function', 'function': tool})
+        return normalized or None
+
+    @staticmethod
+    def _with_tools(messages, tools):
+        messages = [dict(message) for message in messages]
+        for message in messages:
+            if message.get('role') in ('system', 'developer'):
+                message['tools'] = tools
+                return messages
+        return [{'role': 'system', 'content': '', 'tools': tools}] + messages
 
     @classmethod
-    def match(cls, model_path: str, trust_remote_code: bool = False) -> str | None:
-        """Return the model_name that was registered to MODELS."""
-        path = model_path.lower()
-        if 'deepseek' in path and 'v4' in path.lower():
+    def match(cls, model_path: str, trust_remote_code: bool = False, **kwargs) -> str | None:
+        try:
+            arch, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
+            cfg_dict = cfg.to_dict()
+        except Exception:
+            cfg_dict = {}
+            config_path = os.path.join(model_path, 'config.json')
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, encoding='utf-8') as f:
+                        cfg_dict = json.load(f)
+                except Exception:
+                    cfg_dict = {}
+            arch = (cfg_dict.get('architectures') or [None])[0]
+
+        if arch == 'DeepseekV4ForCausalLM' or cfg_dict.get('model_type') == 'deepseek_v4':
             return 'deepseek-v4'
         return None
 
