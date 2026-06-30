@@ -3,12 +3,11 @@
 PyTorch.
 
 Starts an api_server with a base model plus MemDecode ``memory_model_path`` and
-optional router settings via ``--hf-overrides``, then runs a simple Chat
+optional named router selection via ``--hf-overrides``, then runs a simple Chat
 Completion call.
 
-Default paths target Intern-S2-Preview + fine-tuned 4B memory with **fixed** fusion
-(``lambda_value``). The bundled ``DEFAULT_ROUTER_PATH`` is trained for Intern-S2-397B
-base hidden size and does **not** match Preview; use ``--mode fixed`` for Preview.
+Default paths target Intern-S2-Preview + fine-tuned 4B memory with **fixed**
+fusion (``lambda_value``); use ``--mode fixed`` for Preview.
 
 Example (Intern-S2-Preview + memory, single GPU):
 
@@ -17,7 +16,8 @@ Example (Intern-S2-Preview + memory, single GPU):
         --memory-model-path /path/to/memory/checkpoint \\
         --mode fixed --tp 1 --max-new-tokens 64
 
-Adaptive mode requires a router checkpoint whose input dim matches
+Adaptive mode requires a named router profile under
+``memory_model_path/memory_fusion/routers`` whose input dim matches
 ``base_hidden_size + memory_hidden_size + 4 * scalar_proj_dim`` for your pair.
 """
 
@@ -41,11 +41,6 @@ DEFAULT_MEM_MODEL_PATH = (
     '/mnt/shared-storage-user/llmrazor-share/memdecode/'
     'interns2_4bmemory_m4match_clean8n_tp2_mbs1_gbs1024_lr4e5_wu5p_3epoch_hf'
 )
-DEFAULT_ROUTER_PATH = (
-    # Trained for Intern-S2-397B + 4B memory (mlp input dim 6912). Not for Preview (4864).
-    '/mnt/shared-storage-user/llmrazor-share/memdecode/'
-    'interns2_397b_base02_2806_plus_interns2_4b_mem_m4match_clean8n_sft32k_bio128k_realmm_mlp4_lr4e4_epoch1_20260622'
-)
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,16 +48,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--base-model-path', default=DEFAULT_BASE_MODEL_PATH)
     p.add_argument('--memory-model-path', default=DEFAULT_MEM_MODEL_PATH)
     p.add_argument(
-        '--router-path',
-        default=DEFAULT_ROUTER_PATH,
-        help='Adaptive mode only. Router must match base/memory hidden sizes (not Preview + 397B router).',
-    )
-    p.add_argument(
         '--mode',
         choices=['fixed', 'adaptive'],
         default='fixed',
-        help='Fusion mode. Use fixed for Intern-S2-Preview unless you have a matching router.',
+        help='Fusion mode. Adaptive mode can select a named router under memory_model_path/memory_fusion.',
     )
+    p.add_argument('--router-name', default=None,
+                   help='Adaptive mode only; selects a router profile from memory_model_path/memory_fusion/routers.')
     p.add_argument('--server-name', default='127.0.0.1')
     p.add_argument('--server-port', type=int, default=23333)
     p.add_argument('--tp', type=int, default=1)
@@ -96,8 +88,9 @@ def build_hf_overrides(args: argparse.Namespace) -> dict:
         'adaptive_router': False,
     }
     if args.mode == 'adaptive':
-        overrides['router_path'] = args.router_path
         overrides['adaptive_router'] = True
+        if args.router_name is not None:
+            overrides['router_name'] = args.router_name
         overrides['lambda_base_only_threshold'] = args.lambda_base_only_threshold
     return overrides
 
@@ -148,8 +141,6 @@ def main() -> int:
         raise FileNotFoundError(f'base model path does not exist: {args.base_model_path}')
     if not os.path.exists(args.memory_model_path):
         raise FileNotFoundError(f'memory model path does not exist: {args.memory_model_path}')
-    if args.mode == 'adaptive' and not os.path.exists(args.router_path):
-        raise FileNotFoundError(f'router path does not exist: {args.router_path}')
 
     env = os.environ.copy()
 

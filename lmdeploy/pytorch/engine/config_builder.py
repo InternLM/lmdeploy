@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import copy
+import json
 import os
+from pathlib import Path
 
 from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
 from lmdeploy.pytorch.config import (
@@ -121,15 +123,66 @@ class ConfigBuilder:
             return None
 
         memory_model_path = hf_overrides.pop('memory_model_path', None)
-        lambda_value = hf_overrides.pop('lambda_value', 1.0)
-        adaptive_router = hf_overrides.pop('adaptive_router', False)
-        router_path = hf_overrides.pop('router_path', None)
-        lambda_base_only_threshold = hf_overrides.pop('lambda_base_only_threshold', -1.0)
+        memdecode_keys = (
+            'lambda_value',
+            'adaptive_router',
+            'router_name',
+            'lambda_base_only_threshold',
+        )
+        explicit_options = {key: hf_overrides.pop(key) for key in memdecode_keys if key in hf_overrides}
         if memory_model_path is None:
             return None
 
         if not os.path.exists(memory_model_path):
             memory_model_path = get_model(memory_model_path, engine_config.download_dir, engine_config.revision)
+
+        fusion_dir = Path(memory_model_path) / 'memory_fusion'
+        fusion_config_path = fusion_dir / 'config.json'
+        packaged_options = {}
+        packaged_keys = set(memdecode_keys) | {'default_router', 'routers'}
+        if fusion_config_path.exists():
+            with fusion_config_path.open() as f:
+                packaged_options = json.load(f)
+            if not isinstance(packaged_options, dict):
+                raise ValueError(f'{fusion_config_path} must contain a JSON object.')
+            unknown_keys = set(packaged_options) - packaged_keys
+            if unknown_keys:
+                unknown_keys = ', '.join(sorted(unknown_keys))
+                raise ValueError(f'{fusion_config_path} contains unsupported keys: {unknown_keys}')
+
+        fusion_options = {
+            'lambda_value': 1.0,
+            'adaptive_router': False,
+            'lambda_base_only_threshold': -1.0,
+            'default_router': None,
+            'routers': {},
+        }
+        fusion_options.update(packaged_options)
+        fusion_options.update(explicit_options)
+
+        lambda_value = fusion_options['lambda_value']
+        adaptive_router = fusion_options['adaptive_router']
+        lambda_base_only_threshold = fusion_options['lambda_base_only_threshold']
+        router_name = fusion_options.get('router_name')
+        routers = fusion_options.get('routers')
+        if not isinstance(routers, dict):
+            raise ValueError(f'{fusion_config_path} field "routers" must be a JSON object.')
+
+        selected_router_dir = None
+        if adaptive_router:
+            router_name = router_name or fusion_options.get('default_router')
+            if router_name is None:
+                raise ValueError(
+                    'router_name or default_router is required when multiple MemDecode routers are packaged.')
+            if router_name not in routers:
+                raise ValueError(f'unknown MemDecode router_name: {router_name}')
+            router_entry = routers[router_name]
+            if not isinstance(router_entry, dict) or 'path' not in router_entry:
+                raise ValueError(f'{fusion_config_path} routers.{router_name} must contain a path field.')
+            selected_router_dir = Path(router_entry['path'])
+            if not selected_router_dir.is_absolute():
+                selected_router_dir = fusion_dir / selected_router_dir
+            selected_router_dir = str(selected_router_dir)
 
         memory_model_config = ModelConfig.from_pretrained(
             memory_model_path,
@@ -145,7 +198,7 @@ class ConfigBuilder:
             memory_model_config=memory_model_config,
             lambda_value=lambda_value,
             adaptive_router=adaptive_router,
-            router_path=router_path,
+            router_path=selected_router_dir,
             lambda_base_only_threshold=lambda_base_only_threshold,
         )
 
