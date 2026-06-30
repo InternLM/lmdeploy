@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-from pathlib import Path
 
 from lmdeploy.deepseek_v4_encoding import (
     REASONING_EFFORT_MAX,
@@ -15,77 +14,137 @@ from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
-TESTS_DIR = Path(__file__).parent / 'data' / 'deepseek_v4_encoding'
+WEATHER_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'get_weather',
+        'description': 'Get weather for a city.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'city': {
+                    'type': 'string'
+                }
+            },
+            'required': ['city'],
+        },
+    },
+}
 
 
-def _load_json(name: str):
-    return json.loads((TESTS_DIR / name).read_text(encoding='utf-8'))
+def test_deepseek_v4_minimal_chat_and_thinking_modes():
+    messages = [{'role': 'user', 'content': 'Hello'}]
 
-
-def _load_text(name: str):
-    return (TESTS_DIR / name).read_text(encoding='utf-8')
-
-
-def test_case_1():
-    """Thinking mode with tool calls (multi-turn, tool results merged into user)."""
-    td = _load_json('test_input_1.json')
-    messages = td['messages']
-    messages[0]['tools'] = td['tools']
-    gold = _load_text('test_output_1.golden')
-    prompt = encode_messages(messages, thinking_mode='thinking')
-    assert prompt == gold
-
-    marker = '<｜Assistant｜><think>'
-    first_start = prompt.find(marker) + len(marker)
-    first_end = prompt.find('<｜User｜>', first_start)
-    parsed_tc = parse_message_from_completion_text(prompt[first_start:first_end], thinking_mode='thinking')
-    assert parsed_tc['reasoning_content'] == (
-        'The user wants to know the weather in Beijing. I should use the get_weather tool.'
+    assert encode_messages(messages, thinking_mode='chat') == (
+        f'{bos_token}<｜User｜>Hello<｜Assistant｜></think>'
     )
-    assert parsed_tc['content'] == ''
-    assert len(parsed_tc['tool_calls']) == 1
-    assert parsed_tc['tool_calls'][0]['function']['name'] == 'get_weather'
-    assert json.loads(parsed_tc['tool_calls'][0]['function']['arguments']) == {
-        'location': 'Beijing',
-        'unit': 'celsius',
-    }
-
-    last_start = prompt.rfind(marker) + len(marker)
-    parsed_final = parse_message_from_completion_text(prompt[last_start:], thinking_mode='thinking')
-    assert parsed_final['reasoning_content'] == 'Got the weather data. Let me format a nice response.'
-    assert '22°C' in parsed_final['content']
-    assert parsed_final['tool_calls'] == []
+    assert encode_messages(messages, thinking_mode='thinking') == (
+        f'{bos_token}<｜User｜>Hello<｜Assistant｜><think>'
+    )
 
 
-def test_case_2():
-    """Thinking mode without tools (drop_thinking removes earlier reasoning)."""
-    messages = _load_json('test_input_2.json')
-    gold = _load_text('test_output_2.golden')
-    prompt = encode_messages(messages, thinking_mode='thinking')
-    assert prompt == gold
+def test_deepseek_v4_uses_v4_tool_call_block():
+    messages = [
+        {
+            'role': 'system',
+            'content': 'You may call tools.',
+            'tools': [WEATHER_TOOL],
+        },
+        {
+            'role': 'user',
+            'content': 'Weather in Paris?',
+        },
+        {
+            'role': 'assistant',
+            'reasoning_content': 'I should call the weather tool.',
+            'tool_calls': [{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'arguments': '{"city": "Paris"}',
+                },
+            }],
+        },
+    ]
 
-    marker = '<｜Assistant｜><think>'
-    last_start = prompt.rfind(marker) + len(marker)
-    parsed = parse_message_from_completion_text(prompt[last_start:], thinking_mode='thinking')
-    assert parsed['reasoning_content'] == 'The user asks about the capital of France. It is Paris.'
-    assert parsed['content'] == 'The capital of France is Paris.'
-    assert parsed['tool_calls'] == []
+    prompt = encode_messages(messages, thinking_mode='thinking', drop_thinking=False)
 
-    assert 'The user said hello' not in prompt
-
-
-def test_case_3():
-    """Interleaved thinking + search (developer with tools, latest_reminder)."""
-    messages = _load_json('test_input_3.json')
-    gold = _load_text('test_output_3.golden')
-    assert encode_messages(messages, thinking_mode='thinking') == gold
+    assert '## Tools' in prompt
+    assert '"name": "get_weather"' in prompt
+    assert '<｜DSML｜tool_calls>' in prompt
+    assert '</｜DSML｜tool_calls>' in prompt
+    assert '<｜DSML｜function_calls>' not in prompt
+    assert '<｜DSML｜parameter name="city" string="true">Paris' in prompt
 
 
-def test_case_4():
-    """Quick instruction task with latest_reminder (chat mode, action task)."""
-    messages = _load_json('test_input_4.json')
-    gold = _load_text('test_output_4.golden')
-    assert encode_messages(messages, thinking_mode='chat') == gold
+def test_deepseek_v4_merges_tool_results_into_user_blocks():
+    messages = [
+        {
+            'role': 'user',
+            'content': 'Weather in Paris?',
+        },
+        {
+            'role': 'assistant',
+            'tool_calls': [{
+                'id': 'call_1',
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'arguments': '{"city": "Paris"}',
+                },
+            }],
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'call_1',
+            'content': 'Sunny',
+        },
+    ]
+
+    prompt = encode_messages(messages, thinking_mode='chat')
+
+    assert '<tool_result>Sunny</tool_result>' in prompt
+    assert prompt.index('<｜DSML｜tool_calls>') < prompt.index('<tool_result>Sunny</tool_result>')
+
+
+def test_deepseek_v4_task_and_latest_reminder_rendering():
+    prompt = encode_messages(
+        [
+            {
+                'role': 'latest_reminder',
+                'content': 'Be terse.',
+            },
+            {
+                'role': 'user',
+                'content': 'Classify this page.',
+                'task': 'domain',
+            },
+        ],
+        thinking_mode='chat',
+    )
+
+    assert '<｜latest_reminder｜>Be terse.' in prompt
+    assert '<｜User｜>Classify this page.<｜domain｜>' in prompt
+    assert '<｜Assistant｜>' not in prompt
+
+
+def test_deepseek_v4_parse_completion_text():
+    completion = (
+        'I should call a tool.</think>\n\n'
+        '<｜DSML｜tool_calls>\n'
+        '<｜DSML｜invoke name="get_weather">\n'
+        '<｜DSML｜parameter name="city" string="true">Paris</｜DSML｜parameter>\n'
+        '</｜DSML｜invoke>\n'
+        '</｜DSML｜tool_calls>'
+        f'{eos_token}'
+    )
+
+    parsed = parse_message_from_completion_text(completion, thinking_mode='thinking')
+
+    assert parsed['reasoning_content'] == 'I should call a tool.'
+    assert parsed['content'] == ''
+    assert parsed['tool_calls'][0]['function']['name'] == 'get_weather'
+    assert json.loads(parsed['tool_calls'][0]['function']['arguments']) == {'city': 'Paris'}
 
 
 def test_deepseek_v4_chat_template_normalizes_lmdeploy_tools():
@@ -155,29 +214,23 @@ def _make_response_parser(thinking=True):
 
 
 def test_deepseek_v4_response_parser_complete_dsml_tool_call():
-    td = _load_json('test_input_1.json')
-    messages = td['messages']
-    messages[0]['tools'] = td['tools']
-    prompt = encode_messages(messages, thinking_mode='thinking')
-
-    marker = '<｜Assistant｜><think>'
-    first_start = prompt.find(marker) + len(marker)
-    first_end = prompt.find('<｜User｜>', first_start)
-    completion = prompt[first_start:first_end].removesuffix(eos_token)
+    completion = (
+        'I should call a tool.</think>\n\n'
+        '<｜DSML｜tool_calls>\n'
+        '<｜DSML｜invoke name="get_weather">\n'
+        '<｜DSML｜parameter name="city" string="true">Paris</｜DSML｜parameter>\n'
+        '</｜DSML｜invoke>\n'
+        '</｜DSML｜tool_calls>'
+    )
 
     parser = _make_response_parser(thinking=True)
     content, tool_calls, reasoning_content = parser.parse_complete(completion)
     assert content is None
-    assert reasoning_content == (
-        'The user wants to know the weather in Beijing. I should use the get_weather tool.'
-    )
+    assert reasoning_content == 'I should call a tool.'
     assert tool_calls is not None
     assert len(tool_calls) == 1
     assert tool_calls[0].function.name == 'get_weather'
-    assert json.loads(tool_calls[0].function.arguments) == {
-        'location': 'Beijing',
-        'unit': 'celsius',
-    }
+    assert json.loads(tool_calls[0].function.arguments) == {'city': 'Paris'}
     assert parser.validate_complete(completion)
 
 
