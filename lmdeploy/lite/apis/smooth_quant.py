@@ -1,12 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import os.path as osp
+from pathlib import Path
 from typing import Literal
 
 import fire
 import torch
 from torch import nn
 
+from lmdeploy.lite.apis.auto_awq import copy_others
 from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
 from lmdeploy.lite.model import MODELS
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, skipped_module, smooth_layers
@@ -58,6 +60,8 @@ def smooth_quant(model: str,
                                                            dtype=dtype,
                                                            batch_size=batch_size,
                                                            trust_remote_code=trust_remote_code)
+
+    copy_others(Path(model_path), work_dir)
 
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
@@ -132,13 +136,8 @@ def smooth_quant(model: str,
     if skipped_modules:
         quantization_config['modules_to_not_convert'] = skipped_modules
     model.config.update(dict(quantization_config=quantization_config))
-    # model.config.update(dict(quantization_config=dict(quant_method='smooth_quant', quant_dtype=f'{quant_dtype_s}')))
 
-    if vl_model:
-        from .auto_awq import save_vl_model
-        save_vl_model(vl_model, model_path, work_dir)
-    else:
-        model.save_pretrained(work_dir, safe_serialization=True)
+    model.save_pretrained(work_dir, safe_serialization=True)
     tokenizer.save_pretrained(work_dir)
 
 
