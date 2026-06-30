@@ -1,12 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from lmdeploy.pytorch.config import (
-    BackendConfig,
-    CacheConfig,
-    MiscConfig,
-    ModelConfig,
-    SpecDecodeConfig,
-)
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 

@@ -14,13 +14,7 @@ import torch.distributed as dist
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import (
-    BackendConfig,
-    CacheConfig,
-    MiscConfig,
-    ModelConfig,
-    SpecDecodeConfig,
-)
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
