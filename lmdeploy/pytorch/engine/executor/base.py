@@ -311,19 +311,10 @@ class ExecutorBase:
 
         base_vocab_size = self.model_config.vocab_size
         memory_vocab_size = memory_model_config.vocab_size
-        if memory_vocab_size > base_vocab_size:
+        if memory_vocab_size != base_vocab_size:
             logger.warning(
-                'Memory model vocab_size (%s) is larger than base vocab_size (%s); '
-                'fusion and sampling will use the base vocab only.',
-                memory_vocab_size,
-                base_vocab_size,
-            )
-        elif memory_vocab_size < base_vocab_size:
-            logger.warning(
-                'Memory model vocab_size (%s) is smaller than base vocab_size (%s); '
-                'memory-only tokens will be padded with -inf during fusion.',
-                memory_vocab_size,
-                base_vocab_size,
+                f'Memory model vocab_size ({memory_vocab_size}) differs from base vocab_size ({base_vocab_size}); '
+                'fusion logits will be aligned to the base vocab before sampling.'
             )
 
     def _sync_spec_cache_block_size(self) -> None:

@@ -57,12 +57,3 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5Moe):
     def skipped_modules(cls):
         return ['mlp.gate', 'visual', 'linear_attn', 'self_attn',
                 'model.layers.0.', 'time_series', 'shared_expert']
-
-
-@MODELS.register_module(name='InternS2ForConditionalGeneration')
-class InternS2ForConditionalGeneration(Qwen3_5Moe):
-
-    @classmethod
-    def skipped_modules(cls):
-        return ['mlp.gate', 'visual', 'linear_attn', 'self_attn',
-                'model.layers.0.', 'time_series', 'shared_expert']

@@ -14,8 +14,6 @@ logger = get_logger('lmdeploy')
 _INTERN_S2_ARCHS = [
     'InternS2PreviewForConditionalGeneration',
     'InternS2PreviewForCausalLM',
-    'InternS2ForConditionalGeneration',
-    'InternS2ForCausalLM',
 ]
 
 
@@ -168,8 +166,6 @@ class Qwen3_5Model(Qwen3VLModel):
                                                 'Qwen3_5MoeVisionBlock',
                                                 'InternS2PreviewDecoderLayer',
                                                 'InternS2PreviewVisionBlock',
-                                                'InternS2DecoderLayer',
-                                                'InternS2VisionBlock',
                                             ],
                                              dtype=torch.half)
             self.model = model.eval()

@@ -115,7 +115,6 @@ def check_vl_llm(backend: str, config: dict) -> bool:
         'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
         'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
         'InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM',
-        'InternS2ForConditionalGeneration', 'InternS2ForCausalLM',
     ])
     turbomind_unsupported_archs = []
     if arch == 'QWenLMHeadModel' and 'visual' in config:
