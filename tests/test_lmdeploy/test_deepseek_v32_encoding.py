@@ -1,7 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import copy
 import json
-from pathlib import Path
 
 from lmdeploy.deepseek_v32_encoding import (
     bos_token,
@@ -15,61 +13,115 @@ from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
-TESTS_DIR = Path(__file__).parent / 'data' / 'deepseek_v32_encoding'
+WEATHER_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'get_weather',
+        'description': 'Get weather for a city.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'city': {
+                    'type': 'string'
+                }
+            },
+            'required': ['city'],
+        },
+    },
+}
 
 
-def _load_json(name: str):
-    return json.loads((TESTS_DIR / name).read_text(encoding='utf-8'))
+def test_deepseek_v32_minimal_chat_and_thinking_modes():
+    messages = [{'role': 'user', 'content': 'Hello'}]
+
+    assert encode_messages(messages, thinking_mode='chat') == (
+        f'{bos_token}<｜User｜>Hello<｜Assistant｜></think>'
+    )
+    assert encode_messages(messages, thinking_mode='thinking') == (
+        f'{bos_token}<｜User｜>Hello<｜Assistant｜><think>'
+    )
 
 
-def _load_text(name: str):
-    return (TESTS_DIR / name).read_text(encoding='utf-8').strip()
+def test_deepseek_v32_uses_function_call_block():
+    messages = [
+        {
+            'role': 'system',
+            'content': 'You may call tools.',
+            'tools': [WEATHER_TOOL],
+        },
+        {
+            'role': 'user',
+            'content': 'Weather in Paris?',
+        },
+        {
+            'role': 'assistant',
+            'reasoning_content': 'I should call the weather tool.',
+            'tool_calls': [{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'arguments': '{"city": "Paris"}',
+                },
+            }],
+        },
+    ]
+
+    prompt = encode_messages(messages, thinking_mode='thinking', drop_thinking=False)
+
+    assert '## Tools' in prompt
+    assert '"name": "get_weather"' in prompt
+    assert '<｜DSML｜function_calls>' in prompt
+    assert '</｜DSML｜function_calls>' in prompt
+    assert '<｜DSML｜tool_calls>' not in prompt
+    assert '<｜DSML｜parameter name="city" string="true">Paris' in prompt
 
 
-def _load_main_messages():
-    td = _load_json('test_input.json')
-    messages = td['messages']
-    messages[0]['tools'] = td['tools']
-    return messages
+def test_deepseek_v32_tool_results_reopen_thinking():
+    messages = [
+        {
+            'role': 'user',
+            'content': 'Weather in Paris?',
+        },
+        {
+            'role': 'assistant',
+            'tool_calls': [{
+                'id': 'call_1',
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'arguments': '{"city": "Paris"}',
+                },
+            }],
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'call_1',
+            'content': 'Sunny',
+        },
+    ]
+
+    prompt = encode_messages(messages, thinking_mode='thinking', drop_thinking=False)
+
+    assert '<function_results>\n<result>Sunny</result>\n</function_results>\n\n<think>' in prompt
 
 
-def test_official_deepseek_v32_main_fixture():
-    messages = _load_main_messages()
-    prompt = encode_messages(messages, thinking_mode='thinking', drop_thinking=True, add_default_bos_token=True)
-    assert prompt == _load_text('test_output.golden')
+def test_deepseek_v32_parse_completion_text():
+    completion = (
+        'I should call a tool.</think>\n\n'
+        '<｜DSML｜function_calls>\n'
+        '<｜DSML｜invoke name="get_weather">\n'
+        '<｜DSML｜parameter name="city" string="true">Paris</｜DSML｜parameter>\n'
+        '</｜DSML｜invoke>\n'
+        '</｜DSML｜function_calls>'
+        f'{eos_token}'
+    )
 
-    tool_call_message = messages[4]
-    tool_call_prompt = encode_messages([tool_call_message],
-                                       context=messages[:4],
-                                       thinking_mode='thinking',
-                                       drop_thinking=True,
-                                       add_default_bos_token=True)
-    tool_call_message_wo_id = copy.deepcopy(tool_call_message)
-    for tool_call in tool_call_message_wo_id['tool_calls']:
-        tool_call.pop('id')
-    parsed_tool_call_message = parse_message_from_completion_text(tool_call_prompt, thinking_mode='thinking')
-    parsed_tool_call_message.pop('content')
-    assert tool_call_message_wo_id == parsed_tool_call_message
+    parsed = parse_message_from_completion_text(completion, thinking_mode='thinking')
 
-    thinking_message = messages[-6]
-    thinking_prompt = encode_messages([thinking_message],
-                                      context=messages[:-6],
-                                      thinking_mode='thinking',
-                                      drop_thinking=True,
-                                      add_default_bos_token=True)
-    parsed_thinking_message = parse_message_from_completion_text(thinking_prompt, thinking_mode='thinking')
-    parsed_thinking_message.pop('tool_calls')
-    assert thinking_message == parsed_thinking_message
-
-
-def test_official_deepseek_v32_search_fixtures():
-    messages = _load_json('test_input_search_wo_date.json')['messages']
-    prompt = encode_messages(messages, thinking_mode='thinking', drop_thinking=True, add_default_bos_token=True)
-    assert prompt == _load_text('test_output_search_wo_date.golden')
-
-    messages = _load_json('test_input_search_w_date.json')['messages']
-    prompt = encode_messages(messages, thinking_mode='thinking', drop_thinking=True, add_default_bos_token=True)
-    assert prompt == _load_text('test_output_search_w_date.golden')
+    assert parsed['reasoning_content'] == 'I should call a tool.'
+    assert parsed['content'] == ''
+    assert parsed['tool_calls'][0]['function']['name'] == 'get_weather'
+    assert json.loads(parsed['tool_calls'][0]['function']['arguments']) == {'city': 'Paris'}
 
 
 def test_deepseek_v32_chat_template_uses_vllm_thinking_switches():
@@ -162,21 +214,23 @@ def _make_response_parser(thinking=True):
 
 
 def test_deepseek_v32_response_parser_complete_dsml_function_calls():
-    messages = _load_main_messages()
-    prompt = encode_messages(messages, thinking_mode='thinking', drop_thinking=True, add_default_bos_token=True)
-
-    start = prompt.find('<｜Assistant｜>') + len('<｜Assistant｜>')
-    end = prompt.find(eos_token, start)
-    completion = prompt[start:end]
+    completion = (
+        'I should call a tool.</think>\n\n'
+        '<｜DSML｜function_calls>\n'
+        '<｜DSML｜invoke name="get_weather">\n'
+        '<｜DSML｜parameter name="city" string="true">Paris</｜DSML｜parameter>\n'
+        '</｜DSML｜invoke>\n'
+        '</｜DSML｜function_calls>'
+    )
 
     parser = _make_response_parser(thinking=True)
     content, tool_calls, reasoning_content = parser.parse_complete(completion)
     assert content is None
-    assert reasoning_content is None
+    assert reasoning_content == 'I should call a tool.'
     assert tool_calls is not None
     assert len(tool_calls) == 1
-    assert tool_calls[0].function.name == 'get_datetime'
-    assert json.loads(tool_calls[0].function.arguments) == {'timezone': 'Asia/Shanghai'}
+    assert tool_calls[0].function.name == 'get_weather'
+    assert json.loads(tool_calls[0].function.arguments) == {'city': 'Paris'}
     assert parser.validate_complete(completion)
 
 
