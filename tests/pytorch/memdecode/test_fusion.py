@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from safetensors.torch import save_file
 
 from lmdeploy.pytorch.config import MemDecodeConfig, ModelConfig
 from lmdeploy.pytorch.memdecode import MemDecodeFusion, align_logits_to_base
@@ -150,6 +151,45 @@ def test_adaptive_router_requires_base_and_memory_hidden_states(tmp_path):
 def test_adaptive_router_loads_state_dict_and_fuses(tmp_path):
     router_config = {'num_layers': 1, 'input_mode': 'both', 'use_scalars': False, 'hidden_dim': 4, 'dropout': 0.0}
     router_dir = _write_router_checkpoint(tmp_path / 'router', router_config, output_bias=[-2.0, 2.0])
+    fusion = _fusion(
+        _memdecode_config(adaptive_router=True, router_path=str(router_dir)),
+        base_hidden_size=2,
+        memory_hidden_size=3,
+    )
+    base_logits = torch.tensor([[1.0, 0.0, -1.0, -2.0]])
+    memory_logits = torch.tensor([[-2.0, -1.0, 0.0, 1.0]])
+
+    fused = fusion(
+        base_logits,
+        memory_logits,
+        base_hidden_states=torch.randn(1, 2),
+        memory_hidden_states=torch.randn(1, 3),
+    )
+
+    log_weights = torch.log_softmax(torch.tensor([[-2.0, 2.0]]), dim=-1)
+    expected = torch.logaddexp(
+        torch.log_softmax(base_logits, dim=-1) + log_weights[:, 0:1],
+        torch.log_softmax(memory_logits, dim=-1) + log_weights[:, 1:2],
+    )
+    torch.testing.assert_close(fused, expected)
+
+
+def test_adaptive_router_loads_safetensors_state_dict(tmp_path):
+    router_config = {'num_layers': 1, 'input_mode': 'both', 'use_scalars': False, 'hidden_dim': 4, 'dropout': 0.0}
+    router_dir = tmp_path / 'router'
+    router_dir.mkdir()
+    (router_dir / 'router_config.json').write_text(json.dumps(router_config))
+    router = RouterNetwork(router_config, base_hidden_size=2, memory_hidden_size=3)
+    pt_state_dict = {name: torch.zeros_like(value) for name, value in router.state_dict().items()}
+    for name, value in pt_state_dict.items():
+        if name.endswith('bias') and value.shape == torch.Size([2]):
+            pt_state_dict[name] = torch.tensor([2.0, -2.0], dtype=value.dtype)
+    torch.save({'state_dict': pt_state_dict}, router_dir / 'router_epoch_1.pt')
+    safetensors_state_dict = {name: torch.zeros_like(value) for name, value in router.state_dict().items()}
+    for name, value in safetensors_state_dict.items():
+        if name.endswith('bias') and value.shape == torch.Size([2]):
+            safetensors_state_dict[name] = torch.tensor([-2.0, 2.0], dtype=value.dtype)
+    save_file(safetensors_state_dict, router_dir / 'router_epoch_1.safetensors')
     fusion = _fusion(
         _memdecode_config(adaptive_router=True, router_path=str(router_dir)),
         base_hidden_size=2,

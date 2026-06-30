@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from safetensors.torch import load_file
 from torch import nn
 
 from lmdeploy.pytorch.config import MemDecodeConfig
@@ -261,11 +262,15 @@ class MemDecodeFusion(nn.Module):
     @staticmethod
     def _latest_checkpoint(router_dir: Path) -> Path:
         checkpoints = sorted(
-            router_dir.glob('*.pt'),
-            key=lambda path: (MemDecodeFusion._checkpoint_number(path), path.name),
+            [*router_dir.glob('*.pt'), *router_dir.glob('*.safetensors')],
+            key=lambda path: (
+                MemDecodeFusion._checkpoint_number(path),
+                path.suffix == '.safetensors',
+                path.name,
+            ),
         )
         if not checkpoints:
-            raise ValueError(f'no .pt router checkpoints found in {router_dir}')
+            raise ValueError(f'no .pt or .safetensors router checkpoints found in {router_dir}')
         return checkpoints[-1]
 
     @staticmethod
@@ -285,6 +290,8 @@ class MemDecodeFusion(nn.Module):
 
     @staticmethod
     def _router_config_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
+        if checkpoint_path.suffix == '.safetensors':
+            return {}
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         if not isinstance(checkpoint, dict):
             return {}
@@ -297,6 +304,12 @@ class MemDecodeFusion(nn.Module):
 
     @staticmethod
     def _load_router_state_dict(checkpoint_path: Path) -> dict[str, torch.Tensor]:
+        if checkpoint_path.suffix == '.safetensors':
+            state_dict = load_file(str(checkpoint_path), device='cpu')
+            if not state_dict:
+                raise ValueError('router checkpoint must contain a non-empty state dict.')
+            return state_dict
+
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         if not isinstance(checkpoint, dict):
             raise ValueError('router checkpoint must be a state-dict checkpoint.')
