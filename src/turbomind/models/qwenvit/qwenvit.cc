@@ -460,7 +460,7 @@ struct QwenVit::Impl {
                                     cfg.data_type,
                                     d.grid_thws.data(),
                                     d.grid_offsets.data(),
-                                    d.grid_thws.shape(0),
+                                    (int)d.grid_thws_host.size(),
                                     d.total_hw,
                                     num_grid_per_side,
                                     stream);
