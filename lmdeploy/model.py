@@ -662,6 +662,60 @@ class DeepseekV4ChatTemplate(BaseChatTemplate):
         return None
 
 
+@MODELS.register_module(name=['deepseek-v32', 'deepseek-v3.2'])
+class DeepseekV32ChatTemplate(BaseChatTemplate):
+    """Chat template of DeepSeek-V3.2 models."""
+
+    def __init__(self, eoa='<｜end▁of▁sentence｜>', stop_words=['<｜end▁of▁sentence｜>'], **kwargs):
+        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True, **kwargs):
+        messages = [{'role': 'user', 'content': prompt}]
+        return self.messages2prompt(messages, sequence_start, **kwargs)
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        from lmdeploy.deepseek_v32_encoding import encode_messages
+
+        if isinstance(messages, str):
+            messages = [{'role': 'user', 'content': messages}]
+
+        tools = DeepseekV4ChatTemplate._normalize_tools(kwargs.pop('tools', None))
+        messages = DeepseekV4ChatTemplate._with_tools(messages, tools) if tools else list(messages)
+
+        thinking = kwargs.pop('thinking', False)
+        enable_thinking = kwargs.pop('enable_thinking', False)
+        thinking = thinking or enable_thinking
+
+        drop_thinking = kwargs.pop('drop_thinking', None)
+        if drop_thinking is None:
+            drop_thinking = bool(messages and messages[-1].get('role') == 'user')
+
+        return encode_messages(messages,
+                               thinking_mode='thinking' if thinking else 'chat',
+                               drop_thinking=drop_thinking,
+                               add_default_bos_token=sequence_start)
+
+    @classmethod
+    def match(cls, model_path: str, trust_remote_code: bool = False, **kwargs) -> str | None:
+        try:
+            arch, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
+            cfg_dict = cfg.to_dict()
+        except Exception:
+            cfg_dict = {}
+            config_path = os.path.join(model_path, 'config.json')
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, encoding='utf-8') as f:
+                        cfg_dict = json.load(f)
+                except Exception:
+                    cfg_dict = {}
+            arch = (cfg_dict.get('architectures') or [None])[0]
+
+        if arch == 'DeepseekV32ForCausalLM' or cfg_dict.get('model_type') == 'deepseek_v32':
+            return 'deepseek-v32'
+        return None
+
+
 @MODELS.register_module(name=['llava-chatml'])
 class ChatmlDirect(BaseChatTemplate):
 
