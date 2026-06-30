@@ -1191,6 +1191,8 @@ class BaseModelAgent:
     def reset_graph_runner(self):
         """Reset graph runner to prevent tp hanging."""
         with self.all_context():
+            self._prev_chunk_output = None
+            self._prev_chunk_last_logit = None
             if hasattr(self.patched_model, 'reset'):
                 self.patched_model.reset()
 

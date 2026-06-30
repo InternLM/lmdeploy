@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import torch
 
@@ -291,6 +292,123 @@ def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypa
     asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
+
+
+def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
+    """Draft warmup must mark decode graph captures as DP-global decode."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup
+    from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    class DummyInputsStrategy:
+
+        def make_dummy(self,
+                       batch_size: int,
+                       is_decoding: bool,
+                       device: str = 'cpu',
+                       vocab_size: int = 1,
+                       max_q_seqlen: int = 1,
+                       target_hidden_size: int = None,
+                       target_dtype: torch.dtype = torch.float32,
+                       meta=None):
+            input_ids = torch.zeros((1, batch_size * max_q_seqlen), dtype=torch.long)
+            seq_length = torch.full((batch_size, ), max_q_seqlen, dtype=torch.long)
+            inputs = ModelInputs(input_ids=input_ids,
+                                 seq_length=seq_length,
+                                 history_lengths=torch.zeros(batch_size, dtype=torch.long),
+                                 block_offsets=torch.zeros((batch_size, 1), dtype=torch.long),
+                                 is_decoding=is_decoding,
+                                 num_ignored_history=torch.zeros(batch_size, dtype=torch.long),
+                                 max_q_seqlen=max_q_seqlen,
+                                 max_kv_seqlen=max_q_seqlen,
+                                 sum_kv_seqlen=batch_size * max_q_seqlen)
+            if target_hidden_size is not None:
+                inputs.target_hidden_states = torch.zeros((1, batch_size * max_q_seqlen, target_hidden_size),
+                                                          dtype=target_dtype)
+            return inputs
+
+    class DummyDraftModel:
+
+        def get_capture_batch_sizes(self):
+            return [2]
+
+    class DummyProposer:
+
+        def __init__(self):
+            self.model = DummyDraftModel()
+
+        def get_target_hidden_size(self, target_model_config):
+            return 4
+
+    build_calls = []
+
+    def fake_dp_meta_build(seqlen, num_tokens):
+        build_calls.append((seqlen, list(num_tokens)))
+        return DPMeta(tp_sizes=[seqlen], moe_tp_sizes=[seqlen])
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(fake_dp_meta_build))
+
+    dist_config = DistConfig(dp=2, ep=2)
+    draft_dist_ctx = DistContext(rank=0,
+                                 dp_rank=0,
+                                 dist_config=dist_config,
+                                 attn_tp_group=DistGroup(rank=0),
+                                 mlp_tp_group=DistGroup(rank=0),
+                                 moe_tp_group=DistGroup(rank=0),
+                                 tp_group=DistGroup(rank=0))
+    agent = object.__new__(SpecModelAgent)
+    agent.draft_dist_ctx = draft_dist_ctx
+    agent.inputs_strategy = DummyInputsStrategy()
+    agent.proposer = DummyProposer()
+    agent.model_config = SimpleNamespace(vocab_size=11, dtype=torch.float32, hidden_size=8)
+    agent.num_spec_tokens = 3
+    agent.make_dummy_meta = None
+
+    forwarded = []
+
+    def forward_impl(inputs):
+        forwarded.append({
+            'num_tokens': inputs.input_ids.numel(),
+            'batch_size': inputs.seq_length.numel(),
+            'is_decoding': inputs.is_decoding,
+            'dp_batches': inputs.dp_meta.dp_batches,
+            'dp_is_decoding': inputs.dp_meta.dp_is_decoding,
+            'global_is_decoding': inputs.global_is_decoding(),
+        })
+
+    agent._forward_impl = forward_impl
+
+    agent.warmup(max_batches=4, target_model_config=SimpleNamespace())
+
+    assert build_calls == [(4, [4, 4]), (8, [8, 8]), (2, [2, 2])]
+    assert forwarded == [
+        {
+            'num_tokens': 4,
+            'batch_size': 4,
+            'is_decoding': False,
+            'dp_batches': [4, 4],
+            'dp_is_decoding': False,
+            'global_is_decoding': False,
+        },
+        {
+            'num_tokens': 8,
+            'batch_size': 2,
+            'is_decoding': True,
+            'dp_batches': [2, 2],
+            'dp_is_decoding': True,
+            'global_is_decoding': True,
+        },
+        {
+            'num_tokens': 2,
+            'batch_size': 2,
+            'is_decoding': True,
+            'dp_batches': [2, 2],
+            'dp_is_decoding': True,
+            'global_is_decoding': True,
+        },
+    ]
 
 
 def test_slice_sampling_inputs_decode():

@@ -689,12 +689,15 @@ class SpecModelAgent(BaseSpecModelAgent):
         draft_dist_config = self.draft_dist_ctx.dist_config
         if draft_dist_config.dp > 1:
             num_tokens = inputs.input_ids.numel()
+            batch_size = inputs.seq_length.numel()
             with self.draft_context():
                 inputs.build_dp_meta([num_tokens] * draft_dist_config.world_size)
+            inputs.dp_meta.dp_batches = [batch_size] * draft_dist_config.world_size
             inputs.dp_meta.dp_is_decoding = inputs.is_decoding
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""
+
         target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
         # warmup prefill
@@ -705,7 +708,6 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  target_hidden_size=target_hidden_size,
                                                  target_dtype=self.model_config.dtype,
                                                  meta=self.make_dummy_meta)
-
         self._build_warmup_dp_meta(inputs)
         self._forward_impl(inputs)
 
@@ -740,6 +742,7 @@ class SpecModelAgent(BaseSpecModelAgent):
     def reset_graph_runner(self):
         """Reset graph runner."""
         with self.draft_context():
+            self._prev_chunk_last.clear()
             if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
                 self.proposer.model.reset()
 
