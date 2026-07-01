@@ -702,7 +702,13 @@ Scheduler::PublishStat Scheduler::Publish(Sequence& s, int t0, int end)
     const int   bs   = logical_.block_size();
     const int   last = std::min<int>((end + bs - 1) / bs, s.block_ids.size());
     PublishStat stat{};
-    for (int i = 0; i < last; ++i) {
+    // Start at t0/bs, mirroring SetProducers/CheckProducers: this pass only
+    // marks producers on [t0/bs, ceil(end/bs)) and clears them here, and every
+    // indexed block below t0 is already valid (Resume advances resume_len only
+    // over valid prefix; the in-flight [resume_len, t0) region was published at
+    // the prior forward's commit). The block straddling t0 sits at index t0/bs,
+    // so it is still processed.
+    for (int i = t0 / bs; i < last; ++i) {
         LogicalBlock& x = *s.block_ids[i];
         if (x.producer == s.req->unique_id) {
             x.producer = 0;

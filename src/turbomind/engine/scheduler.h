@@ -191,7 +191,7 @@ private:
     // Per-request planning for sequences active in the last iteration.
     void Continue(Sequence& s);
 
-    // Clear producer marks and mark produced blocks valid for [0, end). Returns
+    // Clear producer marks and mark produced blocks valid for [t0, end). Returns
     // the indexed blocks that became cross-request reusable this pass.
     PublishStat Publish(Sequence& s, int t0, int end);
 
