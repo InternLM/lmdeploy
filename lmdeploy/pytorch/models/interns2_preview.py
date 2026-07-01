@@ -416,10 +416,13 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         else:
             return False
 
-        q, k, v = loaded_weight.chunk(3, dim=0)
-        load_weight(params_dict[f'{base}.q_proj.{suffix}'], q)
-        load_weight(params_dict[f'{base}.k_proj.{suffix}'], k)
-        load_weight(params_dict[f'{base}.v_proj.{suffix}'], v)
+        # HF QFormer packs Q/K/V as in_proj_*; split only for LMDeploy's Q/K/V params.
+        qkv_names = tuple(f'{base}.{shard}_proj.{suffix}' for shard in ('q', 'k', 'v'))
+        if not all(param_name in params_dict for param_name in qkv_names):
+            return False
+
+        for param_name, shard_weight in zip(qkv_names, loaded_weight.chunk(3, dim=0)):
+            load_weight(params_dict[param_name], shard_weight)
         return True
 
     def _load_forecaster_weight(self, name: str, loaded_weight: torch.Tensor,

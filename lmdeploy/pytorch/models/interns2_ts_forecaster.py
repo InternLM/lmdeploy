@@ -1082,8 +1082,9 @@ class Aligner(nn.Module):
     attn KV space, and predicts the forecast horizon.
 
     Two per-modality Q-formers compress the raw hidden-state sequences into a fixed number of query tokens; their
-    concatenation is the static KV stream the Forecaster transformer cross-attends to. A small linear *prediction-length
-    head* sits on the LLM Q-former's compressed output and regresses horizon.
+    concatenation is the static KV stream the Forecaster transformer cross-attends to. The forecast horizon is predicted
+    by a separate one-layer Transformer encoder over the original LLM hidden states, so it does not share the LLM
+    Q-former used for Forecaster cross-attention.
     """
 
     def __init__(
@@ -1105,18 +1106,42 @@ class Aligner(nn.Module):
         self.llm_qformer = QFormer(in_dim=config.d_llm, **qformer_kwargs)
 
         if config.use_horizon_head:
+            horizon_hidden_dim = config.qformer_hidden_dim
+            if horizon_hidden_dim % config.qformer_num_heads != 0:
+                raise ValueError(
+                    f"horizon_hidden_dim ({horizon_hidden_dim}) must be divisible by qformer_num_heads "
+                    f"({config.qformer_num_heads}) for the horizon Transformer encoder.")
+            self.horizon_input_proj = build_colwise_linear(
+                config.d_llm,
+                horizon_hidden_dim,
+                bias=True,
+                dtype=dtype,
+                device=device,
+            )
+            self.horizon_input_ln = LayerNorm(horizon_hidden_dim, eps=1e-5, dtype=dtype, device=device)
+            self.horizon_encoder = nn.TransformerEncoderLayer(
+                d_model=horizon_hidden_dim,
+                nhead=config.qformer_num_heads,
+                dim_feedforward=4 * horizon_hidden_dim,
+                dropout=config.qformer_dropout,
+                activation='gelu',
+                batch_first=True,
+                norm_first=True,
+                dtype=dtype,
+                device=device,
+            )
             self.horizon_head = nn.Sequential(
-                LayerNorm(config.qformer_hidden_dim, eps=1e-5, dtype=dtype, device=device),
+                LayerNorm(horizon_hidden_dim, eps=1e-5, dtype=dtype, device=device),
                 build_colwise_linear(
-                    config.qformer_hidden_dim,
-                    config.qformer_hidden_dim,
+                    horizon_hidden_dim,
+                    horizon_hidden_dim,
                     bias=True,
                     dtype=dtype,
                     device=device,
                 ),
                 nn.SiLU(),
                 build_rowwise_linear(
-                    config.qformer_hidden_dim,
+                    horizon_hidden_dim,
                     1,
                     bias=True,
                     dtype=dtype,
@@ -1124,6 +1149,9 @@ class Aligner(nn.Module):
                 ),
             )
         else:
+            self.horizon_input_proj = None
+            self.horizon_input_ln = None
+            self.horizon_encoder = None
             self.horizon_head = None
 
     def forward(
@@ -1145,7 +1173,6 @@ class Aligner(nn.Module):
 
         Returns:
             ctx: (B, Q_ts + Q_llm, qformer_hidden_dim) cross-attention KV stream.
-            llm_chunk: (B, Q_llm, qformer_hidden_dim) compressed LLM tokens.
         """
         ts_param = next(self.ts_qformer.parameters())
         ts_hidden = ts_encoder_embedding_input.to(device=ts_param.device, dtype=ts_param.dtype)
@@ -1164,28 +1191,46 @@ class Aligner(nn.Module):
         llm_chunk = self.llm_qformer(llm_hidden, src_key_padding_mask=llm_pad)
 
         ctx = torch.cat([ts_chunk, llm_chunk], dim=1)
-        return ctx, llm_chunk
+        return ctx
 
     def predict_horizon(
         self,
-        llm_chunk: Tensor,
+        llm_embedding_input: Tensor,
+        llm_embedding_mask: Tensor | None = None,
     ) -> Tensor:
-        """Predict per-sample forecast horizon in linear step space from
-        llm_chunk.
+        """Predict per-sample forecast horizon in linear step space from LLM
+        hidden states.
 
         Args:
-            llm_chunk: (B, Q, qformer_hidden_dim) LLM Q-former output.
+            llm_embedding_input: (B, T_llm, d_llm) precomputed LLM hidden states.
+            llm_embedding_mask: optional (B, T_llm) bool mask, True = valid token.
 
         Returns:
             (B,) float32 tensor of predicted horizon.
         """
-        if self.horizon_head is None:
+        if (self.horizon_input_proj is None or self.horizon_input_ln is None or self.horizon_encoder is None
+                or self.horizon_head is None):
             raise RuntimeError('horizon_head is not enabled but predict_horizon was called')
-        if llm_chunk.dim() != 3:
-            raise ValueError(f"Expected llm_chunk with shape (B, Q, D), got {tuple(llm_chunk.shape)}")
+        if llm_embedding_input.dim() != 3:
+            raise ValueError(f"Expected llm_embedding_input with shape (B, T, D), "
+                             f"got {tuple(llm_embedding_input.shape)}")
         head_param = next(self.horizon_head.parameters())
-        chunk = llm_chunk.to(device=head_param.device, dtype=head_param.dtype)
-        pooled = chunk.mean(dim=1)
+        llm_hidden = llm_embedding_input.to(device=head_param.device, dtype=head_param.dtype)
+
+        if llm_embedding_mask is None:
+            valid_mask = torch.ones(llm_hidden.shape[:2], dtype=torch.bool, device=llm_hidden.device)
+        else:
+            valid_mask = llm_embedding_mask.to(device=llm_hidden.device, dtype=torch.bool)
+            if valid_mask.shape != llm_hidden.shape[:2]:
+                raise ValueError('llm_embedding_mask shape must equal llm_embedding_input.shape[:2]:'
+                                 f" {tuple(valid_mask.shape)} != {tuple(llm_hidden.shape[:2])}")
+        if not valid_mask.any(dim=1).all():
+            raise ValueError('Each llm_embedding_mask row must contain at least one valid token.')
+
+        hidden = self.horizon_input_ln(self.horizon_input_proj(llm_hidden))
+        encoded = self.horizon_encoder(hidden, src_key_padding_mask=~valid_mask)
+        pool_mask = valid_mask.to(dtype=encoded.dtype).unsqueeze(-1)
+        pooled = (encoded * pool_mask).sum(dim=1) / pool_mask.sum(dim=1).clamp_min(1.0)
         return self.horizon_head(pooled).squeeze(-1).to(dtype=torch.float32)
 
     @staticmethod
@@ -1244,6 +1289,7 @@ class TSForecasterConfig:
         self.qformer_num_query_tokens = int(qformer_num_query_tokens)
         self.qformer_num_heads = int(qformer_num_heads)
         self.qformer_num_layers = int(qformer_num_layers)
+        self.qformer_dropout = 0.0 if qformer_dropout is None else float(qformer_dropout)
 
         self.horizon_max_length = int(horizon_max_length)
 
@@ -1545,7 +1591,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
                              f"{batch_size}, llm_embedding_input={llm_embedding_input.size(0)},"
                              f" ts_encoder_embedding_input={ts_encoder_embedding_input.size(0)}")
 
-        ctx, llm_chunk = self.aligner(
+        ctx = self.aligner(
             llm_embedding_input,
             ts_encoder_embedding_input,
             llm_embedding_mask=llm_embedding_mask,
@@ -1554,7 +1600,10 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
 
         predicted_horizon = None
         if self.aligner.horizon_head is not None:
-            pred_horizon = self.aligner.predict_horizon(llm_chunk)
+            pred_horizon = self.aligner.predict_horizon(
+                llm_embedding_input,
+                llm_embedding_mask=llm_embedding_mask,
+            )
             predicted_horizon = self.aligner.decode_horizon(
                 pred_horizon,
                 min_h=1,
