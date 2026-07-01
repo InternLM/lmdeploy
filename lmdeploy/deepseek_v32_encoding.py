@@ -117,7 +117,7 @@ def decode_dsml_to_arguments(tool_name: str, tool_args: dict[str, tuple[str, str
     def _decode_value(key: str, value: str, string: str):
         if string == 'true':
             value = to_json(value)
-        return f"{to_json(key)}: {value}"
+        return f'{to_json(key)}: {value}'
 
     tool_args_json = '{' + ', '.join([_decode_value(k, v, string=is_str) for k, (v, is_str) in tool_args.items()]) + '}'
     return dict(name=tool_name, arguments=tool_args_json)
@@ -142,7 +142,7 @@ def find_last_user_index(messages: list[dict[str, Any]]) -> int:
 
 def render_message(index: int, messages: list[dict[str, Any]], thinking_mode: str) -> str:
     assert 0 <= index < len(messages)
-    assert thinking_mode in ['chat', 'thinking'], f"Invalid thinking_mode `{thinking_mode}`"
+    assert thinking_mode in ['chat', 'thinking'], f'Invalid thinking_mode `{thinking_mode}`'
 
     prompt = ''
     msg = messages[index]
@@ -169,7 +169,7 @@ def render_message(index: int, messages: list[dict[str, Any]], thinking_mode: st
             prompt += '\n\n' + response_format_template.format(schema=to_json(response_format))
 
     elif role == 'developer':
-        assert content, f"Invalid message for role `{role}`: {msg}"
+        assert content, f'Invalid message for role `{role}`: {msg}'
         content_developer = ''
         if tools:
             content_developer += '\n\n' + render_tools(tools)
@@ -256,7 +256,7 @@ def render_message(index: int, messages: list[dict[str, Any]], thinking_mode: st
             tool_calls=tool_calls_content,
         )
     else:
-        raise NotImplementedError(f"Unknown role: {role}")
+        raise NotImplementedError(f'Unknown role: {role}')
 
     return prompt
 
@@ -314,10 +314,10 @@ def _read_until_stop(index: int, text: str, stop: list[str]) -> tuple[int, str, 
 def parse_tool_calls(index: int, text: str):
     tool_calls: list[dict[str, Any]] = []
     stop_token = None
-    tool_calls_end_token = f"</{dsml_token}function_calls>"
+    tool_calls_end_token = f'</{dsml_token}function_calls>'
 
     while index < len(text):
-        index, _, stop_token = _read_until_stop(index, text, [f"<{dsml_token}invoke", tool_calls_end_token])
+        index, _, stop_token = _read_until_stop(index, text, [f'<{dsml_token}invoke', tool_calls_end_token])
         assert _ == '>\n', 'Tool call format error'
 
         if stop_token == tool_calls_end_token:
@@ -326,15 +326,15 @@ def parse_tool_calls(index: int, text: str):
         assert stop_token is not None, 'Missing special token'
 
         index, tool_name_content, stop_token = _read_until_stop(
-            index, text, [f"<{dsml_token}parameter", f"</{dsml_token}invoke"])
+            index, text, [f'<{dsml_token}parameter', f'</{dsml_token}invoke'])
 
         p_tool_name = re.findall(r'^\s*name="(.*?)">\n$', tool_name_content, flags=re.DOTALL)
         assert len(p_tool_name) == 1, 'Tool name format error'
         tool_name = p_tool_name[0]
 
         tool_args: dict[str, tuple[str, str]] = {}
-        while stop_token == f"<{dsml_token}parameter":
-            index, param_content, stop_token = _read_until_stop(index, text, [f"/{dsml_token}parameter"])
+        while stop_token == f'<{dsml_token}parameter':
+            index, param_content, stop_token = _read_until_stop(index, text, [f'/{dsml_token}parameter'])
 
             param_kv = re.findall(r'^ name="(.*?)" string="(true|false)">(.*?)<$', param_content, flags=re.DOTALL)
             assert len(param_kv) == 1, 'Parameter format error'
@@ -344,7 +344,7 @@ def parse_tool_calls(index: int, text: str):
             tool_args[param_name] = (param_value, string)
 
             index, content, stop_token = _read_until_stop(
-                index, text, [f"<{dsml_token}parameter", f"</{dsml_token}invoke"])
+                index, text, [f'<{dsml_token}parameter', f'</{dsml_token}invoke'])
             assert content == '>\n', 'Parameter format error'
 
         tool_call = decode_dsml_to_arguments(tool_name=tool_name, tool_args=tool_args)
@@ -357,7 +357,7 @@ def parse_tool_calls(index: int, text: str):
 def parse_message_from_completion_text(text: str, thinking_mode: str):
     summary_content, reasoning_content, tool_calls = '', '', []
     index, stop_token = 0, None
-    tool_calls_start_token = f"\n\n<{dsml_token}function_calls"
+    tool_calls_start_token = f'\n\n<{dsml_token}function_calls'
 
     is_thinking, is_tool_calling = thinking_mode == 'thinking', False
 

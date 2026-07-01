@@ -178,7 +178,7 @@ def decode_dsml_to_arguments(tool_name: str, tool_args: dict[str, tuple[str, str
     def _decode_value(key: str, value: str, string: str):
         if string == 'true':
             value = to_json(value)
-        return f"{to_json(key)}: {value}"
+        return f'{to_json(key)}: {value}'
 
     tool_args_json = '{' + ', '.join([_decode_value(k, v, string=is_str) for k, (v, is_str) in tool_args.items()]) + '}'
     return dict(name=tool_name, arguments=tool_args_json)
@@ -238,7 +238,7 @@ def render_message(index: int,
         Encoded string for this message.
     """
     assert 0 <= index < len(messages)
-    assert thinking_mode in ['chat', 'thinking'], f"Invalid thinking_mode `{thinking_mode}`"
+    assert thinking_mode in ['chat', 'thinking'], f'Invalid thinking_mode `{thinking_mode}`'
 
     prompt = ''
     msg = messages[index]
@@ -258,7 +258,7 @@ def render_message(index: int,
         tool_calls = tool_calls_from_openai_format(tool_calls)
 
     # Reasoning effort prefix (only at index 0 in thinking mode with max effort)
-    assert reasoning_effort in ['max', None, 'high'], f"Invalid reasoning effort: {reasoning_effort}"
+    assert reasoning_effort in ['max', None, 'high'], f'Invalid reasoning effort: {reasoning_effort}'
     if index == 0 and thinking_mode == 'thinking' and reasoning_effort == 'max':
         prompt += REASONING_EFFORT_MAX
 
@@ -270,7 +270,7 @@ def render_message(index: int,
             prompt += '\n\n' + response_format_template.format(schema=to_json(response_format))
 
     elif role == 'developer':
-        assert content, f"Invalid message for role `{role}`: {msg}"
+        assert content, f'Invalid message for role `{role}`: {msg}'
 
         content_developer = USER_SP_TOKEN
         content_developer += content
@@ -305,7 +305,7 @@ def render_message(index: int,
                         tool_content = '\n\n'.join(text_parts)
                     parts.append(tool_output_template.format(content=tool_content))
                 else:
-                    parts.append(f"[Unsupported {block_type}]")
+                    parts.append(f'[Unsupported {block_type}]')
             prompt += '\n\n'.join(parts)
         else:
             prompt += content or ''
@@ -361,7 +361,7 @@ def render_message(index: int,
                 tool_calls=tc_content,
             )
     else:
-        raise NotImplementedError(f"Unknown role: {role}")
+        raise NotImplementedError(f'Unknown role: {role}')
 
     # Append transition tokens based on what follows
     if index + 1 < len(messages) and messages[index + 1].get('role') not in ['assistant', 'latest_reminder']:
@@ -639,10 +639,10 @@ def parse_tool_calls(index: int, text: str) -> tuple[int, str | None, list[dict[
     """
     tool_calls: list[dict[str, Any]] = []
     stop_token = None
-    tool_calls_end_token = f"</{dsml_token}{tool_calls_block_name}>"
+    tool_calls_end_token = f'</{dsml_token}{tool_calls_block_name}>'
 
     while index < len(text):
-        index, _, stop_token = _read_until_stop(index, text, [f"<{dsml_token}invoke", tool_calls_end_token])
+        index, _, stop_token = _read_until_stop(index, text, [f'<{dsml_token}invoke', tool_calls_end_token])
         if _ != '>\n':
             raise ValueError(f"Tool call format error: expected '>\\n' but got '{_}'")
 
@@ -653,7 +653,7 @@ def parse_tool_calls(index: int, text: str) -> tuple[int, str | None, list[dict[
             raise ValueError('Missing special token in tool calls')
 
         index, tool_name_content, stop_token = _read_until_stop(
-            index, text, [f"<{dsml_token}parameter", f"</{dsml_token}invoke"])
+            index, text, [f'<{dsml_token}parameter', f'</{dsml_token}invoke'])
 
         p_tool_name = re.findall(r'^\s*name="(.*?)">\n$', tool_name_content, flags=re.DOTALL)
         if len(p_tool_name) != 1:
@@ -661,8 +661,8 @@ def parse_tool_calls(index: int, text: str) -> tuple[int, str | None, list[dict[
         tool_name = p_tool_name[0]
 
         tool_args: dict[str, tuple[str, str]] = {}
-        while stop_token == f"<{dsml_token}parameter":
-            index, param_content, stop_token = _read_until_stop(index, text, [f"/{dsml_token}parameter"])
+        while stop_token == f'<{dsml_token}parameter':
+            index, param_content, stop_token = _read_until_stop(index, text, [f'/{dsml_token}parameter'])
 
             param_kv = re.findall(r'^ name="(.*?)" string="(true|false)">(.*?)<$', param_content, flags=re.DOTALL)
             if len(param_kv) != 1:
@@ -674,7 +674,7 @@ def parse_tool_calls(index: int, text: str) -> tuple[int, str | None, list[dict[
             tool_args[param_name] = (param_value, string)
 
             index, content, stop_token = _read_until_stop(
-                index, text, [f"<{dsml_token}parameter", f"</{dsml_token}invoke"])
+                index, text, [f'<{dsml_token}parameter', f'</{dsml_token}invoke'])
             if content != '>\n':
                 raise ValueError(f"Parameter format error: expected '>\\n' but got '{content}'")
 
@@ -706,7 +706,7 @@ def parse_message_from_completion_text(text: str, thinking_mode: str) -> dict[st
     """
     summary_content, reasoning_content, tool_calls = '', '', []
     index, stop_token = 0, None
-    tool_calls_start_token = f"\n\n<{dsml_token}{tool_calls_block_name}"
+    tool_calls_start_token = f'\n\n<{dsml_token}{tool_calls_block_name}'
 
     is_thinking = thinking_mode == 'thinking'
     is_tool_calling = False
