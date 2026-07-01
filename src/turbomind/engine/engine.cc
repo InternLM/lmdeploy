@@ -89,6 +89,9 @@ struct Engine::Impl {
     // Allocation of memory / compute resources
     void Schedule();
 
+    // Forward-progress guard: fail the head-of-line request on genuine cache OOM
+    void FailStalledHeadOfLine(std::vector<Signal>& signals);
+
     // Initialize batch data from engine-local sequence state
     void Setup(BatchData& d);
 
@@ -454,7 +457,9 @@ void Engine::Impl::Schedule()
     subrange active{idxs.begin(),
                     std::stable_partition(idxs.begin(), idxs.end(), [&](int i) { return eligible[i]->is_active; })};
 
-    /// TODO: what to do when active is empty (cache OOM)
+    // An empty active batch (cache OOM / resource starvation) is handled by
+    // FailStalledHeadOfLine, called after Schedule() returns, where request
+    // lifecycle and signal emission live (see README forward-progress).
 
     if (is_warm_up_) {
         // Avoid extra iteration for warm up request in async mode (force inactivate)
@@ -542,6 +547,45 @@ void Engine::Impl::Schedule()
     }
     s.swapout = swap_out.size();
     s.finish  = 0;
+}
+
+void Engine::Impl::FailStalledHeadOfLine(std::vector<Signal>& signals)
+{
+    auto& s = states_.at(0);
+
+    if (s.active != 0 || is_warm_up_) {
+        return;  // work was admitted, or warm-up legitimately forces empty active
+    }
+
+    // Nothing was admitted this pass. If no in-flight work remains, no memory
+    // will ever be released, so the highest-priority eligible request cannot
+    // make progress even with maximum eviction. Fail it with kOutOfMemory: it
+    // retires, releases its held cache, and the next request becomes
+    // head-of-line (see README forward-progress).
+    Sequence* victim = nullptr;
+    for (auto& p : s.rc) {
+        if (!p) {
+            continue;
+        }
+        if (p->inflight > 0) {
+            return;  // in-flight batch will release memory when it completes (transient drain)
+        }
+        if (!p->retiring && (!victim || p->req->unique_id < victim->req->unique_id)) {
+            victim = p.get();  // smallest unique_id == highest priority == root of the OOM
+        }
+    }
+
+    if (!victim) {
+        return;
+    }
+
+    TM_LOG_WARN("dp{} ID {}: cache out of memory, no request can be admitted; failing head-of-line request",
+                dp_rank_,
+                victim->req->id);
+
+    victim->retiring = true;
+    victim->done     = true;
+    signals.push_back([r = victim->req] { UpdateState(*r, Request::kOutOfMemory, 0); });
 }
 
 void Engine::Impl::Setup(BatchData& d)
@@ -772,6 +816,8 @@ void Engine::Impl::InternalThreadEntry()
         if (n_active) {
 
             Schedule();
+
+            FailStalledHeadOfLine(signals);
 
             UpdateScheduleMetrics();
 

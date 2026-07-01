@@ -447,6 +447,10 @@ Is every request-owned resource released only after `retiring && inflight == 0`?
 
 Does async state account for submitted-but-not-yet-reflected work through `inflight_input_len`, `inflight_new_tokens`, and `inflight`?
 
+### forward-progress
+
+On a scheduling pass that admits nothing (empty active batch) with no in-flight work remaining (`inflight == 0` for every request), does the engine fail the highest-priority eligible request (smallest `unique_id`) with `kOutOfMemory` — rather than resubmitting empty batches indefinitely — so a request too large for the cache always receives a terminal status?
+
 ### callbacks
 
 Are external callbacks delivered through gateway signals rather than directly on the engine scheduling path?
