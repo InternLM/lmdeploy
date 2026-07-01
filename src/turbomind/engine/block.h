@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "src/turbomind/core/check.h"
-#include "src/turbomind/engine/prefix_key.h"
 #include "src/turbomind/engine/fingerprint.h"
+#include "src/turbomind/engine/prefix_key.h"
 #include "src/turbomind/memory/common.h"
 #include "src/turbomind/memory/object.h"
 
@@ -137,10 +137,10 @@ struct LogicalBlock {
     int checkpoint_id{0};
 
     // Prefix trie node state (mutated only via the trie methods)
-    const LogicalBlock* parent{};  // nullptr = root; non-owning identity
-    PrefixKey           key{};     // empty => not (yet) a prefix node
+    const LogicalBlock*      parent{};  // nullptr = root; non-owning identity
+    PrefixKey                key{};     // empty => not (yet) a prefix node
     std::vector<int>         tokens;
-    std::vector<Fingerprint> image_fps;  // start-fingerprints of images beginning in this block (usually empty)
+    std::vector<Fingerprint> image_fps;       // start-fingerprints of images beginning in this block (usually empty)
     bool                     indexed{false};  // present in the trie index
 
     // Fork edges (strong, RAII)

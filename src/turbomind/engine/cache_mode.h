@@ -44,8 +44,7 @@ inline CacheMode ParseCacheMode(const std::string& s)
 inline bool DecidePromptBoundaryPublish(CacheMode prompt_mode, bool plan_partial, bool has_image_in_node)
 {
     if (plan_partial) {
-        return prompt_mode == CacheMode::kAll
-               || (prompt_mode == CacheMode::kAuto && has_image_in_node);
+        return prompt_mode == CacheMode::kAll || (prompt_mode == CacheMode::kAuto && has_image_in_node);
     }
     return prompt_mode == CacheMode::kAll;
 }

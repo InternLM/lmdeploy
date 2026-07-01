@@ -82,8 +82,8 @@ def merge_text_segments(segments: list[dict]) -> list[dict]:
 def parse_interactive_prompt(prompt: str):
     """Parse a completed interactive chat prompt block.
 
-    Text-only prompts return the original string to preserve existing CLI behavior.
-    Prompts with image commands return ordered OpenAI multimodal content blocks.
+    Text-only prompts return the original string to preserve existing CLI behavior. Prompts with image commands return
+    ordered OpenAI multimodal content blocks.
     """
     segments = [parse_prompt_line(line) for line in prompt.splitlines()]
     content = merge_text_segments(segments)

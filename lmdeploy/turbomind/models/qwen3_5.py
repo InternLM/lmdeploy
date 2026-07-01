@@ -333,9 +333,8 @@ def _split_packed_vision_qkv(qkv):
 def _image_fingerprint(input_mm: dict) -> bytes:
     """SHA-256 over the Qwen3.5 ViT-forward inputs plus the mRoPE scalar.
 
-    Post-preprocess (phase A): every input is already on the item dict. Two
-    requests hash equal iff their ViT embeddings and cached LM KV for the image
-    span are identical -- i.e. reuse is correct.
+    Post-preprocess (phase A): every input is already on the item dict. Two requests hash equal iff their ViT embeddings
+    and cached LM KV for the image span are identical -- i.e. reuse is correct.
     """
     modality = input_mm['modality']
     is_video = modality in (Modality.VIDEO, Modality.VIDEO.value)
@@ -362,8 +361,9 @@ def _image_fingerprint(input_mm: dict) -> bytes:
 
 
 def _resolve_fingerprint(input_mm: dict) -> bytes:
-    """Use a pre-placed fingerprint if present (future pre-preprocess generator,
-    or a test forcing empty/dormant); otherwise derive it from the ViT inputs.
+    """Use a pre-placed fingerprint if present (future pre-preprocess
+    generator, or a test forcing empty/dormant); otherwise derive it from the
+    ViT inputs.
 
     `is not None` (not `or`) so an explicit b'' stays empty rather than falling
     through to compute -- the empty-fingerprint sentinel must be preserved

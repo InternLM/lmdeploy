@@ -225,8 +225,7 @@ struct Qwen3_5Vit::Impl {
                 }
 
                 const Interval interval{item.token_begin, Interval::Size{tokens}};
-                auto mm_item = std::make_shared<MultiModalData>(
-                    MultiModalData{item.data, interval, item.grid_thw});
+                auto mm_item = std::make_shared<MultiModalData>(MultiModalData{item.data, interval, item.grid_thw});
                 s.multimodal_inputs.push_back(mm_item);
                 s.multimodal_spans.push_back(MultiModalSpan{interval, item.fingerprint});
             }
@@ -383,7 +382,7 @@ struct Qwen3_5Vit::Impl {
         std::vector<Tensor> pixel_values;
 
         // collect image/video pixel values, grid_thws and embeds_coords
-        Buffer_<Sequence*> rc = env.at("requests").buffer();
+        Buffer_<Sequence*> rc              = env.at("requests").buffer();
         int                mm_prefill_seqs = 0;  // prefill sequences carrying multimodal inputs
         int                images_total    = 0;  // total images across those sequences
         for (int i = 0; i < rc.size(); ++i) {

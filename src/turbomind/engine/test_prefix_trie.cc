@@ -66,7 +66,7 @@ TEST_CASE("PrefixTrie::Find honors image_fps", "[prefix_trie]")
     // Same tokens, EMPTY fingerprint -> miss (empty never equals).
     {
         const std::vector<Fingerprint> empty_fps = {Fingerprint{}};
-        const auto key = ExtendPrefixKey(PrefixKey{}, MakeTokenSpan(toks), empty_fps);
+        const auto                     key       = ExtendPrefixKey(PrefixKey{}, MakeTokenSpan(toks), empty_fps);
         REQUIRE(trie.Find(nullptr, key, MakeTokenSpan(toks), empty_fps) == nullptr);
     }
 }
@@ -85,7 +85,7 @@ TEST_CASE("PrefixTrie::Find: plain text block matches with empty fps", "[prefix_
     REQUIRE(trie.Insert(blk));
 
     const auto key = ExtendPrefixKey(PrefixKey{}, MakeTokenSpan(toks));
-    REQUIRE(trie.Find(nullptr, key, MakeTokenSpan(toks)) == &blk);        // default fps = {}
+    REQUIRE(trie.Find(nullptr, key, MakeTokenSpan(toks)) == &blk);  // default fps = {}
     REQUIRE(trie.Find(nullptr, key, MakeTokenSpan(toks), {}) == &blk);
 }
 
@@ -130,10 +130,10 @@ TEST_CASE("PrefixTrie::Search excludes an image that starts beyond the matched p
 
     // Image starts at relative position 2 (token index 2). For the length-2 prefix the
     // sub-selection (fp_pos < 2) is empty, so it must match the empty-fps block.
-    std::vector<int> full = {1, 2, 3, 4};
-    const Fingerprint fpA = FP(7);
-    PrefixKey        key{};
-    LogicalBlock*    hit = trie.Search(nullptr, key, MakeTokenSpan(full), {fpA}, /*fp_pos=*/{2});
+    std::vector<int>  full = {1, 2, 3, 4};
+    const Fingerprint fpA  = FP(7);
+    PrefixKey         key{};
+    LogicalBlock*     hit = trie.Search(nullptr, key, MakeTokenSpan(full), {fpA}, /*fp_pos=*/{2});
     REQUIRE(hit == &blk);
 }
 
@@ -180,8 +180,8 @@ TEST_CASE("PlanPromptBoundary: geometry and guards", "[prompt_boundary]")
         const auto p = PlanPromptBoundary(/*prompt_len=*/17, bs, /*skip=*/1, /*miss=*/0);
         REQUIRE(p.valid);
         REQUIRE_FALSE(p.partial);
-        REQUIRE(p.pos == 16);       // 17 - 1, block-aligned
-        REQUIRE(p.block == 1);      // (16-1)/8
+        REQUIRE(p.pos == 16);   // 17 - 1, block-aligned
+        REQUIRE(p.block == 1);  // (16-1)/8
     }
     // K=2, last block has >2 tokens (prompt%bs==3): partial node at prompt_len-2.
     {

@@ -10,7 +10,10 @@ namespace turbomind {
 struct Fingerprint {
     std::array<uint64_t, 4> words{};
 
-    bool empty() const noexcept { return words == std::array<uint64_t, 4>{}; }
+    bool empty() const noexcept
+    {
+        return words == std::array<uint64_t, 4>{};
+    }
 
     friend bool operator==(const Fingerprint& a, const Fingerprint& b) noexcept
     {
@@ -19,7 +22,10 @@ struct Fingerprint {
         }
         return a.words == b.words;
     }
-    friend bool operator!=(const Fingerprint& a, const Fingerprint& b) noexcept { return !(a == b); }
+    friend bool operator!=(const Fingerprint& a, const Fingerprint& b) noexcept
+    {
+        return !(a == b);
+    }
 };
 
 }  // namespace turbomind

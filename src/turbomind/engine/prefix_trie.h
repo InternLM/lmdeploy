@@ -19,7 +19,9 @@ public:
     // Exact full lookup: hash, parent, length, token identity, and start-
     // fingerprints must match. `fps` are the start-fingerprints of images whose
     // start token falls inside this block (empty for ordinary blocks).
-    LogicalBlock* Find(const LogicalBlock* parent, const PrefixKey& key, TokenSpan tokens,
+    LogicalBlock* Find(const LogicalBlock*             parent,
+                       const PrefixKey&                key,
+                       TokenSpan                       tokens,
                        const std::vector<Fingerprint>& fps = {}) const
     {
         if (auto it = index_.find(key); it != index_.end()) {
@@ -37,7 +39,9 @@ public:
     // describe images whose start token falls inside this block: fp_pos[k] is the
     // block-relative start position of fps[k] (ascending). On a hit, `key` is
     // replaced with the matched node's key.
-    LogicalBlock* Search(const LogicalBlock* parent, PrefixKey& key, TokenSpan tokens,
+    LogicalBlock* Search(const LogicalBlock*             parent,
+                         PrefixKey&                      key,
+                         TokenSpan                       tokens,
                          const std::vector<Fingerprint>& fps    = {},
                          const std::vector<int>&         fp_pos = {}) const
     {

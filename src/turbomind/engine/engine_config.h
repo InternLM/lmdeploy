@@ -24,9 +24,9 @@ struct EngineConfig {
     X(int, cache_chunk_size, 0)                                                                                        \
     X(bool, enable_prefix_caching, false)                                                                              \
     X(int, cache_checkpoint_interval, 4096)                                                                            \
-    X(std::string, cache_prompt, "auto")                                                                              \
-    X(int, cache_prompt_boundary_skip, 1)                                                                             \
-    X(std::string, cache_generation, "auto")                                                                          \
+    X(std::string, cache_prompt, "auto")                                                                               \
+    X(int, cache_prompt_boundary_skip, 1)                                                                              \
+    X(std::string, cache_generation, "auto")                                                                           \
     X(bool, enable_metrics, false)                                                                                     \
     X(int, num_tokens_per_iter, 0)                                                                                     \
     X(int, max_prefill_iters, 1)                                                                                       \

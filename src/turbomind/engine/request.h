@@ -15,8 +15,8 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/interval.h"
-#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/block.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -242,11 +242,12 @@ struct Sequence {
     LogicalBlock* publish_target    = nullptr;  // logical block selected for publication this pass
     int           publish_end       = 0;        // sequence position of the pending publication
     int           last_ckpt_pos     = 0;        // end of the last published checkpoint
-    bool prompt_boundary_node = false;  // a reusable prompt-boundary exists and WILL be published: a partial fork_to
-                                        // node when B is mid-block, else a block-aligned checkpoint clamp target. The
-                                        // producer clamps its forward to prompt_boundary_pos to populate the node's KV
-                                        // (and publish a checkpoint when the model is recurrent). Decided in SetupForks.
-    int  prompt_boundary_pos = 0;       // resolved boundary B = prompt_len - cache_prompt_boundary_skip; 0 = none
+    bool          prompt_boundary_node =
+        false;                    // a reusable prompt-boundary exists and WILL be published: a partial fork_to
+                                  // node when B is mid-block, else a block-aligned checkpoint clamp target. The
+                                  // producer clamps its forward to prompt_boundary_pos to populate the node's KV
+                                  // (and publish a checkpoint when the model is recurrent). Decided in SetupForks.
+    int prompt_boundary_pos = 0;  // resolved boundary B = prompt_len - cache_prompt_boundary_skip; 0 = none
 
     std::vector<int> tokens;
 

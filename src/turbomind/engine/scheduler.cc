@@ -162,11 +162,7 @@ const char* ResumeSourceName(ResumeSource src)
 // Collect start-fingerprints of images whose start token lies in [lo, hi), with
 // their block-relative start positions. multimodal_spans is prompt-ordered
 // ascending by interval.begin().
-void CollectStartFps(const Sequence&           s,
-                     int                       lo,
-                     int                       hi,
-                     std::vector<Fingerprint>& fps,
-                     std::vector<int>*         pos = nullptr)
+void CollectStartFps(const Sequence& s, int lo, int hi, std::vector<Fingerprint>& fps, std::vector<int>* pos = nullptr)
 {
     for (const auto& sp : s.multimodal_spans) {
         const int b = sp.interval.begin();
@@ -269,14 +265,14 @@ TokenSpan Scheduler::TokenSegment(const Sequence& s, int offset, int size) const
     return MakeTokenSpan(s.token_ids + offset, size);
 }
 
-Scheduler::Scheduler(ObjectAllocator&                     alloc,
-                     CacheRegistry                        registry,
-                     int                                  cache_block_seq_len,
-                     bool                                 enable_prefix_caching,
-                     const std::string&                   cache_prompt,
-                     int                                  cache_prompt_boundary_skip,
-                     const std::string&                   cache_generation,
-                     const int&                           is_warm_up):
+Scheduler::Scheduler(ObjectAllocator&   alloc,
+                     CacheRegistry      registry,
+                     int                cache_block_seq_len,
+                     bool               enable_prefix_caching,
+                     const std::string& cache_prompt,
+                     int                cache_prompt_boundary_skip,
+                     const std::string& cache_generation,
+                     const int&         is_warm_up):
     enable_prefix_caching_{enable_prefix_caching},
     prompt_cache_mode_{ParseCacheMode(cache_prompt)},
     cache_prompt_boundary_skip_{cache_prompt_boundary_skip < 1 ? 1 : cache_prompt_boundary_skip},
@@ -407,7 +403,7 @@ void Scheduler::CreateMissingBlocks(Sequence& s, AcceptState& st)
             x.key           = next;
             x.size          = size;
             x.tokens.assign(tokens.begin(), tokens.end());
-            x.image_fps     = fps;  // usually empty
+            x.image_fps = fps;  // usually empty
             if (!trie_.Insert(x)) {
                 LogCollision(s, CollisionSite::kAccept, offset, offset + size);
                 // Stays un-indexed; treated as a private block from here on.
@@ -481,8 +477,8 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
                 y.key              = next;
                 y.size             = plan.node_size;
                 y.tokens.assign(tokens.begin(), tokens.end());
-                y.image_fps        = fps;
-                y.prefix_id        = cache_.Create(registry_.prefix().object_id(), vh.get());
+                y.image_fps = fps;
+                y.prefix_id = cache_.Create(registry_.prefix().object_id(), vh.get());
                 if (trie_.Insert(y)) {
                     x.fork_to = std::move(vh);  // edge holds the only ref
                 }
@@ -842,7 +838,7 @@ void Scheduler::PublishGeneration(Sequence& s)
         x.key           = next;
         x.size          = size;
         x.tokens.assign(tokens.begin(), tokens.end());
-        x.image_fps     = fps;  // usually empty
+        x.image_fps = fps;  // usually empty
         if (!trie_.Insert(x)) {
             LogCollision(s, CollisionSite::kPublish, x.offset, x.offset + size);
             x.parent = nullptr;
