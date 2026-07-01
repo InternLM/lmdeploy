@@ -45,7 +45,12 @@ class SubCliServe:
                             ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
                             ', "baichuan-inc/baichuan2-7b-chat" and so on')
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for serving')
-        parser.add_argument('--server-port', type=int, default=None, help='Server port')
+        parser.add_argument('--server-port',
+                            type=int,
+                            default=None,
+                            help='Server port. Effective default is 23333 when unset. '
+                            'In DP mode with --proxy-url, ports are auto-selected unless '
+                            'this flag is explicitly set.')
         parser.add_argument('--allow-origins',
                             nargs='+',
                             type=str,

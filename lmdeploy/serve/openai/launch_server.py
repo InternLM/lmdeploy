@@ -38,6 +38,16 @@ def find_available_ports(num: int) -> list[int]:
     return ports
 
 
+def _validate_server_port_range(base_port: int, dp_per_node: int) -> None:
+    """Validate base port and the contiguous DP port range."""
+    if not 1 <= base_port <= 65535:
+        raise ValueError(f'server_port must be between 1 and 65535, got {base_port}')
+    end_port = base_port + dp_per_node - 1
+    if end_port > 65535:
+        raise ValueError(f'server_port {base_port} cannot accommodate dp_per_node={dp_per_node}: '
+                         f'ports {base_port}-{end_port} exceed the maximum port 65535')
+
+
 def get_host_ip():
     """Get host ip."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -112,6 +122,7 @@ def launch_server(num_nodes: int,
         server_port_li = find_available_ports(dp_per_node)
     else:
         base_port = server_port if server_port is not None else 23333
+        _validate_server_port_range(base_port, dp_per_node)
         server_port_li = [base_port + i for i in range(dp_per_node)]
         for port in server_port_li:
             if not is_port_available(port):
