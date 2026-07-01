@@ -224,7 +224,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             kv_start_loc=kv_start_loc,
             kv_seqlens=kv_seqlens,
             kv_flatten_size=kv_flatten_size,
-            quant_policy=step_context.kv_quant_policy,
+            kv_cache_dtype=step_context.kv_cache_dtype,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
             max_kv_seqlen=step_context.max_kv_seqlen,

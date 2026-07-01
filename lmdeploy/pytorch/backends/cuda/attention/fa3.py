@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata, _cdiv
@@ -103,13 +103,13 @@ class FA3Impl(TritonAttentionImpl):
         Returns:
             Attention output tensor.
         """
-        quant_policy = attn_metadata.quant_policy
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
 
         # TurboQuant stores packed uint8 data in cache, which FA3's native
         # flash_attn_with_kvcache cannot dequantize directly.
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             raise NotImplementedError(
-                'quant_policy=QuantPolicy.TURBO_QUANT is not supported with '
+                'kv_cache_dtype=KVCacheDType.TURBO_QUANT is not supported with '
                 'FA3 speculative decoding (max_q_seqlen > 1). '
                 'FA3 speculative decoding accesses raw KV cache directly '
                 'and cannot dequantize TurboQuant packed data. '
@@ -165,7 +165,7 @@ class FA3Impl(TritonAttentionImpl):
             Attention output tensor.
         """
         block_offsets = attn_metadata.block_offsets
-        quant_policy = attn_metadata.quant_policy
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
 
         attn_output = self.paged_attention_fwd(
             query,
@@ -183,7 +183,7 @@ class FA3Impl(TritonAttentionImpl):
             # custom args
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            quant_policy=quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
         )
         return attn_output
 
@@ -258,7 +258,7 @@ class FA3Impl(TritonAttentionImpl):
         kv_start_loc = attn_metadata.kv_start_loc
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
-        quant_policy = attn_metadata.quant_policy
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
 
         # Flatten KV cache for varlen attention
         block_size = k_cache.size(1)
@@ -273,7 +273,7 @@ class FA3Impl(TritonAttentionImpl):
             out_dtype=query.dtype,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            quant_policy=quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
             flatten_kv_layout='shd',
         )
 
@@ -281,7 +281,7 @@ class FA3Impl(TritonAttentionImpl):
 
         # For TurboQuant, flattened K/V are in rotated domain.
         # Rotate Q to match, and inverse-rotate output afterwards.
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
                 hadamard_rotate,
                 hadamard_rotate_inv,
@@ -303,7 +303,7 @@ class FA3Impl(TritonAttentionImpl):
         )
 
         # Inverse-rotate output back to original domain
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             attn_output = hadamard_rotate_inv(attn_output)
 
         return attn_output

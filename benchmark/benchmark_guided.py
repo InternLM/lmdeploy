@@ -501,7 +501,7 @@ def parse_args():
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
     ArgumentHelper.model_format(tb_group, default='hf')
-    ArgumentHelper.quant_policy(tb_group, default=0)
+    ArgumentHelper.kv_cache_dtype(tb_group, default=0)
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
     ArgumentHelper.communicator(tb_group)
@@ -547,7 +547,7 @@ def main():
             session_len=args.session_len,
             cache_block_seq_len=args.cache_block_seq_len,
             model_format=args.model_format,
-            quant_policy=args.quant_policy,
+            kv_cache_dtype=args.kv_cache_dtype,
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
             enable_prefix_caching=args.enable_prefix_caching,

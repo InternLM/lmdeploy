@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionMetadata
 from lmdeploy.pytorch.backends.cuda.attention.fa3 import FA3Impl
 
@@ -18,7 +18,7 @@ def _make_prefill_metadata(q_seqlens, block_offsets):
         q_seqlens=q_seqlens,
         kv_start_loc=cu_seqlens[:-1],
         kv_seqlens=q_seqlens,
-        quant_policy=QuantPolicy.NONE,
+        kv_cache_dtype=KVCacheDType.AUTO,
         kv_flatten_size=int(q_seqlens.sum().item()),
         cu_seqlens_q=cu_seqlens,
         cu_seqlens_k=cu_seqlens.clone(),

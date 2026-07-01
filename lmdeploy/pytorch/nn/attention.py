@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
@@ -107,8 +107,8 @@ class Attention(nn.Module):
         """forward."""
         self._lazy_init(query.device)
 
-        quant_policy = attn_metadata.quant_policy
-        if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
+        if kv_cache_dtype in (KVCacheDType.FP8, KVCacheDType.FP8_E5M2):
             # Reuse the scale/zero arguments as scalar-scale channels for FP8.
             if self.k_scale.device != query.device:
                 self.k_scale = self.k_scale.to(device=query.device, non_blocking=True)

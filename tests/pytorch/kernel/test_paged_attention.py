@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
     hadamard_rotate,
     hadamard_rotate_inv,
@@ -502,7 +502,7 @@ class TestPagedAttentionInt8(TestPagedAttention):
                                       blocked_v,
                                       k_scales_zeros=blocked_ksz,
                                       v_scales_zeros=blocked_vsz,
-                                      quant_policy=nbits,
+                                      kv_cache_dtype=nbits,
                                       page_table=block_offsets,
                                       cache_seqlens=kv_seqlens)
         if nbits == 4:
@@ -527,7 +527,7 @@ class TestPagedAttentionInt8(TestPagedAttention):
                                       blocked_v,
                                       k_scales_zeros=blocked_ksz,
                                       v_scales_zeros=blocked_vsz,
-                                      quant_policy=nbits,
+                                      kv_cache_dtype=nbits,
                                       page_table=block_offsets,
                                       cache_seqlens=kv_seqlens,
                                       window_size=win_size)
@@ -555,9 +555,9 @@ class TestPagedAttentionFP8Scalar(TestPagedAttentionBase):
         yield torch.float8_e4m3fn
 
     @pytest.fixture
-    def quant_policy(self):
-        from lmdeploy.messages import QuantPolicy
-        yield QuantPolicy.FP8
+    def kv_cache_dtype(self):
+        from lmdeploy.messages import KVCacheDType
+        yield KVCacheDType.FP8
 
     @pytest.fixture
     def blocked_kv(self, batched_kv, seq_lens, history_lens, block_offsets, block_size, num_heads_k, feat_dim,
@@ -576,7 +576,7 @@ class TestPagedAttentionFP8Scalar(TestPagedAttentionBase):
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)], indirect=True)
     @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt, quant_policy):
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt, kv_cache_dtype):
         from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, k_scale, v_scale, _, _ = blocked_kv
@@ -586,7 +586,7 @@ class TestPagedAttentionFP8Scalar(TestPagedAttentionBase):
                                       blocked_v,
                                       k_scales_zeros=k_scale,
                                       v_scales_zeros=v_scale,
-                                      quant_policy=quant_policy,
+                                      kv_cache_dtype=kv_cache_dtype,
                                       page_table=block_offsets,
                                       cache_seqlens=kv_seqlens)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
@@ -599,9 +599,9 @@ class TestPagedAttentionFP8E5M2Scalar(TestPagedAttentionFP8Scalar):
         yield torch.float8_e5m2
 
     @pytest.fixture
-    def quant_policy(self):
-        from lmdeploy.messages import QuantPolicy
-        yield QuantPolicy.FP8_E5M2
+    def kv_cache_dtype(self):
+        from lmdeploy.messages import KVCacheDType
+        yield KVCacheDType.FP8_E5M2
 
 
 class TestPagedAttentionBlockDecoding(TestPagedAttentionBase):
@@ -676,7 +676,7 @@ class TestPagedAttentionAlibi(TestPagedAttentionBase):
 
 
 # =============================================================================
-# quant_policy=QuantPolicy.TURBO_QUANT Tests (TurboQuant: K=QJL4, V=TurboQuant MSE int2)
+# kv_cache_dtype=KVCacheDType.TURBO_QUANT Tests (TurboQuant: K=QJL4, V=TurboQuant MSE int2)
 # =============================================================================
 
 def _make_blocked_cache_quant42(batched_k,
@@ -688,7 +688,8 @@ def _make_blocked_cache_quant42(batched_k,
                                 num_heads_k,
                                 feat_dim,
                                 feat_dim_v):
-    """Create full blocked KV cache with quant_policy=QuantPolicy.TURBO_QUANT.
+    """Create full blocked KV cache with
+    kv_cache_dtype=KVCacheDType.TURBO_QUANT.
 
     This matches the semantics of the standard paged attention tests:
     the cache already contains the full KV sequence of length
@@ -787,10 +788,10 @@ def _recover_kv_from_blocked_cache(blocked_k,
 
 
 class TestPagedAttentionQuant42(TestPagedAttentionBase):
-    """Test quant_policy=QuantPolicy.TURBO_QUANT (TurboQuant) attention kernel
-    numerical correctness.
+    """Test kv_cache_dtype=KVCacheDType.TURBO_QUANT (TurboQuant) attention
+    kernel numerical correctness.
 
-    quant_policy=QuantPolicy.TURBO_QUANT uses:
+    kv_cache_dtype=KVCacheDType.TURBO_QUANT uses:
     - K: QJL4 (3bit MSE + 1bit QJL)
     - V: TurboQuant MSE int2
 
@@ -949,7 +950,8 @@ class TestPagedAttentionQuant42(TestPagedAttentionBase):
     @pytest.mark.parametrize('history_lens', [(8, 4, 2, 1)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt):
-        """Test paged attention with quant_policy=QuantPolicy.TURBO_QUANT."""
+        """Test paged attention with
+        kv_cache_dtype=KVCacheDType.TURBO_QUANT."""
         from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
@@ -959,7 +961,7 @@ class TestPagedAttentionQuant42(TestPagedAttentionBase):
             blocked_v,
             k_scales_zeros=blocked_ksz,
             v_scales_zeros=blocked_vsz,
-            quant_policy=QuantPolicy.TURBO_QUANT,
+            kv_cache_dtype=KVCacheDType.TURBO_QUANT,
             page_table=block_offsets,
             cache_seqlens=kv_seqlens,
         )
@@ -971,12 +973,13 @@ class TestPagedAttentionQuant42(TestPagedAttentionBase):
 
 
 class TestPagedAttentionFP16vsQuant42(TestPagedAttentionBase):
-    """Compare FP16 vs quant_policy=QuantPolicy.TURBO_QUANT attention outputs.
+    """Compare FP16 vs kv_cache_dtype=KVCacheDType.TURBO_QUANT attention
+    outputs.
 
-    This test verifies that quant_policy=QuantPolicy.TURBO_QUANT (TurboQuant) produces numerically
+    This test verifies that kv_cache_dtype=KVCacheDType.TURBO_QUANT (TurboQuant) produces numerically
     reasonable results compared to FP16 baseline.
 
-    quant_policy=QuantPolicy.TURBO_QUANT uses:
+    kv_cache_dtype=KVCacheDType.TURBO_QUANT uses:
     - K: QJL4 (3bit MSE + 1bit QJL)
     - V: TurboQuant MSE int2
     """
@@ -1072,7 +1075,7 @@ class TestPagedAttentionFP16vsQuant42(TestPagedAttentionBase):
     @pytest.fixture
     def blocked_kv_quant42(self, batched_kv, seq_lens, history_lens, block_offsets, block_size, num_heads_k, feat_dim,
                            feat_dim_v):
-        """Build quant_policy=QuantPolicy.TURBO_QUANT blocked KV cache."""
+        """Build kv_cache_dtype=KVCacheDType.TURBO_QUANT blocked KV cache."""
         batched_k, batched_v = batched_kv
         yield _make_blocked_cache_quant42(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size,
                                           num_heads_k, feat_dim, feat_dim_v)
@@ -1089,13 +1092,13 @@ class TestPagedAttentionFP16vsQuant42(TestPagedAttentionBase):
             blocked_v,
             page_table=block_offsets,
             cache_seqlens=kv_seqlens,
-            quant_policy=QuantPolicy.NONE,
+            kv_cache_dtype=KVCacheDType.AUTO,
         )
         yield out
 
     @pytest.fixture
     def out_quant42(self, conti_q, blocked_kv_quant42, block_offsets, kv_seqlens):
-        """Run attention with quant_policy=QuantPolicy.TURBO_QUANT cache."""
+        """Run attention with kv_cache_dtype=KVCacheDType.TURBO_QUANT cache."""
         from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv_quant42
@@ -1105,7 +1108,7 @@ class TestPagedAttentionFP16vsQuant42(TestPagedAttentionBase):
             blocked_v,
             k_scales_zeros=blocked_ksz,
             v_scales_zeros=blocked_vsz,
-            quant_policy=QuantPolicy.TURBO_QUANT,
+            kv_cache_dtype=KVCacheDType.TURBO_QUANT,
             page_table=block_offsets,
             cache_seqlens=kv_seqlens,
         )

@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 
 # Import common TurboQuant utilities from turboquant_utils
 from .turboquant_utils import (
@@ -287,7 +287,7 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
 
 
 class TestFillKVCacheInt42(TestFillKVCacheInt4):
-    """quant_policy == QuantPolicy.TURBO_QUANT:
+    """kv_cache_dtype == KVCacheDType.TURBO_QUANT:
 
     - K: QJL4 = 3bit MSE + 1bit QJL
     - V: TurboQuant MSE int2
@@ -395,7 +395,7 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
             block_offsets,
             k_scales_zeros,
             v_scales_zeros,
-            QuantPolicy.TURBO_QUANT,
+            KVCacheDType.TURBO_QUANT,
         )
 
         torch.testing.assert_close(k_caches, gt[0])
@@ -418,8 +418,8 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
         assert cos > 0.80, f'QJL4 reference cosine too low: {cos}'
 
     def test_fill_kv_cache_quant42_vs_python_reference(self):
-        """Test fill_kv_cache with quant_policy=QuantPolicy.TURBO_QUANT against
-        Python reference.
+        """Test fill_kv_cache with kv_cache_dtype=KVCacheDType.TURBO_QUANT
+        against Python reference.
 
         This test verifies that the fill_kv_cache kernel produces the same quantized output as the Python reference
         implementation.
@@ -486,7 +486,7 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
             block_offsets,
             k_scales_zeros=blocked_ksz,
             v_scales_zeros=blocked_vsz,
-            quant_policy=QuantPolicy.TURBO_QUANT,
+            kv_cache_dtype=KVCacheDType.TURBO_QUANT,
         )
 
         # Python reference quantization - only for the last token (the one being written)
@@ -730,8 +730,8 @@ class TestFillKVCacheFP8Scalar(TestFillKVCache):
         yield torch.float8_e4m3fn
 
     @pytest.fixture
-    def quant_policy(self):
-        yield QuantPolicy.FP8
+    def kv_cache_dtype(self):
+        yield KVCacheDType.FP8
 
     @pytest.fixture
     def head_dim(self, request):
@@ -788,7 +788,7 @@ class TestFillKVCacheFP8Scalar(TestFillKVCache):
     ],
                              indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, block_offsets, q_start_loc, q_seq_length,
-                           kv_seq_length, max_q_seq_length, gt, quant_policy, fp8_dtype):
+                           kv_seq_length, max_q_seq_length, gt, kv_cache_dtype, fp8_dtype):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
         gt_k, gt_v, k_scale, v_scale = gt
         fill_kv_cache(k_states,
@@ -800,7 +800,7 @@ class TestFillKVCacheFP8Scalar(TestFillKVCache):
                       kv_seq_length,
                       max_q_seq_length,
                       block_offsets,
-                      quant_policy=quant_policy,
+                      kv_cache_dtype=kv_cache_dtype,
                       k_scales_zeros=k_scale,
                       v_scales_zeros=v_scale)
         _assert_fp8_cache_close(k_caches, gt_k, fp8_dtype, k_scale)
@@ -815,5 +815,5 @@ class TestFillKVCacheFP8E5M2Scalar(TestFillKVCacheFP8Scalar):
         yield torch.float8_e5m2
 
     @pytest.fixture
-    def quant_policy(self):
-        yield QuantPolicy.FP8_E5M2
+    def kv_cache_dtype(self):
+        yield KVCacheDType.FP8_E5M2

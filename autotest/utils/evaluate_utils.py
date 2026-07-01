@@ -79,7 +79,7 @@ def write_to_summary(case_name, result, msg, metrics, result_dir):
     model = config['model']
     communicator = config['communicator']
     parallel_config_str = config['parallel_config']
-    quant_policy = config['quant_policy']
+    kv_cache_dtype = config['kv_cache_dtype']
 
     dataset_name = []
     dataset_metrics = []
@@ -92,7 +92,7 @@ def write_to_summary(case_name, result, msg, metrics, result_dir):
 
     summary_file = os.environ.get('GITHUB_STEP_SUMMARY', '')
     md_summary_file = f'{result_dir}/summary_{case_name}.md'
-    summary_line = f'| {model} | {quant_policy} | {backend} | {communicator} | {parallel_config_str} | {status} | {summary_dataset_metrics} |\n'  # noqa: E501
+    summary_line = f'| {model} | {kv_cache_dtype} | {backend} | {communicator} | {parallel_config_str} | {status} | {summary_dataset_metrics} |\n'  # noqa: E501
 
     write_header = not os.path.exists(md_summary_file) or os.path.getsize(md_summary_file) == 0
     with open(md_summary_file, 'a') as f:
@@ -100,7 +100,7 @@ def write_to_summary(case_name, result, msg, metrics, result_dir):
             dash_line = '-----|' * (len(metrics.keys()))
             f.write('## Model Evaluation Results\n')
             f.write(
-                f'| Model | QuantPolicy | Backend | Communicator | Parallel config | Status | {summary_dataset_name} |\n'  # noqa
+                f'| Model | KVCacheDType | Backend | Communicator | Parallel config | Status | {summary_dataset_name} |\n'  # noqa
             )
             f.write(f'|-------|-------------|---------|--------------|----|--------|{dash_line}\n')
         f.write(summary_line)
@@ -111,7 +111,7 @@ def write_to_summary(case_name, result, msg, metrics, result_dir):
                 dash_line = '-----|' * (len(metrics.keys()))
                 f.write('## Model Evaluation Results\n')
                 f.write(
-                    f'| Model | QuantPolicy | Backend | Communicator | Parallel config | Status | {summary_dataset_name} |\n'  # noqa
+                    f'| Model | KVCacheDType | Backend | Communicator | Parallel config | Status | {summary_dataset_name} |\n'  # noqa
                 )
                 f.write(f'|-------|-------------|---------|--------------|----|--------|{dash_line}\n')
             f.write(summary_line)

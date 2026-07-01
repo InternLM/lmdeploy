@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
+from lmdeploy.messages import KVCacheDType, PytorchEngineConfig, normalize_kv_cache_dtype
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
@@ -118,7 +118,7 @@ class CacheConfig:
     max_prefill_token_num: int = 8192
     cudagraph_capture_batch_sizes: list[int] | None = None
     enable_prefix_caching: bool = False
-    quant_policy: QuantPolicy = QuantPolicy.NONE
+    kv_cache_dtype: KVCacheDType | int | str = KVCacheDType.AUTO
     device_type: str = 'cuda'
     num_state_caches: int = None
     prefix_cache_state_budget: int = 0
@@ -141,6 +141,7 @@ class CacheConfig:
             self.enable_prefix_caching = False
         if self.kernel_block_size == -1:
             self.kernel_block_size = self.block_size
+        self.kv_cache_dtype = normalize_kv_cache_dtype(self.kv_cache_dtype)
         if self.prefix_cache_decode_state_interval > 0:
             assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
                 'prefix_cache_decode_state_interval must be a multiple of block_size')
@@ -641,7 +642,7 @@ class SpecDecodeConfig:
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
                                        cudagraph_capture_batch_sizes=target_cache_cfg.cudagraph_capture_batch_sizes,
                                        device_type=target_cache_cfg.device_type,
-                                       quant_policy=target_cache_cfg.quant_policy,
+                                       kv_cache_dtype=target_cache_cfg.kv_cache_dtype,
                                        migration_backend=target_cache_cfg.migration_backend)
         obj = cls(
             model=model,

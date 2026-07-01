@@ -6,17 +6,17 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 
 from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate
 
-# Triton-compatible quantization policy constants
+# Triton-compatible KV cache dtype constants
 # Python Enum cannot be used in Triton kernels, so we define these as module-level
 # constants which Triton will inline at compile time.
-Q_POLICY_NONE = tl.constexpr(0)
-Q_POLICY_INT4 = tl.constexpr(4)
-Q_POLICY_INT8 = tl.constexpr(8)
-Q_POLICY_TURBO = tl.constexpr(42)
+KV_CACHE_DTYPE_NONE = tl.constexpr(0)
+KV_CACHE_DTYPE_INT4 = tl.constexpr(4)
+KV_CACHE_DTYPE_INT8 = tl.constexpr(8)
+KV_CACHE_DTYPE_TURBO = tl.constexpr(42)
 
 
 @triton.jit
@@ -538,11 +538,11 @@ def _fill_page_quant(
     stride_szh: tl.constexpr,
     stride_szd: tl.constexpr,
     BLOCK_D: tl.constexpr,
-    quant_policy: tl.constexpr,
+    kv_cache_dtype: tl.constexpr,
     is_value: tl.constexpr,
 ):
     """Fill page."""
-    if quant_policy == Q_POLICY_INT8:
+    if kv_cache_dtype == KV_CACHE_DTYPE_INT8:
         return _fill_page_quant_int8(state_ptr,
                                      cache_ptr,
                                      scales_zeros_ptr,
@@ -564,7 +564,7 @@ def _fill_page_quant(
                                      stride_szh=stride_szh,
                                      stride_szd=stride_szd,
                                      BLOCK_D=BLOCK_D)
-    elif quant_policy == Q_POLICY_INT4:
+    elif kv_cache_dtype == KV_CACHE_DTYPE_INT4:
         return _fill_page_quant_int4(state_ptr,
                                      cache_ptr,
                                      scales_zeros_ptr,
@@ -586,7 +586,7 @@ def _fill_page_quant(
                                      stride_szh=stride_szh,
                                      stride_szd=stride_szd,
                                      BLOCK_D=BLOCK_D)
-    elif quant_policy == Q_POLICY_TURBO:
+    elif kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         if is_value:
             return _fill_page_quant_turbo_int2(state_ptr,
                                                cache_ptr,
@@ -635,7 +635,7 @@ def _fill_page_quant(
                                                stride_szd=stride_szd,
                                                BLOCK_D=BLOCK_D)
     else:
-        tl.static_assert(False, 'Unsupported quant policy')
+        tl.static_assert(False, 'Unsupported KV cache dtype')
 
 
 @triton.jit
@@ -679,7 +679,7 @@ def _fill_kv_cache_quant_kernel(
     stride_vszb: tl.constexpr,
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
-    quant_policy: tl.constexpr,
+    kv_cache_dtype: tl.constexpr,
     stride_boff,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
@@ -752,7 +752,7 @@ def _fill_kv_cache_quant_kernel(
                      stride_szh=stride_kszh,
                      stride_szd=stride_kszd,
                      BLOCK_D=BLOCK_D,
-                     quant_policy=quant_policy,
+                     kv_cache_dtype=kv_cache_dtype,
                      is_value=False)
 
     if BLOCK_DV > 0:
@@ -779,7 +779,7 @@ def _fill_kv_cache_quant_kernel(
                          stride_szh=stride_vszh,
                          stride_szd=stride_vszd,
                          BLOCK_D=BLOCK_DV,
-                         quant_policy=quant_policy,
+                         kv_cache_dtype=kv_cache_dtype,
                          is_value=True)
 
 
@@ -794,7 +794,7 @@ def fill_kv_cache(k_states: Tensor,
                   block_offsets: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
-                  quant_policy: QuantPolicy = QuantPolicy.NONE,
+                  kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO,
                   kv_layout: str = 'bshd'):
     """Fill key/value state to cache for paged attention.
 
@@ -838,7 +838,7 @@ def fill_kv_cache(k_states: Tensor,
     v_centroids = torch.empty((1,), device=k_states.device, dtype=torch.float32)
     v_boundaries = torch.empty((1,), device=k_states.device, dtype=torch.float32)
 
-    if quant_policy == QuantPolicy.TURBO_QUANT:
+    if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
         raw_k_dim = k_states.size(-1)
         if raw_k_dim & (raw_k_dim - 1) != 0:
             raise ValueError(f'TurboQuant K requires power-of-2 raw dim, got {raw_k_dim}')
@@ -875,7 +875,7 @@ def fill_kv_cache(k_states: Tensor,
     grid = (num_heads, max_num_blocks, batch_size)
     is_decoding = max_num_blocks == 1
 
-    if quant_policy == QuantPolicy.NONE:
+    if kv_cache_dtype == KVCacheDType.AUTO:
         _fill_kv_cache_kernel[grid](
             k_states,
             v_states,
@@ -909,7 +909,7 @@ def fill_kv_cache(k_states: Tensor,
             num_warps=4,
             num_stages=3,
         )
-    elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+    elif kv_cache_dtype in (KVCacheDType.FP8, KVCacheDType.FP8_E5M2):
         assert k_scales_zeros is not None, 'FP8 KV cache requires k scale.'
         assert v_scales_zeros is not None, 'FP8 KV cache requires v scale.'
         finfo = torch.finfo(k_caches.dtype)
@@ -991,7 +991,7 @@ def fill_kv_cache(k_states: Tensor,
             stride_vszb=v_scales_zeros.stride(s_dim),
             stride_vszh=v_scales_zeros.stride(h_dim),
             stride_vszd=v_scales_zeros.stride(d_dim),
-            quant_policy=quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
             stride_boff=block_offsets.stride(0),
             BLOCK=BLOCK,
             BLOCK_D=BLOCK_D,

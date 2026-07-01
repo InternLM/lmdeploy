@@ -98,7 +98,7 @@ public:
                              int                     kv_head_num,
                              int                     num_layer,
                              const std::vector<int>& layer_types,
-                             int                     quant_policy,
+                             int                     kv_cache_dtype,
                              DataType                data_type,
                              DataType                runtime_dtype,
                              int                     linear_key_head_dim,

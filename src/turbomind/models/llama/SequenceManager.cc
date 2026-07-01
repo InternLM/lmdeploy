@@ -35,7 +35,7 @@ SequenceManager::SequenceManager(int                     head_dim,
                                  int                     kv_head_num,
                                  int                     num_layer,
                                  const std::vector<int>& layer_types,
-                                 int                     quant_policy,
+                                 int                     kv_cache_dtype,
                                  DataType                data_type,
                                  DataType                runtime_dtype,
                                  int                     linear_key_head_dim,
@@ -102,7 +102,7 @@ SequenceManager::SequenceManager(int                     head_dim,
     }
 
     const int dbits     = byte_size(runtime_dtype, 8);
-    const int elem_bits = quant_policy ? quant_policy : dbits;
+    const int elem_bits = kv_cache_dtype ? kv_cache_dtype : dbits;
 
     BlockConfig block_config{
         head_dim,

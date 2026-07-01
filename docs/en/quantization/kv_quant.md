@@ -57,15 +57,15 @@ TurboQuant achieves efficient compression through two key steps:
 
 Tested on H200 with Qwen3-30B-A3B-Base model and ShareGPT dataset:
 
-| Metric             | Baseline (quant_policy=0) | TurboQuant (quant_policy=42) | Change     |
-| ------------------ | ------------------------- | ---------------------------- | ---------- |
-| Input throughput   | 2368.8 tok/s              | 2195.8 tok/s                 | -7.3%      |
-| Output throughput  | 2186.7 tok/s              | 2027.0 tok/s                 | -7.3%      |
-| Request throughput | 10.74 req/s               | 9.96 req/s                   | -7.3%      |
-| Mean E2E latency   | 5.888s                    | 6.348s                       | +7.8%      |
-| Mean TTFT          | 1.139s                    | 1.235s                       | +8.4%      |
-| Mean TPOT          | 0.024s                    | 0.026s                       | +8.3%      |
-| Mean ITL           | 0.059s                    | 0.059s                       | ~unchanged |
+| Metric             | Baseline (kv_cache_dtype=0) | TurboQuant (kv_cache_dtype=42) | Change     |
+| ------------------ | --------------------------- | ------------------------------ | ---------- |
+| Input throughput   | 2368.8 tok/s                | 2195.8 tok/s                   | -7.3%      |
+| Output throughput  | 2186.7 tok/s                | 2027.0 tok/s                   | -7.3%      |
+| Request throughput | 10.74 req/s                 | 9.96 req/s                     | -7.3%      |
+| Mean E2E latency   | 5.888s                      | 6.348s                         | +7.8%      |
+| Mean TTFT          | 1.139s                      | 1.235s                         | +8.4%      |
+| Mean TPOT          | 0.024s                      | 0.026s                         | +8.3%      |
+| Mean ITL           | 0.059s                      | 0.059s                         | ~unchanged |
 
 **Test configuration**: GPU: H200, Model: Qwen3-30B-A3B-Base, Dataset: ShareGPT, Concurrency: 64, Requests: 5000
 
@@ -97,15 +97,15 @@ pip install lmdeploy
 
 ## Usage
 
-Applying kv quantization and inference via LMDeploy is quite straightforward. Simply set the `quant_policy` parameter.
+Applying kv quantization and inference via LMDeploy is quite straightforward. Simply set the `kv_cache_dtype` parameter.
 
-**LMDeploy specifies that `quant_policy=4` stands for 4-bit kv, `quant_policy=8` indicates 8-bit kv, and `quant_policy=42` indicates TurboQuant.**
+**LMDeploy specifies that `kv_cache_dtype='int4'` stands for 4-bit kv, `kv_cache_dtype='int8'` indicates 8-bit kv, and `kv_cache_dtype='turbo_quant'` indicates TurboQuant. The numeric values `4`, `8`, and `42` are also accepted.**
 
 ### Offline inference
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
-engine_config = TurbomindEngineConfig(quant_policy=8)
+engine_config = TurbomindEngineConfig(kv_cache_dtype='int8')
 pipe = pipeline("internlm/internlm2_5-7b-chat", backend_config=engine_config)
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
@@ -114,19 +114,19 @@ print(response)
 ### Serving
 
 ```shell
-lmdeploy serve api_server internlm/internlm2_5-7b-chat --quant-policy 8
+lmdeploy serve api_server internlm/internlm2_5-7b-chat --kv-cache-dtype int8
 ```
 
 ### TurboQuant
 
-TurboQuant uses `quant_policy=42`, **PytorchEngine only**:
+TurboQuant uses `kv_cache_dtype='turbo_quant'`, **PytorchEngine only**:
 
 ```python
 from lmdeploy import pipeline, PytorchEngineConfig
 engine_config = PytorchEngineConfig(
     tp=1,
     cache_max_entry_count=0.8,
-    quant_policy=42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
+    kv_cache_dtype='turbo_quant'  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 )
 pipe = pipeline("Qwen/Qwen3-8B", backend_config=engine_config)
 response = pipe.infer("Hello, how are you?", max_new_tokens=30)
@@ -147,7 +147,7 @@ We apply kv quantization of LMDeploy to several LLM models and utilize OpenCompa
 | race-middle | 9a54b6  | accuracy      | 41.57          | 41.78   | 41.23   | 88.93             | 88.93   | 88.93   | 92.76               | 92.83   | 92.55   | 87.33           | 87.26   | 86.28   |
 | race-high   | 9a54b6  | accuracy      | 39.65          | 39.77   | 40.77   | 85.33             | 85.31   | 84.62   | 90.51               | 90.42   | 90.42   | 82.53           | 82.59   | 82.02   |
 
-For detailed evaluation methods, please refer to [this](../benchmark/evaluate_with_opencompass.md) guide. Remember to pass `quant_policy` to the inference engine in the config file.
+For detailed evaluation methods, please refer to [this](../benchmark/evaluate_with_opencompass.md) guide. Remember to pass `kv_cache_dtype` to the inference engine in the config file.
 
 ## Performance
 

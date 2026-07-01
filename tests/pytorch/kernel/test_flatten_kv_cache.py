@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 
 # Import common TurboQuant utilities from turboquant_utils
 from .turboquant_utils import (
@@ -154,7 +154,7 @@ class TestFlattenKVCacheQuant8(TestFlattenKVCache):
                                               out_dtype=out_dtype,
                                               k_scales_zeros=k_sz,
                                               v_scales_zeros=v_sz,
-                                              quant_policy=nbits)
+                                              kv_cache_dtype=nbits)
 
         torch.testing.assert_close(k_states, gt[0], atol=atol, rtol=rtol)
         torch.testing.assert_close(v_states, gt[1], atol=atol, rtol=rtol)
@@ -285,7 +285,7 @@ def test_flatten_kv_cache_quant_zeroes_padded_tail(flatten_kv_layout, nbits):
                                           out_dtype=torch.float16,
                                           k_scales_zeros=k_scales_zeros,
                                           v_scales_zeros=v_scales_zeros,
-                                          quant_policy=nbits,
+                                          kv_cache_dtype=nbits,
                                           flatten_kv_layout=flatten_kv_layout)
 
     if flatten_kv_layout == 'hsd':
@@ -342,11 +342,11 @@ class TestFlattenKVCacheFP8Scalar(TestFlattenKVCache):
         yield torch.float8_e4m3fn
 
     @pytest.fixture
-    def quant_policy(self):
-        yield QuantPolicy.FP8
+    def kv_cache_dtype(self):
+        yield KVCacheDType.FP8
 
     def test_flatten_kv_cache(self, k_caches, v_caches, kv_lens, kv_seqlens, block_offsets, block_size, num_heads,
-                              out_size, head_dim, out_dtype, fp8_dtype, quant_policy):
+                              out_size, head_dim, out_dtype, fp8_dtype, kv_cache_dtype):
         from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 
         k_caches_fp8, k_scale, k_dequant = quant_fp8_scalar(k_caches, fp8_dtype, scale=0.25)
@@ -362,13 +362,13 @@ class TestFlattenKVCacheFP8Scalar(TestFlattenKVCache):
                                               out_dtype=out_dtype,
                                               k_scales_zeros=k_scale,
                                               v_scales_zeros=v_scale,
-                                              quant_policy=quant_policy)
+                                              kv_cache_dtype=kv_cache_dtype)
 
         torch.testing.assert_close(k_states, gt[0], atol=1e-3, rtol=1e-5)
         torch.testing.assert_close(v_states, gt[1], atol=1e-3, rtol=1e-5)
 
     def test_flatten_kv_cache_requires_scale(self, k_caches, v_caches, kv_seqlens, block_offsets, out_size, out_dtype,
-                                             fp8_dtype, quant_policy):
+                                             fp8_dtype, kv_cache_dtype):
         from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 
         k_caches_fp8 = k_caches.to(fp8_dtype)
@@ -381,11 +381,11 @@ class TestFlattenKVCacheFP8Scalar(TestFlattenKVCache):
                              block_offsets,
                              out_size=out_size,
                              out_dtype=out_dtype,
-                             quant_policy=quant_policy)
+                             kv_cache_dtype=kv_cache_dtype)
 
     @pytest.mark.parametrize('flatten_kv_layout', ['hsd', 'shd'])
     def test_flatten_kv_cache_zeroes_padded_tail(self, k_caches, v_caches, kv_seqlens, block_offsets, block_size,
-                                                 out_size, out_dtype, fp8_dtype, quant_policy, flatten_kv_layout):
+                                                 out_size, out_dtype, fp8_dtype, kv_cache_dtype, flatten_kv_layout):
         from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 
         padded_out_size = _div_up(out_size, block_size) * block_size + block_size
@@ -400,7 +400,7 @@ class TestFlattenKVCacheFP8Scalar(TestFlattenKVCache):
                                               out_dtype=out_dtype,
                                               k_scales_zeros=k_scale,
                                               v_scales_zeros=v_scale,
-                                              quant_policy=quant_policy,
+                                              kv_cache_dtype=kv_cache_dtype,
                                               flatten_kv_layout=flatten_kv_layout)
 
         if flatten_kv_layout == 'hsd':
@@ -418,8 +418,8 @@ class TestFlattenKVCacheFP8E5M2Scalar(TestFlattenKVCacheFP8Scalar):
         yield torch.float8_e5m2
 
     @pytest.fixture
-    def quant_policy(self):
-        yield QuantPolicy.FP8_E5M2
+    def kv_cache_dtype(self):
+        yield KVCacheDType.FP8_E5M2
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
@@ -514,14 +514,14 @@ class TestFlattenKVCacheMLAFP8(TestFlattenKVCache):
 
 
 # =============================================================================
-# Tests for quant_policy=QuantPolicy.TURBO_QUANT (TurboQuant) flatten_kv_cache
+# Tests for kv_cache_dtype=KVCacheDType.TURBO_QUANT (TurboQuant) flatten_kv_cache
 # =============================================================================
 
 class TestFlattenKVCacheQuant42:
-    """Test flatten_kv_cache with quant_policy=QuantPolicy.TURBO_QUANT
+    """Test flatten_kv_cache with kv_cache_dtype=KVCacheDType.TURBO_QUANT
     (TurboQuant).
 
-    quant_policy=QuantPolicy.TURBO_QUANT uses:
+    kv_cache_dtype=KVCacheDType.TURBO_QUANT uses:
     - K: QJL4 (3bit MSE + 1bit QJL), stored in rotate domain
     - V: TurboQuant MSE int2, stored in rotate domain
 
@@ -621,7 +621,7 @@ class TestFlattenKVCacheQuant42:
 
     def test_flatten_kv_cache_quant42(self, k_caches, v_caches, kv_seqlens, block_offsets, k_scales_zeros,
                                        v_scales_zeros, out_dtype, head_dim, head_dim_v, num_heads):
-        """Test flatten_kv_cache with quant_policy=QuantPolicy.TURBO_QUANT.
+        """Test flatten_kv_cache with kv_cache_dtype=KVCacheDType.TURBO_QUANT.
 
         This test verifies that:
         1. The flatten function runs without error
@@ -634,7 +634,7 @@ class TestFlattenKVCacheQuant42:
         )
 
 
-        # Run flatten with quant_policy=QuantPolicy.TURBO_QUANT
+        # Run flatten with kv_cache_dtype=KVCacheDType.TURBO_QUANT
         k_states, v_states = flatten_kv_cache(
             k_caches,
             v_caches,
@@ -642,7 +642,7 @@ class TestFlattenKVCacheQuant42:
             block_offsets,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            quant_policy=QuantPolicy.TURBO_QUANT,
+            kv_cache_dtype=KVCacheDType.TURBO_QUANT,
             kv_layout='bshd',
             flatten_kv_layout='shd',
             out_dtype=out_dtype,

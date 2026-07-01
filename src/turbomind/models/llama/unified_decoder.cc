@@ -67,7 +67,7 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
         }
     }
 
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(engine.quant_policy,
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(engine.kv_cache_dtype,
                                                           model_weight.layer_types,
                                                           model_weight.num_layer,
                                                           attn_weights,

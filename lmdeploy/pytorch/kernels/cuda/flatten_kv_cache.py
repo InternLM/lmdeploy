@@ -5,17 +5,17 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 
 from .turbo_quant import get_lloyd_max_codebook
 
-# Triton-compatible quantization policy constants
+# Triton-compatible KV cache dtype constants
 # Python Enum cannot be used in Triton kernels, so we define these as module-level
 # constants which Triton will inline at compile time.
-Q_POLICY_NONE = tl.constexpr(0)
-Q_POLICY_INT4 = tl.constexpr(4)
-Q_POLICY_INT8 = tl.constexpr(8)
-Q_POLICY_TURBO = tl.constexpr(42)
+KV_CACHE_DTYPE_NONE = tl.constexpr(0)
+KV_CACHE_DTYPE_INT4 = tl.constexpr(4)
+KV_CACHE_DTYPE_INT8 = tl.constexpr(8)
+KV_CACHE_DTYPE_TURBO = tl.constexpr(42)
 
 
 @triton.jit
@@ -263,7 +263,7 @@ def _flatten_kv_cache_quant(
     stride_vos: tl.constexpr,
     stride_vod: tl.constexpr,
     stride_boff,
-    quant_policy: tl.constexpr,
+    kv_cache_dtype: tl.constexpr,
     OUT_SIZE,
     HEAD_DIM_K: tl.constexpr,
     HEAD_DIM_V: tl.constexpr,
@@ -310,12 +310,12 @@ def _flatten_kv_cache_quant(
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
     b_off = b_off.to(tl.int64)
     offs_bs = tl.arange(0, BLOCK_BS)
-    if quant_policy == Q_POLICY_INT4:
+    if kv_cache_dtype == KV_CACHE_DTYPE_INT4:
         HALF_HDK: tl.constexpr = HEAD_DIM_K // 2
         HALF_HDV: tl.constexpr = HEAD_DIM_V // 2
         offs_dk = tl.arange(0, BLOCK_DK) % HALF_HDK
         offs_dv = tl.arange(0, BLOCK_DV) % HALF_HDV
-    elif quant_policy == Q_POLICY_TURBO:
+    elif kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         # K is QJL4 packed in int4 => packed dim = HEAD_DIM_K // 2
         # V is TurboQuant MSE int2 => packed dim = HEAD_DIM_V // 4
         HALF_HDK: tl.constexpr = HEAD_DIM_K // 2
@@ -348,10 +348,10 @@ def _flatten_kv_cache_quant(
     # K path
     # -----------------------
     kc = tl.load(kc_ptrs)
-    if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
+    if kv_cache_dtype == KV_CACHE_DTYPE_INT4 or kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         kc = _dequant_int4(kc, HEAD_DIM_K, BLOCK_DK)
 
-    if quant_policy == Q_POLICY_TURBO:
+    if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         # QJL4:
         #   low 3bit = mse idx
         #   high 1bit = qjl sign
@@ -375,12 +375,12 @@ def _flatten_kv_cache_quant(
     # V path
     # -----------------------
     vc = tl.load(vc_ptrs)
-    if quant_policy == Q_POLICY_TURBO:
+    if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         vc = _dequant_int2(vc, HEAD_DIM_V, BLOCK_DV)
-    elif quant_policy == Q_POLICY_INT4:
+    elif kv_cache_dtype == KV_CACHE_DTYPE_INT4:
         vc = _dequant_int4(vc, HEAD_DIM_V, BLOCK_DV)
 
-    if quant_policy == Q_POLICY_TURBO:
+    if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         # V is TurboQuant MSE int2, meta only stores norm
         vs = tl.load(vsz_ptrs)
         vq = tl.load(v_codebook_ptr + vc.to(tl.int32))
@@ -403,7 +403,7 @@ def flatten_kv_cache(k_caches: Tensor,
                      out_dtype: torch.dtype = None,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
-                     quant_policy: QuantPolicy = QuantPolicy.NONE,
+                     kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO,
                      kv_layout: str = 'bshd',
                      flatten_kv_layout: str = 'hsd'):
     """Recover paged KV cache to contiguous KV cache.
@@ -422,7 +422,7 @@ def flatten_kv_cache(k_caches: Tensor,
         raise RuntimeError('Unsupported layout.')
 
     if out_dtype is None:
-        if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT):
+        if kv_cache_dtype in (KVCacheDType.FP8, KVCacheDType.FP8_E5M2, KVCacheDType.TURBO_QUANT):
             out_dtype = torch.float16
         else:
             out_dtype = k_caches.dtype
@@ -437,10 +437,10 @@ def flatten_kv_cache(k_caches: Tensor,
     num_heads = k_caches.size(h_dim)
     k_head_dim = k_caches.size(d_dim)
     v_head_dim = v_caches.size(d_dim)
-    if quant_policy == QuantPolicy.INT4:
+    if kv_cache_dtype == KVCacheDType.INT4:
         k_head_dim *= 2
         v_head_dim *= 2
-    elif quant_policy == QuantPolicy.TURBO_QUANT:
+    elif kv_cache_dtype == KVCacheDType.TURBO_QUANT:
         k_head_dim *= 2   # K packed int4 => raw dim *2
         v_head_dim *= 4   # V packed int2 => raw dim *4
     BLOCK_DK = triton.next_power_of_2(k_head_dim)
@@ -449,7 +449,7 @@ def flatten_kv_cache(k_caches: Tensor,
     shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
     if flatten_kv_layout == 'hsd':
         k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
-        if quant_policy == QuantPolicy.NONE and shared_kv:
+        if kv_cache_dtype == KVCacheDType.AUTO and shared_kv:
             v_states = k_states[..., :v_head_dim]
             v_head_dim = 0
         else:
@@ -460,7 +460,7 @@ def flatten_kv_cache(k_caches: Tensor,
         stride_vos = v_states.stride(1)
     elif flatten_kv_layout == 'shd':
         k_states = k_caches.new_empty(out_size, num_heads, k_head_dim, dtype=out_dtype)
-        if quant_policy == QuantPolicy.NONE and shared_kv:
+        if kv_cache_dtype == KVCacheDType.AUTO and shared_kv:
             v_states = k_states[..., :v_head_dim]
             v_head_dim = 0
         else:
@@ -475,7 +475,7 @@ def flatten_kv_cache(k_caches: Tensor,
     # The extra batch zero-fills the padded tail. Current callers pad to the
     # next block plus one guard block, so at most two pages are needed.
     grid = (max(num_blocks, 2), batch_size + 1, num_heads)
-    if quant_policy == QuantPolicy.NONE:
+    if kv_cache_dtype == KVCacheDType.AUTO:
         _flatten_kv_cache[grid](
             k_caches,
             v_caches,
@@ -506,7 +506,7 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DK=BLOCK_DK,
             BLOCK_DV=BLOCK_DV,
         )
-    elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+    elif kv_cache_dtype in (KVCacheDType.FP8, KVCacheDType.FP8_E5M2):
         assert k_scales_zeros is not None, 'FP8 KV cache requires k scale.'
         assert v_scales_zeros is not None, 'FP8 KV cache requires v scale.'
         _flatten_kv_cache_fp8_scalar[grid](
@@ -542,7 +542,7 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DV=BLOCK_DV,
         )
     else:
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             # K = QJL4 => 3bit centroid codebook
             k_codebook, _ = get_lloyd_max_codebook(k_head_dim, bits=3, device=k_caches.device)
             # V = TurboQuant MSE int2 => 2bit centroid codebook
@@ -585,7 +585,7 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vos=stride_vos,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
-            quant_policy=quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
             OUT_SIZE=out_size,
             HEAD_DIM_K=k_head_dim,
             HEAD_DIM_V=v_head_dim,

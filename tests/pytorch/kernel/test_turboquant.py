@@ -1,7 +1,7 @@
-"""Tests for TurboQuant (quant_policy=QuantPolicy.TURBO_QUANT).
+"""Tests for TurboQuant (kv_cache_dtype=KVCacheDType.TURBO_QUANT).
 
 This module contains kernel-level tests for TurboQuant MSE quantization,
-which is used by quant_policy=QuantPolicy.TURBO_QUANT (K=QJL4, V=2bit mixed precision).
+which is used by kv_cache_dtype=KVCacheDType.TURBO_QUANT (K=QJL4, V=2bit mixed precision).
 
 TurboQuant is a quantization method that:
 - Uses Lloyd-Max algorithm for optimal quantization
@@ -34,7 +34,7 @@ from .turboquant_utils import (
 class TestTurboQuantMSE:
     """Verify TurboQuant MSE quantization-dequantization correctness.
 
-    These tests verify the core TurboQuant MSE algorithm used by quant_policy=QuantPolicy.TURBO_QUANT.
+    These tests verify the core TurboQuant MSE algorithm used by kv_cache_dtype=KVCacheDType.TURBO_QUANT.
     """
 
     @pytest.fixture

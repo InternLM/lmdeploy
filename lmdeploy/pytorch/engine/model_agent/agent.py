@@ -171,7 +171,7 @@ def model_forward(
             cache_config=cache_engine.cache_config,
             kv_caches=cache_engine.gpu_cache,
             state_caches=state_cache_engine.state_caches,
-            kv_quant_policy=cache_engine.cache_config.quant_policy,
+            kv_cache_dtype=cache_engine.cache_config.kv_cache_dtype,
         )
 
         with ctx_mgr.context(context):

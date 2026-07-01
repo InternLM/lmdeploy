@@ -120,7 +120,7 @@ class SubCliServe:
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
-        quant_policy = ArgumentHelper.quant_policy(pt_group)
+        kv_cache_dtype = ArgumentHelper.kv_cache_dtype(pt_group)
         model_format = ArgumentHelper.model_format(pt_group)
         hf_overrides = ArgumentHelper.hf_overrides(pt_group)
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
@@ -146,7 +146,7 @@ class SubCliServe:
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
-        tb_group._group_actions.append(quant_policy)
+        tb_group._group_actions.append(kv_cache_dtype)
         tb_group._group_actions.append(model_format)
         tb_group._group_actions.append(num_nodes_act)
         tb_group._group_actions.append(node_rank_act)
@@ -239,7 +239,7 @@ class SubCliServe:
                 prefix_cache_state_budget=args.prefix_cache_state_budget,
                 prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
                 device_type=args.device,
-                quant_policy=args.quant_policy,
+                kv_cache_dtype=args.kv_cache_dtype,
                 eager_mode=args.eager_mode,
                 max_prefill_token_num=args.max_prefill_token_num,
                 cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
@@ -271,7 +271,7 @@ class SubCliServe:
                                                    max_batch_size=max_batch_size,
                                                    session_len=args.session_len,
                                                    model_format=args.model_format,
-                                                   quant_policy=args.quant_policy,
+                                                   kv_cache_dtype=args.kv_cache_dtype,
                                                    rope_scaling_factor=args.rope_scaling_factor,
                                                    cache_max_entry_count=args.cache_max_entry_count,
                                                    cache_block_seq_len=args.cache_block_seq_len,

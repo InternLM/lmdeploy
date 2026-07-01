@@ -1,8 +1,8 @@
-"""Test quant_policy=QuantPolicy.TURBO_QUANT (K=4bit, V=2bit mixed precision)
-for PytorchEngine.
+"""Test kv_cache_dtype=KVCacheDType.TURBO_QUANT (K=4bit, V=2bit mixed
+precision) for PytorchEngine.
 
-This module tests both functional correctness and accuracy of quant_policy=QuantPolicy.TURBO_QUANT against a non-
-quantized (quant_policy=QuantPolicy.NONE) baseline.
+This module tests both functional correctness and accuracy of kv_cache_dtype=KVCacheDType.TURBO_QUANT against a non-
+quantized (kv_cache_dtype=KVCacheDType.AUTO) baseline.
 """
 
 import gc
@@ -11,10 +11,10 @@ import pytest
 import torch
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, pipeline
-from lmdeploy.messages import QuantPolicy, Response
+from lmdeploy.messages import KVCacheDType, Response
 
-# Use smaller model to avoid OOM when running both quant_policy=QuantPolicy.NONE
-# and quant_policy=QuantPolicy.TURBO_QUANT
+# Use smaller model to avoid OOM when running both kv_cache_dtype=KVCacheDType.AUTO
+# and kv_cache_dtype=KVCacheDType.TURBO_QUANT
 MODEL_ID = 'Qwen/Qwen3-8B'
 
 
@@ -42,7 +42,7 @@ def pipe_no_quant(model_id):
     engine_config = PytorchEngineConfig(
         tp=1,
         cache_max_entry_count=0.05,
-        quant_policy=QuantPolicy.NONE,  # No quantization
+        kv_cache_dtype=KVCacheDType.AUTO,  # No quantization
     )
     pipe = pipeline(model_id, backend_config=engine_config, log_level='INFO')
     yield pipe
@@ -56,7 +56,7 @@ def pipe_no_quant(model_id):
 
 @pytest.fixture(scope='class')
 def pipe_quant_42(model_id):
-    """Create pipeline with quant_policy=QuantPolicy.TURBO_QUANT.
+    """Create pipeline with kv_cache_dtype=KVCacheDType.TURBO_QUANT.
 
     This fixture has class scope so large model instances are released before later FP8 accuracy tests allocate their
     own pipelines.
@@ -64,7 +64,7 @@ def pipe_quant_42(model_id):
     engine_config = PytorchEngineConfig(
         tp=1,
         cache_max_entry_count=0.05,
-        quant_policy=QuantPolicy.TURBO_QUANT,  # K=4bit, V=2bit mixed precision
+        kv_cache_dtype=KVCacheDType.TURBO_QUANT,  # K=4bit, V=2bit mixed precision
     )
     pipe = pipeline(model_id, backend_config=engine_config, log_level='INFO')
     yield pipe
@@ -77,11 +77,11 @@ def pipe_quant_42(model_id):
 
 
 # =============================================================================
-# Basic Functional Tests (quant_policy=QuantPolicy.TURBO_QUANT only)
+# Basic Functional Tests (kv_cache_dtype=KVCacheDType.TURBO_QUANT only)
 # =============================================================================
 
-class TestQuantPolicy42Basic:
-    """Basic functional tests for quant_policy=QuantPolicy.TURBO_QUANT.
+class TestKVCacheDType42Basic:
+    """Basic functional tests for kv_cache_dtype=KVCacheDType.TURBO_QUANT.
 
     These tests verify that the quantized model can perform basic inference without errors. They test single prompt,
     batch prompts, and generation config.
@@ -89,11 +89,11 @@ class TestQuantPolicy42Basic:
 
     @pytest.fixture(scope='class')
     def pipe(self):
-        """Create pipeline with quant_policy=QuantPolicy.TURBO_QUANT."""
+        """Create pipeline with kv_cache_dtype=KVCacheDType.TURBO_QUANT."""
         engine_config = PytorchEngineConfig(
             tp=1,
             cache_max_entry_count=0.1,
-            quant_policy=QuantPolicy.TURBO_QUANT,
+            kv_cache_dtype=KVCacheDType.TURBO_QUANT,
         )
         pipe = pipeline(MODEL_ID, backend_config=engine_config, log_level='INFO')
         yield pipe
@@ -105,7 +105,7 @@ class TestQuantPolicy42Basic:
 
     def test_infer_single_prompt(self, pipe):
         """Test single prompt inference with
-        quant_policy=QuantPolicy.TURBO_QUANT."""
+        kv_cache_dtype=KVCacheDType.TURBO_QUANT."""
         prompt = 'Hello, how are you?'
         response = pipe.infer(prompt, max_new_tokens=30)
 
@@ -115,7 +115,8 @@ class TestQuantPolicy42Basic:
         assert len(response.text.strip()) > 0
 
     def test_infer_batch_prompts(self, pipe):
-        """Test batch inference with quant_policy=QuantPolicy.TURBO_QUANT."""
+        """Test batch inference with
+        kv_cache_dtype=KVCacheDType.TURBO_QUANT."""
         prompts = ['What is AI?', 'Hello!']
         responses = pipe.infer(prompts, max_new_tokens=20)
 
@@ -136,15 +137,15 @@ class TestQuantPolicy42Basic:
 
 
 # =============================================================================
-# Accuracy Tests (quant_policy=QuantPolicy.NONE vs quant_policy=QuantPolicy.TURBO_QUANT)
+# Accuracy Tests (kv_cache_dtype=KVCacheDType.AUTO vs kv_cache_dtype=KVCacheDType.TURBO_QUANT)
 # =============================================================================
 
-class TestQuantPolicy42Accuracy:
-    """Accuracy tests comparing quant_policy=QuantPolicy.TURBO_QUANT against
+class TestKVCacheDType42Accuracy:
+    """Accuracy tests comparing kv_cache_dtype=KVCacheDType.TURBO_QUANT against
     non-quantized baseline.
 
-    These tests verify the numerical accuracy/precision of quant_policy=QuantPolicy.TURBO_QUANT
-    (K=4bit, V=2bit mixed precision) by comparing against quant_policy=QuantPolicy.NONE.
+    These tests verify the numerical accuracy/precision of kv_cache_dtype=KVCacheDType.TURBO_QUANT
+    (K=4bit, V=2bit mixed precision) by comparing against kv_cache_dtype=KVCacheDType.AUTO.
 
     Error thresholds are relaxed due to aggressive quantization:
     - MAE < 0.1 on logits
@@ -296,22 +297,22 @@ class TestQuantPolicy42Accuracy:
 
 
 # =============================================================================
-# FP8 Tests (QuantPolicy.FP8)
+# FP8 Tests (KVCacheDType.FP8)
 # =============================================================================
 
 
 @pytest.mark.skipif(_e4m3_fp8_unsupported_on_pre_sm90(),
                     reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
-class TestQuantPolicyFP8Basic:
-    """Basic functional tests for quant_policy=QuantPolicy.FP8."""
+class TestKVCacheDTypeFP8Basic:
+    """Basic functional tests for kv_cache_dtype=KVCacheDType.FP8."""
 
     @pytest.fixture(scope='class')
     def pipe(self):
-        """Create pipeline with quant_policy=QuantPolicy.FP8."""
+        """Create pipeline with kv_cache_dtype=KVCacheDType.FP8."""
         engine_config = PytorchEngineConfig(
             tp=1,
             cache_max_entry_count=0.1,
-            quant_policy=QuantPolicy.FP8,
+            kv_cache_dtype=KVCacheDType.FP8,
         )
         pipe = pipeline(MODEL_ID, backend_config=engine_config, log_level='INFO')
         yield pipe
@@ -322,7 +323,8 @@ class TestQuantPolicyFP8Basic:
             torch.cuda.empty_cache()
 
     def test_infer_single_prompt(self, pipe):
-        """Test single prompt inference with quant_policy=QuantPolicy.FP8."""
+        """Test single prompt inference with
+        kv_cache_dtype=KVCacheDType.FP8."""
         prompt = 'Hello, how are you?'
         response = pipe.infer(prompt, max_new_tokens=30)
 
@@ -332,7 +334,7 @@ class TestQuantPolicyFP8Basic:
         assert len(response.text.strip()) > 0
 
     def test_infer_batch_prompts(self, pipe):
-        """Test batch inference with quant_policy=QuantPolicy.FP8."""
+        """Test batch inference with kv_cache_dtype=KVCacheDType.FP8."""
         prompts = ['What is AI?', 'Hello!']
         responses = pipe.infer(prompts, max_new_tokens=20)
 
@@ -354,15 +356,15 @@ class TestQuantPolicyFP8Basic:
 
 @pytest.mark.skipif(_e4m3_fp8_unsupported_on_pre_sm90(),
                     reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
-class TestQuantPolicyFP8Accuracy:
-    """Accuracy tests comparing quant_policy=QuantPolicy.FP8 against non-
+class TestKVCacheDTypeFP8Accuracy:
+    """Accuracy tests comparing kv_cache_dtype=KVCacheDType.FP8 against non-
     quantized baseline.
 
     FP8 (float8_e4m3fn, per-tensor scale) is more precise than 4-bit TurboQuant, so
     thresholds are tighter: MAE < 0.05, Max AE < 0.3.
 
     Uses class-scoped fixtures to avoid holding three models in GPU memory simultaneously
-    when running the full test suite alongside TestQuantPolicy42Accuracy.
+    when running the full test suite alongside TestKVCacheDType42Accuracy.
     """
 
     @pytest.fixture(scope='class')
@@ -371,7 +373,7 @@ class TestQuantPolicyFP8Accuracy:
         engine_config = PytorchEngineConfig(
             tp=1,
             cache_max_entry_count=0.05,
-            quant_policy=QuantPolicy.NONE,
+            kv_cache_dtype=KVCacheDType.AUTO,
         )
         pipe = pipeline(MODEL_ID, backend_config=engine_config, log_level='INFO')
         yield pipe
@@ -387,7 +389,7 @@ class TestQuantPolicyFP8Accuracy:
         engine_config = PytorchEngineConfig(
             tp=1,
             cache_max_entry_count=0.05,
-            quant_policy=QuantPolicy.FP8,
+            kv_cache_dtype=KVCacheDType.FP8,
         )
         pipe = pipeline(MODEL_ID, backend_config=engine_config, log_level='INFO')
         yield pipe

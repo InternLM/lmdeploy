@@ -316,11 +316,11 @@ for model in [v for k, v in locals().items() if k.endswith('_w8a8')]:
     model['path'] = model['path'] + '-inner-w8a8'
 
 for model in [v for k, v in locals().items() if k.endswith('_kvint4')]:
-    model['engine_config']['quant_policy'] = 4
+    model['engine_config']['kv_cache_dtype'] = 4
     model['abbr'] = model['abbr'] + '_kvint4'
 
 for model in [v for k, v in locals().items() if k.endswith('_kvint8')]:
-    model['engine_config']['quant_policy'] = 8
+    model['engine_config']['kv_cache_dtype'] = 8
     model['abbr'] = model['abbr'] + '_kvint8'
 
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:

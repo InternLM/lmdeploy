@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
 from lmdeploy.utils import get_logger
 
@@ -24,7 +24,7 @@ class TritonAttentionMetadata(AttentionMetadata):
         q_seqlens: Length of each query sequence [batch_size].
         kv_start_loc: Start location of each KV sequence [batch_size].
         kv_seqlens: Length of each KV sequence [batch_size].
-        quant_policy: Quantization policy (0=none, 4=int4, 8=int8, 16/17=per-tensor fp8).
+        kv_cache_dtype: Quantization policy (0=none, 4=int4, 8=int8, 16/17=per-tensor fp8).
         kv_flatten_size: Total size of flattened KV cache.
         tile_scheduler_metadata: Scheduler metadata for Flash MLA.
         num_splits: Number of splits for Flash MLA.
@@ -40,7 +40,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     q_seqlens: torch.Tensor = None
     kv_start_loc: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
-    quant_policy: QuantPolicy = QuantPolicy.NONE
+    kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO
     kv_flatten_size: int = None
     # flash mla
     tile_scheduler_metadata: torch.Tensor = None
@@ -153,7 +153,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         """Fill kv cache."""
         kv_seqlens = attn_metadata.kv_seqlens
         block_offsets = attn_metadata.block_offsets
-        quant_policy = attn_metadata.quant_policy
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
 
         # fill seqlen args
         fill_seqlens, fill_max_q_seqlen, fill_q_start_loc = self._get_fill_meta(
@@ -175,7 +175,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             block_offsets=block_offsets,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            quant_policy=quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
         )
 
     def _forward_decoding(
@@ -205,7 +205,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             Attention output tensor.
         """
         block_offsets = attn_metadata.block_offsets
-        quant_policy = attn_metadata.quant_policy
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
 
         attn_output = self.paged_attention_fwd(
             query,
@@ -221,7 +221,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             # custom args
             sinks=learnable_sink,
             alibi_slopes=self.alibi_slopes,
-            quant_policy=quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
         )
@@ -257,7 +257,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         kv_start_loc = attn_metadata.kv_start_loc
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
-        quant_policy = attn_metadata.quant_policy
+        kv_cache_dtype = attn_metadata.kv_cache_dtype
 
         # Prepare flattened KV cache
         BLOCK_BS = k_cache.size(1)
@@ -275,13 +275,13 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             out_dtype=query.dtype,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            quant_policy=quant_policy,
+            kv_cache_dtype=kv_cache_dtype,
             flatten_kv_layout=kv_layout,
         )
 
-        # For quant_policy==QuantPolicy.TURBO_QUANT, flattened K/V are in rotated domain.
+        # For kv_cache_dtype==KVCacheDType.TURBO_QUANT, flattened K/V are in rotated domain.
         # Rotate Q to match, and inverse-rotate output afterwards.
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
                 hadamard_rotate,
                 hadamard_rotate_inv,
@@ -308,7 +308,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         )
 
         # Inverse-rotate output back to original domain
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             attn_output = hadamard_rotate_inv(attn_output)
 
         return attn_output
