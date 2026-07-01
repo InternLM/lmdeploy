@@ -343,3 +343,29 @@ class TestWindowBlockManager:
         block_table = block_mgr.get_block_table(msg)
         assert block_table is None or len(block_table) == 2
         block_mgr.free(msg)
+
+    def test_win_alloc_respects_kv_token_limit(self, scheduler, block_mgr, num_gpu_blocks, window_size):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+
+        token_ids = torch.tensor([1] * (window_size * 3))
+        msg = sess.add_sequence(token_ids)
+
+        msg.kv_token_limit = window_size
+        block_mgr.allocate(msg)
+        assert len(block_mgr.get_block_table(msg)) == 2
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+
+        msg.set_step(window_size)
+        msg.kv_token_limit = window_size + block_size
+        block_mgr.allocate(msg)
+        assert len(block_mgr.get_block_table(msg)) == 3
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+
+        msg.set_step(window_size + block_size)
+        msg.kv_token_limit = window_size + block_size * 2
+        assert block_mgr.num_required_blocks(msg) == 1
+        block_mgr.allocate(msg)
+        assert len(block_mgr.get_block_table(msg)) == 3
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+        assert msg.num_ignored_history == block_size

@@ -279,8 +279,8 @@ class TurboMind:
         input."""
         if not multimodal:
             return None
-        if self.engine_config.disable_vision_encoder:
-            logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+        if self.engine_config.language_model_only:
+            logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
             return None
 
         parser = getattr(self.source_model, 'to_turbomind_multimodal', None)

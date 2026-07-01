@@ -1606,6 +1606,8 @@ def serve(model_path: str,
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     VariableInterface.enable_abort_handling = enable_abort_handling
+    from lmdeploy.serve.parsers import validate_parser_names
+    reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:

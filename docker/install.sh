@@ -53,7 +53,7 @@ else
 fi
 
 pip install /wheels/*.whl
-pip install dlblas==0.0.7 dlslime==0.0.2.post1
+pip install dlslime==0.0.2.post1
 
 pip install ninja einops packaging
 
