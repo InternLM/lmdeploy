@@ -687,7 +687,7 @@ class RayExecutor(ExecutorBase):
 
         # Single-node PG below.
         if 'ASCEND_RT_VISIBLE_DEVICES' in os.environ:
-            ray.get([w.set_device.remote(idx) for idx, w in enumerate(self.workers)])
+            ray.get([w.set_device.remote(idx + self.rank_offset) for idx, w in enumerate(self.workers)])
         else:
             local_npu_count = torch.npu.device_count()
             if local_npu_count <= 0:
