@@ -97,8 +97,8 @@ models = [
          retry=3,
          run_cfg=dict(num_gpus=0),
          meta_template=api_meta_template,
-         timeout=10800,
-         max_workers=1024,
+         timeout=40800,
+         max_workers=256,
          pred_postprocessor=dict(type=extract_non_reasoning_content))
 ]
 

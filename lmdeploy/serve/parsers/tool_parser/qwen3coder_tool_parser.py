@@ -173,7 +173,7 @@ class Qwen3CoderToolParser(XmlToolParser):
         func_name, raw_args_dict, _ = self._extract_params(payload)
         if not func_name:
             return None
-        args_dict = self._get_coerced_args(func_name, raw_args_dict)
+        args_dict = self._get_coerced_args(func_name, raw_args_dict, use_cache=False)
         args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
         return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
 

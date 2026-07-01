@@ -5,8 +5,9 @@
 The scheduler is the first owner of prefix-cache side effects.  In prefill,
 ``BlockTrie.match()`` is intentionally called before eviction and allocation so
 the scheduler can account for reused KV/state.  That match is tentative:
-rollback is required if long-context chunking, checkpoint pinning, KV eviction,
-or runtime state allocation means the request cannot safely run now.
+rollback is required if checkpoint pinning, KV eviction, or runtime state
+allocation means the request cannot safely run now.  Long-context suffixes can
+continue chunking from the accepted prefix hit.
 
 Successful prefill scheduling keeps this order:
 
@@ -184,6 +185,8 @@ class Scheduler:
         prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
         prefix_cache.match_start_step = -1
+        prefix_cache.private_recompute_start_step = -1
+        prefix_cache.private_recompute_end_step = -1
         seq.cached_tokens = 0
 
     def _rollback_prefix_match_for_prefill_gate(self, seq: SchedulerSequence, stats_snapshot, reason: str):
@@ -211,10 +214,6 @@ class Scheduler:
 
         stats_snapshot = self.block_trie.snapshot_stats()
         self.block_trie.match(seq)
-        if self._prefix_hit_starts_middle_long_context_chunk(seq):
-            self._rollback_prefix_match_for_prefill_gate(seq, stats_snapshot,
-                                                         'long-context chunk starts after prefix hit')
-            return None
 
         prefix_match = _PrefixMatchForPrefillGate(
             stats_snapshot=stats_snapshot,
@@ -298,14 +297,6 @@ class Scheduler:
             prefix_cache.suppress_match_stats = False
             return
         Scheduler._finalize_prefix_cache_match(seq)
-
-    def _prefix_hit_starts_middle_long_context_chunk(self, seq: SchedulerSequence):
-        """Check whether a prefix hit would start chunking from the middle."""
-        if seq.num_history_ids <= 0:
-            return False
-
-        max_prefill_num = self._long_context_chunk_limit(seq)
-        return seq.num_token_ids > max_prefill_num
 
     def _long_context_chunk_limit(self, seq: SchedulerSequence):
         """Return the token budget for one long-context chunk."""
@@ -670,8 +661,6 @@ class Scheduler:
 
                 if gate_check.prefix_match is None:
                     self.block_trie.match(seq)
-                    if self._prefix_hit_starts_middle_long_context_chunk(seq):
-                        __rollback_prefix_match('long-context chunk starts after prefix hit')
 
                 had_ssm_restore = self.is_ssm and seq.prefix_cache.restore_state >= 0
                 if not self._acquire_ssm_restore_if_needed(seq):

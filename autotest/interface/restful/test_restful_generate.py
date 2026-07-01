@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 import requests
 from transformers import AutoTokenizer
+from utils.config_utils import get_model_path_from_config
 from utils.constant import BACKEND_LIST, DEFAULT_SERVER, RESTFUL_MODEL_LIST
 from utils.toolkit import encode_text, parse_sse_stream
 
@@ -295,7 +296,7 @@ class TestGenerateComprehensive:
 
     def test_input_ids_mode(self, config):
         print(f'\n[Model: {self.model_name}] Running input_ids mode test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
 
         test_cases = [{
             'name': 'simple text',
@@ -438,7 +439,7 @@ class TestGenerateComprehensive:
     @pytest.mark.logprob
     def test_input_ids_with_logprob(self, config):
         print(f'\n[Model: {self.model_name}] Running input_ids with logprob test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
 
         test_cases = [{
             'name': 'basic logprob',
@@ -918,7 +919,7 @@ class TestGenerateComprehensive:
 
     def test_skip_special_tokens(self, config):
         print(f'[Model: {self.model_name}] Running skip_special_tokens test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -1144,7 +1145,7 @@ class TestGenerateComprehensive:
 
     def test_spaces_between_special_tokens(self, config):
         print(f'[Model: {self.model_name}] Running spaces_between_special_tokens test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)

@@ -117,7 +117,6 @@ with set_envs():
 
     # ascend
     ascend_set_rt_visable_devices_by_ray = env_to_bool('ASCEND_SET_RT_VISIBLE_DEVICES_BY_RAY', False)
-    ascend_rank_table_file = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
 
     # dp
     dp_master_addr = os.getenv('LMDEPLOY_DP_MASTER_ADDR', None)
@@ -155,15 +154,22 @@ with set_envs():
     # check env
     enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
 
-    # dlblas
-    # we don't need to read this, it would be passed to ray workers
-    # If Ray is launched from outside, it may fail to access the environment variables.
-    deep_ep_max_tokens_per_rank = env_to_int('DEEPEP_MAX_TOKENS_PER_RANK', 128)
-    os.getenv('DEEPEP_ENABLE_MNNVL', None)
-    os.getenv('DEEPEP_MODE', 'auto')
+    # hccl / ascend - passed to ray workers
+    os.getenv('HCCL_BUFFSIZE', None)
+    os.getenv('HCCL_CONNECT_TIMEOUT', None)
+    os.getenv('HCCL_OP_EXPANSION_MODE', None)
+    os.getenv('HCCL_IF_IP', None)
 
     # deepep
+    os.getenv('DEEPEP_ENABLE_MNNVL', None)
+    os.getenv('DEEPEP_MODE', 'auto')
     deep_ep_buffer_num_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', 20)
+
+    # eplb
+    eplb_num_groups = env_to_int('LMDEPLOY_EPLB_NUM_GROUPS', 4)
+    eplb_experts_statistic_file = os.getenv('LMDEPLOY_EPLB_EXPERTS_STATISTIC_FILE', None)
+    eplb_ranks_per_node = env_to_int('LMDEPLOY_EPLB_RANKS_PER_NODE', 8)
+    eplb_num_redundant_experts = env_to_int('LMDEPLOY_EPLB_NUM_REDUNDANT_EXPERTS', 32)
 
     # deepgemm
     os.getenv('DG_JIT_DEBUG', '0')
