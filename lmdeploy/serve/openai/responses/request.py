@@ -9,7 +9,7 @@ from typing import Any, Literal
 from fastapi.responses import JSONResponse
 
 from lmdeploy.messages import GenerationConfig
-from lmdeploy.serve.core.generation_config import build_generation_config, extract_request_sampling_values
+from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
 from lmdeploy.utils import get_logger
@@ -270,11 +270,10 @@ def to_generation_config(
     default_gen_config: dict | None = None,
 ) -> GenerationConfig:
     stop_words = [request.stop] if isinstance(request.stop, str) else request.stop
-    request_values = extract_request_sampling_values(request)
     return build_generation_config(
-        request_values,
+        request,
         default_gen_config or {},
-        max_completion_tokens=request.max_output_tokens,
+        max_new_tokens=request.max_output_tokens,
         stop_words=stop_words,
         ignore_eos=request.ignore_eos,
         skip_special_tokens=request.skip_special_tokens,

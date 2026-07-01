@@ -9,7 +9,7 @@ from typing import Any
 import shortuuid
 
 from lmdeploy.messages import GenerationConfig
-from lmdeploy.serve.core.generation_config import build_generation_config, extract_request_sampling_values
+from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 
 from .protocol import (
@@ -347,11 +347,10 @@ def to_generation_config(
     default_gen_config: dict | None = None,
 ) -> GenerationConfig:
     """Map Anthropic messages request to LMDeploy generation config."""
-    request_values = extract_request_sampling_values(request)
     return build_generation_config(
-        request_values,
+        request,
         default_gen_config or {},
-        max_tokens=request.max_tokens,
+        max_new_tokens=request.max_tokens,
         stop_words=request.stop_sequences,
         include_stop_str_in_output=request.include_stop_str_in_output or False,
         skip_special_tokens=True,

@@ -1,11 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import TYPE_CHECKING
 
-from lmdeploy.serve.core.generation_config import (
-    PROTOCOL_FALLBACKS,
-    extract_request_sampling_values,
-    merge_sampling_params,
-)
+from lmdeploy.serve.core.generation_config import build_generation_config
 
 from .protocol import ChatCompletionRequest
 
@@ -14,11 +10,12 @@ if TYPE_CHECKING:
 
 
 def _effective_sampling(request: ChatCompletionRequest, server_context: 'VariableInterface') -> dict:
-    return merge_sampling_params(
-        extract_request_sampling_values(request),
-        server_context.default_gen_config,
-        PROTOCOL_FALLBACKS,
-    )
+    gen = build_generation_config(request, server_context.default_gen_config)
+    return {
+        'temperature': gen.temperature,
+        'top_p': gen.top_p,
+        'top_k': gen.top_k,
+    }
 
 
 def check_request(request: ChatCompletionRequest, server_context: 'VariableInterface') -> str:

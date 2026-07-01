@@ -50,7 +50,6 @@ from lmdeploy.serve.anthropic import create_anthropic_router
 from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
 from lmdeploy.serve.core.generation_config import (
     build_generation_config,
-    extract_request_sampling_values,
     resolve_default_gen_config,
 )
 from lmdeploy.serve.openai.protocol import (
@@ -156,16 +155,13 @@ class VariableInterface:
 
 def _build_serving_generation_config(request, **extra_kwargs) -> GenerationConfig:
     """Build ``GenerationConfig`` with server and request sampling merge."""
-    request_values = extract_request_sampling_values(request)
-    max_completion_tokens = getattr(request, 'max_completion_tokens', None)
-    max_tokens = getattr(request, 'max_tokens', None)
-    if max_completion_tokens is None and hasattr(request, 'max_output_tokens'):
-        max_completion_tokens = getattr(request, 'max_output_tokens', None)
+    max_new_tokens = getattr(request, 'max_completion_tokens', None)
+    if max_new_tokens is None:
+        max_new_tokens = getattr(request, 'max_tokens', None)
     return build_generation_config(
-        request_values,
+        request,
         VariableInterface.default_gen_config,
-        max_completion_tokens=max_completion_tokens,
-        max_tokens=max_tokens,
+        max_new_tokens=max_new_tokens,
         **extra_kwargs,
     )
 

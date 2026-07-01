@@ -4,29 +4,13 @@ helpers."""
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
-
-PROTOCOL_FALLBACKS: dict[str, Any] = {
-    'temperature': 0.7,
-    'top_p': 1.0,
-    'top_k': 40,
-    'repetition_penalty': 1.0,
-    'min_p': 0.0,
-    'do_sample': True,
-}
-
-REQUEST_SAMPLING_FIELDS = (
-    'temperature',
-    'top_p',
-    'top_k',
-    'min_p',
-    'repetition_penalty',
-)
 
 
 def _load_hf_generation_config(path: str, trust_remote_code: bool) -> dict[str, Any]:
@@ -66,55 +50,45 @@ def resolve_default_gen_config(
 def merge_sampling_params(
     request_values: dict[str, Any],
     default_gen_config: dict[str, Any],
-    fallbacks: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Merge sampling params with request > default_gen_config > protocol
-    fallback priority."""
-    fallbacks = fallbacks or PROTOCOL_FALLBACKS
+    """Merge sampling params with request > default_gen_config priority."""
     merged: dict[str, Any] = {}
-    all_keys = set(fallbacks) | set(default_gen_config) | set(request_values)
-    for key in all_keys:
+    for key in set(default_gen_config) | set(request_values):
         if key in request_values:
             merged[key] = request_values[key]
-        elif key in default_gen_config:
+        else:
             merged[key] = default_gen_config[key]
-        elif key in fallbacks:
-            merged[key] = fallbacks[key]
     return merged
 
 
 def extract_request_sampling_values(request: Any) -> dict[str, Any]:
-    """Extract explicitly provided sampling fields from a request object."""
+    """Extract non-None GenerationConfig fields present on the request."""
     values: dict[str, Any] = {}
-    for field in REQUEST_SAMPLING_FIELDS:
-        if not hasattr(request, field):
+    for field in dataclasses.fields(GenerationConfig):
+        if not hasattr(request, field.name):
             continue
-        value = getattr(request, field)
+        value = getattr(request, field.name)
         if value is not None:
-            values[field] = value
+            values[field.name] = value
     return values
 
 
 def build_generation_config(
-    request_values: dict[str, Any],
+    request: Any,
     default_gen_config: dict[str, Any],
     *,
-    max_completion_tokens: int | None = None,
-    max_tokens: int | None = None,
-    fallbacks: dict[str, Any] | None = None,
+    max_new_tokens: int | None = None,
     **extra_kwargs: Any,
 ) -> GenerationConfig:
     """Build ``GenerationConfig`` from merged sampling defaults and request
     values."""
-    merged = merge_sampling_params(request_values, default_gen_config, fallbacks)
-    max_new_tokens = max_completion_tokens if max_completion_tokens is not None else max_tokens
+    request_values = extract_request_sampling_values(request)
+    merged = merge_sampling_params(request_values, default_gen_config)
+    merged.pop('max_new_tokens', None)
+    merged.pop('do_sample', None)
     return GenerationConfig(
         max_new_tokens=max_new_tokens,
-        do_sample=merged.get('do_sample', PROTOCOL_FALLBACKS['do_sample']),
-        top_k=merged['top_k'],
-        top_p=merged['top_p'],
-        temperature=merged['temperature'],
-        repetition_penalty=merged['repetition_penalty'],
-        min_p=merged['min_p'],
+        do_sample=True,
+        **merged,
         **extra_kwargs,
     )
