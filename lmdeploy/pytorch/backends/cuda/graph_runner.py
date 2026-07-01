@@ -320,6 +320,7 @@ class CUDAGraphRunner(GraphRunner):
 
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
+        super().reset()
         self._runner_map.clear()
         if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer

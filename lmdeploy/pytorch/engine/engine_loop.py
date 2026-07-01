@@ -478,6 +478,7 @@ class EngineLoop:
                 # stale after the drain point.
                 forward_inputs = None
                 next_running = None
+                self.inputs_maker.clear_for_sleep()
                 # Acknowledge that no new forward input will be scheduled until
                 # wakeup resumes this loop.
                 self._main_sleep_drain_event.set()

@@ -403,6 +403,7 @@ class BaseModelAgent:
             if dp > 1:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
+                inputs.dp_meta.dp_is_decoding = False
             logger.debug('Warmup prefill start.')
             self._forward_impl(inputs)
             torch.cuda.synchronize()
@@ -423,6 +424,7 @@ class BaseModelAgent:
                 if dp > 1:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)
+                    inputs.dp_meta.dp_is_decoding = True
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
@@ -1146,6 +1148,8 @@ class BaseModelAgent:
     def reset_graph_runner(self):
         """Reset graph runner to prevent tp hanging."""
         with self.all_context():
+            self._prev_chunk_output = None
+            self._prev_chunk_last_logit = None
             if hasattr(self.patched_model, 'reset'):
                 self.patched_model.reset()
 

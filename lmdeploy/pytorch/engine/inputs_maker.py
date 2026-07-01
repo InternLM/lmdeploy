@@ -285,6 +285,10 @@ class InputsMakerAsync:
         # long context chunker
         self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
 
+    def clear_for_sleep(self):
+        """Clear transient scheduling state before engine sleep."""
+        self.long_context_chunker.clear()
+
     def _init_do_prefill(self, config: InputsMakerConfig):
         if config.role == EngineRole.Prefill:
             self.do_prefill = self.do_prefill_pnode
