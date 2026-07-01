@@ -16,6 +16,18 @@ from lmdeploy.vl.media.video import VideoMediaIO
 
 logger = get_logger('lmdeploy')
 
+MULTIMODAL_TYPES = (
+    'image_url',
+    'image_data',
+    'image',
+    'video_url',
+    'video',
+    'audio_url',
+    'audio',
+    'time_series_url',
+    'time_series',
+)
+
 
 class MultimodalProcessor:
     """Processor for handling prompt preprocessing, message content merging,
@@ -329,16 +341,22 @@ class MultimodalProcessor:
             messages['content'].append({'type': 'text', 'text': prompt})
         return messages
 
-    def _has_multimodal_input(self, messages: list[dict]) -> bool:
+    @staticmethod
+    def _has_multimodal_input(messages: Any) -> bool:
         """Check if messages contain multimodal input such as images, videos,
         audios, or time series."""
-        multimodal_types = [
-            'image_url', 'image_data', 'image', 'video_url', 'video', 'audio_url', 'audio', 'time_series_url',
-            'time_series'
-        ]
-        return any(
-            isinstance(message.get('content'), list) and any(
-                item.get('type') in multimodal_types for item in message['content']) for message in messages)
+        if not isinstance(messages, list):
+            return False
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get('content')
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES:
+                    return True
+        return False
 
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],
