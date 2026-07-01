@@ -41,7 +41,8 @@ def tokenizer():
 
 @pytest.fixture(scope='module')
 def tokenizer_info(tokenizer):
-    return xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=tokenizer.vocab_size)
+    # Use len(tokenizer) to match GuidedDecodingManager's vocab_size expansion
+    return xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=len(tokenizer))
 
 
 @pytest.fixture(scope='module')
@@ -51,17 +52,18 @@ def compiler(tokenizer_info):
 
 @pytest.fixture(scope='module')
 def guided_manager(tokenizer):
-    return GuidedDecodingManager(tokenizer, vocab_size=tokenizer.vocab_size)
+    # GuidedDecodingManager will expand vocab_size to len(tokenizer)
+    return GuidedDecodingManager(tokenizer, vocab_size=len(tokenizer))
 
 
 def _json_matcher(compiler, schema):
     compiled = compiler.compile_json_schema(schema)
-    return xgr.GrammarMatcher(compiled, terminate_without_stop_token=True)
+    return xgr.GrammarMatcher(compiled)
 
 
 def _regex_matcher(compiler, pattern):
     compiled = compiler.compile_regex(pattern)
-    return xgr.GrammarMatcher(compiled, terminate_without_stop_token=True)
+    return xgr.GrammarMatcher(compiled)
 
 
 def _allowed_ids(bitmask, row=0):
