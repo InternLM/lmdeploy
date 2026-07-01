@@ -186,15 +186,14 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
 })
 
-# interns2preview
-# TODO: zhouxinyu, adapt to interns2
+# interns2-preview
 MODULE_MAP.update({
     'InternS2PreviewForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_preview.InternS2PreviewForConditionalGeneration',
 })
 MODULE_MAP.update({
     'InternS2PreviewForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_preview.InternS2PreviewForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_preview.InternS2PreviewForConditionalGeneration',
 })
 
 MODULE_MAP.update({
