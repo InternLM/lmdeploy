@@ -1198,7 +1198,11 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         }
 
         SetProducers(s, begin, end);
-        LogResume(s);  // emit here so a producer's resume precedes any later consumer's defer log
+
+        if (s.resuming) {
+            // emit here so a producer's resume precedes any later consumer's defer log
+            LogResume(s);
+        }
     }
 
     counter_.tick(23);
@@ -1428,155 +1432,158 @@ namespace {
 
 using turbomind::core::Logger;
 
+constexpr auto kCacheLogLevel = Logger::Level::kWarning;
+
 void LogAccept(const Sequence& s, int bs)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
-        return;
-    }
-    const int   prompt = s.prompt_len, full = prompt / bs, all = (prompt + bs - 1) / bs;
-    const int   matched = s.matched_blocks, M = matched * bs;
-    std::string mtail, clast, ctail;
-    if (matched < (int)s.block_ids.size() && s.block_ids[matched]->fork_from) {
-        const LogicalBlock& y = *s.block_ids[matched]->fork_from;
-        mtail                 = fmt::format(", fork_from@{}", y.offset + y.size);  // matched-side partial reuse
-    }
-    if (all - matched > 0 && prompt % bs) {
-        clast = fmt::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
-    }
-    if (s.prompt_boundary_pos > 0) {
-        const int j = (s.prompt_boundary_pos - 1) / bs;  // block holding B (matches PlanPromptBoundary)
-        if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->fork_to) {
-            const LogicalBlock& ft = *s.block_ids[j]->fork_to;
-            ctail                  = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+    auto msg = [&] {
+        const int   prompt = s.prompt_len, full = prompt / bs, all = (prompt + bs - 1) / bs;
+        const int   matched = s.matched_blocks, M = matched * bs;
+        std::string mtail, clast, ctail;
+        if (matched < (int)s.block_ids.size() && s.block_ids[matched]->fork_from) {
+            const LogicalBlock& y = *s.block_ids[matched]->fork_from;
+            mtail                 = fmt::format(", fork_from@{}", y.offset + y.size);  // matched-side partial reuse
         }
-    }
-    TM_LOG_INFO("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
-                s.req->id,
-                s.req->unique_id,
-                M,
-                matched,
-                mtail,
-                M,
-                prompt,
-                all - matched,
-                clast,
-                ctail);
+        if (all - matched > 0 && prompt % bs) {
+            clast = fmt::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
+        }
+        if (s.prompt_boundary_pos > 0) {
+            const int j = (s.prompt_boundary_pos - 1) / bs;  // block holding B (matches PlanPromptBoundary)
+            if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->fork_to) {
+                const LogicalBlock& ft = *s.block_ids[j]->fork_to;
+                ctail = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+            }
+        }
+        return fmt::format("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
+                           s.req->id,
+                           s.req->unique_id,
+                           M,
+                           matched,
+                           mtail,
+                           M,
+                           prompt,
+                           all - matched,
+                           clast,
+                           ctail);
+    };
+
+    TM_LOG(kCacheLogLevel, msg());
 }
 
 void LogResume(const Sequence& s)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
-        return;
-    }
-    if (!s.resuming) {
-        return;
-    }
-    const int begin = s.history_len + s.inflight_input_len;
-    const int end   = begin + s.input_len;
-    const int total = s.seq_len + s.inflight_new_tokens;
-    const int pct   = total > 0 ? 100 * s.history_len / total : 0;
-    TM_LOG_INFO("req {} (uid {}) resume [0,{}) {} blk ro ({}%) source={} | computed [{},{}) {} tok",
-                s.req->id,
-                s.req->unique_id,
-                s.history_len,
-                s.readonly_block_num,
-                pct,
-                ResumeSourceName(s.resume_source),
-                begin,
-                end,
-                s.input_len);
+    auto msg = [&] {
+        const int begin = s.history_len + s.inflight_input_len;
+        const int end   = begin + s.input_len;
+        const int total = s.seq_len + s.inflight_new_tokens;
+        const int pct   = total > 0 ? 100 * s.history_len / total : 0;
+        return fmt::format("req {} (uid {}) resume [0,{}) {} blk ro ({}%) source={} | computed [{},{}) {} tok",
+                           s.req->id,
+                           s.req->unique_id,
+                           s.history_len,
+                           s.readonly_block_num,
+                           pct,
+                           ResumeSourceName(s.resume_source),
+                           begin,
+                           end,
+                           s.input_len);
+    };
+
+    TM_LOG(kCacheLogLevel, msg());
 }
 
 void LogDeferred(const Sequence& s, int bs, const Scheduler::ProducerConflict& c)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
-        return;
-    }
-    const int begin = s.resume_len + s.inflight_input_len;
-    const int end   = begin + s.input_len;
-    const int b0    = std::max(begin, c.block * bs);
-    const int b1    = std::min(end, (c.block + 1) * bs);
-    TM_LOG_INFO("req {} (uid {}) deferred: tok [{},{}) held by producer uid {}",
-                s.req->id,
-                s.req->unique_id,
-                b0,
-                b1,
-                c.producer);
+    auto msg = [&] {
+        const int begin = s.resume_len + s.inflight_input_len;
+        const int end   = begin + s.input_len;
+        const int b0    = std::max(begin, c.block * bs);
+        const int b1    = std::min(end, (c.block + 1) * bs);
+        return fmt::format("req {} (uid {}) deferred: tok [{},{}) held by producer uid {}",
+                           s.req->id,
+                           s.req->unique_id,
+                           b0,
+                           b1,
+                           c.producer);
+    };
+    TM_LOG(kCacheLogLevel, msg());
 }
 
 void LogPublished(const Sequence& s, int bs, const Scheduler::PublishStat& p)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
-        return;
-    }
     if (!(p.reusable_blocks > 0 || p.forked || p.ckpt)) {
         return;
     }
-    const int   end = s.history_len + s.inflight_input_len + s.input_len;  // forward end this pass
-    std::string body;
-    auto        add = [&](std::string c) { body += body.empty() ? c : ", " + c; };
-    if (p.reusable_blocks > 0) {
-        add(fmt::format("prefix [{},{}) ({} blk)", p.start, p.end, p.reusable_blocks));
-    }
-    if (p.forked) {
-        const int b0 = (end - 1) / bs * bs;
-        add(fmt::format("boundary [{},{}) ({} tok)", b0, end, end - b0));
-    }
-    if (p.ckpt) {
-        add(fmt::format("ckpt@{}", s.last_ckpt_pos));
-    }
-    TM_LOG_INFO("req {} (uid {}) published {}", s.req->id, s.req->unique_id, body);
+    auto msg = [&] {
+        const int   end = s.history_len + s.inflight_input_len + s.input_len;  // forward end this pass
+        std::string body;
+        auto        add = [&](std::string c) { body += body.empty() ? c : ", " + c; };
+        if (p.reusable_blocks > 0) {
+            add(fmt::format("prefix [{},{}) ({} blk)", p.start, p.end, p.reusable_blocks));
+        }
+        if (p.forked) {
+            const int b0 = (end - 1) / bs * bs;
+            add(fmt::format("boundary [{},{}) ({} tok)", b0, end, end - b0));
+        }
+        if (p.ckpt) {
+            add(fmt::format("ckpt@{}", s.last_ckpt_pos));
+        }
+        return fmt::format("req {} (uid {}) published {}", s.req->id, s.req->unique_id, body);
+    };
+    TM_LOG(kCacheLogLevel, msg());
 }
 
 void LogFinalized(const Sequence& s, int bs, const GenStat& g)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
-        return;
-    }
     if (!(g.indexed > 0 || g.terminal_ckpt)) {
         return;
     }  // terminal_ckpt implies indexed > 0
-    std::string tail = (g.last_size < bs) ? fmt::format(", last {}/{}", g.last_size, bs) : "";
-    std::string ckpt =
-        g.terminal_ckpt ? (g.dropped ? fmt::format(", terminal ckpt (dropped {})", g.dropped) : ", terminal ckpt") : "";
-    TM_LOG_INFO("req {} (uid {}) finalized gen [{},{}) ({} blk{}){}",
-                s.req->id,
-                s.req->unique_id,
-                g.first_offset,
-                s.filled_len,
-                g.indexed,
-                tail,
-                ckpt);
+    auto msg = [&] {
+        std::string tail = (g.last_size < bs) ? fmt::format(", last {}/{}", g.last_size, bs) : "";
+        std::string ckpt =
+            g.terminal_ckpt ? (g.dropped ? fmt::format(", terminal ckpt (dropped {})", g.dropped) : ", terminal ckpt") :
+                              "";
+        return fmt::format("req {} (uid {}) finalized gen [{},{}) ({} blk{}){}",
+                           s.req->id,
+                           s.req->unique_id,
+                           g.first_offset,
+                           s.filled_len,
+                           g.indexed,
+                           tail,
+                           ckpt);
+    };
+    TM_LOG(kCacheLogLevel, msg());
 }
 
 void LogCollision(const Sequence& s, CollisionSite site, int begin, int end)
 {
-    if (Logger::Instance().get_level() > Logger::Level::kInfo) {
-        return;
-    }
-    const char* where = "";
-    const char* note  = "";
-    switch (site) {
-        case CollisionSite::kAccept:
-            where = "accept";
-            note  = "";
-            break;
-        case CollisionSite::kPromptBoundary:
-            where = "prompt boundary";
-            note  = " (no fork_to)";
-            break;
-        case CollisionSite::kPublish:
-            where = "publish";
-            note  = ", stop";
-            break;
-    }
-    TM_LOG_INFO("req {} (uid {}) collision at {}: tok [{},{}) → private{}",
-                s.req->id,
-                s.req->unique_id,
-                where,
-                begin,
-                end,
-                note);
+    auto msg = [&] {
+        const char* where = "";
+        const char* note  = "";
+        switch (site) {
+            case CollisionSite::kAccept:
+                where = "accept";
+                note  = "";
+                break;
+            case CollisionSite::kPromptBoundary:
+                where = "prompt boundary";
+                note  = " (no fork_to)";
+                break;
+            case CollisionSite::kPublish:
+                where = "publish";
+                note  = ", stop";
+                break;
+        }
+        return fmt::format("req {} (uid {}) collision at {}: tok [{},{}) → private{}",
+                           s.req->id,
+                           s.req->unique_id,
+                           where,
+                           begin,
+                           end,
+                           note);
+    };
+
+    TM_LOG(kCacheLogLevel, msg());
 }
 
 }  // namespace
