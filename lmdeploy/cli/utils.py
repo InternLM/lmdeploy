@@ -300,21 +300,7 @@ class ArgumentHelper:
             help='The folder path to the generation config. Defaults to "auto", the '
             'generation config will be loaded from model path. If set to "lmdeploy", no '
             'generation config is loaded, lmdeploy defaults will be used. If set to a folder '
-            'path, the generation config will be loaded from the specified folder path. '
-            'If max_new_tokens is specified in generation config, then it sets a '
-            'server-wide limit on the number of output tokens for all requests.')
-
-    @staticmethod
-    def override_generation_config(parser):
-        """Add argument override_generation_config to parser."""
-        return parser.add_argument(
-            '--override-generation-config',
-            type=json.loads,
-            default=None,
-            help='Overrides or sets generation config. e.g. \'{"temperature": 0.5}\'. If '
-            'used with --generation-config auto, the override parameters will be merged '
-            'with the default config from the model. If used with --generation-config '
-            'lmdeploy, only the override parameters are used.')
+            'path, the generation config will be loaded from the specified folder path.')
 
     @staticmethod
     def use_logn_attn(parser):

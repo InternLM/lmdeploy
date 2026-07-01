@@ -117,7 +117,6 @@ class VariableInterface:
     enable_abort_handling: bool = False
     response_parser_cls: type[ResponseParser] | None = None
     server_sampling_defaults: dict = {}
-    override_max_new_tokens: int | None = None
 
     @classmethod
     def create_session(cls, user_session_id: int | None = None) -> Session:
@@ -167,7 +166,6 @@ def _build_serving_generation_config(request, **extra_kwargs) -> GenerationConfi
         VariableInterface.server_sampling_defaults,
         max_completion_tokens=max_completion_tokens,
         max_tokens=max_tokens,
-        override_max_new_tokens=VariableInterface.override_max_new_tokens,
         **extra_kwargs,
     )
 
@@ -1553,7 +1551,6 @@ def serve(model_path: str,
           enable_abort_handling: bool = False,
           speculative_config: SpeculativeConfig | None = None,
           generation_config: str = 'auto',
-          override_generation_config: dict | None = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1616,14 +1613,11 @@ def serve(model_path: str,
     from lmdeploy.serve.parsers import validate_parser_names
     reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
 
-    server_defaults, override_max_new_tokens = resolve_server_sampling_defaults(
+    VariableInterface.server_sampling_defaults = resolve_server_sampling_defaults(
         generation_config,
-        override_generation_config,
         model_path,
         trust_remote_code,
     )
-    VariableInterface.server_sampling_defaults = server_defaults
-    VariableInterface.override_max_new_tokens = override_max_new_tokens
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:

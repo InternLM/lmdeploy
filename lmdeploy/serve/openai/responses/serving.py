@@ -100,7 +100,6 @@ class OpenAIServingResponses:
             gen_config = to_generation_config(
                 request,
                 server_defaults=self.server_context.server_sampling_defaults,
-                override_max_new_tokens=self.server_context.override_max_new_tokens,
             )
         except ValueError as err:
             return error_response(HTTPStatus.BAD_REQUEST, str(err), param='text')

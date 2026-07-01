@@ -177,7 +177,6 @@ def register(router: APIRouter, server_context) -> None:
             gen_config=to_generation_config(
                 request,
                 server_defaults=server_context.server_sampling_defaults,
-                override_max_new_tokens=server_context.override_max_new_tokens,
             ),
             tools=parsed_request.tools,
             stream_response=True,

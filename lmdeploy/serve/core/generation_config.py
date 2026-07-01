@@ -24,10 +24,6 @@ SAMPLING_PARAM_KEYS = (
     'temperature',
     'top_p',
     'top_k',
-    'min_p',
-    'repetition_penalty',
-    'max_new_tokens',
-    'do_sample',
 )
 
 REQUEST_SAMPLING_FIELDS = (
@@ -56,17 +52,10 @@ def extract_sampling_params(config: dict[str, Any]) -> dict[str, Any]:
 
 def resolve_server_sampling_defaults(
     generation_config: str,
-    override: dict[str, Any] | None,
     model_path: str,
     trust_remote_code: bool,
-) -> tuple[dict[str, Any], int | None]:
-    """Resolve server-side default sampling params from CLI flags.
-
-    Returns:
-        A tuple of (sampling_defaults, override_max_new_tokens).
-        ``override_max_new_tokens`` is a server-wide cap/default when set.
-    """
-    override = override or {}
+) -> dict[str, Any]:
+    """Resolve server-side default sampling params from CLI flags."""
     src = generation_config
 
     if src == 'lmdeploy':
@@ -76,25 +65,15 @@ def resolve_server_sampling_defaults(
     else:
         config = _load_hf_generation_config(src, trust_remote_code)
 
-    config.update(override)
     sampling = extract_sampling_params(config)
-
-    override_max_new_tokens = sampling.pop('max_new_tokens', None)
-    if override_max_new_tokens is not None:
-        override_max_new_tokens = int(override_max_new_tokens)
 
     if sampling and src != 'lmdeploy':
         source = "the model's `generation_config.json`" if src == 'auto' else src
         logger.info(
-            'Using default sampling params from %s: %s. '
-            'Use `--generation-config lmdeploy` to disable.',
-            source,
-            sampling,
-        )
-    elif sampling and override:
-        logger.info('Using override generation config sampling params: %s.', sampling)
+            f'Using default sampling params from {source}: {sampling}. '
+            'Use `--generation-config lmdeploy` to disable.')
 
-    return sampling, override_max_new_tokens
+    return sampling
 
 
 def merge_sampling_params(
@@ -129,38 +108,19 @@ def extract_request_sampling_values(request: Any) -> dict[str, Any]:
     return values
 
 
-def resolve_max_new_tokens(
-    max_completion_tokens: int | None,
-    max_tokens: int | None,
-    server_cap: int | None,
-) -> int | None:
-    """Resolve output token limit with optional server-wide cap/default."""
-    request_value = max_completion_tokens if max_completion_tokens is not None else max_tokens
-    if request_value is None:
-        return server_cap
-    if server_cap is not None:
-        return min(request_value, server_cap)
-    return request_value
-
-
 def build_generation_config(
     request_values: dict[str, Any],
     server_defaults: dict[str, Any],
     *,
     max_completion_tokens: int | None = None,
     max_tokens: int | None = None,
-    override_max_new_tokens: int | None = None,
     fallbacks: dict[str, Any] | None = None,
     **extra_kwargs: Any,
 ) -> GenerationConfig:
     """Build ``GenerationConfig`` from merged sampling defaults and request
     values."""
     merged = merge_sampling_params(request_values, server_defaults, fallbacks)
-    max_new_tokens = resolve_max_new_tokens(
-        max_completion_tokens,
-        max_tokens,
-        override_max_new_tokens,
-    )
+    max_new_tokens = max_completion_tokens if max_completion_tokens is not None else max_tokens
     return GenerationConfig(
         max_new_tokens=max_new_tokens,
         do_sample=merged.get('do_sample', PROTOCOL_FALLBACKS['do_sample']),
