@@ -6,7 +6,7 @@ from lmdeploy.serve.core.generation_config import (
     build_generation_config,
     extract_request_sampling_values,
     merge_sampling_params,
-    resolve_server_sampling_defaults,
+    resolve_default_gen_config,
 )
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest
 
@@ -52,20 +52,24 @@ def test_build_generation_config_max_new_tokens_defaults_to_none():
 
 
 @patch('lmdeploy.serve.core.generation_config._load_hf_generation_config')
-def test_resolve_server_sampling_defaults_auto(mock_load):
+def test_resolve_default_gen_config_auto(mock_load):
     mock_load.return_value = {
         'temperature': 0.6,
         'top_p': 0.8,
         'max_new_tokens': 2048,
     }
-    defaults = resolve_server_sampling_defaults('auto', '/fake/model', False)
-    assert defaults == {'temperature': 0.6, 'top_p': 0.8}
+    config = resolve_default_gen_config('auto', '/fake/model', False)
+    assert config == {
+        'temperature': 0.6,
+        'top_p': 0.8,
+        'max_new_tokens': 2048,
+    }
     mock_load.assert_called_once_with('/fake/model', False)
 
 
-def test_resolve_server_sampling_defaults_lmdeploy():
-    defaults = resolve_server_sampling_defaults('lmdeploy', '/fake/model', False)
-    assert defaults == {}
+def test_resolve_default_gen_config_lmdeploy():
+    config = resolve_default_gen_config('lmdeploy', '/fake/model', False)
+    assert config == {}
 
 
 def test_completion_request_sampling_merge():

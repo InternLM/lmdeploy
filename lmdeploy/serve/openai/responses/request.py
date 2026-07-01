@@ -267,13 +267,13 @@ def _response_format_from_text(text: Any) -> dict[str, Any] | None:
 
 def to_generation_config(
     request: ResponsesRequest,
-    server_defaults: dict | None = None,
+    default_gen_config: dict | None = None,
 ) -> GenerationConfig:
     stop_words = [request.stop] if isinstance(request.stop, str) else request.stop
     request_values = extract_request_sampling_values(request)
     return build_generation_config(
         request_values,
-        server_defaults or {},
+        default_gen_config or {},
         max_completion_tokens=request.max_output_tokens,
         stop_words=stop_words,
         ignore_eos=request.ignore_eos,

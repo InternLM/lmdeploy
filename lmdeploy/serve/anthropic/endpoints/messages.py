@@ -176,7 +176,7 @@ def register(router: APIRouter, server_context) -> None:
             session,
             gen_config=to_generation_config(
                 request,
-                server_defaults=server_context.server_sampling_defaults,
+                default_gen_config=server_context.default_gen_config,
             ),
             tools=parsed_request.tools,
             stream_response=True,

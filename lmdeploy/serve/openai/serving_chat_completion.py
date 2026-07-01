@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 def _effective_sampling(request: ChatCompletionRequest, server_context: 'VariableInterface') -> dict:
     return merge_sampling_params(
         extract_request_sampling_values(request),
-        server_context.server_sampling_defaults,
+        server_context.default_gen_config,
         PROTOCOL_FALLBACKS,
     )
 

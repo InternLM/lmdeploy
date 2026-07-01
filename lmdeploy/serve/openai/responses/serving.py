@@ -99,7 +99,7 @@ class OpenAIServingResponses:
         try:
             gen_config = to_generation_config(
                 request,
-                server_defaults=self.server_context.server_sampling_defaults,
+                default_gen_config=self.server_context.default_gen_config,
             )
         except ValueError as err:
             return error_response(HTTPStatus.BAD_REQUEST, str(err), param='text')

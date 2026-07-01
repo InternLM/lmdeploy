@@ -20,12 +20,6 @@ PROTOCOL_FALLBACKS: dict[str, Any] = {
     'do_sample': True,
 }
 
-SAMPLING_PARAM_KEYS = (
-    'temperature',
-    'top_p',
-    'top_k',
-)
-
 REQUEST_SAMPLING_FIELDS = (
     'temperature',
     'top_p',
@@ -45,17 +39,12 @@ def _load_hf_generation_config(path: str, trust_remote_code: bool) -> dict[str, 
         return {}
 
 
-def extract_sampling_params(config: dict[str, Any]) -> dict[str, Any]:
-    """Extract supported sampling parameters from a generation config dict."""
-    return {key: config[key] for key in SAMPLING_PARAM_KEYS if key in config and config[key] is not None}
-
-
-def resolve_server_sampling_defaults(
+def resolve_default_gen_config(
     generation_config: str,
     model_path: str,
     trust_remote_code: bool,
 ) -> dict[str, Any]:
-    """Resolve server-side default sampling params from CLI flags."""
+    """Resolve server-side default generation config from CLI flags."""
     src = generation_config
 
     if src == 'lmdeploy':
@@ -65,32 +54,30 @@ def resolve_server_sampling_defaults(
     else:
         config = _load_hf_generation_config(src, trust_remote_code)
 
-    sampling = extract_sampling_params(config)
-
-    if sampling and src != 'lmdeploy':
+    if config and src != 'lmdeploy':
         source = "the model's `generation_config.json`" if src == 'auto' else src
         logger.info(
-            f'Using default sampling params from {source}: {sampling}. '
+            f'Using default generation config from {source}: {config}. '
             'Use `--generation-config lmdeploy` to disable.')
 
-    return sampling
+    return config
 
 
 def merge_sampling_params(
     request_values: dict[str, Any],
-    server_defaults: dict[str, Any],
+    default_gen_config: dict[str, Any],
     fallbacks: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Merge sampling params with request > server > protocol fallback
-    priority."""
+    """Merge sampling params with request > default_gen_config > protocol
+    fallback priority."""
     fallbacks = fallbacks or PROTOCOL_FALLBACKS
     merged: dict[str, Any] = {}
-    all_keys = set(fallbacks) | set(server_defaults) | set(request_values)
+    all_keys = set(fallbacks) | set(default_gen_config) | set(request_values)
     for key in all_keys:
         if key in request_values:
             merged[key] = request_values[key]
-        elif key in server_defaults:
-            merged[key] = server_defaults[key]
+        elif key in default_gen_config:
+            merged[key] = default_gen_config[key]
         elif key in fallbacks:
             merged[key] = fallbacks[key]
     return merged
@@ -110,7 +97,7 @@ def extract_request_sampling_values(request: Any) -> dict[str, Any]:
 
 def build_generation_config(
     request_values: dict[str, Any],
-    server_defaults: dict[str, Any],
+    default_gen_config: dict[str, Any],
     *,
     max_completion_tokens: int | None = None,
     max_tokens: int | None = None,
@@ -119,7 +106,7 @@ def build_generation_config(
 ) -> GenerationConfig:
     """Build ``GenerationConfig`` from merged sampling defaults and request
     values."""
-    merged = merge_sampling_params(request_values, server_defaults, fallbacks)
+    merged = merge_sampling_params(request_values, default_gen_config, fallbacks)
     max_new_tokens = max_completion_tokens if max_completion_tokens is not None else max_tokens
     return GenerationConfig(
         max_new_tokens=max_new_tokens,

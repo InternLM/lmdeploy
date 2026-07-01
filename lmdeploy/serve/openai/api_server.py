@@ -51,7 +51,7 @@ from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
 from lmdeploy.serve.core.generation_config import (
     build_generation_config,
     extract_request_sampling_values,
-    resolve_server_sampling_defaults,
+    resolve_default_gen_config,
 )
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
@@ -116,7 +116,7 @@ class VariableInterface:
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
     response_parser_cls: type[ResponseParser] | None = None
-    server_sampling_defaults: dict = {}
+    default_gen_config: dict = {}
 
     @classmethod
     def create_session(cls, user_session_id: int | None = None) -> Session:
@@ -163,7 +163,7 @@ def _build_serving_generation_config(request, **extra_kwargs) -> GenerationConfi
         max_completion_tokens = getattr(request, 'max_output_tokens', None)
     return build_generation_config(
         request_values,
-        VariableInterface.server_sampling_defaults,
+        VariableInterface.default_gen_config,
         max_completion_tokens=max_completion_tokens,
         max_tokens=max_tokens,
         **extra_kwargs,
@@ -1613,7 +1613,7 @@ def serve(model_path: str,
     from lmdeploy.serve.parsers import validate_parser_names
     reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
 
-    VariableInterface.server_sampling_defaults = resolve_server_sampling_defaults(
+    VariableInterface.default_gen_config = resolve_default_gen_config(
         generation_config,
         model_path,
         trust_remote_code,

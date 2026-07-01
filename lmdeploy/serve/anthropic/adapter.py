@@ -344,13 +344,13 @@ def to_lmdeploy_messages(request: MessagesRequest | CountTokensRequest) -> list[
 
 def to_generation_config(
     request: MessagesRequest,
-    server_defaults: dict | None = None,
+    default_gen_config: dict | None = None,
 ) -> GenerationConfig:
     """Map Anthropic messages request to LMDeploy generation config."""
     request_values = extract_request_sampling_values(request)
     return build_generation_config(
         request_values,
-        server_defaults or {},
+        default_gen_config or {},
         max_tokens=request.max_tokens,
         stop_words=request.stop_sequences,
         include_stop_str_in_output=request.include_stop_str_in_output or False,
