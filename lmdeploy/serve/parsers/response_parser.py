@@ -24,9 +24,6 @@ logger = get_logger('lmdeploy')
 
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
 
-LEGACY_REASONING_PARSER_NAMES = ('qwen-qwq', 'intern-s1', 'deepseek-r1')
-
-
 def validate_parser_names(
     reasoning_parser_name: str | None = None,
     tool_parser_name: str | None = None,
@@ -34,7 +31,7 @@ def validate_parser_names(
     warn_legacy: bool = True,
 ) -> tuple[str | None, str | None]:
     """Validate parser registry names before expensive engine startup."""
-    from .reasoning_parser import ReasoningParserManager
+    from .reasoning_parser import LEGACY_REASONING_PARSER_NAMES, ReasoningParserManager
     from .tool_parser import ToolParserManager
 
     if reasoning_parser_name in LEGACY_REASONING_PARSER_NAMES:
