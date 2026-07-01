@@ -186,7 +186,7 @@ class MultimodalProcessor:
                                sequence_start: bool,
                                adapter_name: str,
                                tools: list[object] | None = None,
-                               reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                               reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
                                chat_template_kwargs: dict | None = None,
                                media_io_kwargs: dict[str, Any] | None = None,
                                mm_processor_kwargs: dict[str, Any] | None = None,
@@ -346,7 +346,7 @@ class MultimodalProcessor:
                                      sequence_start: bool,
                                      adapter_name: str,
                                      tools: list[object] | None = None,
-                                     reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                                     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
                                      chat_template_kwargs: dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
