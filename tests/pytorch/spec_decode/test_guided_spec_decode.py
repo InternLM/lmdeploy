@@ -47,7 +47,8 @@ _QWEN_MODEL = 'Qwen/Qwen3.5-0.8B'
 def tokenizer_info():
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(_QWEN_MODEL, trust_remote_code=True)
-    return xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=tokenizer.vocab_size)
+    # Use len(tokenizer) to match GuidedDecodingManager's vocab_size expansion
+    return xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=len(tokenizer))
 
 
 @pytest.fixture(scope='module')
@@ -57,7 +58,7 @@ def compiler(tokenizer_info):
 
 def _json_matcher(compiler, schema):
     compiled = compiler.compile_json_schema(schema)
-    return xgr.GrammarMatcher(compiled, terminate_without_stop_token=True)
+    return xgr.GrammarMatcher(compiled)
 
 
 def _allowed_ids(bitmask, row=0):

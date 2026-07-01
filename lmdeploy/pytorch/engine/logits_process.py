@@ -352,12 +352,15 @@ class FusedLogitsProcessor:
             await asyncio.sleep(0)
 
     def _fill_guided_bitmask(self, guided_bitmask: torch.Tensor):
+        guided_bitmask.fill_(-1)
         for i, processor in self.guided_processors.items():
             self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
 
     def _accept_guided_tokens(self, next_token_ids: torch.Tensor):
         cpu_result = next_token_ids.tolist()
         for i, processor in self.guided_processors.items():
+            if self.guided_decoding_manager.is_terminated(processor):
+                continue
             self.guided_decoding_manager.accept_token(processor, cpu_result[i])
 
     async def accept_guided_tokens(self, next_token_ids: torch.Tensor):
@@ -397,6 +400,7 @@ class FusedLogitsProcessor:
         if self.guided_decoding_manager and self.guided_processors:
             if not hasattr(self, 'guided_bitmask'):
                 self.guided_bitmask = self.guided_decoding_manager.allocate_batched_bitmap(len(scores))
+            self.guided_bitmask.fill_(-1)
 
             assert self.guided_bitmask is not None
             guided_bitmask = self.guided_bitmask

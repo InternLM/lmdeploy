@@ -109,6 +109,8 @@ class GuidedSpecHelper:
 
         def _accept():
             for idx, proc in processors.items():
+                if self._mgr.is_terminated(proc):
+                    continue
                 self._mgr.accept_token(proc, cpu_ids[idx].item())
 
         await asyncio.to_thread(_accept)
@@ -144,7 +146,8 @@ class GuidedSpecHelper:
         """
         if not processors or self._mgr is None:
             return
-        forked = {idx: proc.fork() for idx, proc in processors.items()}
+        forked = {idx: proc.fork() for idx, proc in processors.items()
+                  if not self._mgr.is_terminated(proc)}
         cpu_draft = draft_token_ids.cpu()
         batch_size = scores_3d.size(0)
         num_expand = scores_3d.size(1)
@@ -156,7 +159,6 @@ class GuidedSpecHelper:
             self._mgr.apply_batched_bitmap(pos_logits, bitmask)
             scores_3d[:, pos, :] = pos_logits
 
-            # Advance fork using draft tokens for draft positions.
             if pos < num_spec_tokens:
                 await asyncio.to_thread(self._accept_forked_at_pos, forked, cpu_draft, pos)
 
@@ -196,6 +198,8 @@ class GuidedSpecHelper:
 
         def _accept():
             for idx, processor in processors.items():
+                if self._mgr.is_terminated(processor):
+                    continue
                 n_rejected = cpu_num_rejected[idx].item()
                 n_valid_draft = num_spec_tokens - n_rejected
                 for pos in range(n_valid_draft):
@@ -211,9 +215,12 @@ class GuidedSpecHelper:
     # ------------------------------------------------------------------
 
     def _fill_bitmask(self, processors: dict, bitmask: torch.Tensor):
+        bitmask.fill_(-1)
         for idx, proc in processors.items():
             self._mgr.fill_bitmap(proc, bitmask, idx)
 
     def _accept_forked_at_pos(self, forked: dict, cpu_draft: torch.Tensor, pos: int):
         for idx, fork_proc in forked.items():
+            if self._mgr.is_terminated(fork_proc):
+                continue
             self._mgr.accept_token(fork_proc, cpu_draft[idx, pos].item())

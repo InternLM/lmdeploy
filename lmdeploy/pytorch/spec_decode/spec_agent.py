@@ -626,7 +626,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                 sampling_inputs.response_formats if sampling_inputs else None)
             if orig_processors:
                 draft_guided_processors = {idx: proc.fork()
-                                           for idx, proc in orig_processors.items()}
+                                           for idx, proc in orig_processors.items()
+                                           if not self.guided_helper.manager.is_terminated(proc)}
 
             loop_count = self.num_spec_tokens - 1
             draft_token_ids, model_metas, target_hidden_states = await self.proposer.get_outputs(
