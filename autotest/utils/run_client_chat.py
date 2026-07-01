@@ -4,7 +4,12 @@ import time
 from subprocess import PIPE, Popen
 
 import allure
-from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_cuda_prefix_by_workerid,
+    get_model_path_from_config,
+)
 from utils.rule_condition_assert import assert_result
 
 TEMPLATE = 'autotest/template.json'
@@ -32,7 +37,7 @@ def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str =
         model_path = model
 
     else:
-        model_path = os.path.join(config.get('model_path'), model)
+        model_path = get_model_path_from_config(config, model)
 
     chat_config = copy.deepcopy(run_config)
     chat_config['extra_params'] = {
