@@ -20,13 +20,17 @@ TOOL_CALLS_BLOCK_NAME = 'function_calls'
 class DeepSeekV32ToolParser(ToolParser):
     """Tool parser for DeepSeek-V3.2 DSML function-call blocks."""
 
+    dsml_token = dsml_token
+    tool_calls_block_name = TOOL_CALLS_BLOCK_NAME
+    parse_tool_calls_func = staticmethod(parse_tool_calls)
+
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
-        return f'\n\n<{dsml_token}{TOOL_CALLS_BLOCK_NAME}>'
+        return f'\n\n<{cls.dsml_token}{cls.tool_calls_block_name}>'
 
     @classmethod
     def get_tool_close_tag(cls) -> str | None:
-        return f'</{dsml_token}{TOOL_CALLS_BLOCK_NAME}>'
+        return f'</{cls.dsml_token}{cls.tool_calls_block_name}>'
 
     @classmethod
     def get_tool_payload_format(cls) -> str:
@@ -70,7 +74,7 @@ class DeepSeekV32ToolParser(ToolParser):
         wrapped = f'{self.get_tool_open_tag()}\n{payload}\n{self.get_tool_close_tag()}'
         start = len(self.get_tool_open_tag()) - 1
         try:
-            _, stop_token, raw_tool_calls = parse_tool_calls(start, wrapped)
+            _, stop_token, raw_tool_calls = self.parse_tool_calls_func(start, wrapped)
         except Exception:
             return None
         if stop_token != self.get_tool_close_tag() or not raw_tool_calls:
