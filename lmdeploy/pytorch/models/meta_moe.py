@@ -1,15 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from collections.abc import Iterable
+from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import RMSNorm, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -25,27 +27,14 @@ from .qwen3_5 import (
     Qwen3_5TextModel,
 )
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
+from .qwen3_5_moe import Qwen3_5MoeTopKRouter
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
 
 
-class Qwen3_5MoeTopKRouter(nn.Module):
-
-    def __init__(self, config, dtype: torch.dtype | None = None, device: torch.device | None = None):
-        super().__init__()
-        self.top_k = config.num_experts_per_tok
-        self.num_experts = config.num_experts
-        self.hidden_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.zeros(self.num_experts, self.hidden_dim, dtype=dtype, device=device))
-
-    def forward(self, hidden_states):
-        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
-        router_logits = F.linear(hidden_states, self.weight)  # (seq_len, num_experts)
-        router_logits = torch.nn.functional.softmax(router_logits, dtype=torch.float, dim=-1)
-        router_top_value, router_indices = torch.topk(router_logits, self.top_k, dim=-1)  # (seq_len, top_k)
-        router_top_value /= router_top_value.sum(dim=-1, keepdim=True)
-        router_top_value = router_top_value.to(router_logits.dtype)
-        router_scores = router_top_value
-        return router_logits, router_scores, router_indices
+def _enable_moe_shared_tp():
+    """Whether shared experts should use the same TP policy as MoE experts."""
+    dist_config = get_dist_manager().current_context().dist_config
+    return dist_config.moe_tp_mode == TPMode.DEFAULT and dist_config.moe_tp > 1
 
 
 class Qwen3_5MoeSparseMoeBlock(nn.Module):
@@ -84,46 +73,19 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
 
         self.moe_all_reduce = self.experts.build_moe_all_reduce()
 
-        self.shared_expert = Qwen3_5MLP(
-            config=config,
-            intermediate_size=config.shared_expert_intermediate_size,
-            dtype=dtype,
-            device=device,
-            is_tp=self.moe_all_reduce.enable_shared_tp(),
-            all_reduce=False,
-            prefix=add_prefix('shared_expert', prefix),
-        )
-        self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False, device=device, dtype=dtype)
-
-        # get all reduce
-        dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dist_config.dp
-        world_size = dist_ctx.dist_config.moe_tp
-        if dp == 1 and world_size > 1:
-            self._all_reduce = True
-        else:
-            self._all_reduce = False
-
-    def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor | None = None):
+    def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor | None = None,
+                layer_idx: int | None = None):
         """forward."""
-        batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.reshape(-1, hidden_dim)
         router_logits, topk_weights, topk_ids = self.gate(hidden_states)
         if all_routed_experts is not None:
-            all_routed_experts[:, self.layer_idx, :] = topk_ids
+            routed_layer_idx = self.layer_idx if layer_idx is None else layer_idx
+            all_routed_experts[:, routed_layer_idx, :] = topk_ids
         out_states = self.experts(
             hidden_states,
             topk_weights,
             topk_ids,
         )
 
-        shared_states = self.shared_expert(hidden_states)
-        shared_states = self.shared_expert_gate(hidden_states).sigmoid() * shared_states
-
-        out_states += shared_states
-        out_states = out_states.reshape(batch_size, sequence_length, -1)
-
-        out_states = self.moe_all_reduce(out_states)
         return out_states
 
 
@@ -157,12 +119,16 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
                                               device=device,
                                               prefix=add_prefix('self_attn', prefix))
 
-        # build MLP
-        self.mlp = Qwen3_5MoeSparseMoeBlock(config,
-                                            layer_idx,
-                                            dtype=dtype,
-                                            device=device,
-                                            prefix=add_prefix('mlp', prefix))
+        self.shared_expert = Qwen3_5MLP(
+            config=config,
+            intermediate_size=config.shared_expert_intermediate_size,
+            dtype=dtype,
+            device=device,
+            is_tp=_enable_moe_shared_tp(),
+            all_reduce=False,
+            prefix=add_prefix('shared_expert', prefix),
+        )
+        self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False, device=device, dtype=dtype)
 
         # build input layer norm
         self.input_layernorm = RMSNorm(
@@ -176,6 +142,61 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor],
+        residual: torch.Tensor | None,
+        attn_metadata: Any,
+        gated_delta_meta: GatedDeltaMeta,
+        all_routed_experts: torch.Tensor | None = None,
+        meta_mlp: nn.Module = None,
+    ):
+
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        # Self Attention
+        if self.layer_type == 'linear_attention':
+            hidden_states = self.linear_attn(
+                hidden_states=hidden_states,
+                past_key_value=past_key_value,
+                gated_delta_meta=gated_delta_meta,
+            )
+        elif self.layer_type == 'full_attention':
+            hidden_states = self.self_attn(
+                hidden_states=hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                attn_metadata=attn_metadata,
+            )
+
+        # Fully Connected
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.reshape(-1, hidden_dim)
+
+        moe_block = meta_mlp[self.layer_idx % len(meta_mlp)]
+        out_states = moe_block(hidden_states, all_routed_experts=all_routed_experts, layer_idx=self.layer_idx)
+
+        shared_states = self.shared_expert(hidden_states)
+        shared_states = self.shared_expert_gate(hidden_states).sigmoid() * shared_states
+
+        out_states += shared_states
+        hidden_states = out_states.reshape(batch_size, sequence_length, -1)
+
+        moe_all_reduce = getattr(moe_block, 'moe_all_reduce', None)
+        if moe_all_reduce is not None:
+            hidden_states = moe_all_reduce(hidden_states)
+
+        outputs = (hidden_states, residual)
+        return outputs
 
 
 class Qwen3_5MoeTextModel(Qwen3_5TextModel):
@@ -197,7 +218,6 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
                                          device=device)
 
         # build all decode layers
-        # TODO: use full config.num_hidden_layers
         self.layers = nn.ModuleList([
             Qwen3_5MoeDecoderLayer(config,
                                    layer_idx,
@@ -207,11 +227,71 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
             for layer_idx in range(self.config.num_hidden_layers)
         ])
 
+        self.meta_mlp = nn.ModuleList([
+            Qwen3_5MoeSparseMoeBlock(config,
+                                     layer_idx=idx,
+                                     dtype=dtype,
+                                     device=device,
+                                     prefix=add_prefix('mlp', prefix))
+            for idx in range(config.num_meta_moe_blocks)])
+
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        position_ids: torch.LongTensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any,
+        state_ids: torch.Tensor,
+        inputs_embeds: torch.Tensor | None = None,
+        mrope_position_ids: torch.Tensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
+    ):
+        """Rewrite of LlamaModel.forward."""
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+
+        # rotary embedding
+        if mrope_position_ids is None:
+            cos, sin = self.rotary_emb(hidden_states, position_ids)
+        else:
+            mrope_position_ids = mrope_position_ids.unsqueeze(1)
+            cos, sin = self.rotary_emb(hidden_states, mrope_position_ids)
+
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        # make seq_idx
+        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
+                                          attn_metadata)
+
+        # decoding
+        residual = None
+        for idx, decoder_layer in enumerate(self.layers):
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_values[idx],
+                residual=residual,
+                attn_metadata=attn_metadata,
+                gated_delta_meta=gated_delta_meta,
+                all_routed_experts=all_routed_experts,
+                meta_mlp=self.meta_mlp
+            )
+
+        # norm
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
 
 
 class Qwen3_5MoeModel(Qwen3_5Model):
@@ -236,7 +316,8 @@ class Qwen3_5MoeModel(Qwen3_5Model):
         if hasattr(config, 'ts_config'):
             self.time_series = InternS1ProTimeSeriesModel(config.ts_config, dtype=dtype, device=device)
 
-class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
+
+class MetaMoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -328,11 +409,12 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
+        import re
 
         def __skip_layers(name):
             """We might change the number of layers so we can debug the model
             with less gpus."""
-            import re
+
             if '.layers.' not in name:
                 return False
             matches = re.findall(r'\.layers\.(\d+)\.', name)
@@ -360,9 +442,16 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             if __skip_layers(name):
                 continue
 
+            if 'mlp.shared_expert' in name:
+                name = name.replace('mlp.shared_expert', 'shared_expert')
+
+            if 'meta_experts_gate' in name:
+                name = re.sub(r'meta_experts_gate\.(\d+)\.', r'meta_mlp.\1.gate.', name)
+
+            if 'meta_experts' in name:
+                name = re.sub(r'meta_experts\.(\d+)\.', r'meta_mlp.\1.experts.', name)
+
             if 'mtp.' in name:
-                continue
-            if name.startswith(('model.time_series.', 'time_series_forecaster.')):
                 continue
             if 'rotary_emb.inv_freq' in name:
                 continue
@@ -371,36 +460,36 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 
-            if '.experts' in name and '.shared_expert' not in name:
+            if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict)
+                continue
+
+            for (param_name, weight_name, shard_id) in stacked_params_mapping:
+                # include dot to avoid partial match
+                # e.g. in_proj_ba (in linear attn) vs in_proj_bias (in time series)
+                if f'{weight_name}.' not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                load_weight(param, loaded_weight, shard_id=shard_id)
+                break
             else:
-                for (param_name, weight_name, shard_id) in stacked_params_mapping:
-                    # include dot to avoid partial match
-                    # e.g. in_proj_ba (in linear attn) vs in_proj_bias (in time series)
-                    if f'{weight_name}.' not in name:
-                        continue
-                    name = name.replace(weight_name, param_name)
+                if '.qkv.' in name:
+                    # vl attention
                     param = params_dict[name]
-                    load_weight(param, loaded_weight, shard_id=shard_id)
-                    break
+                    q, k, v = param.weight_spliter(loaded_weight)
+                    load_weight(param, q, shard_id='q')
+                    load_weight(param, k, shard_id='k')
+                    load_weight(param, v, shard_id='v')
+                elif name in params_dict:
+                    for rms_norm_key in rms_norm_keys:
+                        if rms_norm_key in name and 'weight' in name:
+                            loaded_weight = loaded_weight + 1
+                            break
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight)
+                elif name in buffers_dict:
+                    param = buffers_dict[name]
+                    load_weight(param, loaded_weight)
                 else:
-                    if '.qkv.' in name:
-                        # vl attention
-                        param = params_dict[name]
-                        q, k, v = param.weight_spliter(loaded_weight)
-                        load_weight(param, q, shard_id='q')
-                        load_weight(param, k, shard_id='k')
-                        load_weight(param, v, shard_id='v')
-                    else:
-                        if name in params_dict:
-                            for rms_norm_key in rms_norm_keys:
-                                if rms_norm_key in name and 'weight' in name:
-                                    loaded_weight = loaded_weight + 1
-                                    break
-                            param = params_dict[name]
-                            load_weight(param, loaded_weight)
-                        elif name in buffers_dict:
-                            param = buffers_dict[name]
-                            load_weight(param, loaded_weight)
-                        else:
-                            raise KeyError(f'Unexpected weight name: {name}')
+                    raise KeyError(f'Unexpected weight name: {name}')

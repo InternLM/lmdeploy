@@ -212,7 +212,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             self.hidden_dim,
             self.num_experts,
             bias=False,
-            dtype=torch.float32,
+            dtype=dtype,
             device=device,
             is_tp=False,
         )

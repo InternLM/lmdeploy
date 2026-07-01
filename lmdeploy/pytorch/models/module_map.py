@@ -196,6 +196,12 @@ MODULE_MAP.update({
     'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
 })
 
+# meta moe
+MODULE_MAP.update({
+    'MetaMoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.meta_moe.MetaMoeForConditionalGeneration',
+})
+
 # qwen3 omni moe thinker
 # only support thinker module, so map to Qwen3OmniMoeThinkerForConditionalGeneration
 MODULE_MAP.update({
