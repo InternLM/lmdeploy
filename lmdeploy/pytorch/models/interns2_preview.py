@@ -24,6 +24,7 @@ from .qwen3_5_moe import (
     Qwen3_5MoeTextModel,
     Qwen3_5MoeVisionModel,
 )
+from .whisper import _create_fake_bias_for_whisper_k_proj
 
 
 class InternS2PreviewModel(Qwen3_5MoeModel):
@@ -592,7 +593,9 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
                     continue
                 yield name, loaded_weight
 
-        super().load_weights(remaining_weights())
+        # InternS2Preview TS encoders use Whisper layers; HF omits k_proj bias.
+        weights = _create_fake_bias_for_whisper_k_proj(remaining_weights(), '.self_attn.k_proj.weight')
+        super().load_weights(weights)
 
 
 class InternS2PreviewInputProcessor(Qwen3_5MoeInputProcessor):
