@@ -290,7 +290,8 @@ class BaseResponseParser(ResponseParser):
 
         self.request = normalize_chat_request(self.request)
 
-        self._accumulated_text = ''
+        self._accumulated_chunks: list[str] = []
+        self._received_any_text = False
 
         self.profile = self._build_profile()
         if (self.reasoning_parser is not None and self.enable_thinking is not False
@@ -325,7 +326,7 @@ class BaseResponseParser(ResponseParser):
         if (
             not delta_text
             and not delta_token_ids
-            and self._accumulated_text == ''
+            and not self._received_any_text
         ):
             return [(DeltaMessage(role='assistant', content=''), False)]
 
@@ -334,7 +335,9 @@ class BaseResponseParser(ResponseParser):
                 return []
             return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
-        self._accumulated_text += delta_text
+        if delta_text:
+            self._accumulated_chunks.append(delta_text)
+            self._received_any_text = True
         self._pending += delta_text
         produced_any = False
         deltas: list[tuple[DeltaMessage, bool]] = []
@@ -370,7 +373,7 @@ class BaseResponseParser(ResponseParser):
         if (
             delta_text == ''
             and not produced_any
-            and self._accumulated_text != ''
+            and self._received_any_text
             and not deltas
         ):
             deltas.append((DeltaMessage(role='assistant', content=''), False))
@@ -616,6 +619,9 @@ class BaseResponseParser(ResponseParser):
         mode = self.MODE_REASONING if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
                                        and self.enable_thinking is not False) else self.MODE_PLAIN
         n = len(text)
+        plain_open_tags = [
+            t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t
+        ]
 
         while pos < n:
             if mode == self.MODE_REASONING:
@@ -642,11 +648,7 @@ class BaseResponseParser(ResponseParser):
                 mode = self.MODE_PLAIN
                 continue
 
-            open_idx, open_tag = self._find_first(
-                text,
-                [t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t],
-                pos,
-            )
+            open_idx, open_tag = self._find_first(text, plain_open_tags, pos)
             if open_idx < 0:
                 content_parts.append(text[pos:])
                 break
@@ -684,8 +686,11 @@ class BaseResponseParser(ResponseParser):
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
         return content if content != '' else None, tool_calls or None, reasoning_content
 
+    def _get_accumulated_text(self) -> str:
+        return ''.join(self._accumulated_chunks)
+
     def validate_complete(self, text: str | None = None) -> bool:
-        text = self._accumulated_text if text is None else text
+        text = self._get_accumulated_text() if text is None else text
 
         if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
                 and self.enable_thinking is not False):
