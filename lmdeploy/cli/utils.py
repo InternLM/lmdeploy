@@ -101,14 +101,6 @@ def get_speculative_config(args):
     return speculative_config
 
 
-def _reject_removed_disable_vision_encoder(args: list[str]) -> None:
-    """Raise if the removed --disable-vision-encoder flag is present."""
-    for arg in args:
-        key = arg.split('=', 1)[0]
-        if key == '--disable-vision-encoder':
-            raise ValueError(f'{key} has been removed. Use --language-model-only instead.')
-
-
 class ArgumentHelper:
     """Helper class to add unified argument."""
 
@@ -909,5 +901,4 @@ class FlexibleArgumentParser(argparse.ArgumentParser):
             processed_args.append(dict_arg)
             processed_args.append(json.dumps(dict_value))
 
-        _reject_removed_disable_vision_encoder(processed_args)
         return super().parse_args(processed_args, namespace)
