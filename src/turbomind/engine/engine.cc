@@ -14,7 +14,6 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
-#include "src/turbomind/engine/cache_boundary_policy.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/request.h"
@@ -227,9 +226,9 @@ Engine::Impl::Impl(EngineParam                  param,
                std::move(cache_registry),
                param_.cache_block_seq_len,
                param_.enable_prefix_caching,
-               param_.cache_prompt_boundary,
-               param_.cache_generation_boundary,
-               CreateCacheBoundaryPolicy(param_),
+               param_.cache_prompt,
+               param_.cache_prompt_boundary_skip,
+               param_.cache_generation,
                is_warm_up_},
     model_{std::move(model)},
     vision_model_{std::move(vision_model)}

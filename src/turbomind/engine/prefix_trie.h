@@ -16,24 +16,32 @@ class PrefixTrie {
 public:
     explicit PrefixTrie(int block_size): block_size_{block_size} {}
 
-    // Exact full lookup: hash, parent, length, and token identity must match.
-    LogicalBlock* Find(const LogicalBlock* parent, const PrefixKey& key, TokenSpan tokens) const
+    // Exact full lookup: hash, parent, length, token identity, and start-
+    // fingerprints must match. `fps` are the start-fingerprints of images whose
+    // start token falls inside this block (empty for ordinary blocks).
+    LogicalBlock* Find(const LogicalBlock* parent, const PrefixKey& key, TokenSpan tokens,
+                       const std::vector<Fingerprint>& fps = {}) const
     {
         if (auto it = index_.find(key); it != index_.end()) {
             LogicalBlock* b = it->second;
             if (b->parent == parent && b->size == tokens.size
-                && std::equal(tokens.begin(), tokens.end(), b->tokens.begin())) {
+                && std::equal(tokens.begin(), tokens.end(), b->tokens.begin())
+                && b->image_fps == fps) {  // vector==; empty Fingerprint never equal
                 return b;
             }
         }
         return nullptr;
     }
 
-    // Longest partial match within one block (never the full block). On a hit,
-    // `key` is replaced with the matched node's key.
-    LogicalBlock* Search(const LogicalBlock* parent, PrefixKey& key, TokenSpan tokens) const
+    // Longest partial match within one block (never the full block). `fps`/`fp_pos`
+    // describe images whose start token falls inside this block: fp_pos[k] is the
+    // block-relative start position of fps[k] (ascending). On a hit, `key` is
+    // replaced with the matched node's key.
+    LogicalBlock* Search(const LogicalBlock* parent, PrefixKey& key, TokenSpan tokens,
+                         const std::vector<Fingerprint>& fps    = {},
+                         const std::vector<int>&         fp_pos = {}) const
     {
-        std::vector<PrefixKey> prefixes;
+        std::vector<PrefixKey> prefixes;  // token-only cumulative keys
         PrefixKey              k = key;
         for (const int* it = tokens.begin(); it != tokens.end(); ++it) {
             k.hash = HashCombine(k.hash, static_cast<size_t>(*it));
@@ -44,8 +52,16 @@ public:
             prefixes.pop_back();  // enforce a partial match
         }
         for (int i = static_cast<int>(prefixes.size()); i > 0; --i) {
-            if (LogicalBlock* b = Find(parent, prefixes[i - 1], TokenSpan{tokens.begin(), i})) {
-                key = prefixes[i - 1];
+            std::vector<Fingerprint> sub;  // images that begin within [0, i)
+            for (size_t j = 0; j < fps.size() && j < fp_pos.size() && fp_pos[j] < i; ++j) {
+                sub.push_back(fps[j]);
+            }
+            PrefixKey ki = prefixes[i - 1];
+            for (const Fingerprint& fp : sub) {
+                ki.hash = HashCombine(ki.hash, fp);
+            }
+            if (LogicalBlock* b = Find(parent, ki, TokenSpan{tokens.begin(), i}, sub)) {
+                key = ki;
                 return b;
             }
         }

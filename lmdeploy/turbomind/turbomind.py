@@ -238,10 +238,10 @@ class TurboMind:
         ec.cache_max_block_count = engine_config.cache_max_entry_count
         ec.cache_chunk_size = engine_config.cache_chunk_size
         ec.enable_prefix_caching = engine_config.enable_prefix_caching
-        ec.linear_prefix_cache_min_interval = engine_config.linear_prefix_cache_min_interval
-        ec.cache_prompt_boundary = engine_config.cache_prompt_boundary
-        ec.cache_generation_boundary = engine_config.cache_generation_boundary
-        ec.cache_boundary_policy = engine_config.cache_boundary_policy
+        ec.cache_checkpoint_interval = engine_config.cache_checkpoint_interval
+        ec.cache_prompt = engine_config.cache_prompt
+        ec.cache_prompt_boundary_skip = engine_config.cache_prompt_boundary_skip
+        ec.cache_generation = engine_config.cache_generation
         ec.enable_metrics = engine_config.enable_metrics
         ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
         ec.max_prefill_iters = engine_config.max_prefill_iters
@@ -583,6 +583,7 @@ class TurboMindInstance:
             8: ResponseType.CANCEL,
             9: ResponseType.PREFIX_CACHE_CONFLICT,
             10: ResponseType.NO_QUEUE,
+            11: ResponseType.OUT_OF_MEMORY,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 

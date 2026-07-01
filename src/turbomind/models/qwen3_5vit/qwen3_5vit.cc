@@ -224,9 +224,11 @@ struct Qwen3_5Vit::Impl {
                     return Request::kInvalid;
                 }
 
+                const Interval interval{item.token_begin, Interval::Size{tokens}};
                 auto mm_item = std::make_shared<MultiModalData>(
-                    MultiModalData{item.data, Interval{item.token_begin, Interval::Size{tokens}}, item.grid_thw});
+                    MultiModalData{item.data, interval, item.grid_thw});
                 s.multimodal_inputs.push_back(mm_item);
+                s.multimodal_spans.push_back(MultiModalSpan{interval, item.fingerprint});
             }
         }
 
@@ -382,10 +384,14 @@ struct Qwen3_5Vit::Impl {
 
         // collect image/video pixel values, grid_thws and embeds_coords
         Buffer_<Sequence*> rc = env.at("requests").buffer();
+        int                mm_prefill_seqs = 0;  // prefill sequences carrying multimodal inputs
+        int                images_total    = 0;  // total images across those sequences
         for (int i = 0; i < rc.size(); ++i) {
             const auto& s = *rc[i];
 
             if ((not s.autoregres) && (not s.multimodal_inputs.empty())) {
+                ++mm_prefill_seqs;
+                images_total += (int)s.multimodal_inputs.size();
                 Interval text{s.history_len + s.inflight_input_len, Interval::Size{s.input_len}};
                 for (const auto& mm : s.multimodal_inputs) {
                     auto o = mm->interval & text;
@@ -407,6 +413,18 @@ struct Qwen3_5Vit::Impl {
             }
 
             input_ids_offsets += s.autoregres ? 1 : s.input_len;
+        }
+
+        // Prefix-cache observability: on a fully-cached image, the window filter
+        // above batches 0 images (ViT skipped). Only logged for multimodal
+        // prefill passes so decode steps stay quiet.
+        if (mm_prefill_seqs > 0) {
+            const int images_batched = (int)pixel_values.size();
+            TM_LOG_INFO("Qwen3.5 ViT setup: mm_seqs={} images_batched={} images_skipped={} patches={}",
+                        mm_prefill_seqs,
+                        images_batched,
+                        images_total - images_batched,
+                        d.batch_size);
         }
 
         // copy pixel values to batch input

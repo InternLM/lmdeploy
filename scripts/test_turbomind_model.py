@@ -15,6 +15,9 @@ Stdout is plain text in short sections, for example:
   session_len: 16384
   max_batch_size: 8
   enable_prefix_caching: 0
+  cache_checkpoint_interval: 4096
+  cache_prompt: 'auto'
+  cache_generation: 'auto'
   prompt_count: 1
   prompt_source: default
   CUDA_LAUNCH_BLOCKING: 1    (only if --debug was passed)
@@ -53,10 +56,9 @@ Usage (from repo root):
       [--max-batch-size N] \\
       [--enable-prefix-caching] \\
       [--max-prefill-token-num N] \\
-      [--linear-prefix-cache-min-interval N] \\
-      [--cache-prompt-boundary] \\
-      [--cache-generation-boundary] \\
-      [--cache-boundary-policy NAME] \\
+      [--cache-checkpoint-interval N] \\
+      [--cache-prompt {all,auto}] \\
+      [--cache-generation {all,auto,none}] \\
       [--debug]
 
 Optional prompts: repeat --prompt for multiple strings, or --prompt-file for a JSON
@@ -136,8 +138,9 @@ DEFAULT_ASYNC = 1
 DEFAULT_SESSION_LEN = 16384
 DEFAULT_MAX_BATCH_SIZE = 8
 DEFAULT_MAX_PREFILL_TOKEN_NUM = 1024
-DEFAULT_LINEAR_PREFIX_CACHE_MIN_INTERVAL = 0
-DEFAULT_CACHE_BOUNDARY_POLICY = ''
+DEFAULT_CACHE_CHECKPOINT_INTERVAL = 4096
+DEFAULT_CACHE_PROMPT = 'auto'
+DEFAULT_CACHE_GENERATION = 'auto'
 DEFAULT_PROMPT = 'Write a short paragraph about the importance of reading books.'
 PROMPT_PREVIEW_LEN = 64
 
@@ -179,13 +182,6 @@ def _positive_int(value: str) -> int:
     return n
 
 
-def _non_negative_int(value: str) -> int:
-    n = int(value)
-    if n < 0:
-        raise argparse.ArgumentTypeError(f'{value!r} must be >= 0')
-    return n
-
-
 def _validate_engine_params(
     *,
     max_new_tokens: int,
@@ -193,7 +189,7 @@ def _validate_engine_params(
     session_len: int,
     max_batch_size: int,
     max_prefill_token_num: int,
-    linear_prefix_cache_min_interval: int,
+    cache_checkpoint_interval: int,
 ) -> None:
     if max_new_tokens < 1:
         raise ValueError(f'max_new_tokens must be >= 1, got {max_new_tokens}')
@@ -205,9 +201,9 @@ def _validate_engine_params(
         raise ValueError(f'max_batch_size must be >= 1, got {max_batch_size}')
     if max_prefill_token_num < 1:
         raise ValueError(f'max_prefill_token_num must be >= 1, got {max_prefill_token_num}')
-    if linear_prefix_cache_min_interval < 0:
+    if cache_checkpoint_interval < 1:
         raise ValueError(
-            f'linear_prefix_cache_min_interval must be >= 0, got {linear_prefix_cache_min_interval}')
+            f'cache_checkpoint_interval must be >= 1, got {cache_checkpoint_interval}')
 
 
 def _format_prompt_preview(text: str) -> str:
@@ -291,10 +287,9 @@ Optional engine params:
     --max-batch-size
     --enable-prefix-caching
     --max-prefill-token-num
-    --linear-prefix-cache-min-interval
-    --cache-prompt-boundary
-    --cache-generation-boundary
-    --cache-boundary-policy
+    --cache-checkpoint-interval
+    --cache-prompt
+    --cache-generation
 Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit 2: usage error.
 """,
     )
@@ -340,30 +335,25 @@ Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit
         help=f'TurbomindEngineConfig.max_prefill_token_num (default: {DEFAULT_MAX_PREFILL_TOKEN_NUM})',
     )
     parser.add_argument(
-        '--linear-prefix-cache-min-interval',
-        type=_non_negative_int,
-        default=DEFAULT_LINEAR_PREFIX_CACHE_MIN_INTERVAL,
-        help=('TurbomindEngineConfig.linear_prefix_cache_min_interval '
-              f'(default: {DEFAULT_LINEAR_PREFIX_CACHE_MIN_INTERVAL})'),
+        '--cache-checkpoint-interval',
+        type=_positive_int,
+        default=DEFAULT_CACHE_CHECKPOINT_INTERVAL,
+        help=('TurbomindEngineConfig.cache_checkpoint_interval '
+              f'(default: {DEFAULT_CACHE_CHECKPOINT_INTERVAL})'),
     )
     parser.add_argument(
-        '--cache-prompt-boundary',
-        action='store_true',
-        help=('Enable prompt-boundary checkpoints '
-              '(TurbomindEngineConfig.cache_prompt_boundary; recurrent/hybrid only)'),
+        '--cache-prompt',
+        choices=['all', 'auto'],
+        default=DEFAULT_CACHE_PROMPT,
+        help=('Prompt-boundary caching mode '
+              f'(TurbomindEngineConfig.cache_prompt; default: {DEFAULT_CACHE_PROMPT!r})'),
     )
     parser.add_argument(
-        '--cache-generation-boundary',
-        action='store_true',
-        help=('Enable generation-boundary checkpoints '
-              '(TurbomindEngineConfig.cache_generation_boundary; recurrent/hybrid only)'),
-    )
-    parser.add_argument(
-        '--cache-boundary-policy',
-        default=DEFAULT_CACHE_BOUNDARY_POLICY,
-        metavar='NAME',
-        help=('Cache-boundary publish policy name (TurbomindEngineConfig.cache_boundary_policy; '
-              'empty = default policy, "auto" = distance-gated)'),
+        '--cache-generation',
+        choices=['all', 'auto', 'none'],
+        default=DEFAULT_CACHE_GENERATION,
+        help=('Generation caching mode '
+              f'(TurbomindEngineConfig.cache_generation; default: {DEFAULT_CACHE_GENERATION!r})'),
     )
     parser.add_argument(
         '--prompt',
@@ -412,10 +402,9 @@ def run_smoke_infer(
     max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
     enable_prefix_caching: bool = False,
     max_prefill_token_num: int = DEFAULT_MAX_PREFILL_TOKEN_NUM,
-    linear_prefix_cache_min_interval: int = DEFAULT_LINEAR_PREFIX_CACHE_MIN_INTERVAL,
-    cache_prompt_boundary: bool = False,
-    cache_generation_boundary: bool = False,
-    cache_boundary_policy: str = DEFAULT_CACHE_BOUNDARY_POLICY,
+    cache_checkpoint_interval: int = DEFAULT_CACHE_CHECKPOINT_INTERVAL,
+    cache_prompt: str = DEFAULT_CACHE_PROMPT,
+    cache_generation: str = DEFAULT_CACHE_GENERATION,
     debug: bool = False,
 ) -> SmokeResult:
     _validate_engine_params(
@@ -424,7 +413,7 @@ def run_smoke_infer(
         session_len=session_len,
         max_batch_size=max_batch_size,
         max_prefill_token_num=max_prefill_token_num,
-        linear_prefix_cache_min_interval=linear_prefix_cache_min_interval,
+        cache_checkpoint_interval=cache_checkpoint_interval,
     )
     _set_hf_cache(cache_dir)
     os.environ['CUDA_VISIBLE_DEVICES'] = gpus
@@ -444,10 +433,9 @@ def run_smoke_infer(
         enable_metrics=False,
         communicator='nccl',
         enable_prefix_caching=enable_prefix_caching,
-        linear_prefix_cache_min_interval=linear_prefix_cache_min_interval,
-        cache_prompt_boundary=cache_prompt_boundary,
-        cache_generation_boundary=cache_generation_boundary,
-        cache_boundary_policy=cache_boundary_policy,
+        cache_checkpoint_interval=cache_checkpoint_interval,
+        cache_prompt=cache_prompt,
+        cache_generation=cache_generation,
     )
     gen_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False)
 
@@ -493,10 +481,9 @@ def print_report(
     max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
     enable_prefix_caching: bool = False,
     max_prefill_token_num: int = DEFAULT_MAX_PREFILL_TOKEN_NUM,
-    linear_prefix_cache_min_interval: int = DEFAULT_LINEAR_PREFIX_CACHE_MIN_INTERVAL,
-    cache_prompt_boundary: bool = False,
-    cache_generation_boundary: bool = False,
-    cache_boundary_policy: str = DEFAULT_CACHE_BOUNDARY_POLICY,
+    cache_checkpoint_interval: int = DEFAULT_CACHE_CHECKPOINT_INTERVAL,
+    cache_prompt: str = DEFAULT_CACHE_PROMPT,
+    cache_generation: str = DEFAULT_CACHE_GENERATION,
     debug: bool = False,
 ) -> None:
     print('--- setup ---')
@@ -508,10 +495,9 @@ def print_report(
     print(f'session_len: {session_len}')
     print(f'max_batch_size: {max_batch_size}')
     print(f'enable_prefix_caching: {1 if enable_prefix_caching else 0}')
-    print(f'linear_prefix_cache_min_interval: {linear_prefix_cache_min_interval}')
-    print(f'cache_prompt_boundary: {1 if cache_prompt_boundary else 0}')
-    print(f'cache_generation_boundary: {1 if cache_generation_boundary else 0}')
-    print(f'cache_boundary_policy: {cache_boundary_policy!r}')
+    print(f'cache_checkpoint_interval: {cache_checkpoint_interval}')
+    print(f'cache_prompt: {cache_prompt!r}')
+    print(f'cache_generation: {cache_generation!r}')
     print(f'max_prefill_token_num: {max_prefill_token_num}')
     print(f'prompt_count: {len(resolved.prompts)}')
     print(f'prompt_source: {resolved.source}')
@@ -554,10 +540,9 @@ def run_smoke_test(
     max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
     enable_prefix_caching: bool = False,
     max_prefill_token_num: int = DEFAULT_MAX_PREFILL_TOKEN_NUM,
-    linear_prefix_cache_min_interval: int = DEFAULT_LINEAR_PREFIX_CACHE_MIN_INTERVAL,
-    cache_prompt_boundary: bool = False,
-    cache_generation_boundary: bool = False,
-    cache_boundary_policy: str = DEFAULT_CACHE_BOUNDARY_POLICY,
+    cache_checkpoint_interval: int = DEFAULT_CACHE_CHECKPOINT_INTERVAL,
+    cache_prompt: str = DEFAULT_CACHE_PROMPT,
+    cache_generation: str = DEFAULT_CACHE_GENERATION,
     debug: bool = False,
     emit_report: bool = True,
 ) -> SmokeResult:
@@ -578,10 +563,9 @@ def run_smoke_test(
         max_batch_size=max_batch_size,
         enable_prefix_caching=enable_prefix_caching,
         max_prefill_token_num=max_prefill_token_num,
-        linear_prefix_cache_min_interval=linear_prefix_cache_min_interval,
-        cache_prompt_boundary=cache_prompt_boundary,
-        cache_generation_boundary=cache_generation_boundary,
-        cache_boundary_policy=cache_boundary_policy,
+        cache_checkpoint_interval=cache_checkpoint_interval,
+        cache_prompt=cache_prompt,
+        cache_generation=cache_generation,
         debug=debug,
     )
     if emit_report:
@@ -597,10 +581,9 @@ def run_smoke_test(
             max_batch_size=max_batch_size,
             enable_prefix_caching=enable_prefix_caching,
             max_prefill_token_num=max_prefill_token_num,
-            linear_prefix_cache_min_interval=linear_prefix_cache_min_interval,
-            cache_prompt_boundary=cache_prompt_boundary,
-            cache_generation_boundary=cache_generation_boundary,
-            cache_boundary_policy=cache_boundary_policy,
+            cache_checkpoint_interval=cache_checkpoint_interval,
+            cache_prompt=cache_prompt,
+            cache_generation=cache_generation,
             debug=debug,
         )
     return result
@@ -622,10 +605,9 @@ def main() -> None:
         max_batch_size=args.max_batch_size,
         enable_prefix_caching=args.enable_prefix_caching,
         max_prefill_token_num=args.max_prefill_token_num,
-        linear_prefix_cache_min_interval=args.linear_prefix_cache_min_interval,
-        cache_prompt_boundary=args.cache_prompt_boundary,
-        cache_generation_boundary=args.cache_generation_boundary,
-        cache_boundary_policy=args.cache_boundary_policy,
+        cache_checkpoint_interval=args.cache_checkpoint_interval,
+        cache_prompt=args.cache_prompt,
+        cache_generation=args.cache_generation,
         debug=args.debug,
         emit_report=True,
     )

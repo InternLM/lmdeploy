@@ -15,6 +15,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/interval.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/block.h"
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/utils/metrics.h"
@@ -140,6 +141,13 @@ struct Sequence;
 
 struct MultiModalData;  // defined in models/vision_model.h
 
+// The prefix-cache projection of one multimodal input: its token span and
+// content identity. The engine never sees MultiModalData / pixels.
+struct MultiModalSpan {
+    Interval    interval;     // absolute token span [begin, end)
+    Fingerprint fingerprint;  // empty until the generation PR
+};
+
 // A scheduler-planned device copy between two cache blocks of the same
 // category. Resolved to pointers on the engine thread at setup and executed
 // as a whole-object copy by the model executor.
@@ -234,10 +242,11 @@ struct Sequence {
     LogicalBlock* publish_target    = nullptr;  // logical block selected for publication this pass
     int           publish_end       = 0;        // sequence position of the pending publication
     int           last_ckpt_pos     = 0;        // end of the last published checkpoint
-    bool prompt_boundary_node = false;  // a reusable prompt-boundary partial node exists; when the boundary policy
-                                        // admits the publish, the producer clamps its forward to prompt_len-1 to
-                                        // populate the node's KV (and publish a checkpoint when the model is recurrent)
-    int prompt_boundary_publish = -1;   // cached CacheBoundaryPolicy decision: -1 undecided, 0 no, 1 yes
+    bool prompt_boundary_node = false;  // a reusable prompt-boundary exists and WILL be published: a partial fork_to
+                                        // node when B is mid-block, else a block-aligned checkpoint clamp target. The
+                                        // producer clamps its forward to prompt_boundary_pos to populate the node's KV
+                                        // (and publish a checkpoint when the model is recurrent). Decided in SetupForks.
+    int  prompt_boundary_pos = 0;       // resolved boundary B = prompt_len - cache_prompt_boundary_skip; 0 = none
 
     std::vector<int> tokens;
 
@@ -245,7 +254,8 @@ struct Sequence {
     std::vector<int>    input_embeds_offsets;
 
     // persistent per-sequence vision features (qwen3.5-vit, W1)
-    std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;
+    std::vector<MultiModalSpan>                  multimodal_spans;   // engine-visible projection; consumed by scheduler
+    std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;  // opaque (unchanged)
 
     bool is_active   = false;
     bool is_canceled = false;

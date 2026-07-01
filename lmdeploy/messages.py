@@ -247,29 +247,29 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
-        linear_prefix_cache_min_interval: minimum token gap between reusable
-            linear-attention prefix checkpoints. The default value 0 means
-            use `cache_block_seq_len`.
-        cache_prompt_boundary: requires `enable_prefix_caching`. When True,
-            publish a reusable partial-block node at `prompt_len - 1` so a
-            duplicate prompt skips prefill (costs one extra prefill forward and a
-            partial block). The node carries the partial block's k/v; a
-            recurrent/hybrid model additionally publishes a recurrent-state
-            checkpoint onto it. Default False.
-        cache_generation_boundary: requires `enable_prefix_caching`. When True,
-            index the terminal partial generated block so the exact generation
-            end is resumable (e.g. multi-turn chat); a recurrent/hybrid model
-            additionally adopts the terminal recurrent frontier checkpoint onto
-            it. Costs a partial block. Default False.
-        cache_boundary_policy: name of the cache-boundary publish policy that
-            decides, at runtime, whether to publish the partial-block prompt-
-            and generation-boundary nodes gated by `cache_prompt_boundary` /
-            `cache_generation_boundary`. Empty or 'default' selects the built-in
-            policy that reproduces those two flags. 'auto' selects a policy that
-            publishes a partial-block boundary node only when its distance from
-            the last published checkpoint is at least
-            `linear_prefix_cache_min_interval / 2`; inert when
-            `linear_prefix_cache_min_interval` is `0`. Default ''.
+        cache_checkpoint_interval: minimum token gap between reusable
+            recurrent-state checkpoints (CacheRegistry checkpoint_min_interval).
+            Must be > 0. Default 4096.
+        cache_prompt: partial prompt-boundary publication mode, one of
+            'all' | 'auto'. 'all' publishes the reusable partial fork_to node at
+            B = prompt_len - cache_prompt_boundary_skip whenever B is mid-block
+            (and arms a recurrent-state checkpoint clamp when B is block-aligned),
+            so a duplicate prompt skips prefill (costs one extra prefill forward +
+            a partial block). 'auto' (default) does that only when the partial
+            block holds image tokens (reusing vision-encoded KV) and is inert for
+            text-only prompts. Requires enable_prefix_caching.
+        cache_prompt_boundary_skip: number of trailing prompt tokens treated as
+            the volatile generation-prompt suffix (e.g. a chat template's
+            `<think>\n`) and excluded from the reusable prompt-boundary node, so
+            the node ends at prompt_len - cache_prompt_boundary_skip. Default 1
+            (exclude only the last token). Applies when cache_prompt is 'all' or
+            'auto'.
+        cache_generation: generated-block caching mode, one of
+            'all' | 'auto' | 'none'. 'all' indexes full generated blocks and the
+            terminal partial block, and adopts the terminal recurrent frontier
+            checkpoint (exact multi-turn resume, costs a partial block). 'auto'
+            (default) indexes full generated blocks only. 'none' indexes no
+            generated blocks at all. Requires enable_prefix_caching.
         quant_policy: default to 0. For TurboMind, when k/v is quantized
             into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
@@ -320,10 +320,10 @@ class TurbomindEngineConfig:
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
-    linear_prefix_cache_min_interval: int = 0
-    cache_prompt_boundary: bool = False
-    cache_generation_boundary: bool = False
-    cache_boundary_policy: str = ''
+    cache_checkpoint_interval: int = 4096
+    cache_prompt: str = 'auto'
+    cache_prompt_boundary_skip: int = 1
+    cache_generation: str = 'auto'
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
@@ -357,8 +357,10 @@ class TurbomindEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
-        assert self.linear_prefix_cache_min_interval >= 0, \
-            'invalid linear_prefix_cache_min_interval'
+        assert self.cache_prompt in ('all', 'auto'), 'invalid cache_prompt'
+        assert self.cache_generation in ('all', 'auto', 'none'), 'invalid cache_generation'
+        assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
+        assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
 
 
@@ -560,6 +562,7 @@ class ResponseType(enum.Enum):
     PREFIX_CACHE_CONFLICT = enum.auto()
     NO_QUEUE = enum.auto()
     NOT_SUPPORTED = enum.auto()
+    OUT_OF_MEMORY = enum.auto()
 
 
 @dataclass

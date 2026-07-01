@@ -19,8 +19,10 @@ transformer blocks and merger linears shard with the model TP group.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
+import struct
 from typing import TYPE_CHECKING, Any
 
 import _turbomind as _tm
@@ -328,6 +330,49 @@ def _split_packed_vision_qkv(qkv):
     return tuple(x.contiguous() for x in qkv.chunk(3, dim=-1))
 
 
+def _image_fingerprint(input_mm: dict) -> bytes:
+    """SHA-256 over the Qwen3.5 ViT-forward inputs plus the mRoPE scalar.
+
+    Post-preprocess (phase A): every input is already on the item dict. Two
+    requests hash equal iff their ViT embeddings and cached LM KV for the image
+    span are identical -- i.e. reuse is correct.
+    """
+    modality = input_mm['modality']
+    is_video = modality in (Modality.VIDEO, Modality.VIDEO.value)
+    pv   = input_mm['pixel_values_videos'] if is_video else input_mm['pixel_values']
+    gthw = input_mm['video_grid_thw']      if is_video else input_mm['image_grid_thw']
+    if isinstance(gthw, torch.Tensor):
+        values = gthw.flatten().tolist()
+    else:
+        values = list(gthw)
+    t, h, w = int(values[0]), int(values[1]), int(values[2])
+    spg = input_mm.get('second_per_grid')          # video only; float | None
+
+    h_obj = hashlib.sha256()
+    h_obj.update(struct.pack('<B', 1 if is_video else 0))
+    h_obj.update(struct.pack('<3i', t, h, w))
+    h_obj.update(struct.pack('<B', 0 if spg is None else 1))
+    if spg is not None:
+        h_obj.update(struct.pack('<d', float(spg)))
+    # Reinterpret the raw storage as uint8 so the digest is dtype-agnostic and
+    # works for bfloat16 (numpy cannot consume bfloat16 directly). Same dtype +
+    # same values -> same bytes; the dtype is constant per engine instance.
+    h_obj.update(pv.contiguous().cpu().view(torch.uint8).numpy().tobytes())
+    return h_obj.digest()                          # 32 bytes; never all-zero
+
+
+def _resolve_fingerprint(input_mm: dict) -> bytes:
+    """Use a pre-placed fingerprint if present (future pre-preprocess generator,
+    or a test forcing empty/dormant); otherwise derive it from the ViT inputs.
+
+    `is not None` (not `or`) so an explicit b'' stays empty rather than falling
+    through to compute -- the empty-fingerprint sentinel must be preserved
+    (empty never compares equal -> image-span reuse stays dormant).
+    """
+    fp = input_mm.get('fingerprint')
+    return fp if fp is not None else _image_fingerprint(input_mm)
+
+
 class Qwen3_5VisionModel(TextModel):
     """Vision sub-tree for Qwen3.5 VLM, rooted at ModelRoot.vision_model.
 
@@ -401,6 +446,7 @@ class Qwen3_5VisionModel(TextModel):
                 raise ValueError(f'Qwen3.5 TurboMind does not support modality {modality!r}')
 
             token_begin, token_end = self._offset_pair(input_mm['offset'])
+            fingerprint = _resolve_fingerprint(input_mm)
             items.append(
                 _tm.multimodal.Qwen3_5VitItem(
                     modality=tm_modality,
@@ -408,6 +454,7 @@ class Qwen3_5VisionModel(TextModel):
                     token_begin=token_begin,
                     token_end=token_end,
                     grid_thw=grid_thw,
+                    fingerprint=fingerprint,
                 ))
 
         return _tm.multimodal.Qwen3_5VitInput(items)

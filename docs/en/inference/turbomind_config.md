@@ -107,23 +107,24 @@ Since k/v block is the smallest granularity for reuse in prefix caching, if the 
 
 ### Partial-block boundary reuse
 
-Two flags control whether partial-block prefix nodes are published at the prompt and generation boundaries. Both require `enable_prefix_caching` and apply to any prefix-cached model: the published node carries the partial block's k/v, and on a recurrent/hybrid model (e.g. those with GatedDeltaNet layers) it additionally carries a recurrent-state checkpoint. Both default to `False`.
+Two mode knobs control whether partial-block prefix nodes are published at the prompt and generation boundaries: `cache_prompt` (`'all'` or `'auto'`, default `'auto'`) and `cache_generation` (`'all'`, `'auto'`, or `'none'`, default `'auto'`). Both require `enable_prefix_caching` and apply to any prefix-cached model: the published node carries the partial block's k/v, and on a recurrent/hybrid model (e.g. those with GatedDeltaNet layers) it additionally carries a recurrent-state checkpoint.
 
-Enable `cache_prompt_boundary` when the same prompt is processed repeatedly (multi-sample decoding, shared/system or vision prompts), and `cache_generation_boundary` when you need to resume from the exact generation end (e.g. multi-turn chat). Leave them off when such reuse is rare, since the partial-block node costs extra VRAM and copy bandwidth that may not pay off when a nearby full-block boundary already exists.
+Set `cache_prompt='all'` when the same prompt is processed repeatedly (multi-sample decoding, shared/system prompts) so a duplicate prompt skips prefill; the default `'auto'` does this only for image-bearing partial prompt blocks (reusing vision-encoded KV) and is inert for text-only prompts. Set `cache_generation='all'` when you need to resume from the exact generation end (e.g. multi-turn chat); `'auto'` (default) caches full generated blocks only; `'none'` caches no generated blocks. The partial-block node costs extra VRAM and copy bandwidth, so prefer `'auto'` unless the reuse pays off.
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(
     enable_prefix_caching=True,
-    cache_prompt_boundary=True,
-    cache_generation_boundary=True,
+    cache_prompt='all',
+    cache_generation='all',
 )
 pipe = pipeline('your-model', backend_config=backend_config)
 ```
 
-- `cache_prompt_boundary`: publish a reusable partial-block node at `prompt_len - 1` so a duplicate prompt (e.g. sampling multiple outputs, or image-token prompts) skips prefill. The node carries the partial block's k/v; a recurrent/hybrid model additionally publishes a recurrent-state checkpoint onto it. Costs one extra prefill forward for the producing request and one partial cache block.
-- `cache_generation_boundary`: index the terminal partial generated block on normal finish so the exact generation end can be resumed (e.g. multi-round conversation); a recurrent/hybrid model additionally adopts the terminal recurrent frontier checkpoint onto it. Costs one partial cache block. Full-block checkpoints at block boundaries are always published regardless of this flag.
+- `cache_prompt`: partial prompt-boundary publication mode, `'all'` or `'auto'` (default `'auto'`). `'all'` publishes a reusable prompt-boundary node at `B = prompt_len - cache_prompt_boundary_skip` whenever `B` is mid-block (and arms a recurrent-state checkpoint clamp when `B` is block-aligned), so a duplicate prompt skips prefill. `'auto'` does that only when the partial block holds image tokens (reusing vision-encoded KV) and is inert for text-only prompts. Costs one extra prefill forward for the producing request and (when `B` is mid-block) one partial cache block.
+- `cache_prompt_boundary_skip`: number of trailing prompt tokens treated as the volatile generation-prompt suffix (e.g. a chat template's `<think>\n`) and excluded from the reusable prompt-boundary node, moving it to `prompt_len - cache_prompt_boundary_skip`. Applies when `cache_prompt` is `'all'` or `'auto'`. Default 1 (exclude only the last token). Increase it for thinking models whose chat template appends a multi-token suffix that the next turn drops from history.
+- `cache_generation`: generated-block caching mode, `'all'`, `'auto'` (default), or `'none'`. `'all'` indexes full generated blocks and the terminal partial block, and adopts the terminal recurrent frontier checkpoint (exact multi-turn resume). `'auto'` indexes full generated blocks only. `'none'` indexes no generated blocks. Costs one partial cache block when `'all'` indexes a terminal partial block. Full-block checkpoints at block boundaries are always published regardless of this setting.
 
 ### kv quantization and inference switch
 

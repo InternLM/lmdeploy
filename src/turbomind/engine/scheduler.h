@@ -8,7 +8,7 @@
 #include "src/turbomind/comm/env.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/engine/block.h"
-#include "src/turbomind/engine/cache_boundary_policy.h"
+#include "src/turbomind/engine/cache_mode.h"
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/prefix_trie.h"
 #include "src/turbomind/engine/request.h"
@@ -91,9 +91,9 @@ public:
               CacheRegistry                        registry,
               int                                  cache_block_seq_len,
               bool                                 enable_prefix_caching,
-              bool                                 cache_prompt_boundary,
-              bool                                 cache_generation_boundary,
-              std::unique_ptr<CacheBoundaryPolicy> boundary_policy,
+              const std::string&                   cache_prompt,
+              int                                  cache_prompt_boundary_skip,
+              const std::string&                   cache_generation,
               const int&                           is_warm_up);
 
     ~Scheduler();
@@ -122,6 +122,10 @@ public:
     {
         return enable_prefix_caching_;
     }
+
+    // True if any multimodal span overlaps [lo, hi). Pure; used by SetupForks to
+    // gate the 'auto' prompt-boundary publish. Public so it can be unit-tested.
+    static bool HasMultimodalOverlap(const Sequence& s, int lo, int hi);
 
     // Match the prompt against the prefix trie; create missing blocks; set up
     // fork_from (partial match) and fork_to (prompt-boundary publish point).
@@ -201,7 +205,6 @@ private:
     LogicalBlock* PlanForkToPopulation(Sequence& s, int end, std::unordered_set<int>& planned);
     void          PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end);
     void          PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end);
-    bool          ResolvePublishPromptBoundary(Sequence& s);
 
     void EnsureBlocks(Sequence& s);
     void ReleaseCacheId(int cache_id);
@@ -219,10 +222,10 @@ private:
 
     void LogProfile(const PerformanceCounter& counter) const;
 
-    bool                                 enable_prefix_caching_{false};
-    bool                                 cache_prompt_boundary_{false};
-    bool                                 cache_generation_boundary_{false};
-    std::unique_ptr<CacheBoundaryPolicy> boundary_policy_;
+    bool      enable_prefix_caching_{false};
+    CacheMode prompt_cache_mode_{CacheMode::kAuto};
+    int       cache_prompt_boundary_skip_{1};
+    CacheMode generation_cache_mode_{CacheMode::kAuto};
     const int&                           is_warm_up_;
     ObjectAllocator&                     alloc_;     // owned by Engine; also used outside the scheduler
     CacheRegistry                        registry_;  // owned: registration is closed before construction

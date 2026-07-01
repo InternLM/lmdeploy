@@ -10,6 +10,8 @@
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/engine/cache_mode.h"
+#include "src/turbomind/engine/prompt_boundary.h"
 #include "src/turbomind/memory/common.h"
 
 namespace turbomind {
@@ -157,6 +159,30 @@ const char* ResumeSourceName(ResumeSource src)
     }
 }
 
+// Collect start-fingerprints of images whose start token lies in [lo, hi), with
+// their block-relative start positions. multimodal_spans is prompt-ordered
+// ascending by interval.begin().
+void CollectStartFps(const Sequence&           s,
+                     int                       lo,
+                     int                       hi,
+                     std::vector<Fingerprint>& fps,
+                     std::vector<int>*         pos = nullptr)
+{
+    for (const auto& sp : s.multimodal_spans) {
+        const int b = sp.interval.begin();
+        if (b < lo) {
+            continue;
+        }
+        if (b >= hi) {
+            break;
+        }
+        fps.push_back(sp.fingerprint);
+        if (pos) {
+            pos->push_back(b - lo);
+        }
+    }
+}
+
 enum class CollisionSite
 {
     kAccept,
@@ -186,6 +212,23 @@ void LogCollision(const Sequence& s, CollisionSite site, int begin, int end);
 
 }  // namespace
 
+// True if any multimodal span overlaps [lo, hi). Interval is the absolute token
+// span [begin, end); a partial prompt block "contains image tokens" when a span
+// intersects it, even one that started in an earlier (full) block and extends
+// in. multimodal_spans is prompt-ordered ascending by interval.begin().
+bool Scheduler::HasMultimodalOverlap(const Sequence& s, int lo, int hi)
+{
+    for (const auto& sp : s.multimodal_spans) {
+        if (sp.interval.begin() >= hi) {
+            break;  // ascending; no later span can overlap
+        }
+        if (sp.interval.end() > lo) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static PerformanceCounter make_perf_counter()
 {
     constexpr int kSchedPerfCounters = 32;
@@ -210,6 +253,9 @@ struct Scheduler::ScheduleState {
 
 bool Scheduler::PrefixEligible(const Sequence& s) const noexcept
 {
+    // Native VLM (multimodal_spans) is eligible: image identity is carried by the
+    // per-image fingerprint folded into the prefix key. The legacy Python-embedding
+    // path (input_embeds) stays excluded -- out of scope for this change.
     return enable_prefix_caching_ && !is_warm_up_ && s.input_embeds.empty() && s.input_embeds_offsets.empty()
            && s.token_ids != nullptr;
 }
@@ -227,14 +273,14 @@ Scheduler::Scheduler(ObjectAllocator&                     alloc,
                      CacheRegistry                        registry,
                      int                                  cache_block_seq_len,
                      bool                                 enable_prefix_caching,
-                     bool                                 cache_prompt_boundary,
-                     bool                                 cache_generation_boundary,
-                     std::unique_ptr<CacheBoundaryPolicy> boundary_policy,
+                     const std::string&                   cache_prompt,
+                     int                                  cache_prompt_boundary_skip,
+                     const std::string&                   cache_generation,
                      const int&                           is_warm_up):
     enable_prefix_caching_{enable_prefix_caching},
-    cache_prompt_boundary_{cache_prompt_boundary},
-    cache_generation_boundary_{cache_generation_boundary},
-    boundary_policy_{std::move(boundary_policy)},
+    prompt_cache_mode_{ParseCacheMode(cache_prompt)},
+    cache_prompt_boundary_skip_{cache_prompt_boundary_skip < 1 ? 1 : cache_prompt_boundary_skip},
+    generation_cache_mode_{ParseCacheMode(cache_generation)},
     is_warm_up_{is_warm_up},
     alloc_{alloc},
     registry_{std::move(registry)},
@@ -285,6 +331,8 @@ struct Scheduler::AcceptState {
     int                 miss{};         // first block index not matched in the trie
     const LogicalBlock* miss_parent{};  // trie position at the miss, for fork_from
     PrefixKey           miss_key{};
+
+    size_t next_fp = 0;  // monotonic cursor into Sequence::multimodal_spans
 };
 
 void Scheduler::Accept(Sequence& s)
@@ -308,15 +356,23 @@ void Scheduler::MatchPrompt(Sequence& s, AcceptState& st)
 
     int i = 0;
     for (; i < full_blocks; ++i) {
-        const auto tokens = TokenSegment(s, i * bs, bs);
-        const auto next   = ExtendPrefixKey(st.key, tokens);
-        if (LogicalBlock* b = trie_.Find(st.parent, next, tokens)) {
+        const int                offset = i * bs;
+        size_t                   cur    = st.next_fp;  // working copy; do not commit on a miss
+        std::vector<Fingerprint> fps;
+        while (cur < s.multimodal_spans.size() && s.multimodal_spans[cur].interval.begin() < offset + bs) {
+            fps.push_back(s.multimodal_spans[cur].fingerprint);
+            ++cur;
+        }
+        const auto tokens = TokenSegment(s, offset, bs);
+        const auto next   = ExtendPrefixKey(st.key, tokens, fps);
+        if (LogicalBlock* b = trie_.Find(st.parent, next, tokens, fps)) {
             s.block_ids.emplace_back(b);  // retain via BlockHandle copy
-            st.parent = b;
-            st.key    = next;
+            st.parent  = b;
+            st.key     = next;
+            st.next_fp = cur;  // commit advance only on a match
         }
         else {
-            break;
+            break;  // cursor still at the miss block's first span
         }
     }
 
@@ -333,18 +389,25 @@ void Scheduler::CreateMissingBlocks(Sequence& s, AcceptState& st)
     const int all_blocks = (prompt + bs - 1) / bs;
 
     for (int i = st.miss; i < all_blocks; ++i) {
-        const int     offset = i * bs;
-        const int     size   = std::min(prompt - offset, bs);
+        const int                offset = i * bs;
+        const int                size   = std::min(prompt - offset, bs);
+        std::vector<Fingerprint> fps;
+        while (st.next_fp < s.multimodal_spans.size()
+               && s.multimodal_spans[st.next_fp].interval.begin() < offset + size) {
+            fps.push_back(s.multimodal_spans[st.next_fp].fingerprint);
+            ++st.next_fp;
+        }
         const auto    tokens = TokenSegment(s, offset, size);
         BlockHandle   h      = logical_.Create(i);
         LogicalBlock& x      = *h;
         x.prefix_id          = cache_.Create(registry_.prefix().object_id(), h.get());
         if (size == bs) {
-            const auto next = ExtendPrefixKey(st.key, tokens);
+            const auto next = ExtendPrefixKey(st.key, tokens, fps);
             x.parent        = st.parent;
             x.key           = next;
             x.size          = size;
             x.tokens.assign(tokens.begin(), tokens.end());
+            x.image_fps     = fps;  // usually empty
             if (!trie_.Insert(x)) {
                 LogCollision(s, CollisionSite::kAccept, offset, offset + size);
                 // Stays un-indexed; treated as a private block from here on.
@@ -352,6 +415,7 @@ void Scheduler::CreateMissingBlocks(Sequence& s, AcceptState& st)
                 x.key    = {};
                 x.size   = 0;
                 x.tokens.clear();
+                x.image_fps.clear();
             }
             else {
                 st.parent = h.get();
@@ -370,62 +434,68 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
 
     const int all_blocks = (prompt + bs - 1) / bs;
 
-    // Partial-block fork edges publish/match a node that ends mid-block. The
-    // node carries the partial block's KV for every prefix-cached model; a
-    // recurrent model additionally publishes a recurrent-state checkpoint onto
-    // it. So both edges are gated on the boundary knobs alone (not
-    // has_checkpoint) — the checkpoint payload attaches itself only when
-    // checkpoint cache ids exist. fork_to (write side) publishes the
-    // prompt-boundary node; fork_from (read side) is worthwhile whenever either
-    // boundary knob can publish a node to match.
-    const bool prompt_boundary = cache_prompt_boundary_;
-    const bool fork_match      = cache_prompt_boundary_ || cache_generation_boundary_;
-
-    // Partial match for the first missed position (fork_from)
-    if (fork_match && st.miss < all_blocks) {
+    // fork_from (read side) is always armed: any prior request may have published
+    // a prompt partial node (cache_prompt in {all, auto}) or a generation
+    // terminal partial ('all'), so the read edge must always try to match.
+    if (st.miss < all_blocks) {
         LogicalBlock& x      = *s.block_ids[st.miss];
         const int     offset = st.miss * bs;
         const int     size   = std::min(prompt - offset, bs);
         PrefixKey     k      = st.miss_key;
-        if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size))) {
+
+        std::vector<Fingerprint> fps;
+        std::vector<int>         fp_pos;
+        CollectStartFps(s, offset, offset + size, fps, &fp_pos);
+
+        if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size), fps, fp_pos)) {
             x.fork_from = BlockHandle{v};  // edge ref
         }
     }
 
-    // Prompt-boundary publish point (fork_to): only when cache_prompt_boundary
-    // is enabled and the last block is partial and was not the location of the
-    // first miss (where Search above already covers the boundary). The node
-    // excludes the last prompt token so it ends at prompt_len-1 (the reusable
-    // position under the seq_len-1 resume cap).
-    if (prompt_boundary) {
-        if (const int last = all_blocks - 1; prompt % bs != 0 && st.miss < last) {
-            const int full_size = prompt - last * bs;  // partial tail length (1..bs-1)
-            const int node_size = full_size - 1;       // exclude the last prompt token
+    // Prompt-boundary publish point (fork_to). B = prompt_len - K (K =
+    // cache_prompt_boundary_skip). 'all' publishes a partial node whenever B is
+    // mid-block and arms the checkpoint clamp when B is block-aligned. 'auto'
+    // publishes the partial node only when its own token range [j*bs, B) overlaps
+    // a multimodal span (including a span that began in an earlier block and
+    // extends into this range), and never arms the block-aligned clamp.
+    const auto plan = PlanPromptBoundary(prompt, bs, cache_prompt_boundary_skip_, st.miss);
+    if (plan.valid) {
+        const bool need_image = plan.partial && prompt_cache_mode_ == CacheMode::kAuto;
+        const bool has_image  = need_image && HasMultimodalOverlap(s, plan.block * bs, plan.pos);
 
-            bool have_target = full_size == 1;  // prompt_len-1 is the prior block boundary (full-block node)
+        if (DecidePromptBoundaryPublish(prompt_cache_mode_, plan.partial, has_image)) {
+            bool have_target = true;
 
-            if (node_size >= 1) {
-                LogicalBlock& x      = *s.block_ids.back();
-                const auto    tokens = TokenSegment(s, last * bs, node_size);
-                const auto    next   = ExtendPrefixKey(st.key, tokens);
-                BlockHandle   vh     = logical_.Create(last);
-                LogicalBlock& y      = *vh;
-                y.parent             = st.parent;
-                y.key                = next;
-                y.size               = node_size;
+            if (plan.partial) {
+                const int     j      = plan.block;  // j >= 1 (guaranteed by the planner)
+                LogicalBlock& x      = *s.block_ids[j];
+                const auto    tokens = TokenSegment(s, j * bs, plan.node_size);
+
+                std::vector<Fingerprint> fps;
+                CollectStartFps(s, j * bs, j * bs + plan.node_size, fps);
+
+                const auto    next = ExtendPrefixKey(s.block_ids[j - 1]->key, tokens, fps);
+                BlockHandle   vh   = logical_.Create(j);
+                LogicalBlock& y    = *vh;
+                y.parent           = s.block_ids[j - 1].get();
+                y.key              = next;
+                y.size             = plan.node_size;
                 y.tokens.assign(tokens.begin(), tokens.end());
-                y.prefix_id = cache_.Create(registry_.prefix().object_id(), vh.get());
+                y.image_fps        = fps;
+                y.prefix_id        = cache_.Create(registry_.prefix().object_id(), vh.get());
                 if (trie_.Insert(y)) {
-                    x.fork_to   = std::move(vh);  // edge holds the only ref
-                    have_target = true;
+                    x.fork_to = std::move(vh);  // edge holds the only ref
                 }
                 else {
-                    LogCollision(s, CollisionSite::kPromptBoundary, last * bs, last * bs + node_size);
-                    // undiscoverable: vh drops at scope end -> recycle
+                    LogCollision(s, CollisionSite::kPromptBoundary, j * bs, j * bs + plan.node_size);
+                    have_target = false;  // undiscoverable: vh drops at scope end -> recycle
                 }
             }
 
-            s.prompt_boundary_node = have_target;  // clamp the producer's prefill to prompt_len-1
+            if (have_target) {
+                s.prompt_boundary_node = true;
+                s.prompt_boundary_pos  = plan.pos;  // clamp the producer's prefill to B
+            }
         }
     }
 }
@@ -713,9 +783,13 @@ void Scheduler::PublishGeneration(Sequence& s)
     if (!PrefixEligible(s) || s.filled_len <= 0) {
         return;
     }
+    if (generation_cache_mode_ == CacheMode::kNone) {
+        return;  // index no generated blocks at all
+    }
 
-    const bool publish_generation_boundary =
-        cache_generation_boundary_ && boundary_policy_->PublishGenerationBoundary(s);
+    // 'all' indexes the terminal partial block + adopts the terminal recurrent
+    // frontier checkpoint; 'auto' indexes full generated blocks only.
+    const bool publish_generation_boundary = (generation_cache_mode_ == CacheMode::kAll);
 
     const LogicalBlock* parent = nullptr;
     PrefixKey           key{};
@@ -741,28 +815,35 @@ void Scheduler::PublishGeneration(Sequence& s)
             break;
         }
         // The terminal partial generated block is the generation-boundary partial
-        // node; index it only when the generation boundary is published
-        // (publish_generation_boundary; its cache_generation_boundary_ component
-        // matches the fork_from gate in Accept, so the node stays reachable). It carries
-        // the partial block's KV for every model; a recurrent model additionally
-        // adopts the terminal frontier checkpoint below (guarded by a valid
-        // frontier id). Full generated blocks always index. It ends at filled_len,
-        // so nothing follows.
+        // node; index it only when generation_cache_mode_ is kAll
+        // (publish_generation_boundary). It carries the partial block's KV for
+        // every model; a recurrent model additionally adopts the terminal frontier
+        // checkpoint below (guarded by a valid frontier id). Full generated blocks
+        // always index. It ends at filled_len, so nothing follows.
         if (size < x.capacity && !publish_generation_boundary) {
             break;
         }
-        const auto tokens = TokenSegment(s, x.offset, size);
-        const auto next   = ExtendPrefixKey(key, tokens);
-        x.parent          = parent;
-        x.key             = next;
-        x.size            = size;
+        const auto               tokens = TokenSegment(s, x.offset, size);
+        std::vector<Fingerprint> fps;
+        if (x.offset < s.prompt_len) {
+            // Only the prompt-tail block (private until now) can hold an image start;
+            // generated positions never do. Fold + store so this node's identity
+            // matches what a future request's MatchPrompt rebuilds.
+            CollectStartFps(s, x.offset, x.offset + size, fps);
+        }
+        const auto next = ExtendPrefixKey(key, tokens, fps);
+        x.parent        = parent;
+        x.key           = next;
+        x.size          = size;
         x.tokens.assign(tokens.begin(), tokens.end());
+        x.image_fps     = fps;  // usually empty
         if (!trie_.Insert(x)) {
             LogCollision(s, CollisionSite::kPublish, x.offset, x.offset + size);
             x.parent = nullptr;
             x.key    = {};
             x.size   = 0;
             x.tokens.clear();
+            x.image_fps.clear();
             break;
         }
         if (gen.indexed == 0) {
@@ -865,20 +946,7 @@ LogicalBlock* Scheduler::PlanForkToPopulation(Sequence& s, int end, std::unorder
     return x.fork_to.get();
 }
 
-// Runtime prompt-boundary publish veto, resolved once and cached (so a retried
-// admission pass never re-scans). Sole caller: the admission clamp.
-bool Scheduler::ResolvePublishPromptBoundary(Sequence& s)
-{
-    if (!s.prompt_boundary_node) {
-        return false;  // machinery off
-    }
-    if (s.prompt_boundary_publish < 0) {
-        s.prompt_boundary_publish = boundary_policy_->PublishPromptBoundary(s) ? 1 : 0;
-    }
-    return s.prompt_boundary_publish == 1;
-}
-
-// Prompt-boundary group (caller guarantees end == prompt_len-1): fork_to KV copy +
+// Prompt-boundary group (caller guarantees end == B == prompt_boundary_pos): fork_to KV copy +
 // checkpoint, both partial-block, bypassing the min-interval.
 void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end)
 {
@@ -888,8 +956,8 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
         pass.has_optionals   = true;
     }
 
-    // (b) checkpoint onto the fork_to node, or the block itself for a
-    // single-tail-token prompt (prompt_len-1 is a block boundary).
+    // (b) checkpoint onto the fork_to node, or the block itself when
+    // block-aligned B is a block boundary.
     if (s.publish_cache_id) {
         LogicalBlock& x          = *s.block_ids[(end - 1) / logical_.block_size()];
         const bool    at_block   = x.offset + x.capacity == end;
@@ -903,7 +971,7 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
 }
 
 // Full-block group: coverage-driven checkpoint, published iff a full block ends
-// exactly at `end` (subject to min-interval); no prompt-boundary policy involved.
+// exactly at `end` (subject to min-interval); no prompt-boundary mode involved.
 // The full block's prefix is published in place by Publish() (no KV copy).
 void Scheduler::PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end)
 {
@@ -1046,22 +1114,22 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         s.history_len = s.resume_len;
 
         // Land the forward end on a checkpoint candidate. The prompt-boundary
-        // clamp (forward ends exactly at prompt_len-1) takes precedence;
+        // clamp (forward ends exactly at B) takes precedence;
         // otherwise truncate partial prefill chunks to a block boundary.
         const int begin   = s.resume_len + s.inflight_input_len;
         const int ctx_end = s.seq_len + s.inflight_new_tokens;  // == prompt_len for a fresh prefill
         int       desired = begin + admitted;
 
-        const int prompt_boundary_pos = s.prompt_len - 1;
+        const int prompt_boundary_pos = s.prompt_boundary_pos;
 
-        // Consult the policy only on the pass that can reach prompt_len-1; >= so an
-        // exact landing isn't truncated away. On a veto, skip the clamp.
-        const bool is_prompt_boundary =
+        // The publish decision is finalized in SetupForks (prompt_boundary_node);
+        // the clamp fires on the pass that can reach B (>= so an exact landing
+        // isn't truncated away).
+        const bool publish_prompt =
             s.prompt_boundary_node && begin < prompt_boundary_pos && desired >= prompt_boundary_pos;
-        const bool publish_prompt = is_prompt_boundary && ResolvePublishPromptBoundary(s);
 
         if (publish_prompt) {
-            desired = prompt_boundary_pos;  // land exactly on prompt_len-1
+            desired = prompt_boundary_pos;  // land exactly on B
         }
         else if (desired < ctx_end) {  // partial chunk: truncate to a block boundary
             desired = desired / bs * bs;
@@ -1115,9 +1183,11 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         evict_pos                  = evicting;
 
         // Optional optimizations (allocated later, from inactive memory). One
-        // checkpoint per forward, routed by its end; on a veto publish_prompt is
-        // false so nothing prompt-boundary is allocated. PlanPromptBoundaryPublication
-        // reserves the fork-to id in pass.planned for cross-request intent dedup.
+        // checkpoint per forward, routed by its end; publish_prompt is false when
+        // prompt_boundary_node was not set in SetupForks, or when this forward's
+        // geometry does not reach B, so nothing prompt-boundary is allocated.
+        // PlanPromptBoundaryPublication reserves the fork-to id in pass.planned for
+        // cross-request intent dedup.
         if (publish_prompt) {
             PlanPromptBoundaryPublication(pass, i, s, end);  // fork_to KV + prompt-boundary checkpoint
         }
@@ -1371,9 +1441,12 @@ void LogAccept(const Sequence& s, int bs)
     if (all - matched > 0 && prompt % bs) {
         clast = fmt::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
     }
-    if (!s.block_ids.empty() && s.block_ids.back()->fork_to) {
-        const LogicalBlock& ft = *s.block_ids.back()->fork_to;
-        ctail                  = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+    if (s.prompt_boundary_pos > 0) {
+        const int j = (s.prompt_boundary_pos - 1) / bs;  // block holding B (matches PlanPromptBoundary)
+        if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->fork_to) {
+            const LogicalBlock& ft = *s.block_ids[j]->fork_to;
+            ctail                  = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+        }
     }
     TM_LOG_INFO("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
                 s.req->id,

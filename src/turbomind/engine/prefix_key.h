@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/engine/fingerprint.h"
 
 namespace turbomind {
 
@@ -37,6 +38,14 @@ inline size_t HashCombine(size_t seed, size_t value) noexcept
     return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
 }
 
+inline size_t HashCombine(size_t seed, const Fingerprint& fp) noexcept
+{
+    for (uint64_t w : fp.words) {
+        seed = HashCombine(seed, static_cast<size_t>(w));
+    }
+    return seed;
+}
+
 struct PrefixKey {
     int    length{};
     size_t hash{};
@@ -67,6 +76,15 @@ inline PrefixKey ExtendPrefixKey(PrefixKey key, TokenSpan tokens)
     for (const int* it = tokens.begin(); it != tokens.end(); ++it) {
         key.hash = HashCombine(key.hash, static_cast<size_t>(*it));
         ++key.length;
+    }
+    return key;
+}
+
+inline PrefixKey ExtendPrefixKey(PrefixKey key, TokenSpan tokens, const std::vector<Fingerprint>& fps)
+{
+    key = ExtendPrefixKey(key, tokens);  // existing token fold
+    for (const Fingerprint& fp : fps) {
+        key.hash = HashCombine(key.hash, fp);
     }
     return key;
 }
