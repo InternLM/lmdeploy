@@ -204,10 +204,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
-            # Dummy inputs are DP placeholders and should not disturb
-            # local long-context carry-over state.
-            if not model_inputs.is_dummy:
-                self._prev_chunk_last.clear()
+            # Non-chunk prefill/decode can be interleaved between long-context
+            # chunks. Keep pending chunk carry here; a new first chunk clears it
+            # explicitly, and the final chunk consumes it.
             # Case A: non-chunked — shift left by 1, place next_token at end
             input_ids = model_inputs.input_ids.clone()
             input_ids[:, :-1] = model_inputs.input_ids[:, 1:]

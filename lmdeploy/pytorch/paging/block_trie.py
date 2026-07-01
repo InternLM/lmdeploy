@@ -1171,6 +1171,8 @@ class BlockTrie:
 
         num_matched = node.num_matched
         num_valid_ids = seq.num_valid_ids
+        if seq.kv_token_limit is not None:
+            num_valid_ids = min(num_valid_ids, seq.kv_token_limit)
 
         if num_matched + block_size > num_valid_ids:
             self._clear_private_recompute_range(seq)

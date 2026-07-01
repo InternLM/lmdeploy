@@ -636,11 +636,11 @@ class BaseModelAgent:
             # for second round chat
             self.step_inputs.reindex(delta)
 
-        if inputs.is_first_chunk or not inputs.is_chunk:
+        if inputs.is_first_chunk:
             self._prev_chunk_output = None
 
         # check long context
-        if self._prev_chunk_output is not None:
+        if inputs.is_chunk and self._prev_chunk_output is not None:
             # update model metas
             model_metas = self._prev_chunk_output.get('model_metas')
             inputs.model_metas = model_metas

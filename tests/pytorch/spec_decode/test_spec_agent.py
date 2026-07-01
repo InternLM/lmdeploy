@@ -2,7 +2,9 @@ import asyncio
 
 import torch
 
-from lmdeploy.pytorch.spec_decode.spec_agent import _expand_sampling_inputs
+from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
+from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent, _expand_sampling_inputs
+from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -312,3 +314,94 @@ def test_slice_sampling_inputs_prefill():
     sampling_inputs = SamplingInputs(max_top_k=1, batch_size=2)
     result = _slice_sampling_inputs(sampling_inputs, 1)
     assert result is sampling_inputs
+
+
+def _model_inputs(input_ids,
+                  *,
+                  is_decoding=False,
+                  is_chunk=False,
+                  is_first_chunk=False,
+                  is_last_chunk=False,
+                  dp_meta=None):
+    input_ids = torch.tensor([input_ids])
+    seq_length = torch.tensor([input_ids.size(1)])
+    history_lengths = torch.tensor([0])
+    max_q_seqlen = input_ids.size(1)
+    return ModelInputs(
+        input_ids=input_ids,
+        seq_length=seq_length,
+        history_lengths=history_lengths,
+        block_offsets=torch.zeros(1, 1, dtype=torch.int32),
+        is_decoding=is_decoding,
+        num_ignored_history=torch.zeros(1, dtype=torch.long),
+        max_q_seqlen=max_q_seqlen,
+        max_kv_seqlen=max_q_seqlen,
+        sum_kv_seqlen=max_q_seqlen,
+        is_chunk=is_chunk,
+        is_first_chunk=is_first_chunk,
+        is_last_chunk=is_last_chunk,
+        dp_meta=dp_meta,
+    )
+
+
+def _extra(hidden_values):
+    hidden_states = torch.tensor([hidden_values], dtype=torch.float32)
+    return ARSpecExtraInputs(
+        target_hidden_states=hidden_states,
+        next_token_ids=torch.tensor([99]),
+        last_token_indices=torch.tensor([hidden_states.size(1) - 1]),
+    )
+
+
+def test_prepare_inputs_from_main_keeps_chunk_carry_across_decode():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {}
+
+    first_chunk = _model_inputs([10, 11, 12], is_chunk=True, is_first_chunk=True)
+    agent._prepare_inputs_from_main(first_chunk, _extra([[1, 10], [2, 20], [3, 30]]))
+    saved_first_chunk_last = agent._prev_chunk_last['hidden_states'].clone()
+
+    decode = _model_inputs([90, 91, 92], is_decoding=True)
+    agent._prepare_inputs_from_main(decode, _extra([[9, 90], [8, 80], [7, 70]]))
+
+    assert torch.equal(agent._prev_chunk_last['hidden_states'], saved_first_chunk_last)
+
+    middle_chunk = _model_inputs([20, 21, 22], is_chunk=True)
+    draft_inputs, _ = agent._prepare_inputs_from_main(middle_chunk, _extra([[4, 40], [5, 50], [6, 60]]))
+
+    assert torch.equal(draft_inputs.target_hidden_states[:, :1], saved_first_chunk_last)
+    assert torch.equal(agent._prev_chunk_last['hidden_states'], torch.tensor([[[6., 60.]]]))
+
+
+def test_prepare_inputs_from_main_keeps_chunk_carry_across_interleaved_prefill():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    saved = torch.ones(1, 1, 2)
+    agent._prev_chunk_last = {'hidden_states': saved.clone()}
+
+    prefill = _model_inputs([10, 11, 12])
+    agent._prepare_inputs_from_main(prefill, _extra([[1, 10], [2, 20], [3, 30]]))
+
+    torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], saved)
+
+
+def test_prepare_inputs_from_main_first_chunk_clears_stale_chunk_carry():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
+
+    first_chunk = _model_inputs([10, 11, 12], is_chunk=True, is_first_chunk=True)
+    agent._prepare_inputs_from_main(first_chunk, _extra([[1, 10], [2, 20], [3, 30]]))
+
+    torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], torch.tensor([[[3., 30.]]]))
+
+
+def test_prepare_inputs_from_main_keeps_chunk_carry_for_dp_local_decode_global_prefill():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    saved = torch.ones(1, 1, 2)
+    agent._prev_chunk_last = {'hidden_states': saved.clone()}
+    agent.proposer = _DummyProposer()
+
+    dp_meta = DPMeta(dp_batches=[1, 1], dp_is_decoding=False)
+    inputs = _model_inputs([90, 91, 92], is_decoding=True, dp_meta=dp_meta)
+    agent._prepare_inputs_from_main(inputs, _extra([[9, 90], [8, 80], [7, 70]]))
+
+    assert torch.equal(agent._prev_chunk_last['hidden_states'], saved)
