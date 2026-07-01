@@ -145,15 +145,16 @@ with set_envs():
     os.getenv('HCCL_OP_EXPANSION_MODE', None)
     os.getenv('HCCL_IF_IP', None)
 
-    # dlblas
-    # we don't need to read this, it would be passed to ray workers
-    # If Ray is launched from outside, it may fail to access the environment variables.
-    deep_ep_max_tokens_per_rank = env_to_int('DEEPEP_MAX_TOKENS_PER_RANK', 128)
+    # deepep
     os.getenv('DEEPEP_ENABLE_MNNVL', None)
     os.getenv('DEEPEP_MODE', 'auto')
-
-    # deepep
     deep_ep_buffer_num_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', 20)
+
+    # eplb
+    eplb_num_groups = env_to_int('LMDEPLOY_EPLB_NUM_GROUPS', 4)
+    eplb_experts_statistic_file = os.getenv('LMDEPLOY_EPLB_EXPERTS_STATISTIC_FILE', None)
+    eplb_ranks_per_node = env_to_int('LMDEPLOY_EPLB_RANKS_PER_NODE', 8)
+    eplb_num_redundant_experts = env_to_int('LMDEPLOY_EPLB_NUM_REDUNDANT_EXPERTS', 32)
 
     # deepgemm
     os.getenv('DG_JIT_DEBUG', '0')
