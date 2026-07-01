@@ -43,7 +43,7 @@ Set `device_type="camb"` in the `PytorchEngineConfig`:
 
 ```python
 from lmdeploy import pipeline, PytorchEngineConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 pipe = pipeline('OpenGVLab/InternVL2-2B',
         backend_config=PytorchEngineConfig(tp=1, device_type='camb'))
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')

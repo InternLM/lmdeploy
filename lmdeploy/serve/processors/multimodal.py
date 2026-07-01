@@ -7,12 +7,12 @@ import PIL
 from lmdeploy.model import MODELS, BaseChatTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.media.audio import AudioMediaIO
-from lmdeploy.vl.media.connection import load_from_url
-from lmdeploy.vl.media.image import ImageMediaIO
-from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
-from lmdeploy.vl.media.video import VideoMediaIO
+from lmdeploy.multimodal.constants import Modality
+from lmdeploy.multimodal.media.audio import AudioMediaIO
+from lmdeploy.multimodal.media.connection import load_from_url
+from lmdeploy.multimodal.media.image import ImageMediaIO
+from lmdeploy.multimodal.media.time_series import TimeSeriesMediaIO
+from lmdeploy.multimodal.media.video import VideoMediaIO
 
 logger = get_logger('lmdeploy')
 
@@ -299,7 +299,7 @@ class MultimodalProcessor:
     @staticmethod
     def _re_format_prompt_images_pair(prompt: tuple) -> dict:
         """Reformat the prompt to openai message format."""
-        from lmdeploy.vl import load_image
+        from lmdeploy.multimodal import load_image
 
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt

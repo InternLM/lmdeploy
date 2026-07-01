@@ -2,10 +2,9 @@
 
 LMDeploy supports the following Qwen-VL series of models, which are detailed in the table below:
 
-|    Model     |  Size  | Supported Inference Engine |
-| :----------: | :----: | :------------------------: |
-| Qwen-VL-Chat |   -    |         TurboMind          |
-|   Qwen2-VL   | 2B, 7B |          PyTorch           |
+|  Model   |  Size  | Supported Inference Engine |
+| :------: | :----: | :------------------------: |
+| Qwen2-VL | 2B, 7B |          PyTorch           |
 
 The next chapter demonstrates how to deploy an Qwen-VL model using LMDeploy, with [Qwen2-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) as an example.
 
@@ -37,7 +36,7 @@ The following sample code shows the basic usage of VLM pipeline. For detailed in
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('Qwen/Qwen2-VL-2B-Instruct')
 
