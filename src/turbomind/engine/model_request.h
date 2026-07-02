@@ -23,6 +23,9 @@ public:
     // Cancel running request
     void Cancel();
 
+    // Reset the channel to uninitailized state, calls `notify` when done
+    void End(std::function<void(int)> cb, uint64_t session_id);
+
     struct InputParam {
         std::shared_ptr<TensorMap>         tensors;
         std::shared_ptr<multimodal::Input> mm_inputs;

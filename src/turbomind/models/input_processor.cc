@@ -67,6 +67,12 @@ public:
                 return Request::kInvalid;
             }
 
+            // clone the embeds if the request persists
+            if (!r.session.end_flag) {
+                auto tmp = std::exchange(embeds, empty_like(embeds));
+                std::copy_n((const uint8_t*)tmp.raw_data(), tmp.byte_size(), (uint8_t*)embeds.raw_data());
+            }
+
             const auto [sum, dim] = embeds.shapes(0, 1);
             const auto n          = ranges_ptr->shape(0);
             const auto ranges     = ranges_ptr->data<int>();

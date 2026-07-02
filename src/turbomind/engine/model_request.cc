@@ -33,6 +33,18 @@ void ModelRequest::Cancel()
     }
 }
 
+void ModelRequest::End(std::function<void(int)> cb, uint64_t session_id)
+{
+    auto r = std::make_shared<Request>();
+
+    r->id = r->session.id = session_id;
+    r->session.kill_flag  = true;
+
+    r->end_cb = std::move(cb);
+
+    gateway_->kill(std::move(r));
+}
+
 auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> OutputParam
 {
     inputs_  = std::make_shared<TensorMap>();
@@ -108,7 +120,10 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
         metrics->scheduled_time.store(0, std::memory_order_relaxed);
     }
 
-    session_id_      = param.session.id;
+    if (param.session.start_flag) {
+        session_id_ = param.session.id;
+    }
+
     r->id            = param.session.id;
     r->session       = param.session;
     r->gen_cfg       = param.gen_cfg;

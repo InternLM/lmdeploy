@@ -730,7 +730,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id)
+        session = _tm.SessionParam(id=session_id, step=0, start=True, end=True)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)

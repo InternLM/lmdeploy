@@ -57,6 +57,12 @@ std::ostream& operator<<(std::ostream& os, const GenerationConfig& c);
 
 struct SessionParam {
     uint64_t id;
+
+    int step;
+
+    bool start_flag;
+    bool end_flag;
+    bool kill_flag;
 };
 
 struct RequestState {
@@ -122,7 +128,7 @@ struct Request {
         kTooLong       = 6,  // history + prompt > session_len,
         kFinish        = 7,
         kCancel        = 8,
-        kInconsistency = 9,   // Inconsistent request parameters
+        kInconsistency = 9,   // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
         kNoQueue       = 10,  // No queue available for submitting the request (in current process)
     };
 

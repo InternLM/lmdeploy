@@ -386,6 +386,8 @@ void TurboMind::Impl::WarmUp(int index)
                 TensorMap inputs{{"input_ids", input_ids.slice(0, token_num)}};
 
                 ModelRequest::InputParam param{};
+                param.session.start_flag     = true;
+                param.session.end_flag       = true;
                 param.gen_cfg.max_new_tokens = 1;
                 param.tensors                = std::make_shared<TensorMap>(inputs);
 
