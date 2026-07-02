@@ -685,7 +685,21 @@ class TurboMindInstance:
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
-        """Perform model inference."""
+        """Perform model inference.
+
+        Args:
+            session_id (int): the id of a session
+            input_ids (numpy.ndarray): the token ids of a prompt
+            input_embeddings (list[numpy.ndarray]): embeddings features
+            input_embedding_ranges (list[tuple[int,int]]): the begin/end
+              offsets of input_embeddings to input_ids
+            input_meta (dict[str, Any]): optional metadata such as mrope
+              position ids
+            multimodal (list[dict[str, Any]]): multimodal inputs
+            gen_config (GenerationConfig): generation config
+            stream_output (bool): indicator for stream output
+            kwargs (dict): kwargs for backward compatibility
+        """
         logger.info(f'[async_stream_infer] session {session_id} start')
         gen_cfg = self._get_generation_config(gen_config)
 
