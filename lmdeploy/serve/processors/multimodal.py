@@ -342,10 +342,15 @@ class MultimodalProcessor:
             messages['content'].append({'type': 'text', 'text': prompt})
         return messages
 
-    def _has_multimodal_input(self, messages: list[dict]) -> bool:
+    @staticmethod
+    def _has_multimodal_input(messages: Any) -> bool:
         """Check if messages contain multimodal input such as images, videos,
         audios, or time series."""
+        if not isinstance(messages, list):
+            return False
         for message in messages:
+            if not isinstance(message, dict):
+                continue
             content = message.get('content')
             if not isinstance(content, list):
                 continue

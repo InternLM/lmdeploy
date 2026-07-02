@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from lmdeploy.serve.anthropic.protocol import MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
@@ -142,6 +143,7 @@ class _FakeServerContext:
             enable_return_routed_experts=enable_return_routed_experts,
         )
         self.response_parser_cls = response_parser_cls
+        self.mm_preprocess_gate = object()
 
     def create_session(self, _session_id: int | None = None):
         return self.session_mgr.get()
@@ -151,6 +153,13 @@ class _FakeServerContext:
 
     def get_engine_config(self):
         return self.async_engine.backend_config
+
+
+class _RawAnthropicRequest:
+    headers = ANTHROPIC_HEADERS
+
+    async def is_disconnected(self):
+        return False
 
 
 class _ToolAndReasoningParser:
@@ -254,6 +263,13 @@ def test_messages_non_stream():
 
 def _post_messages(client: TestClient, **overrides):
     return client.post('/v1/messages', headers=ANTHROPIC_HEADERS, json=_messages_payload(**overrides))
+
+
+async def _call_messages_endpoint_direct(context, **overrides):
+    router = create_anthropic_router(context)
+    endpoint = next(route.endpoint for route in router.routes if route.path == '/v1/messages')
+    request = MessagesRequest.model_validate(_messages_payload(**overrides))
+    return await endpoint(request, _RawAnthropicRequest())
 
 
 def _stream_messages_body(client: TestClient, **overrides):
@@ -648,6 +664,22 @@ def test_messages_image_data_preserves_input_ids_in_multimodal_content():
     messages_arg = args[0]
     assert messages_arg[0]['content'][0] == {'type': 'text', 'text': [1, 2, 3]}
     assert kwargs['input_ids'] is None
+    assert kwargs['mm_preprocess_gate'] is context.mm_preprocess_gate
+
+
+def test_messages_image_data_passes_mm_preprocess_gate_direct():
+    context = _FakeServerContext()
+    response = asyncio.run(
+        _call_messages_endpoint_direct(
+            context,
+            messages=[],
+            input_ids=[1, 2, 3],
+            image_data='https://example.com/img.png',
+        ))
+
+    assert response['type'] == 'message'
+    _args, kwargs = context.async_engine.generate_calls[-1]
+    assert kwargs['mm_preprocess_gate'] is context.mm_preprocess_gate
 
 
 def test_messages_rejects_tools_with_input_ids():

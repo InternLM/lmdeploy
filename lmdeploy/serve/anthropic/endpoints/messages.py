@@ -182,6 +182,7 @@ def register(router: APIRouter, server_context) -> None:
             do_preprocess=False if resolved_input_ids is not None else True,
             adapter_name=adapter_name,
             input_ids=resolved_input_ids,
+            mm_preprocess_gate=server_context.mm_preprocess_gate,
         )
 
         request_id = f'msg_{shortuuid.random()}'

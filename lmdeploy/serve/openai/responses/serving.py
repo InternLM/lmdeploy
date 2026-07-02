@@ -79,6 +79,7 @@ class OpenAIServingResponses:
             sequence_end=True,
             do_preprocess=True,
             adapter_name=adapter_name,
+            mm_preprocess_gate=self.server_context.mm_preprocess_gate,
         )
         return session, result_generator
 
