@@ -1,12 +1,17 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <memory>
+#include <string>
+
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/activation.h"
+#include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
+#include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
@@ -19,16 +24,65 @@
 
 namespace turbomind {
 
-MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx):
+class MoeFfnLayerImpl {
+public:
+    explicit MoeFfnLayerImpl(const Context& ctx): linear_(*ctx.linear) {}
+
+    virtual ~MoeFfnLayerImpl() = default;
+
+    virtual void Forward(MoeFfnLayer::ForwardParam& p) = 0;
+
+    virtual void Combine(MoeFfnLayer::ForwardParam& p) = 0;
+
+protected:
+    Tensor_<float> Gate(const Tensor& input, const LinearWeight& gate);
+
+    LlamaLinear& linear_;
+};
+
+class MoeFfnTpImpl final: public MoeFfnLayerImpl {
+public:
+    MoeFfnTpImpl(const EngineParam& engine, const Context& ctx);
+
+    void Forward(MoeFfnLayer::ForwardParam& p) override;
+
+    void Combine(MoeFfnLayer::ForwardParam& p) override;
+
+private:
+    void Init(MoeFfnLayer::ForwardParam& p);
+
+    const int tp_size_;
+    const int max_token_num_;
+    int&      is_warm_up_;
+
+    std::unique_ptr<LlamaFfnLayer> expert_ffn_;
+
+    bool initialized_ = false;
+
+    Buffer_<int> h_offsets_;
+
+    Buffer_<int>   masks_;
+    Buffer_<int>   f2n_;
+    Buffer_<int>   f2E_;
+    Buffer_<int>   en2f_;
+    Buffer_<float> scales_;
+    Buffer_<int>   accum_;
+    Buffer_<int>   offsets_;
+
+    Tensor         temp_;
+    Tensor_<float> shared_scales_;
+};
+
+MoeFfnTpImpl::MoeFfnTpImpl(const EngineParam& engine, const Context& ctx):
+    MoeFfnLayerImpl(ctx),
     tp_size_(engine.mlp_tp_size),
     max_token_num_(engine.max_forward_token_num * engine.attn_dp_size),
     is_warm_up_(*ctx.is_warm_up),
-    linear_(*ctx.linear),
     expert_ffn_(std::make_unique<LlamaFfnLayer>(ctx))
 {
 }
 
-void MoeFfnLayer::Init(ForwardParam& p)
+void MoeFfnTpImpl::Init(MoeFfnLayer::ForwardParam& p)
 {
     const int expert_num        = p.weights->num_experts();
     const int experts_per_token = p.weights->experts_per_token;
@@ -48,7 +102,7 @@ void MoeFfnLayer::Init(ForwardParam& p)
     initialized_ = true;
 }
 
-Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LinearWeight& gate)
+Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, const LinearWeight& gate)
 {
     TM_FUNCTION_SCOPE();
 
@@ -61,7 +115,7 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LinearWeight& gate)
     return logits;
 }
 
-void MoeFfnLayer::Forward(ForwardParam& p)
+void MoeFfnTpImpl::Forward(MoeFfnLayer::ForwardParam& p)
 {
     TM_FUNCTION_SCOPE();
     if (!initialized_) {
@@ -196,7 +250,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     }
 }
 
-void MoeFfnLayer::Combine(ForwardParam& p)
+void MoeFfnTpImpl::Combine(MoeFfnLayer::ForwardParam& p)
 {
     TM_FUNCTION_SCOPE();
     auto& moe = *p.weights;
@@ -216,6 +270,65 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 
     temp_          = {};
     shared_scales_ = {};
+}
+
+class MoeFfnAgRsImpl final: public MoeFfnLayerImpl {
+public:
+    MoeFfnAgRsImpl(const EngineParam& engine, const Context& ctx):
+        MoeFfnLayerImpl(ctx), ep_size_(engine.ep_size), ep_rank_(engine.ep_rank), backend_(engine.all2all_backend)
+    {
+        TM_CHECK_GT(ep_size_, 1);
+        TM_CHECK_EQ(engine.mlp_tp_size, 1);
+        TM_CHECK_EQ(backend_, "allgather_reducescatter");
+    }
+
+    void Forward(MoeFfnLayer::ForwardParam&) override
+    {
+        ReportUnsupported();
+    }
+
+    void Combine(MoeFfnLayer::ForwardParam&) override
+    {
+        ReportUnsupported();
+    }
+
+private:
+    void ReportUnsupported() const
+    {
+        TM_LOG_FATAL(
+            "MoeFfnAgRsImpl is a stub: resolve AllreduceResidualRMSnorm and ag-rs ownership before enabling EP MoE");
+    }
+
+    int         ep_size_;
+    int         ep_rank_;
+    std::string backend_;
+};
+
+MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx)
+{
+    if (engine.ep_size <= 1) {
+        impl_ = std::make_unique<MoeFfnTpImpl>(engine, ctx);
+        return;
+    }
+
+    if (engine.all2all_backend == "allgather_reducescatter") {
+        impl_ = std::make_unique<MoeFfnAgRsImpl>(engine, ctx);
+        return;
+    }
+
+    TM_LOG_FATAL("Unsupported MoE EP all2all backend: {}", engine.all2all_backend);
+}
+
+MoeFfnLayer::~MoeFfnLayer() = default;
+
+void MoeFfnLayer::Forward(ForwardParam& p)
+{
+    impl_->Forward(p);
+}
+
+void MoeFfnLayer::Combine(ForwardParam& p)
+{
+    impl_->Combine(p);
 }
 
 }  // namespace turbomind

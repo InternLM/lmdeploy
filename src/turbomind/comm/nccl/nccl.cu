@@ -262,12 +262,70 @@ public:
         NCCLCHECK(ncclGroupEnd());
     }
 
+    void AllGatherV(const void*                sendbuff,
+                    void*                      recvbuff,
+                    const std::vector<size_t>& counts,
+                    DataType                   type,
+                    int                        group,
+                    cudaStream_t               stream) override
+    {
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
+        const int            n_ranks   = this->n_ranks(group);
+        const int            rank      = this->rank(group);
+        ncclComm_t           comm      = groups_.at(group);
+
+        TM_CHECK_EQ((int)counts.size(), n_ranks);
+
+        NCCLCHECK(ncclGroupStart());
+        size_t offset = 0;
+        for (int i = 0; i < n_ranks; ++i) {
+            const size_t count = counts[i];
+            if (count) {
+                auto*       recv = static_cast<char*>(recvbuff) + elem_size * offset;
+                const void* send = i == rank ? sendbuff : recv;
+                NCCLCHECK(ncclBroadcast(send, recv, count, nccl_type, i, comm, stream));
+            }
+            offset += count;
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
+
     void ReduceScatter(
         const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
         NCCLCHECK(
             ncclReduceScatter(sendbuff, recvbuff, recvcount, to_nccl_dtype(type), ncclSum, groups_.at(group), stream));
+        NCCLCHECK(ncclGroupEnd());
+    }
+
+    void ReduceScatterV(const void*                sendbuff,
+                        void*                      recvbuff,
+                        const std::vector<size_t>& counts,
+                        DataType                   type,
+                        int                        group,
+                        cudaStream_t               stream) override
+    {
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
+        const int            n_ranks   = this->n_ranks(group);
+        const int            rank      = this->rank(group);
+        ncclComm_t           comm      = groups_.at(group);
+
+        TM_CHECK_EQ((int)counts.size(), n_ranks);
+
+        NCCLCHECK(ncclGroupStart());
+        size_t offset = 0;
+        for (int i = 0; i < n_ranks; ++i) {
+            const size_t count = counts[i];
+            if (count) {
+                const auto* send = static_cast<const char*>(sendbuff) + elem_size * offset;
+                auto*       recv = i == rank ? recvbuff : const_cast<char*>(send);
+                NCCLCHECK(ncclReduce(send, recv, count, nccl_type, ncclSum, i, comm, stream));
+            }
+            offset += count;
+        }
         NCCLCHECK(ncclGroupEnd());
     }
 
@@ -392,7 +450,7 @@ public:
                    int          group,
                    cudaStream_t stream) override
     {
-        NCCLCHECK(ncclBroadcast(recvbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
+        NCCLCHECK(ncclBroadcast(sendbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
     }
 
 private:
