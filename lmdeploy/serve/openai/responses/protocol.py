@@ -82,10 +82,10 @@ class ResponsesRequest(BaseModel):
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     repetition_penalty: float | None = None
-    top_k: int | None = 40
+    top_k: int | None = None
     stop: str | list[str] | None = None
     seed: int | None = None
-    min_p: float = 0.0
+    min_p: float | None = None
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
