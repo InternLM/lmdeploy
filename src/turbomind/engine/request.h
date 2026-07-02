@@ -39,6 +39,8 @@ struct GenerationConfig {
 
     uint64_t random_seed = 0;
 
+    uint8_t priority = 0;
+
     int output_logprobs = 0;
 
     bool return_ppl = false;
@@ -171,6 +173,8 @@ struct RequestCache {
     bool autoregres = false;  // set at schedule, `seq_len` and `input_ids` taken from the engine
     bool generating = false;  // set at schedule
 
+    bool scheduled = false;  // set once when first selected as active
+
     bool done = false;  // set at cancel / update, is the request finished / canceled
 
     int alpha = 0;  // pending growth of cache_len (draft_len + input_len)
@@ -202,6 +206,7 @@ void serdes(Archive& ar, GenerationConfig& g)
     ar & g.temperature;
     ar & g.repetition_penalty;
     ar & g.random_seed;
+    ar & g.priority;
     ar & g.output_logprobs;
     ar & g.return_ppl;
     ar & g.output_last_hidden_state;
