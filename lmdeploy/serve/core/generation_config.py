@@ -7,10 +7,17 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+from pydantic import BaseModel
+
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
+_GENERATION_CONFIG_FIELDS = {field.name for field in dataclasses.fields(GenerationConfig)}
+
+
+def _filter_gen_config(config: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in config.items() if key in _GENERATION_CONFIG_FIELDS}
 
 
 def _load_hf_generation_config(path: str, trust_remote_code: bool) -> dict[str, Any]:
@@ -37,6 +44,7 @@ def resolve_default_gen_config(
         config = _load_hf_generation_config(model_path, trust_remote_code)
     else:
         config = _load_hf_generation_config(src, trust_remote_code)
+    config = _filter_gen_config(config)
 
     if config and src != 'lmdeploy':
         source = "the model's `generation_config.json`" if src == 'auto' else src
@@ -61,20 +69,19 @@ def merge_gen_config(
     return merged
 
 
-def extract_request_gen_config(request: Any) -> dict[str, Any]:
-    """Extract non-None GenerationConfig fields present on the request."""
-    values: dict[str, Any] = {}
-    for field in dataclasses.fields(GenerationConfig):
-        if not hasattr(request, field.name):
-            continue
-        value = getattr(request, field.name)
-        if value is not None:
-            values[field.name] = value
-    return values
+def extract_request_gen_config(request: BaseModel) -> dict[str, Any]:
+    """Extract explicit non-None GenerationConfig fields from a request."""
+    # exclude_unset keeps client-supplied fields plus parser-updated fields,
+    # while leaving plain Pydantic defaults available for server defaults.
+    return {
+        key: value
+        for key, value in request.model_dump(exclude_unset=True).items()
+        if key in _GENERATION_CONFIG_FIELDS and value is not None
+    }
 
 
 def build_generation_config(
-    request: Any,
+    request: BaseModel,
     default_gen_config: dict[str, Any],
     *,
     max_new_tokens: int | None = None,
@@ -85,7 +92,7 @@ def build_generation_config(
     request_gen_config = extract_request_gen_config(request)
     for key in extra_kwargs:
         request_gen_config.pop(key, None)
-    merged = merge_gen_config(request_gen_config, default_gen_config)
+    merged = merge_gen_config(request_gen_config, _filter_gen_config(default_gen_config))
     merged.pop('max_new_tokens', None)
     merged.pop('do_sample', None)
     return GenerationConfig(

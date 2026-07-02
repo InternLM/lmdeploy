@@ -549,12 +549,12 @@ class GenerateReqInput(BaseModel):
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
     stream: bool | None = False
-    temperature: float = 1.0
+    temperature: float | None = None
     repetition_penalty: float | None = None
     ignore_eos: bool | None = False
-    top_p: float = 1.0
-    top_k: int = 0
-    min_p: float = 0.0
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
