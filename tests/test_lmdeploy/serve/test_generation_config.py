@@ -4,8 +4,8 @@ from unittest.mock import patch
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import (
     build_generation_config,
-    extract_request_sampling_values,
-    merge_sampling_params,
+    extract_request_gen_config,
+    merge_gen_config,
     resolve_default_gen_config,
 )
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest
@@ -13,22 +13,22 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequ
 _DEFAULTS = GenerationConfig()
 
 
-def test_merge_sampling_params_priority():
-    merged = merge_sampling_params(
+def test_merge_gen_config_priority():
+    merged = merge_gen_config(
         {'temperature': 0.2},
         {'temperature': 0.5, 'top_k': 10},
     )
     assert merged == {'temperature': 0.2, 'top_k': 10}
 
 
-def test_merge_sampling_params_uses_server_defaults():
-    merged = merge_sampling_params({}, {'temperature': 0.5})
+def test_merge_gen_config_uses_server_defaults():
+    merged = merge_gen_config({}, {'temperature': 0.5})
     assert merged == {'temperature': 0.5}
 
 
-def test_extract_request_sampling_values_only_non_null():
+def test_extract_request_gen_config_only_non_null():
     request = ChatCompletionRequest(model='test', messages='hi', temperature=0.3)
-    values = extract_request_sampling_values(request)
+    values = extract_request_gen_config(request)
     assert values == {'temperature': 0.3}
 
 
