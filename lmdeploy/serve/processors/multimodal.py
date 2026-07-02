@@ -109,12 +109,13 @@ class MultimodalProcessor:
         role = in_messages[i]['role']
         content = in_messages[i]['content']
 
-        if role != 'user' or isinstance(content, str):
+        if role not in ('user', 'tool') or isinstance(content, str):
             out_messages[i] = in_messages[i]
             return
 
         assert isinstance(content, list)
-        out_message = dict(role=role, content=[])
+        out_message = dict(in_messages[i])
+        out_message['content'] = []
 
         for item in content:
             item_type = item.get('type')

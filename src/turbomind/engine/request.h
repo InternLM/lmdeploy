@@ -41,6 +41,8 @@ struct GenerationConfig {
 
     int output_logprobs = 0;
 
+    bool return_ppl = false;
+
     enum OutType
     {
         kNone       = 0,
@@ -178,6 +180,9 @@ struct RequestCache {
 
     Interval output_hidden_states;
     Interval output_logits;
+    Interval input_ce_loss;
+
+    Buffer_<float> ce_loss;  // device, size 1; rank-0 CE-loss accumulator.
 };
 
 template<class Archive>
@@ -198,6 +203,7 @@ void serdes(Archive& ar, GenerationConfig& g)
     ar & g.repetition_penalty;
     ar & g.random_seed;
     ar & g.output_logprobs;
+    ar & g.return_ppl;
     ar & g.output_last_hidden_state;
     ar & g.output_logits;
     // clang-format on

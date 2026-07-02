@@ -41,6 +41,46 @@ def _make_agent_with_queues():
     return agent
 
 
+def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefill():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    prev_output = {'model_metas': [{'chunk': 1}]}
+    agent._prev_chunk_output = prev_output
+
+    normal_prefill = SimpleNamespace(is_chunk=False,
+                                     is_first_chunk=False,
+                                     is_last_chunk=False,
+                                     model_metas=[{
+                                         'normal': 1
+                                     }])
+
+    agent._prepare_inputs_prefill(normal_prefill, delta=None)
+
+    assert agent._prev_chunk_output is prev_output
+    assert normal_prefill.model_metas == [{'normal': 1}]
+
+    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False, model_metas=None)
+
+    agent._prepare_inputs_prefill(middle_chunk, delta=None)
+
+    assert middle_chunk.model_metas == [{'chunk': 1}]
+    assert agent._prev_chunk_output is prev_output
+
+
+def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent._prev_chunk_output = {'model_metas': [{'chunk': 1}]}
+    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True, model_metas=None)
+
+    agent._prepare_inputs_prefill(final_chunk, delta=None)
+
+    assert final_chunk.model_metas == [{'chunk': 1}]
+    assert agent._prev_chunk_output is None
+
+
 class TestDrainQueues:
 
     def test_drain_empty_queues(self):

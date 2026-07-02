@@ -61,6 +61,9 @@ class InferOutput:
     # expert ids
     routed_experts: torch.Tensor = None
 
+    # summed, unnormalized cross-entropy (NLL) of the input prompt
+    ce_loss: float = None
+
 
 def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
     from lmdeploy.pytorch.messages import SequenceMeta
@@ -404,10 +407,10 @@ class Engine(EngineBase):
                 req_data['input_multimodals'] = None
                 continue
 
-            if self.engine_config.disable_vision_encoder:
+            if self.engine_config.language_model_only:
                 # ignore multimodal inputs
                 req_data['input_multimodals'] = None
-                logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+                logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
                 continue
 
             result = self.input_processor.preprocess_input(input_ids, input_multimodals)

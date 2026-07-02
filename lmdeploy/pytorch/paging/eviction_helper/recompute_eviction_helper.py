@@ -67,7 +67,9 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         state_manager = self.state_manager
         block_trie = self.block_trie
         num_required_blocks = block_manager.num_required_blocks(seq, prealloc_size)
-        has_free_state = state_manager.get_num_free_runtime() > 0
+        # avoid requiring free state when already allocated.
+        has_runtime_state = state_manager.is_allocated(seq)
+        has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
         if block_trie.enable and not has_free_state:
             block_trie.evict_state_checkpoints(1)
             has_free_state = state_manager.get_num_free_runtime() > 0
@@ -87,7 +89,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             if block_trie.enable:
                 evict_seq.prefix_cache.suppress_match_stats = True
             evict_seq.state.free()
-            has_free_state = state_manager.get_num_free_runtime() > 0
+            has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
             if block_trie.enable and not has_free_state:
                 block_trie.evict_state_checkpoints(1)
                 has_free_state = state_manager.get_num_free_runtime() > 0

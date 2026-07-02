@@ -465,6 +465,23 @@ class PoolingResponse(BaseModel):
     usage: UsageInfo
 
 
+class PPLRequest(BaseModel):
+    """Get perplexity request.
+
+    The input may be raw text or token ids. Text is tokenized with
+    ``tokenizer.encode`` (no chat template applied).
+    """
+    input: str | list[int]
+
+
+class PPLResponse(BaseModel):
+    """Get perplexity response.
+
+    ``ppl`` is the perplexity (mean cross-entropy loss) of the input.
+    """
+    ppl: float
+
+
 class EncodeRequest(BaseModel):
     """Encode request."""
     input: str | list[str]
