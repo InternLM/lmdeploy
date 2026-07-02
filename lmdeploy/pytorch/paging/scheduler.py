@@ -49,6 +49,7 @@ from torch.profiler import record_function
 
 from lmdeploy.messages import EventType, ScheduleMetrics
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.long_context import get_long_context_chunk_limit, plan_long_context_chunk
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, SchedulerConfig
@@ -300,40 +301,14 @@ class Scheduler:
 
     def _long_context_chunk_limit(self, seq: SchedulerSequence):
         """Return the token budget for one long-context chunk."""
-        max_prefill_num = self.cache_config.max_prefill_token_num
-        mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
-        for value in mm_for_chunk_limit.values():
-            max_mm_size = max([v.end - v.start for v in value], default=0)
-            max_prefill_num = max(max_prefill_num, max_mm_size)
-
-        return max_prefill_num
+        return get_long_context_chunk_limit(seq, self.cache_config.max_prefill_token_num)
 
     def _next_long_context_chunk_end(self, seq: SchedulerSequence, max_prefill_num: int | None = None):
         """Return the exclusive absolute token end for the next chunk."""
         if max_prefill_num is None:
             max_prefill_num = self._long_context_chunk_limit(seq)
-        chunk_size = min(seq.num_token_ids, max_prefill_num)
-        start = seq.num_history_ids
-        end = start + chunk_size
-
-        input_mm = seq.get_input_multimodals()
-        if len(input_mm) == 0:
-            return end
-
-        multimodal_data = []
-        for modal_type, modal_datas in input_mm.items():
-            multimodal_data += [(modal_type, data) for data in modal_datas]
-        multimodal_data = sorted(multimodal_data, key=lambda x: x[1].start)
-
-        for _, data in multimodal_data:
-            assert data.start >= start, 'multimodal data should be sorted by start'
-            if data.start >= end:
-                break
-            if data.end > end:
-                end = data.start
-                break
-
-        return end
+        plan = plan_long_context_chunk(seq, max_prefill_num, include_multimodals=False)
+        return plan.chunk_end
 
     def _prefill_kv_token_limit(self, seq: SchedulerSequence):
         """Limit KV allocation for a non-final long-context prefill chunk."""

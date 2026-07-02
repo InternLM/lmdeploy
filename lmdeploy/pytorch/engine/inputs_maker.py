@@ -17,6 +17,12 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.long_context import (
+    get_long_context_chunk_limit,
+    has_long_context_multimodal,
+    plan_long_context_chunk,
+    sort_long_context_multimodals,
+)
 from lmdeploy.pytorch.messages import MessageStatus
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, VisionModelInputs
 from lmdeploy.utils import get_logger
@@ -145,37 +151,11 @@ class LongContextChunker:
         self.seq = seq
         self.next_step = seq.num_history_ids
 
-        max_prefill_num = self.max_prefill_token_num
         input_mm = seq.get_input_multimodals()
-        mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
-        self.multimodals = defaultdict(list)
-
-        for value in mm_for_chunk_limit.values():
-            max_mm_size = max([v.end - v.start for v in value], default=0)
-            max_prefill_num = max(max_prefill_num, max_mm_size)
-
-        has_multimodal = False
-        for key, value in input_mm.items():
-            # Only remaining multimodals are emitted by next_chunk_size().
-            value = sorted(value, key=lambda x: x.start)
-            self.multimodals[key] = value
-
-            has_multimodal = has_multimodal or len(value) > 0
-
-        self.max_prefill_num = max_prefill_num
-        self.has_multimodal = has_multimodal
-
-    def multimodal_iter(self):
-        """Multimodal iterator."""
-        multimodal_data = []
-        for modal_type, modal_datas in self.multimodals.items():
-            if len(modal_datas) == 0:
-                continue
-            multimodal_data += [(modal_type, data) for data in modal_datas]
-
-        multimodal_data = sorted(multimodal_data, key=lambda x: x[1].start)
-        for modal_type, data in multimodal_data:
-            yield modal_type, data
+        # Only remaining multimodals are emitted by next_chunk_size().
+        self.multimodals = sort_long_context_multimodals(input_mm)
+        self.max_prefill_num = get_long_context_chunk_limit(seq, self.max_prefill_token_num)
+        self.has_multimodal = has_long_context_multimodal(self.multimodals)
 
     def next_chunk_size(self):
         """Get the next chunk size and its remaining multimodal payloads."""
@@ -183,33 +163,8 @@ class LongContextChunker:
         if seq is None:
             return 0, None
 
-        llm_chunk_size = min(seq.num_token_ids, self.max_prefill_num)
-
-        if len(self.multimodals) == 0:
-            # no vlm inputs found
-            return llm_chunk_size, None
-
-        start = seq.num_history_ids
-        end = start + llm_chunk_size
-        out_multimodals: MultiModalInputs = defaultdict(list)
-        for modal_type, mm in self.multimodal_iter():
-            assert mm.start >= start, 'multimodal data should be sorted by start'
-            if mm.start >= end:
-                # | start ... end ... mm.start ... mm.end |
-                # if start is beyond threshold, stop
-                break
-
-            if mm.end > end:
-                # | start ... mm.start ... end ... mm.end |
-                # Do not split a multimodal span; recompute from its start in
-                # the next chunk instead.
-                end = mm.start
-                break
-
-            # | start ... mm.start ... mm.end ... end |
-            out_multimodals[modal_type].append(mm)
-
-        return end - start, out_multimodals
+        plan = plan_long_context_chunk(seq, self.max_prefill_num, self.multimodals)
+        return plan.chunk_size, plan.multimodals
 
     def is_last_chunk(self):
         """Is last chunk."""
