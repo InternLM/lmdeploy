@@ -40,7 +40,7 @@ SSM scheduling detail:
 
 import logging
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -104,6 +104,361 @@ class _PrefillReorderInfo:
     prefill_token_count: int
     is_nonfinal_long_prefill: bool
     estimated_long_chunks: int
+
+
+class _PrefillReorderer:
+    """Order waiting prefills without applying scheduler side effects."""
+
+    def __init__(self, scheduler: 'Scheduler'):
+        self.scheduler = scheduler
+        self._info_cache: dict[int, _PrefillReorderInfo] = {}
+
+    def reorder(self,
+                waiting: SeqList,
+                allow_long_prefill: bool,
+                prefer_long_prefill: bool):
+        """Return waiting requests in the order the prefill loop should try."""
+        waiting = sorted(waiting, key=lambda seq: seq.arrive_time)
+        if prefer_long_prefill:
+            # Long-work turns choose one long waiter first. The size policy only
+            # reorders this long lane; it is not global shortest-prefill-first
+            # admission.
+            long_turn_order = self._reorder_for_long_turn(waiting)
+            if long_turn_order is not None:
+                return self._warn_if_not_permutation(waiting, long_turn_order)
+
+        if allow_long_prefill:
+            return self._warn_if_not_permutation(waiting, waiting)
+
+        reordered = self._reorder_for_short_turn(waiting)
+        return self._warn_if_not_permutation(waiting, reordered)
+
+    def _warn_if_not_permutation(self, original: SeqList, reordered: SeqList):
+        """Warn if reorder drops, duplicates, or substitutes waiting sequences."""
+        original_ids = [id(seq) for seq in original]
+        reordered_ids = [id(seq) for seq in reordered]
+        if len(original_ids) == len(reordered_ids) and Counter(original_ids) == Counter(reordered_ids):
+            return reordered
+
+        logger.warning('Unexpected prefill reorder result: original_len=%s reordered_len=%s '
+                       'original_sample=%s reordered_sample=%s',
+                       len(original), len(reordered), self._seq_id_sample(original), self._seq_id_sample(reordered))
+        return reordered
+
+    @staticmethod
+    def _seq_id_sample(seqs: SeqList):
+        return [(seq.session_id, seq.seq_id) for seq in seqs[:5]]
+
+    def _get_reorder_info(self, seq: SchedulerSequence):
+        """Return reorder-only info before prefix-cache side effects.
+
+        Prefix-cache match/rollback mutates the remaining prompt. Keep this
+        cache confined to waiting-list ordering and recompute fresh values in
+        the admission path.
+        """
+        seq_key = id(seq)
+        info = self._info_cache.get(seq_key)
+        if info is not None:
+            return info
+
+        scheduler = self.scheduler
+        chunk_limit = scheduler._long_context_chunk_limit(seq)
+        if seq.num_token_ids <= chunk_limit:
+            info = _PrefillReorderInfo(prefill_token_count=seq.num_token_ids,
+                                       is_nonfinal_long_prefill=False,
+                                       estimated_long_chunks=1)
+        else:
+            kv_token_limit = scheduler._next_long_context_chunk_end(seq, chunk_limit)
+            safe_chunk_limit = max(1, chunk_limit)
+            info = _PrefillReorderInfo(
+                prefill_token_count=max(0, kv_token_limit - seq.num_history_ids),
+                is_nonfinal_long_prefill=True,
+                estimated_long_chunks=max(1, (seq.num_token_ids + safe_chunk_limit - 1) // safe_chunk_limit),
+            )
+        self._info_cache[seq_key] = info
+        return info
+
+    def _long_priority_key(self, seq: SchedulerSequence, now: float):
+        """Prefer smaller long prompts, with age credit to avoid starvation."""
+        scheduler = self.scheduler
+        info = self._get_reorder_info(seq)
+        wait_age = max(0.0, now - seq.arrive_time)
+        age_credit = int(wait_age // scheduler._long_prefill_aging_seconds_per_chunk)
+        age_adjusted_chunks = info.estimated_long_chunks - age_credit
+        return age_adjusted_chunks, info.estimated_long_chunks, seq.arrive_time
+
+    def _split_by_prefill_kind(self, waiting: SeqList):
+        """Split waiting requests into normal/final and non-final long prefill."""
+        normal_waiting: SeqList = []
+        long_waiting: SeqList = []
+        for seq in waiting:
+            if self._get_reorder_info(seq).is_nonfinal_long_prefill:
+                long_waiting.append(seq)
+            else:
+                normal_waiting.append(seq)
+        return normal_waiting, long_waiting
+
+    def _sort_normal_prefills(self, waiting: SeqList):
+        return sorted(waiting,
+                      key=lambda seq: (self._get_reorder_info(seq).prefill_token_count, seq.arrive_time))
+
+    def _sort_long_prefills(self, waiting: SeqList):
+        scheduler = self.scheduler
+        if scheduler._long_prefill_policy != 'size':
+            return waiting
+        now = time.perf_counter()
+        return sorted(waiting, key=lambda seq: self._long_priority_key(seq, now))
+
+    def _reorder_for_long_turn(self, waiting: SeqList):
+        """Choose one long waiter, then fill the turn with normal prefills."""
+        normal_waiting, long_waiting = self._split_by_prefill_kind(waiting)
+        if len(long_waiting) == 0:
+            return None
+
+        long_waiting = self._sort_long_prefills(long_waiting)
+        normal_waiting = self._sort_normal_prefills(normal_waiting)
+        return [long_waiting[0]] + normal_waiting + long_waiting[1:]
+
+    def _reorder_for_short_turn(self, waiting: SeqList):
+        """Prioritize normal/final prefills while preserving long waiters."""
+        normal_waiting, long_waiting = self._split_by_prefill_kind(waiting)
+        return self._sort_normal_prefills(normal_waiting) + long_waiting
+
+
+@dataclass(frozen=True)
+class _PrefillAdmissionResult:
+    """Outcome from trying to admit one waiting prefill request."""
+
+    admitted: bool
+    prefill_token_count: int = 0
+    should_skip: bool = False
+
+    @classmethod
+    def admit(cls, prefill_token_count: int):
+        return cls(admitted=True, prefill_token_count=prefill_token_count)
+
+    @classmethod
+    def skip(cls):
+        return cls(admitted=False, should_skip=True)
+
+    @classmethod
+    def stop(cls):
+        return cls(admitted=False)
+
+    @property
+    def should_stop(self):
+        return not self.admitted and not self.should_skip
+
+
+class _PrefillAdmissionAttempt:
+    """Try to admit one waiting prefill sequence.
+
+    The attempt owns all tentative prefix-cache side effects for the sequence:
+    match, SSM restore pinning, eviction, runtime-state checks, allocation, and
+    rollback. The outer scheduler loop still owns queue traversal and decides
+    whether a rejected candidate is skipped or ends the current prefill turn.
+    """
+
+    def __init__(self,
+                 scheduler: 'Scheduler',
+                 seq: SchedulerSequence,
+                 evictable_waiting: SeqList,
+                 prealloc_size: int,
+                 token_count: int,
+                 has_admitted: bool,
+                 allow_long_prefill: bool):
+        self.scheduler = scheduler
+        self.seq = seq
+        self.evictable_waiting = evictable_waiting
+        self.prealloc_size = prealloc_size
+        self.token_count = token_count
+        self.has_admitted = has_admitted
+        self.allow_long_prefill = allow_long_prefill
+        self._alloc_size = prealloc_size
+
+    def run(self):
+        """Run the admission route for one waiting prefill.
+
+        1. Check prefill gates.
+        2. Return skip/stop if a gate rejects the candidate.
+        3. Try resource admission, including prefix-cache rollback on failure.
+        4. Return skip/stop if resources block the candidate.
+        5. On success, allocate blocks/states and publish any prefix-cache hit.
+        """
+        scheduler = self.scheduler
+        gate_check = scheduler._check_prefill_admission_gates(
+            self.seq,
+            token_count=self.token_count,
+            has_admitted=self.has_admitted,
+            allow_long_prefill=self.allow_long_prefill,
+        )
+
+        if gate_check.reject_action is not None:
+            return self._check_result(
+                self._result_for_gate_action(gate_check.reject_action))
+
+        resource_result = self._admit_resources(gate_check)
+        if resource_result is not None:
+            return self._check_result(resource_result)
+
+        return self._check_result(self._finish_admission())
+
+    def _result_for_gate_action(self, action: str | None):
+        if action == _PREFILL_GATE_SKIP:
+            return _PrefillAdmissionResult.skip()
+        if action == _PREFILL_GATE_BREAK:
+            return _PrefillAdmissionResult.stop()
+        self._warn_unexpected_state(f'unknown prefill gate action: action={action!r}')
+        return _PrefillAdmissionResult.stop()
+
+    def _gate_rollback_result(self, gate_check: _PrefillGateCheck):
+        """Reject a candidate whose gate-only prefix hit was rolled back."""
+        if gate_check.prefix_match is None:
+            return None
+        if gate_check.rollback_action is None:
+            self._warn_unexpected_state('gate-only prefix match rollback has no reject action')
+            return _PrefillAdmissionResult.stop()
+        return self._result_for_gate_action(gate_check.rollback_action)
+
+    def _rollback_gate(self,
+                       stats_snapshot,
+                       gate_check: _PrefillGateCheck,
+                       reason: str):
+        """Rollback a tentative prefix hit and return any gate-only rejection.
+
+        A prefill gate may do a tentative prefix-cache match before resource
+        admission. If that match is rolled back, the candidate should follow
+        the gate's original skip/break action. Matches created after the gate
+        return ``None`` so the resource branch keeps its own retry/stop behavior.
+        """
+        self._rollback_prefix_match(stats_snapshot, reason)
+        return self._gate_rollback_result(gate_check)
+
+    def _check_result(self, result: _PrefillAdmissionResult):
+        if result.admitted and result.should_skip:
+            self._warn_unexpected_state(
+                f'admission result both admits and skips: prefill_token_count={result.prefill_token_count}')
+        if not result.admitted and result.prefill_token_count != 0:
+            self._warn_unexpected_state(
+                f'rejected admission result carries token count: prefill_token_count={result.prefill_token_count}')
+        return result
+
+    def _warn_unexpected_state(self, message: str):
+        seq = self.seq
+        logger.warning('Unexpected prefill admission state: session_id=%s seq_id=%s %s',
+                       seq.session_id, seq.seq_id, message)
+
+    def _admit_resources(self, gate_check: _PrefillGateCheck):
+        if self.scheduler.block_trie.enable:
+            return self._admit_prefix_cache_resources(gate_check)
+        if not self._prepare_and_evict():
+            return _PrefillAdmissionResult.stop()
+        return None
+
+    def _admit_prefix_cache_resources(self, gate_check: _PrefillGateCheck):
+        """Admit resources for prefix-cache scheduling.
+
+        Route map:
+        1. Use or create the tentative prefix-cache match.
+        2. Pin any SSM restore state required by the match.
+        3. Prepare allocation limits and evict KV/state resources.
+        4. For SSM, verify a runtime state slot is still available.
+
+        Any failure rolls the tentative match back. A match created only to pass
+        a prefill gate returns that gate's skip/stop result after rollback;
+        normal resource failures keep their local retry/stop behavior here.
+        """
+        scheduler = self.scheduler
+        seq = self.seq
+        if gate_check.prefix_match is None:
+            stats_snapshot = scheduler.block_trie.snapshot_stats()
+        else:
+            stats_snapshot = gate_check.prefix_match.stats_snapshot
+
+        if gate_check.prefix_match is None:
+            scheduler.block_trie.match(seq)
+
+        had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore_state >= 0
+        if not scheduler._acquire_ssm_restore_if_needed(seq):
+            result = self._rollback_gate(stats_snapshot, gate_check,
+                                         'failed to acquire SSM restore checkpoint')
+            if result is not None:
+                return result
+
+        if not self._prepare_and_evict():
+            if not had_ssm_restore:
+                result = self._rollback_gate(stats_snapshot, gate_check, 'eviction failed')
+                if result is not None:
+                    return result
+                return _PrefillAdmissionResult.stop()
+
+            # A matched SSM restore may be pinning the only checkpoint state
+            # that eviction would otherwise free. Roll it back once and retry
+            # eviction before declaring the sequence unschedulable.
+            result = self._rollback_gate(stats_snapshot, gate_check,
+                                         'eviction failed with pinned SSM restore')
+            if result is not None:
+                return result
+            if not self._prepare_and_evict():
+                return _PrefillAdmissionResult.stop()
+
+        if scheduler.is_ssm and not scheduler._ensure_runtime_state_available():
+            result = self._rollback_gate(stats_snapshot, gate_check,
+                                         'no runtime SSM state available')
+            if result is not None:
+                return result
+            if not self._prepare_and_evict():
+                return _PrefillAdmissionResult.stop()
+            if not scheduler._ensure_runtime_state_available():
+                seq.kv_token_limit = None
+                return _PrefillAdmissionResult.stop()
+
+        return None
+
+    def _prepare_and_evict(self):
+        """Apply chunk allocation limits and evict for this prefill."""
+        scheduler = self.scheduler
+        seq = self.seq
+        alloc_size = scheduler._prepare_prefill_allocation(seq, self.prealloc_size)
+        self._alloc_size = alloc_size
+        if self._evict_for_seq(alloc_size):
+            return True
+        seq.kv_token_limit = None
+        return False
+
+    def _evict_for_seq(self, alloc_size: int):
+        """Evict stopped or skipped waiters until this sequence can run."""
+        from itertools import chain
+        scheduler = self.scheduler
+        hanging = reversed(scheduler.hanging)
+        waiting = reversed(self.evictable_waiting)
+        evictable = list(chain(hanging, waiting))
+        return scheduler.eviction_helper.evict_for_seq(self.seq, evictable, alloc_size)
+
+    def _rollback_prefix_match(self, stats_snapshot, reason: str):
+        seq = self.seq
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
+                         f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
+                         f'restore_state={seq.prefix_cache.restore_state}')
+        self.scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
+
+    def _finish_admission(self):
+        scheduler = self.scheduler
+        seq = self.seq
+        # Prefix-cache matching can advance the sequence step and shrink the
+        # remaining prefill tail. Charge the admitted batch with the
+        # post-match/post-rollback cost, not the conservative pre-match
+        # estimate used to decide whether this sequence is worth trying.
+        prefill_token_count = scheduler._prefill_admission_token_count(seq)
+        scheduler.block_manager.allocate(seq, self._alloc_size)
+        if scheduler.block_trie.enable:
+            scheduler.block_trie.allocate(seq)
+        if scheduler.is_ssm:
+            scheduler.state_manager.allocate(seq)
+        if scheduler.block_trie.enable:
+            scheduler._finish_prefix_cache_schedule(seq)
+        return _PrefillAdmissionResult.admit(prefill_token_count)
 
 
 class Scheduler:
@@ -425,7 +780,7 @@ class Scheduler:
         migrating_token_count = 0
 
         def _to_running(seq: SchedulerSequence):
-            """To running."""
+            """Activate a migrated sequence and count its tokens."""
             seq.state.activate()
             migration_ready.append(seq)
             nonlocal migrating_token_count
@@ -468,7 +823,6 @@ class Scheduler:
         """Schedule for prefilling."""
 
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
-        eviction_helper = self.eviction_helper
         swap_out_map: MapType = dict()
         swap_in_map: MapType = dict()
         copy_map: MapType = dict()
@@ -476,224 +830,40 @@ class Scheduler:
         token_count = 0
 
         def _to_running(seq: SchedulerSequence, prefill_token_count: int):
-            """To running."""
+            """Activate an admitted sequence and count its prefill tokens."""
             seq.state.activate()
             running.append(seq)
             nonlocal token_count
             token_count += prefill_token_count
 
-        def __evict_for_seq(seq: SchedulerSequence, waiting, evict_prealloc_size: int):
-            """Evict until can append."""
-            from itertools import chain
-            hanging = reversed(self.hanging)
-            waiting = reversed(waiting)
-            evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, evict_prealloc_size)
-
-        def __prepare_and_evict(seq: SchedulerSequence, waiting):
-            """Apply chunk allocation limits and evict for this prefill."""
-            alloc_prealloc_size = self._prepare_prefill_allocation(seq, prealloc_size)
-            if __evict_for_seq(seq, waiting, alloc_prealloc_size):
-                return True, alloc_prealloc_size
-            seq.kv_token_limit = None
-            return False, alloc_prealloc_size
-
-        reorder_info_cache: dict[int, _PrefillReorderInfo] = {}
-
-        def _get_prefill_reorder_info(seq: SchedulerSequence):
-            """Return reorder-only info before prefix-cache side effects.
-
-            Prefix-cache match/rollback mutates the remaining prompt.  Keep this cache confined to waiting-list ordering
-            and recompute fresh values in the admission path below.
-            """
-            seq_key = id(seq)
-            info = reorder_info_cache.get(seq_key)
-            if info is not None:
-                return info
-
-            chunk_limit = self._long_context_chunk_limit(seq)
-            if seq.num_token_ids <= chunk_limit:
-                info = _PrefillReorderInfo(prefill_token_count=seq.num_token_ids,
-                                           is_nonfinal_long_prefill=False,
-                                           estimated_long_chunks=1)
-            else:
-                kv_token_limit = self._next_long_context_chunk_end(seq, chunk_limit)
-                safe_chunk_limit = max(1, chunk_limit)
-                info = _PrefillReorderInfo(
-                    prefill_token_count=max(0, kv_token_limit - seq.num_history_ids),
-                    is_nonfinal_long_prefill=True,
-                    estimated_long_chunks=max(1, (seq.num_token_ids + safe_chunk_limit - 1) // safe_chunk_limit),
-                )
-            reorder_info_cache[seq_key] = info
-            return info
-
-        def _long_prefill_priority_key_for_reorder(seq: SchedulerSequence, now: float):
-            """Prefer smaller long prompts, with age credit to avoid
-            starvation."""
-            info = _get_prefill_reorder_info(seq)
-            wait_age = max(0.0, now - seq.arrive_time)
-            age_credit = int(wait_age // self._long_prefill_aging_seconds_per_chunk)
-            age_adjusted_chunks = info.estimated_long_chunks - age_credit
-            return age_adjusted_chunks, info.estimated_long_chunks, seq.arrive_time
-
-        def _split_waiting_by_prefill_kind(waiting: SeqList):
-            """Split waiting requests into normal/final and non-final long
-            prefill."""
-            normal_waiting: SeqList = []
-            long_waiting: SeqList = []
-            for seq in waiting:
-                if _get_prefill_reorder_info(seq).is_nonfinal_long_prefill:
-                    long_waiting.append(seq)
-                else:
-                    normal_waiting.append(seq)
-            return normal_waiting, long_waiting
-
-        def _sort_normal_prefills(waiting: SeqList):
-            return sorted(waiting, key=lambda seq: (_get_prefill_reorder_info(seq).prefill_token_count,
-                                                   seq.arrive_time))
-
-        def _sort_long_prefills_for_long_turn(waiting: SeqList):
-            if self._long_prefill_policy != 'size':
-                return waiting
-            now = time.perf_counter()
-            return sorted(waiting, key=lambda seq: _long_prefill_priority_key_for_reorder(seq, now))
-
-        def _reorder_waiting_for_long_turn(waiting: SeqList):
-            """Choose one long waiter, then fill the turn with normal
-            prefills."""
-            normal_waiting, long_waiting = _split_waiting_by_prefill_kind(waiting)
-            if len(long_waiting) == 0:
-                return None
-
-            long_waiting = _sort_long_prefills_for_long_turn(long_waiting)
-            normal_waiting = _sort_normal_prefills(normal_waiting)
-            return [long_waiting[0]] + normal_waiting + long_waiting[1:]
-
-        def _reorder_waiting_for_short_turn(waiting: SeqList):
-            """Prioritize normal/final prefills while preserving long
-            waiters."""
-            normal_waiting, long_waiting = _split_waiting_by_prefill_kind(waiting)
-            return _sort_normal_prefills(normal_waiting) + long_waiting
-
-        def _reorder_waiting():
-            """Reorder waiting."""
-            waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
-            if prefer_long_prefill:
-                # Long-work turns choose one long waiter first. The size policy
-                # only reorders this long lane; it is not global
-                # shortest-prefill-first admission.
-                long_turn_waiting = _reorder_waiting_for_long_turn(waiting)
-                if long_turn_waiting is not None:
-                    return long_turn_waiting
-
-            if allow_long_prefill:
-                return waiting
-
-            return _reorder_waiting_for_short_turn(waiting)
-
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
         if (len(running) >= max_batches or num_waiting == 0):
             return running, swap_in_map, swap_out_map, copy_map
 
-        waiting = _reorder_waiting()
+        waiting = _PrefillReorderer(self).reorder(self.waiting,
+                                                 allow_long_prefill=allow_long_prefill,
+                                                 prefer_long_prefill=prefer_long_prefill)
         skipped_waiting: SeqList = []
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
-            gate_check = self._check_prefill_admission_gates(seq,
-                                                             token_count=token_count,
-                                                             has_admitted=len(running) > 0,
-                                                             allow_long_prefill=allow_long_prefill)
+            evictable_waiting = skipped_waiting + waiting
+            admission = _PrefillAdmissionAttempt(
+                self,
+                seq,
+                evictable_waiting=evictable_waiting,
+                prealloc_size=prealloc_size,
+                token_count=token_count,
+                has_admitted=len(running) > 0,
+                allow_long_prefill=allow_long_prefill,
+            ).run()
 
-            def __reject_after_prefill_gate_match_rollback():
-                """Reject if resource admission rolled back a gate-only hit."""
-                if gate_check.prefix_match is None:
-                    return False
-                if gate_check.rollback_action == _PREFILL_GATE_SKIP:
-                    skipped_waiting.append(seq)
-                    return True
-                return False
-
-            if gate_check.reject_action is not None:
-                if gate_check.reject_action == _PREFILL_GATE_SKIP:
-                    skipped_waiting.append(seq)
-                    continue
+            if admission.should_skip:
+                skipped_waiting.append(seq)
+                continue
+            if admission.should_stop:
                 break
 
-            evictable_waiting = skipped_waiting + waiting
-
-            if self.block_trie.enable:
-                if gate_check.prefix_match is None:
-                    stats_snapshot = self.block_trie.snapshot_stats()
-                else:
-                    stats_snapshot = gate_check.prefix_match.stats_snapshot
-
-                def __rollback_prefix_match(reason: str):
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
-                                     f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                                     f'restore_state={seq.prefix_cache.restore_state}')
-                    self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
-
-                if gate_check.prefix_match is None:
-                    self.block_trie.match(seq)
-
-                had_ssm_restore = self.is_ssm and seq.prefix_cache.restore_state >= 0
-                if not self._acquire_ssm_restore_if_needed(seq):
-                    __rollback_prefix_match('failed to acquire SSM restore checkpoint')
-                    if gate_check.prefix_match is not None:
-                        if __reject_after_prefill_gate_match_rollback():
-                            continue
-                        break
-
-                evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
-                if not evicted:
-                    if not had_ssm_restore:
-                        __rollback_prefix_match('eviction failed')
-                        if __reject_after_prefill_gate_match_rollback():
-                            continue
-                        break
-                    # A matched SSM restore may be pinning the only checkpoint
-                    # state that eviction would otherwise free.  Roll it back once
-                    # and retry eviction before declaring the sequence unschedulable.
-                    __rollback_prefix_match('eviction failed with pinned SSM restore')
-                    if __reject_after_prefill_gate_match_rollback():
-                        continue
-                    if gate_check.prefix_match is not None:
-                        break
-                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
-                    if not evicted:
-                        break
-
-                # allocate session memory
-                if self.is_ssm and not self._ensure_runtime_state_available():
-                    __rollback_prefix_match('no runtime SSM state available')
-                    if __reject_after_prefill_gate_match_rollback():
-                        continue
-                    if gate_check.prefix_match is not None:
-                        break
-                    evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
-                    if not evicted:
-                        break
-                    if not self._ensure_runtime_state_available():
-                        seq.kv_token_limit = None
-                        break
-            else:
-                evicted, alloc_prealloc_size = __prepare_and_evict(seq, evictable_waiting)
-                if not evicted:
-                    break
-            # Prefix-cache matching can advance the sequence step and shrink
-            # the remaining prefill tail.  Charge the admitted batch with the
-            # post-match/post-rollback cost, not the conservative pre-match
-            # estimate used to decide whether this sequence is worth trying.
-            prefill_token_count = self._prefill_admission_token_count(seq)
-            self.block_manager.allocate(seq, alloc_prealloc_size)
-            if self.block_trie.enable:
-                self.block_trie.allocate(seq)
-            if self.is_ssm:
-                self.state_manager.allocate(seq)
-            if self.block_trie.enable:
-                self._finish_prefix_cache_schedule(seq)
-            _to_running(seq, prefill_token_count)
+            _to_running(seq, admission.prefill_token_count)
 
             seq.record_event(EventType.SCHEDULED)
 
