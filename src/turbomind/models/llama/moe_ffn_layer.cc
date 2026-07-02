@@ -280,6 +280,8 @@ public:
         TM_CHECK_GT(ep_size_, 1);
         TM_CHECK_EQ(engine.mlp_tp_size, 1);
         TM_CHECK_EQ(backend_, "allgather_reducescatter");
+        // Decoder owns attention TP/CP-group FFN boundary communication. This backend consumes and produces
+        // this rank's compact token slice and owns expert-parallel allgather/reducescatter communication.
     }
 
     void Forward(MoeFfnLayer::ForwardParam&) override
@@ -295,8 +297,8 @@ public:
 private:
     void ReportUnsupported() const
     {
-        TM_LOG_FATAL(
-            "MoeFfnAgRsImpl is a stub: resolve AllreduceResidualRMSnorm and ag-rs ownership before enabling EP MoE");
+        TM_LOG_FATAL("MoeFfnAgRsImpl is a stub: decoder supplies a compact attention-TP/CP token slice; implement EP "
+                     "allgather-reducescatter dispatch/combine before enabling EP MoE");
     }
 
     int         ep_size_;
