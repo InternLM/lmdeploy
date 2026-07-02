@@ -101,7 +101,7 @@ class GuidedDecodingManager:
         processor.fill_next_token_bitmask(guided_bitmask, index)
 
     def accept_token(self, processor: xgr.GrammarMatcher, token: int) -> None:
-        processor.accept_token(token)
+        processor.accept_token(token, debug_print=False)
 
     def is_terminated(self, processor: xgr.GrammarMatcher) -> bool:
         return processor.is_terminated()
