@@ -11,15 +11,24 @@ logger = logging.getLogger('lmdeploy')
 
 
 class GuidedDecodingManager:
-    processors = {}
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None):
         if vocab_size is None:
             vocab_size = tokenizer.vocab_size
 
+        # vocab_size must include all token IDs the model can produce (EOS, special tokens).
+        # Some models have vocab_size < len(tokenizer), causing EOS to be out of bitmask range.
+        tokenizer_vocab_len = len(tokenizer)
+        if tokenizer_vocab_len > vocab_size:
+            logger.info(f'GuidedDecodingManager: expanding vocab_size from {vocab_size} '
+                        f'to {tokenizer_vocab_len}')
+            vocab_size = tokenizer_vocab_len
+
+        # XGrammar will automatically detect stop tokens from the tokenizer
         tokenizer_info = xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
         self.compiler = xgr.GrammarCompiler(tokenizer_info)
         self.vocab_size = vocab_size
+        self.processors: dict[int, dict[int, xgr.GrammarMatcher]] = {}
 
     def get_processors(self, session_ctx: list[dict[str, Any]],
                        response_formats: tuple[dict]) -> dict[int, xgr.GrammarMatcher]:
@@ -32,7 +41,8 @@ class GuidedDecodingManager:
                     if isinstance(schema, dict):
                         for key in ['json_schema', 'schema']:
                             if key in schema:
-                                schema = json.dumps(schema[key], ensure_ascii=False)
+                                val = schema[key]
+                                schema = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
 
                     if not isinstance(schema, str):
                         raise ValueError(f'Cannot parse schema {schema}. The schema must be '
@@ -72,7 +82,7 @@ class GuidedDecodingManager:
         else:
             assert False, f'Do not support schema type {type}'
 
-        processor = xgr.GrammarMatcher(compiled, terminate_without_stop_token=True)
+        processor = xgr.GrammarMatcher(compiled)
         self.processors.setdefault(session_id, {})[seq_id] = processor
         logger.info(f'create guided processor for session_id={session_id}, seq_id={seq_id}, and '
                     f'total_processors={len(self.processors)}')
@@ -87,11 +97,15 @@ class GuidedDecodingManager:
     def allocate_batched_bitmap(self, batch_size: int) -> torch.Tensor:
         return xgr.allocate_token_bitmask(batch_size, self.vocab_size)
 
-    def fill_bitmap(self, processor: xgr.GrammarMatcher, guided_bitmask: torch.Tensor, index: int) -> None:
-        processor.fill_next_token_bitmask(guided_bitmask, index)
+    def fill_bitmap(self, processor: xgr.GrammarMatcher, guided_bitmask: torch.Tensor, index: int):
+        if not processor.is_terminated():
+            processor.fill_next_token_bitmask(guided_bitmask, index)
 
     def accept_token(self, processor: xgr.GrammarMatcher, token: int) -> None:
         processor.accept_token(token)
+
+    def is_terminated(self, processor: xgr.GrammarMatcher) -> bool:
+        return processor.is_terminated()
 
     def apply_batched_bitmap(self, logits: torch.Tensor, guided_bitmask: torch.Tensor) -> None:
         device = logits.device

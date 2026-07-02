@@ -342,6 +342,11 @@ class BaseModelAgent:
                                            self.agent_strategy,
                                            misc_config=misc_config,
                                            device=device)
+        if self.spec_agent.is_enabled():
+            from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
+            helper = GuidedSpecHelper(self.guided_decoding_manager)
+            self.spec_agent.guided_helper = helper
+            self.spec_agent.proposer.guided_helper = helper
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
