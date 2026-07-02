@@ -984,6 +984,13 @@ void Scheduler::PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s
     if (x.offset + x.capacity != end) {
         return;  // partial block — nothing to publish
     }
+    // cache_generation=none opts out of generation-region checkpoints: a block
+    // whose coverage extends past the prompt (end > prompt_len) holds generated
+    // tokens and is never indexed under 'none', so its checkpoint would only
+    // serve this request's own resume. Prompt-region checkpoints stay always-on.
+    if (generation_cache_mode_ == CacheMode::kNone && end > s.prompt_len) {
+        return;
+    }
     const int interval = registry_.checkpoint_min_interval();
     if (end - s.last_ckpt_pos >= interval && !ValidAlloc(x.checkpoint_id)) {
         pass.pending_publish[i] = {&x, end, s.publish_cache_id};
