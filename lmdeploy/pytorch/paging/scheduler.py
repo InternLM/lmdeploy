@@ -134,7 +134,8 @@ class _PrefillReorderer:
         return self._warn_if_not_permutation(waiting, reordered)
 
     def _warn_if_not_permutation(self, original: SeqList, reordered: SeqList):
-        """Warn if reorder drops, duplicates, or substitutes waiting sequences."""
+        """Warn if reorder drops, duplicates, or substitutes waiting
+        sequences."""
         original_ids = [id(seq) for seq in original]
         reordered_ids = [id(seq) for seq in reordered]
         if len(original_ids) == len(reordered_ids) and Counter(original_ids) == Counter(reordered_ids):
@@ -152,9 +153,8 @@ class _PrefillReorderer:
     def _get_reorder_info(self, seq: SchedulerSequence):
         """Return reorder-only info before prefix-cache side effects.
 
-        Prefix-cache match/rollback mutates the remaining prompt. Keep this
-        cache confined to waiting-list ordering and recompute fresh values in
-        the admission path.
+        Prefix-cache match/rollback mutates the remaining prompt. Keep this cache confined to waiting-list ordering and
+        recompute fresh values in the admission path.
         """
         seq_key = id(seq)
         info = self._info_cache.get(seq_key)
@@ -188,7 +188,8 @@ class _PrefillReorderer:
         return age_adjusted_chunks, info.estimated_long_chunks, seq.arrive_time
 
     def _split_by_prefill_kind(self, waiting: SeqList):
-        """Split waiting requests into normal/final and non-final long prefill."""
+        """Split waiting requests into normal/final and non-final long
+        prefill."""
         normal_waiting: SeqList = []
         long_waiting: SeqList = []
         for seq in waiting:

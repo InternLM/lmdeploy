@@ -358,7 +358,8 @@ class _ForwardInputsTask:
             self._try_active_chunk()
 
     def _should_defer_active_chunk(self):
-        """Check whether the active long-context chunk should yield this loop."""
+        """Check whether the active long-context chunk should yield this
+        loop."""
         maker = self.maker
         if maker.config.role == EngineRole.Prefill:
             return False
@@ -371,7 +372,8 @@ class _ForwardInputsTask:
         return getattr(maker, '_last_forward_kind', None) == 'long_context_chunk'
 
     def _should_try_short_prefill_first(self):
-        """Allow short/normal prefill quota before an active non-final chunk."""
+        """Allow short/normal prefill quota before an active non-final
+        chunk."""
         maker = self.maker
         if maker.long_context_chunker.is_last_chunk():
             return False
