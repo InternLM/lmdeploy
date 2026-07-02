@@ -16,7 +16,7 @@ namespace turbomind {
 
 /// Polymorphic peer of ``LanguageModel`` for the vision sub-graph.
 ///
-/// Concrete subclasses (one per VLM family — ``Qwen3_5Vit``,
+/// Concrete subclasses (one per VLM family — ``QwenVit``,
 /// ``InternVit``, …) wire up the per-family C++ runtime. The
 /// engine talks to this base via ``Run(BatchOp, phase, env)``,
 /// mirroring ``LanguageModel::Run``.

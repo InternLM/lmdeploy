@@ -68,8 +68,9 @@ struct AttentionData {
 
     Buffer_<float> rope_base;
 
-    Tensor_<int> mrope_position_ids;
+    Buffer_<int> mrope_position_ids;
     Buffer_<int> mrope_position_delta;
+    Buffer_<int> mrope_position_offsets;
     Buffer_<int> mrope_length;
 
     // borrowed from env
@@ -136,10 +137,8 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant
         rope_base_buf_ = {bsz + 1, kCPUpinned};
     }
     if (rope_param_.mrope_mode != MropeMode::kNone) {
-        // mrope device buffers are allocated lazily — borrowed from env when the vision encoder
-        // produced them, or owned (allocated in legacy_mrope_setup) when only r.inputs supplies them.
-        mrope_position_delta_buf_ = {bsz, kCPUpinned};
-        mrope_length_buf_         = {bsz, kCPUpinned};
+        mrope_default_buf_ = Buffer_<int>{std::max(bsz, 3), kDEVICE};
+        Clear(mrope_default_buf_);
     }
     const int max_blocks = bsz * cdiv(engine.session_len, engine_param_.cache_block_seq_len);
     for (int i = 0; i < phases; ++i) {
@@ -277,45 +276,26 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         copy(rope_base_buf_, bsz, d.rope_base);
     }
     if (rope_param_.mrope_mode != MropeMode::kNone) {
-        // mrope tensors can come from two sources:
-        //   1. env: the C++ vision encoder produced device tensors in the exact layout
-        //      FastRoPE expects — borrow them with no copy.
-        //   2. r.inputs: legacy Python-preprocessor path, per-request shaped (length, 3) +
-        //      scalar delta. Falls back here when env did not produce mrope.
-        if (env.try_("mrope_length")) {
-            d.mrope_length         = env.at("mrope_length").buffer().borrow();
-            d.mrope_position_delta = env.at("mrope_position_delta").buffer().borrow();
-            d.mrope_position_ids   = env.at("mrope_position_ids").borrow();
+        auto* mrope_length           = env.try_("mrope_length");
+        auto* mrope_position_delta   = env.try_("mrope_position_delta");
+        auto* mrope_position_offsets = env.try_("mrope_position_offsets");
+        auto* mrope_position_ids     = env.try_("mrope_position_ids");
+        if (mrope_length || mrope_position_delta || mrope_position_offsets || mrope_position_ids) {
+            TM_CHECK(mrope_length) << "MRoPE requires native vision-produced mrope_length";
+            TM_CHECK(mrope_position_delta) << "MRoPE requires native vision-produced mrope_position_delta";
+            TM_CHECK(mrope_position_offsets) << "MRoPE requires native vision-produced mrope_position_offsets";
+            TM_CHECK(mrope_position_ids) << "MRoPE requires native vision-produced mrope_position_ids";
+
+            d.mrope_length           = mrope_length->buffer().borrow();
+            d.mrope_position_delta   = mrope_position_delta->buffer().borrow();
+            d.mrope_position_offsets = mrope_position_offsets->buffer().borrow();
+            d.mrope_position_ids     = mrope_position_ids->buffer().borrow();
         }
         else {
-            // Legacy r.inputs path. Lazily allocate owned device buffers on first hit.
-            if (!d.mrope_position_ids) {
-                /// TODO: total space for `mrope_position_ids` can be reduced to (max_fwd_tokens, 3)
-                d.mrope_position_ids =
-                    Tensor_<int>{{engine_param_.max_batch_size, engine_param_.session_len, 3}, kDEVICE};
-                d.mrope_position_delta = Buffer_<int>{engine_param_.max_batch_size, kDEVICE};
-                d.mrope_length         = Buffer_<int>{engine_param_.max_batch_size, kDEVICE};
-            }
-            const auto stride = d.mrope_position_ids.stride(0);
-            for (int i = 0; i < rc.size(); ++i) {
-                auto& c = *rc[i];
-                auto& r = *c.req;
-                if (auto pos_ids = r.inputs.try_("mrope_position_ids")) {
-                    int length                   = pos_ids->shape(0);
-                    mrope_length_buf_[i]         = length;
-                    mrope_position_delta_buf_[i] = *r.inputs.at("mrope_position_delta").data<int>();
-                    if (auto o = Interval{0, length} & Interval{c.history_len + c.alpha, Interval::Size{c.input_len}}) {
-                        copy(pos_ids->data<int>() + o.begin() * 3,
-                             (int)o.size() * 3,
-                             d.mrope_position_ids.data() + i * stride + o.begin() * 3);
-                    }
-                }
-                else {
-                    mrope_length_buf_[i] = mrope_position_delta_buf_[i] = 0;
-                }
-            }
-            copy(mrope_length_buf_, rc.size(), d.mrope_length);
-            copy(mrope_position_delta_buf_, rc.size(), d.mrope_position_delta);
+            d.mrope_length           = mrope_default_buf_.borrow();
+            d.mrope_position_delta   = mrope_default_buf_.borrow();
+            d.mrope_position_offsets = mrope_default_buf_.borrow();
+            d.mrope_position_ids     = mrope_default_buf_.borrow();
         }
     }
 }
@@ -522,11 +502,10 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.rope_param.base = d.rope_base.data() + offset;
         }
         if (rope_param_.mrope_mode != MropeMode::kNone) {
-            params.rope_param.mrope.position_delta = d.mrope_position_delta.data() + offset;
-            params.rope_param.mrope.length         = d.mrope_length.data() + offset;
-            params.rope_param.mrope.stride         = d.mrope_position_ids.stride(0);
-            params.rope_param.mrope.position_ids =
-                d.mrope_position_ids.data() + offset * params.rope_param.mrope.stride;
+            params.rope_param.mrope.position_delta   = d.mrope_position_delta.data() + offset;
+            params.rope_param.mrope.position_offsets = d.mrope_position_offsets.data() + offset;
+            params.rope_param.mrope.length           = d.mrope_length.data() + offset;
+            params.rope_param.mrope.position_ids     = d.mrope_position_ids.data();
         }
 
         // logn attn
