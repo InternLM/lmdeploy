@@ -112,14 +112,18 @@ class StateCheckpointVerifyStatus(enum.Enum):
 class Node:
     """One full-token-block edge in the prefix-cache trie.
 
-    ``extra_hashes`` augments the token block key with VLM content identity.
-    ``state_idx`` / ``state_ready`` / ``state_ref_count`` are optional SSM
-    state-checkpoint ownership fields; they are meaningful only when the cache
-    config has state shapes.  ``state_ready`` controls whether the checkpoint
-    has been published and may be matched.  ``state_ref_count`` pins a ready
-    checkpoint while a restore copy may still read it or a producer save copy
-    may still write it, so LRU eviction or checkpoint reuse cannot overwrite
-    the slot too early.
+    A non-root node owns one trie KV-block reference.  ``hash_key``,
+    ``tokens``, and ``extra_hashes`` define the block identity; ``extra_hashes``
+    carries VLM content identity for blocks that overlap multimodal spans.
+
+    The same node may also own an optional SSM checkpoint.  ``state_idx`` is
+    the checkpoint slot, ``state_ready`` means the slot has been published and
+    is matchable, and ``state_ref_count`` pins the slot while an async restore
+    may still read it or a producer save may still write it.
+
+    ``parent`` is intentionally stateful: assigning it updates the old and new
+    parent ``children`` maps.  Detached nodes can therefore still exist as
+    stale auxiliary-index entries, but they are no longer trie truth.
     """
 
     def __init__(self,
@@ -183,7 +187,22 @@ class StateCheckpointVerifyResult:
 
 
 class BlockTrie:
-    """Block trie for prefix caching."""
+    """Prefix-cache facade for trie KV reuse and SSM state reuse.
+
+    Public scheduling flow stays small: ``match(seq)`` tentatively reuses a
+    prefix, the scheduler admits resources, then ``allocate(seq)`` attaches the
+    newly computed full blocks.  ``evict()`` frees trie-owned KV leaves under
+    allocator pressure.
+
+    Internally this facade owns several related indexes:
+
+    * adapter-partitioned trie roots and leaf candidates for KV eviction;
+    * multimodal-aware block keys;
+    * optional SSM checkpoint reserve/commit/restore/save lifecycle;
+    * sparse ready-checkpoint lookup for SSM prefix hits;
+    * best-effort routed-expert replay data;
+    * prefix-cache stats used by scheduler rollback.
+    """
 
     def __init__(self, cache_config: CacheConfig, block_manager: BaseBlockManager, state_manager=None):
         self.block_manager = block_manager
@@ -202,6 +221,8 @@ class BlockTrie:
         self._state_checkpoint_index: StateCheckpointIndex = dict()
         self._state_checkpoint_steps: StateCheckpointSteps = dict()
         self.stats = PrefixCacheStats()
+
+    # Prefix-cache stats and tentative-match rollback helpers.
 
     def hit_rate(self):
         """Get hit rate."""
@@ -226,6 +247,13 @@ class BlockTrie:
             return
         self.stats.num_query_tokens += query_tokens
         self.stats.num_hit_tokens += hit_tokens
+
+    @staticmethod
+    def _warn_unexpected_state(message: str):
+        """Warn about contradictory internal trie/checkpoint state."""
+        logger.warning('Unexpected prefix-cache trie state: %s', message)
+
+    # Private recompute-overlap helpers for AR-spec/MTP prefix hits.
 
     @staticmethod
     def _clear_private_recompute_range(seq: SchedulerSequence):
@@ -258,6 +286,8 @@ class BlockTrie:
         start = prefix_cache.private_recompute_start_step
         end = prefix_cache.private_recompute_end_step
         return start >= 0 and start <= step < end
+
+    # Trie keying and raw block matching helpers.
 
     def get_root(self, adapter_name: str):
         """Get root by adapter name."""
@@ -301,6 +331,9 @@ class BlockTrie:
             curr = child
             num_matched += block_size
         return num_matched
+
+    # Routed-expert cache/replay helpers.  Routed experts enrich a hit when
+    # complete block rows are available, but they are not part of cache identity.
 
     @staticmethod
     def _get_routed_experts_for_range(seq: SchedulerSequence, start: int, end: int):
@@ -358,6 +391,9 @@ class BlockTrie:
             return
         for seq in seqs:
             self.cache_routed_experts_for_seq(seq)
+
+    # Sparse SSM checkpoint index helpers.  The lookup key is only a filter;
+    # `_verify_state_checkpoint_node()` remains the correctness check.
 
     def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int) -> StateCheckpointKey:
         """Make the sparse SSM checkpoint lookup key for a sequence prefix.
@@ -421,6 +457,8 @@ class BlockTrie:
         for key in list(self._state_checkpoint_index):
             removed = self._remove_state_checkpoint_index_entry(node, key) or removed
         return removed
+
+    # SSM checkpoint reservation and publication lifecycle.
 
     def reserve_state_checkpoint(self, node: Node):
         """Reserve a state-cache slot owned by a trie node.
@@ -486,42 +524,6 @@ class BlockTrie:
             self.release_state_checkpoint(node)
             return True
         return False
-
-    def _get_state_checkpoint_node_for_seq(self, seq: SchedulerSequence, step: int):
-        """Get the trie node that exactly represents a sequence checkpoint
-        step."""
-        node = seq.prefix_cache.last_shared_node
-        while node is not None and node.num_matched > step:
-            node = node.parent
-        if node is None or node.parent is None or node.num_matched != step:
-            return None
-        return node
-
-    @staticmethod
-    def _is_attached_node(node: Node):
-        """Check whether a node is still attached to the trie."""
-        parent = node.parent
-        return parent is not None and parent.children.get(node.hash_key) is node
-
-    @staticmethod
-    def _is_attached_leaf(node: Node):
-        """Check whether a node is a current attached trie leaf."""
-        return BlockTrie._is_attached_node(node) and len(node.children) == 0
-
-    @staticmethod
-    def _is_evict_candidate_leaf(node: Node):
-        """Check whether a leaf-set entry can be considered by KV eviction."""
-        return (node.block >= 0 and len(node.children) == 0
-                and (node.parent is None or BlockTrie._is_attached_node(node)))
-
-    def _is_attached_cursor(self, node: Node):
-        """Check whether a sequence cursor still reaches the adapter root."""
-        if node.parent is None:
-            return node.block < 0 and self._roots.get(node.adapter_name) is node
-        nodes = self._get_node_blocks(node)
-        if len(nodes) * self.block_size != node.num_matched:
-            return False
-        return all(self._is_attached_node(node) for node in nodes)
 
     def reserve_state_checkpoint_for_seq(self,
                                          seq: SchedulerSequence,
@@ -786,6 +788,7 @@ class BlockTrie:
     def _release_state_checkpoint_ref(node: Node | None, state_idx: int, err_msg: str):
         """Release one checkpoint ref held by a sequence."""
         if not BlockTrie._has_state_checkpoint_ref(node, state_idx):
+            BlockTrie._warn_unexpected_state(f'{err_msg} state_idx={state_idx}')
             raise RuntimeError(err_msg)
         node.state_ref_count -= 1
         return node
@@ -844,6 +847,9 @@ class BlockTrie:
             raise RuntimeError('Cannot release a pinned SSM prefix-cache checkpoint.')
         if node.state_idx < 0:
             if node.state_ready:
+                self._warn_unexpected_state(
+                    f'ready SSM checkpoint has no state slot: adapter={node.adapter_name} '
+                    f'step={node.num_matched}')
                 self._unindex_state_checkpoint(node)
                 node.state_ready = False
                 node.state_ref_count = 0
@@ -885,6 +891,44 @@ class BlockTrie:
             self.release_state_checkpoint(node)
             evicted += 1
         return evicted
+
+    # Trie attachment and leaf-index helpers.
+
+    def _get_state_checkpoint_node_for_seq(self, seq: SchedulerSequence, step: int):
+        """Get the trie node that exactly represents a sequence checkpoint
+        step."""
+        node = seq.prefix_cache.last_shared_node
+        while node is not None and node.num_matched > step:
+            node = node.parent
+        if node is None or node.parent is None or node.num_matched != step:
+            return None
+        return node
+
+    @staticmethod
+    def _is_attached_node(node: Node):
+        """Check whether a node is still attached to the trie."""
+        parent = node.parent
+        return parent is not None and parent.children.get(node.hash_key) is node
+
+    @staticmethod
+    def _is_attached_leaf(node: Node):
+        """Check whether a node is a current attached trie leaf."""
+        return BlockTrie._is_attached_node(node) and len(node.children) == 0
+
+    @staticmethod
+    def _is_evict_candidate_leaf(node: Node):
+        """Check whether a leaf-set entry can be considered by KV eviction."""
+        return (node.block >= 0 and len(node.children) == 0
+                and (node.parent is None or BlockTrie._is_attached_node(node)))
+
+    def _is_attached_cursor(self, node: Node):
+        """Check whether a sequence cursor still reaches the adapter root."""
+        if node.parent is None:
+            return node.block < 0 and self._roots.get(node.adapter_name) is node
+        nodes = self._get_node_blocks(node)
+        if len(nodes) * self.block_size != node.num_matched:
+            return False
+        return all(self._is_attached_node(node) for node in nodes)
 
     def _get_node_blocks(self, node: Node):
         """Get trie nodes from root to a target node."""
@@ -1062,10 +1106,17 @@ class BlockTrie:
                          f'max_step={max_step} ready_steps={len(steps)}')
 
     def match(self, seq: SchedulerSequence):
-        """Match reusable prefix blocks for a sequence.
+        """Tentatively match reusable prefix blocks for a sequence.
 
-        Text/VLM models walk the trie block by block.  SSM models delegate to the sparse checkpoint matcher above
-        because a KV block match without an exact recurrent-state snapshot must be treated as a miss.
+        This method mutates sequence state before scheduler admission is final:
+        it may append shared logical blocks, advance ``seq.num_history_ids``,
+        record ``match_start_step``, replay routed experts, update stats, and
+        set SSM restore metadata.  Callers must rollback the sequence if later
+        resource admission rejects the request.
+
+        Text/VLM models walk the trie block by block.  SSM models delegate to
+        sparse checkpoint matching because a KV block match without the exact
+        recurrent-state snapshot is a miss.
         """
         if not self.enable:
             return
@@ -1158,14 +1209,28 @@ class BlockTrie:
                          f'clamped={effective_num_matched != raw_num_matched}')
 
     def allocate(self, seq: SchedulerSequence):
-        """Attach newly allocated full blocks to the prefix-cache trie."""
+        """Attach newly allocated full blocks to the prefix-cache trie.
+
+        Allocation starts from ``seq.prefix_cache.last_shared_node`` when that
+        cursor still reaches the current trie.  Existing identical children are
+        deduplicated back to the trie-owned block, except for the private
+        recompute-overlap window where the sequence must keep fresh writable KV.
+        New nodes take one trie-owned allocator ref.
+        """
         if not self.enable:
             return
 
         block_size = self.block_size
         logical_blocks = seq.logical_blocks
         node: Node = seq.prefix_cache.last_shared_node
-        if node is None or not self._is_attached_cursor(node):
+        if node is None:
+            node = self.get_root(seq.adapter_name)
+            seq.prefix_cache.last_shared_node = node
+        elif not self._is_attached_cursor(node):
+            self._warn_unexpected_state(
+                f'reset detached sequence cursor: session_id={seq.session_id} '
+                f'seq_id={seq.seq_id} adapter={seq.adapter_name} '
+                f'cursor_step={node.num_matched}')
             node = self.get_root(seq.adapter_name)
             seq.prefix_cache.last_shared_node = node
 
@@ -1240,7 +1305,13 @@ class BlockTrie:
         self._clear_private_recompute_range(seq)
 
     def evict(self, max_num_blocks: int):
-        """evict."""
+        """Evict trie-owned KV leaf blocks.
+
+        ``self.leaves`` is an auxiliary candidate index, not the source of
+        truth.  Each candidate is rechecked against the parent/children chain,
+        allocator refcount, and checkpoint pin state before removing it.  When
+        a leaf is removed, its parent can become the next leaf candidate.
+        """
         if not self.enable:
             return 0
 
@@ -1282,22 +1353,26 @@ class BlockTrie:
             return 0
 
         evicted_blocks = []
+        old_leaf_count = len(self.leaves)
         leaves = list(leaf for leaf in self.leaves if self._is_evict_candidate_leaf(leaf))
         if len(leaves) != len(self.leaves):
             self.leaves.intersection_update(leaves)
+            self._warn_unexpected_state(
+                f'dropped stale leaf candidates before eviction: '
+                f'old_count={old_leaf_count} new_count={len(leaves)}')
         if len(leaves) == 0:
             return 0
 
         # filter ref-cnt == 1 (trie own one block ref)
-        leave_blocks = np.array(list(leaf.block for leaf in leaves))
-        ref_cnt = self.allocator.get_ref_count(leave_blocks)
+        leaf_blocks = np.array(list(leaf.block for leaf in leaves))
+        ref_cnt = self.allocator.get_ref_count(leaf_blocks)
         indices = (ref_cnt == 1).nonzero()[0]
         if len(indices) == 0:
             return 0
 
         # make heap
         leaves = list(leaves[i] for i in indices)
-        access_times = self.allocator.get_access_time(leave_blocks)
+        access_times = self.allocator.get_access_time(leaf_blocks)
         access_times = list(access_times[i] for i in indices)
         leaves = list(zip(access_times, leaves))
         heapq.heapify(leaves)
