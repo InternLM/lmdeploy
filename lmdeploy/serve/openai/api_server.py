@@ -154,7 +154,11 @@ class VariableInterface:
 
 
 def _build_serving_generation_config(request, **extra_kwargs) -> GenerationConfig:
-    """Build ``GenerationConfig`` with server and request sampling merge."""
+    """Build ``GenerationConfig`` with server and request sampling merge.
+
+    Same-name request fields are extracted automatically; ``extra_kwargs`` is
+    for renamed, computed, or raw-json fields only.
+    """
     max_new_tokens = getattr(request, 'max_completion_tokens', None)
     if max_new_tokens is None:
         max_new_tokens = getattr(request, 'max_tokens', None)
@@ -494,8 +498,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-    random_seed = request.seed if request.seed is not None else None
-
     parser_cls = VariableInterface.response_parser_cls
     try:
         response_parser = parser_cls(request)
@@ -508,21 +510,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     gen_config = _build_serving_generation_config(
         request,
         logprobs=gen_logprobs,
-        ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        include_stop_str_in_output=request.include_stop_str_in_output,
-        skip_special_tokens=request.skip_special_tokens,
-        response_format=request.response_format,
         logits_processors=logits_processors,
-        min_new_tokens=request.min_new_tokens,
-        random_seed=random_seed,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
+        random_seed=request.seed,
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
-        return_routed_experts=request.return_routed_experts,
     )
 
     # text completion for string input or input_ids
@@ -840,21 +833,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             sessions.append(VariableInterface.create_session(i + 1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
-    random_seed = request.seed if request.seed is not None else None
 
     gen_config = _build_serving_generation_config(
         request,
-        logprobs=request.logprobs,
-        ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens,
-        random_seed=random_seed,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
+        random_seed=request.seed,
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
     generators = []
     for prompt, session in zip(request.prompt, sessions):
@@ -1021,15 +1007,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     gen_config = _build_serving_generation_config(
         request,
         logprobs=1 if request.return_logprob else None,
-        ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        stop_token_ids=request.stop_token_ids,
-        skip_special_tokens=request.skip_special_tokens,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
-        include_stop_str_in_output=request.include_stop_str_in_output,
-        return_routed_experts=request.return_routed_experts,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
 
     result_generator = VariableInterface.async_engine.generate(

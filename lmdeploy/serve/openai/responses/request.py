@@ -275,9 +275,6 @@ def to_generation_config(
         default_gen_config or {},
         max_new_tokens=request.max_output_tokens,
         stop_words=stop_words,
-        ignore_eos=request.ignore_eos,
-        skip_special_tokens=request.skip_special_tokens,
-        include_stop_str_in_output=request.include_stop_str_in_output,
         response_format=_response_format_from_text(request.text),
         random_seed=request.seed,
     )

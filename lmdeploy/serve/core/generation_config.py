@@ -48,14 +48,14 @@ def resolve_default_gen_config(
 
 
 def merge_gen_config(
-    request_values: dict[str, Any],
+    request_gen_config: dict[str, Any],
     default_gen_config: dict[str, Any],
 ) -> dict[str, Any]:
     """Merge generation config with request > default_gen_config priority."""
     merged: dict[str, Any] = {}
-    for key in set(default_gen_config) | set(request_values):
-        if key in request_values:
-            merged[key] = request_values[key]
+    for key in set(default_gen_config) | set(request_gen_config):
+        if key in request_gen_config:
+            merged[key] = request_gen_config[key]
         else:
             merged[key] = default_gen_config[key]
     return merged
@@ -82,8 +82,10 @@ def build_generation_config(
 ) -> GenerationConfig:
     """Build ``GenerationConfig`` from merged sampling defaults and request
     values."""
-    request_values = extract_request_gen_config(request)
-    merged = merge_gen_config(request_values, default_gen_config)
+    request_gen_config = extract_request_gen_config(request)
+    for key in extra_kwargs:
+        request_gen_config.pop(key, None)
+    merged = merge_gen_config(request_gen_config, default_gen_config)
     merged.pop('max_new_tokens', None)
     merged.pop('do_sample', None)
     return GenerationConfig(
