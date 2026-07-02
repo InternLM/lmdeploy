@@ -178,13 +178,22 @@ class Pipeline:
         self.async_engine.close()
 
     @staticmethod
+    def _append_prompt_to_messages(messages: list[dict], prompt) -> None:
+        """Append a prompt (str, tuple, or openai-style messages) to
+        messages."""
+        formatted = MultimodalProcessor.format_prompts(prompt)
+        if isinstance(formatted[0], str):
+            messages.append(dict(role='user', content=formatted[0]))
+        elif isinstance(formatted[0], list):
+            messages.extend(formatted[0])
+        else:
+            messages.extend(formatted)
+
+    @staticmethod
     def _history_to_messages(history: list[tuple]) -> list[dict]:
         messages = []
         for user, assistant in history:
-            if isinstance(user, str):
-                messages.append(dict(role='user', content=user))
-            elif isinstance(user, list):
-                messages.extend(user)
+            Pipeline._append_prompt_to_messages(messages, user)
             messages.append(dict(role='assistant', content=assistant))
         return messages
 
@@ -212,14 +221,8 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        formatted = MultimodalProcessor.format_prompts(prompt)
         messages = self._history_to_messages(session.history)
-        if isinstance(formatted[0], str):
-            messages.append(dict(role='user', content=formatted[0]))
-        elif isinstance(formatted[0], list):
-            messages.extend(formatted[0])
-        else:
-            messages.extend(formatted)
+        self._append_prompt_to_messages(messages, prompt)
 
         generator = self.stream_infer(prompts=messages,
                                       sessions=session,

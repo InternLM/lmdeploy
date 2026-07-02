@@ -281,3 +281,37 @@ class TestBackendInference:
         response = pipe.infer(prompt, gen_config=gen_config, enable_thinking=False)
         assert isinstance(response, Response)
         assert response.generate_token_len == 0
+
+
+def test_history_to_messages_text():
+    from lmdeploy.pipeline import Pipeline
+
+    history = [('hello', 'hi'), ('how are you?', 'fine')]
+    messages = Pipeline._history_to_messages(history)
+    assert messages == [
+        dict(role='user', content='hello'),
+        dict(role='assistant', content='hi'),
+        dict(role='user', content='how are you?'),
+        dict(role='assistant', content='fine'),
+    ]
+
+
+def test_history_to_messages_multimodal_tuple():
+    from PIL import Image
+
+    from lmdeploy.pipeline import Pipeline
+
+    img = Image.new('RGB', (10, 10))
+    history = [
+        (('describe this image', img), 'a small image'),
+        ('what did you see?', 'a small image'),
+    ]
+    messages = Pipeline._history_to_messages(history)
+    assert len(messages) == 4
+    assert messages[0]['role'] == 'user'
+    assert isinstance(messages[0]['content'], list)
+    assert messages[0]['content'][0] == {'type': 'text', 'text': 'describe this image'}
+    assert messages[0]['content'][1]['type'] == 'image_data'
+    assert messages[1] == dict(role='assistant', content='a small image')
+    assert messages[2] == dict(role='user', content='what did you see?')
+    assert messages[3] == dict(role='assistant', content='a small image')
