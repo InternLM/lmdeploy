@@ -280,6 +280,8 @@ class TurbomindEngineConfig:
     tp: int = 1
     dp: int = 1
     cp: int = 1
+    ep: int = 1
+    all2all_backend: str = 'allgather_reducescatter'
     device_num: int = None
     attn_tp_size: int = None
     attn_cp_size: int = None
@@ -317,6 +319,7 @@ class TurbomindEngineConfig:
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
+        assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)

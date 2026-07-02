@@ -167,7 +167,7 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
     }
 
     comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
-    TM_CHECK(engine_param_.mlp_tp_size == comm_size_);
+    TM_CHECK(engine_param_.mlp_tp_size * engine_param_.ep_size == comm_size_);
 
     communicator_type_ = std::move(config.communicator);
 
@@ -243,7 +243,8 @@ void TurboMind::Impl::CreateContext(int index)
 
         p.model_tp_rank = c.d_comm->rank(c.d_tp_group);
         p.attn_tp_rank  = p.model_tp_rank / p.attn_cp_size;
-        p.mlp_tp_rank   = c.d_comm->rank(0);
+        p.mlp_tp_rank   = inner_rank % p.mlp_tp_size;
+        p.ep_rank       = inner_rank % p.ep_size;
     }
 
     if (c.h_tp_group->rank() == 0) {
@@ -514,6 +515,11 @@ int TurboMind::GetAttnTpRank(int index)
 int TurboMind::GetMlpTpRank(int index)
 {
     return impl_->engine_params_.at(index).mlp_tp_rank;
+}
+
+int TurboMind::GetEpRank(int index)
+{
+    return impl_->engine_params_.at(index).ep_rank;
 }
 
 int TurboMind::GetModelTpRank(int index)
