@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -320,8 +320,8 @@ class StepContext:
     state_offsets: torch.LongTensor | None = None
 
     # named cache views for models with block_cache_specs / state_cache_specs
-    block_caches: dict[str, torch.Tensor] | None = None
-    named_state_caches: dict[str, torch.Tensor] | None = None
+    block_caches: Mapping[str, torch.Tensor] | None = None
+    named_state_caches: Mapping[str, torch.Tensor] | None = None
 
     # mrope
     mrope_position_ids: torch.Tensor | None = None

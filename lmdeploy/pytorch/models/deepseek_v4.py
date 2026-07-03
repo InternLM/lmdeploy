@@ -131,9 +131,22 @@ class V4Args:
 class V4Caches:
     """Cache dictionaries extracted once from StepContext, passed down to sub-
     modules."""
-    named_state_caches: dict   # {name: [per_layer_tensor]}
-    block_caches: dict         # {name: [per_layer_tensor]}
+    named_state_caches: dict   # dict-like {name: [per_layer_tensor]}
+    block_caches: dict         # dict-like {name: [per_layer_tensor]}
 
+    @staticmethod
+    def _cache_layer(caches, cache_name: str, layer_id: int):
+        if hasattr(caches, 'layer'):
+            return caches.layer(cache_name, layer_id)
+        return caches[cache_name][layer_id]
+
+    def state_cache(self, cache_name: str, layer_id: int):
+        """Return a named state cache row for a global layer id."""
+        return self._cache_layer(self.named_state_caches, cache_name, layer_id)
+
+    def block_cache(self, cache_name: str, layer_id: int):
+        """Return a named block cache row for a global layer id."""
+        return self._cache_layer(self.block_caches, cache_name, layer_id)
 
 
 class Compressor(nn.Module):
@@ -225,7 +238,7 @@ class Compressor(nn.Module):
         state_ids = slot
 
         # ---- Phase C: Get state views ----
-        state_cache = caches.named_state_caches[self.state_cache_name][self.layer_id]
+        state_cache = caches.state_cache(self.state_cache_name, self.layer_id)
         kv_state = state_cache[:, :rows]
         score_state = state_cache[:, rows:2 * rows]
 
@@ -250,11 +263,11 @@ class Compressor(nn.Module):
         block_caches = caches.block_caches
         cache_name = self._get_block_cache_name()
         fp8_cache_name = self._get_fp8_cache_name()
-        kv_cache = block_caches[cache_name][self.layer_id] if cache_name in block_caches else None
-        fp8_cache = block_caches[fp8_cache_name][self.layer_id] if fp8_cache_name else None
+        kv_cache = caches.block_cache(cache_name, self.layer_id) if cache_name in block_caches else None
+        fp8_cache = caches.block_cache(fp8_cache_name, self.layer_id) if fp8_cache_name else None
         scale_cache_name = f'{cache_name}_scale' if self.rotate else None
         if scale_cache_name and scale_cache_name in block_caches:
-            kv_scale_cache = block_caches[scale_cache_name][self.layer_id]
+            kv_scale_cache = caches.block_cache(scale_cache_name, self.layer_id)
         else:
             kv_scale_cache = None
 
@@ -460,10 +473,7 @@ class Attention(nn.Module):
         _load_vector_shard(param, loaded_weight)
 
     def _resolve_attention_caches(self, caches: V4Caches) -> dict:
-        named_state_caches = caches.named_state_caches
-        block_caches = caches.block_caches
-
-        window_state_fp8 = named_state_caches['v4_window_kv_fp8'][self.layer_id]
+        window_state_fp8 = caches.state_cache('v4_window_kv_fp8', self.layer_id)
 
         compressed_kv = None
         compressed_kv_fp8 = None
@@ -471,11 +481,11 @@ class Attention(nn.Module):
         index_kv_scale = None
         if self.compress_ratio:
             if self.compress_ratio == 4:
-                compressed_kv_fp8 = block_caches['v4_compressed_kv_r4_fp8'][self.layer_id]
-                index_kv = block_caches['v4_index_kv_r4'][self.layer_id]
-                index_kv_scale = block_caches['v4_index_kv_r4_scale'][self.layer_id]
+                compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r4_fp8', self.layer_id)
+                index_kv = caches.block_cache('v4_index_kv_r4', self.layer_id)
+                index_kv_scale = caches.block_cache('v4_index_kv_r4_scale', self.layer_id)
             else:
-                compressed_kv_fp8 = block_caches['v4_compressed_kv_r128_fp8'][self.layer_id]
+                compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r128_fp8', self.layer_id)
 
         return dict(window_state_fp8=window_state_fp8,
                     compressed_kv=compressed_kv,
