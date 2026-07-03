@@ -26,6 +26,25 @@ def rotate_complex(x):
     return out
 
 
+def _prepare_cos_sin(query: Tensor, cos: Tensor, sin: Tensor, complex_mode: bool):
+    """Prepare cos/sin tables for broadcasting over attention heads."""
+    if complex_mode:
+        feature_dim = query.size(-1)
+        if cos.size(-1) * 2 == feature_dim:
+            cos = cos.repeat_interleave(2, dim=-1)
+        if sin.size(-1) * 2 == feature_dim:
+            sin = sin.repeat_interleave(2, dim=-1)
+        if cos.size(-1) != feature_dim or sin.size(-1) != feature_dim:
+            raise ValueError('complex RoPE expects cos/sin width to be head_dim or head_dim // 2, '
+                             f'but got cos={cos.size(-1)}, sin={sin.size(-1)}, head_dim={feature_dim}.')
+
+    if cos.dim() == query.dim() - 1:
+        cos = cos.unsqueeze(-2)
+    if sin.dim() == query.dim() - 1:
+        sin = sin.unsqueeze(-2)
+    return cos, sin
+
+
 class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
@@ -38,15 +57,10 @@ class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
                 complex_mode: bool = False):
         """forward."""
         if complex_mode:
-            # cos/sin are (seq_len, dim//2), broadcast over heads
-            cos = cos.unsqueeze(-2)
-            sin = sin.unsqueeze(-2)
             rotate_fn = rotate_complex
         else:
-            unsqueeze_dim = -2
-            cos = cos.unsqueeze(unsqueeze_dim)
-            sin = sin.unsqueeze(unsqueeze_dim)
             rotate_fn = rotate_half
+        cos, sin = _prepare_cos_sin(query, cos, sin, complex_mode)
         if inplace:
             q_embed = query
             k_embed = key
