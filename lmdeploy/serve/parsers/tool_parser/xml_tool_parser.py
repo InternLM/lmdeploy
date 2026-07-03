@@ -157,10 +157,12 @@ class XmlToolParser(ToolParser):
         if param_name is None:
             return False
         value_text = self._streaming_value_text(raw_value)
-        if value_text is None:
+        if value_text is None and self._streaming_param_emits_json_string():
             return False
         if param_name not in self._xml_emitted_param_names:
-            return bool(value_text) or is_param_closed
+            return bool(value_text) or not self._streaming_param_emits_json_string() or is_param_closed
+        if value_text is None:
+            return False
         return len(value_text) > self._xml_streaming_param_emitted_raw_len or is_param_closed
 
     def _streaming_value_text(self, raw_value: str) -> str | None:
@@ -187,10 +189,10 @@ class XmlToolParser(ToolParser):
             return
 
         value_text = self._streaming_value_text(raw_value)
-        if value_text is None:
+        is_string = self._streaming_param_emits_json_string()
+        if value_text is None and is_string:
             return
 
-        is_string = self._streaming_param_emits_json_string()
         if param_name not in self._xml_emitted_param_names:
             prefix = ', ' if len(self._xml_emitted_param_names) > 0 else ''
             json_fragments.append(f'{prefix}\"{param_name}\": ')
@@ -199,7 +201,7 @@ class XmlToolParser(ToolParser):
                 self._xml_streaming_param_quote_opened = True
             self._xml_emitted_param_names.add(param_name)
 
-        if len(value_text) > self._xml_streaming_param_emitted_raw_len:
+        if value_text is not None and len(value_text) > self._xml_streaming_param_emitted_raw_len:
             diff = value_text[self._xml_streaming_param_emitted_raw_len:]
             if is_string:
                 diff = json.dumps(diff, ensure_ascii=False)[1:-1]

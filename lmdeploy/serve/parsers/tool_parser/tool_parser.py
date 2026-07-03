@@ -147,13 +147,8 @@ class ToolParser:
                     ))
                 self._name_emitted = True
 
-        if self._args_payload_key:
-            args_key = self._args_payload_key
-        elif 'arguments' in obj:
-            args_key = 'arguments'
-        elif 'parameters' in obj:
-            args_key = 'parameters'
-        else:
+        args_key = self._args_payload_key or self._select_json_args_key(raw_payload, obj)
+        if args_key is None:
             return out
 
         if args_key != self._args_payload_key:
@@ -182,6 +177,19 @@ class ToolParser:
                 ))
             self._args_emitted_len = len(args_payload)
         return out
+
+    @staticmethod
+    def _select_json_args_key(payload: str, obj: dict) -> str | None:
+        found_keys: list[tuple[int, str]] = []
+        for key in ('arguments', 'parameters'):
+            if key not in obj:
+                continue
+            value_start = ToolParser._find_json_key_value_start(payload, key)
+            if value_start >= 0:
+                found_keys.append((value_start, key))
+        if found_keys:
+            return min(found_keys)[1]
+        return None
 
     @staticmethod
     def _find_json_key_value_start(payload: str, key: str) -> int:
@@ -248,7 +256,11 @@ class ToolParser:
             elif ch == '\\':
                 escaped = True
             elif ch == '"':
-                return ''.join(chars), i + 1
+                end = i + 1
+                try:
+                    return json.loads(payload[start:end]), end
+                except json.JSONDecodeError:
+                    return ''.join(chars), end
             else:
                 chars.append(ch)
             i += 1
@@ -267,6 +279,7 @@ class ToolParser:
         name = obj.get('name')
         if not isinstance(name, str) or not name:
             return None
-        args_obj = obj.get('arguments', obj.get('parameters', {}))
+        args_key = ToolParser._select_json_args_key(payload.lstrip(), obj)
+        args_obj = obj[args_key] if args_key is not None else {}
         args_json = json.dumps(args_obj, ensure_ascii=False)
         return ToolCall(function=FunctionCall(name=name, arguments=args_json))

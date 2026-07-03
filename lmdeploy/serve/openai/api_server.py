@@ -266,12 +266,16 @@ def _create_output_token_logprobs(token_ids: list[int] | None = None,
     return output_token_logprobs or None
 
 
-def _should_suppress_empty_stream_delta(response_parser) -> bool:
+def _should_suppress_empty_stream_delta(response_parser, delta_message: DeltaMessage | None = None) -> bool:
     """Return whether an empty parser result is hidden from chat SSE output."""
-    return (
+    if not (
         getattr(response_parser, 'tool_parser', None) is not None
         and getattr(response_parser, '_mode', None) == getattr(response_parser, 'MODE_TOOL', None)
-    )
+    ):
+        return False
+    if delta_message is None:
+        return True
+    return delta_message.content == '' and delta_message.reasoning_content is None and not delta_message.tool_calls
 
 
 @router.get('/health')
@@ -608,6 +612,16 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 res.response,
                 delta_token_ids
             )
+            if res.finish_reason is None and stream_deltas and _should_suppress_empty_stream_delta(response_parser):
+                stream_deltas = [
+                    (delta_message, tool_emitted)
+                    for delta_message, tool_emitted in stream_deltas
+                    if not _should_suppress_empty_stream_delta(response_parser, delta_message)
+                ]
+                if not stream_deltas:
+                    if request.return_token_ids and delta_token_ids:
+                        pending_output_ids.extend(delta_token_ids)
+                    continue
             if not stream_deltas:
                 # Parser may buffer partial protocol tags and emit no visible delta
                 # while the engine still produced new tokens (e.g. MTP batch). Do not

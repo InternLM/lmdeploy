@@ -106,7 +106,8 @@ def test_decode_tool_incremental_json_streams_parameters_fallback_before_payload
     assert json.loads(''.join(fragments)) == _complete_arguments(payload)
 
 
-def test_decode_tool_incremental_json_keeps_streamed_parameters_when_arguments_arrive_later():
+def test_decode_tool_incremental_json_uses_first_argument_alias_consistently():
+    payload = '{"name":"f","parameters":{"p":1},"arguments":{"a":2}}'
     fragments = _stream_argument_fragments(
         [
             '{"name":"f","parameters":{"p":1},',
@@ -116,7 +117,27 @@ def test_decode_tool_incremental_json_keeps_streamed_parameters_when_arguments_a
     )
 
     assert fragments
-    assert json.loads(''.join(fragments)) == {'p': 1}
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
+
+    payload = '{"name":"f","arguments":{"a":2},"parameters":{"p":1}}'
+    fragments = _stream_argument_fragments(
+        [
+            '{"name":"f","arguments":{"a":2},',
+            '"parameters":{"p":1}}',
+        ],
+        final_on_last=True,
+    )
+
+    assert fragments
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
+
+
+def test_decode_tool_incremental_json_streams_escaped_arguments_key():
+    payload = '{"name":"f","\\u0061rguments":{"x":1}}'
+    fragments = _stream_argument_fragments([payload], final_on_last=True)
+
+    assert fragments
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
 
 
 def test_chat_stream_suppresses_empty_delta_while_tool_payload_is_buffering():
@@ -136,6 +157,13 @@ def test_chat_stream_suppresses_empty_delta_while_tool_payload_is_buffering():
         assert _should_suppress_empty_stream_delta(parser) is False
         assert parser.stream_chunk('<tool_call>', []) == []
         assert _should_suppress_empty_stream_delta(parser) is True
+
+        deltas = parser.stream_chunk('', [])
+        assert len(deltas) == 1
+        delta_msg, tool_emitted = deltas[0]
+        assert tool_emitted is False
+        assert delta_msg.content == ''
+        assert _should_suppress_empty_stream_delta(parser, delta_msg) is True
     finally:
         cls.reasoning_parser_cls = old_reasoning_cls
         cls.tool_parser_cls = old_tool_cls
