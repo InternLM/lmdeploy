@@ -369,6 +369,44 @@ class TestGlm47ToolParserComplete:
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
 
+    def test_streamed_arguments_match_complete_parse_for_string_schema_value_with_whitespace(self):
+        parser = Glm47ToolParser()
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'name': {
+                                'type': 'string'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+        payload = 'typed_tool<arg_key>name</arg_key><arg_value>  abc  </arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('typed_tool', False),
+                ('<arg_key>name</arg_key><arg_value>  a', False),
+                ('bc  </arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
+
     def test_streamed_arguments_match_complete_parse_for_newline_escaped_quoted_string_value(self):
         parser = Glm47ToolParser()
         request = ChatCompletionRequest(

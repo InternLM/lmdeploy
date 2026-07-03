@@ -169,6 +169,8 @@ class XmlToolParser(ToolParser):
             return None
         if stripped_value.startswith('"'):
             return None
+        if self._xml_streaming_param_schema_type == 'string' and raw_value != raw_value.strip():
+            return None
         if self._xml_streaming_param_schema_type in (None, 'string'):
             return raw_value
         return None
