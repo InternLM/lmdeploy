@@ -607,3 +607,22 @@ class TestGlm47ToolParserComplete:
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_when_value_contains_arg_like_text(self):
+        parser = Glm47ToolParser()
+        payload = 'f<arg_key>a</arg_key><arg_value>foo <arg_key>bar</arg_key><arg_value> baz</arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('f', False),
+                ('<arg_key>a</arg_key><arg_value>foo ', False),
+                ('<arg_key>bar</arg_key><arg_value> baz', False),
+                ('</arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments

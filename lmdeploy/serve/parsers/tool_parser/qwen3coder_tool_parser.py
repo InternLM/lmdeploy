@@ -163,6 +163,13 @@ class Qwen3CoderToolParser(XmlToolParser):
 
     def _extract_streaming_param(self, payload: str) -> tuple[str | None, str, bool]:
         content = payload.strip()
+        if self._open_param_name is not None and self._value_start >= 0:
+            value_end = content.find(self.param_suffix, self._value_start)
+            if value_end == -1:
+                raw_value = self._strip_partial_xml_close_suffix(content[self._value_start:], self.param_suffix)
+                return self._open_param_name, raw_value.strip(), False
+            return self._open_param_name, content[self._value_start:value_end].strip(), True
+
         param_start = content.rfind(self.param_prefix)
         if param_start == -1:
             return None, '', False

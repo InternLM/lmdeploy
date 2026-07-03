@@ -460,3 +460,16 @@ null
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_when_value_contains_parameter_like_text(self):
+        parser = Qwen3CoderToolParser()
+        payload = '<function=f><parameter=a>foo <parameter=bar> baz</parameter></function>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            ['<function=f>', '<parameter=a>foo ', '<parameter=bar> baz', '</parameter></function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
