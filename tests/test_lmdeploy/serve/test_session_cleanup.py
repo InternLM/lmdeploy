@@ -220,20 +220,18 @@ async def _run_max_new_tokens_zero_keeps_history_len():
         engine.session_mgr.build_request_handle_pool(_FakeEngine(), 1)
         engine._determine_gen_config = lambda session, input_ids, gen_config=None: gen_config
 
-        session = engine.session_mgr.get(260606, step=5)
+        session = engine.session_mgr.get(260606)
         generator = engine.generate(None,
                                     session,
                                     input_ids=[1, 2],
-                                    gen_config=GenerationConfig(max_new_tokens=0),
-                                    sequence_start=False,
-                                    sequence_end=True)
+                                    gen_config=GenerationConfig(max_new_tokens=0))
 
         out = await generator.__anext__()
 
-        assert out.history_token_len == 5
+        assert out.history_token_len == 0
         assert out.input_token_len == 2
         assert out.finish_reason == 'length'
-        assert session.step == 0
+        assert not hasattr(session, 'step')
         assert engine.session_mgr.sessions == {}
     finally:
         metrics_processor.scheduler_stats = old_stats
