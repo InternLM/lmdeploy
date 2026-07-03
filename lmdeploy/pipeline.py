@@ -181,6 +181,17 @@ class Pipeline:
         self.internal_thread.close()
         self.async_engine.close()
 
+    def _history_to_messages(self, history, prompt):
+        messages = []
+        for user_prompt, assistant_text in history:
+            user_messages = MultimodalProcessor.format_prompts(
+                user_prompt, allowed_media_domains=self.allowed_media_domains)
+            messages.extend(user_messages)
+            messages.append({'role': 'assistant', 'content': assistant_text})
+        messages.extend(MultimodalProcessor.format_prompts(
+            prompt, allowed_media_domains=self.allowed_media_domains))
+        return messages
+
     def chat(self,
              prompt: str | tuple[str, Image | list[Image]],
              session=None,
@@ -205,18 +216,13 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        prompt = MultimodalProcessor.format_prompts(prompt, allowed_media_domains=self.allowed_media_domains)
-
-        sequence_start = session.step == 0
-        generator = self.stream_infer(prompts=prompt,
+        messages = self._history_to_messages(session.history, prompt)
+        generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
                                       adapter_name=adapter_name,
                                       multiplex=True,
-                                      sequence_start=sequence_start,
-                                      sequence_end=False,
-                                      step=session.step,
                                       **kwargs)
 
         def _gen():
@@ -230,7 +236,6 @@ class Pipeline:
                 raise
             else:
                 session.response = resp
-                session.step += resp.generate_token_len + resp.input_token_len
                 session.history.append((session.prompt, resp.text))
 
         if stream_response:
