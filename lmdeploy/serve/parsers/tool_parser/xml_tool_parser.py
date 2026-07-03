@@ -30,6 +30,10 @@ class XmlToolParser(ToolParser):
         self._payload_parts: list[str] = []
         self._coerced_args: dict[str, Any] = {}
         self._in_progress_value = False
+        self._xml_streaming_param_name: str | None = None
+        self._xml_streaming_param_emitted_raw_len = 0
+        self._xml_streaming_param_schema_type: str | None = None
+        self._xml_streaming_param_quote_opened = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         self._function_param_schemas = self._build_function_param_schemas(request)
@@ -50,27 +54,21 @@ class XmlToolParser(ToolParser):
         self._payload_parts.clear()
         self._coerced_args.clear()
         self._in_progress_value = False
+        self._xml_streaming_param_name = None
+        self._xml_streaming_param_emitted_raw_len = 0
+        self._xml_streaming_param_schema_type = None
+        self._xml_streaming_param_quote_opened = False
         self._reset_incremental_state()
 
     def _reset_incremental_state(self) -> None:
         """Reset subclass-specific incremental parse state."""
 
-    def _should_buffer_value_chunk(self, added_text: str, final: bool) -> bool:
-        """Fast-path plain value fragments that cannot close an XML tag."""
-        if final or not self._in_progress_value:
-            return False
-        return not any(ch in added_text for ch in '<>/')
-
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._payload_parts.append(added_text)
-        if self._should_buffer_value_chunk(added_text, final):
-            return []
-
-        func_name, raw_args_dict, is_closed = self._extract_incremental_state(
-            ''.join(self._payload_parts),
-            final=final,
-        )
+        payload = ''.join(self._payload_parts)
+        func_name, raw_args_dict, is_closed = self._extract_incremental_state(payload, final=final)
         args_dict = self._get_coerced_args(func_name, raw_args_dict)
+        streaming_param_name, streaming_raw_value, is_param_closed = self._extract_streaming_param(payload)
 
         out: list[DeltaToolCall] = []
         if func_name and not self._name_emitted:
@@ -86,7 +84,13 @@ class XmlToolParser(ToolParser):
         should_close = is_closed or (final and self._close_json_on_final())
 
         json_fragments: list[str] = []
-        if not self._xml_has_emitted_json_start and (args_dict or should_close):
+        has_streaming_param = self._prepare_streaming_param(
+            func_name,
+            streaming_param_name,
+            is_param_closed,
+        )
+        has_streaming_update = self._has_streaming_param_update(streaming_raw_value, is_param_closed)
+        if not self._xml_has_emitted_json_start and (args_dict or has_streaming_update or should_close):
             json_fragments.append('{')
             self._xml_has_emitted_json_start = True
 
@@ -96,6 +100,9 @@ class XmlToolParser(ToolParser):
             prefix = ', ' if len(self._xml_emitted_param_names) > 0 else ''
             json_fragments.append(f'{prefix}\"{key}\": {json.dumps(value, ensure_ascii=False)}')
             self._xml_emitted_param_names.add(key)
+
+        if has_streaming_param and has_streaming_update:
+            self._append_streaming_param_fragments(json_fragments, streaming_raw_value, is_param_closed)
 
         if should_close and self._xml_has_emitted_json_start and not self._xml_json_closed:
             json_fragments.append('}')
@@ -110,6 +117,79 @@ class XmlToolParser(ToolParser):
                     function=DeltaFunctionCall(arguments=''.join(json_fragments)),
                 ))
         return out
+
+    def _prepare_streaming_param(self,
+                                 func_name: str | None,
+                                 param_name: str | None,
+                                 is_param_closed: bool) -> bool:
+        if param_name is None:
+            return self._xml_streaming_param_name is not None
+        if self._xml_streaming_param_name == param_name:
+            return True
+        if is_param_closed or param_name in self._xml_emitted_param_names:
+            return False
+
+        self._xml_streaming_param_name = param_name
+        self._xml_streaming_param_emitted_raw_len = 0
+        self._xml_streaming_param_schema_type = self._get_param_schema_type(func_name, param_name)
+        self._xml_streaming_param_quote_opened = False
+        return True
+
+    def _has_streaming_param_update(self, raw_value: str, is_param_closed: bool) -> bool:
+        param_name = self._xml_streaming_param_name
+        if param_name is None:
+            return False
+        if param_name not in self._xml_emitted_param_names:
+            return bool(raw_value) or is_param_closed
+        return len(raw_value) > self._xml_streaming_param_emitted_raw_len or is_param_closed
+
+    def _append_streaming_param_fragments(self,
+                                          json_fragments: list[str],
+                                          raw_value: str,
+                                          is_param_closed: bool) -> None:
+        param_name = self._xml_streaming_param_name
+        if param_name is None:
+            return
+
+        is_string = self._xml_streaming_param_schema_type in (None, 'string')
+        if param_name not in self._xml_emitted_param_names:
+            prefix = ', ' if len(self._xml_emitted_param_names) > 0 else ''
+            json_fragments.append(f'{prefix}\"{param_name}\": ')
+            if is_string:
+                json_fragments.append('"')
+                self._xml_streaming_param_quote_opened = True
+            self._xml_emitted_param_names.add(param_name)
+
+        if len(raw_value) > self._xml_streaming_param_emitted_raw_len:
+            diff = raw_value[self._xml_streaming_param_emitted_raw_len:]
+            if is_string:
+                diff = json.dumps(diff, ensure_ascii=False)[1:-1]
+            json_fragments.append(diff)
+            self._xml_streaming_param_emitted_raw_len = len(raw_value)
+
+        if is_param_closed:
+            if is_string and self._xml_streaming_param_quote_opened:
+                json_fragments.append('"')
+            self._xml_streaming_param_name = None
+            self._xml_streaming_param_emitted_raw_len = 0
+            self._xml_streaming_param_schema_type = None
+            self._xml_streaming_param_quote_opened = False
+
+    def _get_param_schema_type(self, func_name: str | None, param_name: str) -> str | None:
+        if func_name is None:
+            return None
+        param_schema = self._function_param_schemas.get(func_name, {}).get(param_name)
+        if not isinstance(param_schema, dict):
+            return None
+        return self._resolve_schema_type(param_schema)
+
+    @staticmethod
+    def _strip_partial_xml_close_suffix(raw_value: str, close_tag: str) -> str:
+        max_len = min(len(raw_value), len(close_tag) - 1)
+        for suffix_len in range(max_len, 0, -1):
+            if close_tag.startswith(raw_value[-suffix_len:]):
+                return raw_value[:-suffix_len]
+        return raw_value
 
     def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
         """Build function->parameter schema map from request tools."""
@@ -236,6 +316,9 @@ class XmlToolParser(ToolParser):
 
     def _close_json_on_final(self) -> bool:
         return True
+
+    def _extract_streaming_param(self, payload: str) -> tuple[str | None, str, bool]:
+        return None, '', False
 
     def _extract_incremental_state(self,
                                  payload: str,

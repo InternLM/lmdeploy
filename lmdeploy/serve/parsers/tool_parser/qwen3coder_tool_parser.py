@@ -161,6 +161,25 @@ class Qwen3CoderToolParser(XmlToolParser):
             self._scan_pos = next_pos
             self._in_progress_value = False
 
+    def _extract_streaming_param(self, payload: str) -> tuple[str | None, str, bool]:
+        content = payload.strip()
+        param_start = content.rfind(self.param_prefix)
+        if param_start == -1:
+            return None, '', False
+
+        name_start = param_start + len(self.param_prefix)
+        name_end = content.find('>', name_start)
+        if name_end == -1:
+            return None, '', False
+
+        param_name = content[name_start:name_end].strip()
+        value_start = name_end + 1
+        value_end = content.find(self.param_suffix, value_start)
+        if value_end == -1:
+            raw_value = self._strip_partial_xml_close_suffix(content[value_start:], self.param_suffix)
+            return param_name, raw_value.strip(), False
+        return param_name, content[value_start:value_end].strip(), True
+
     @staticmethod
     def _parse_param_value(param_val_str: str) -> Any:
         try:

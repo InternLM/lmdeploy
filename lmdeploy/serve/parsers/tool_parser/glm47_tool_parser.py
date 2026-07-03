@@ -162,6 +162,29 @@ class Glm47ToolParser(XmlToolParser):
             self._scan_pos = next_pos
             self._in_progress_value = False
 
+    def _extract_streaming_param(self, payload: str) -> tuple[str | None, str, bool]:
+        payload = payload.strip()
+        key_start = payload.rfind(self.arg_key_start_token)
+        if key_start < 0:
+            return None, '', False
+
+        key_content_start = key_start + len(self.arg_key_start_token)
+        key_end = payload.find(self.arg_key_end_token, key_content_start)
+        if key_end < 0:
+            return None, '', False
+
+        key = payload[key_content_start:key_end].strip()
+        value_start = payload.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
+        if value_start < 0:
+            return None, '', False
+
+        value_content_start = value_start + len(self.arg_value_start_token)
+        value_end = payload.find(self.arg_value_end_token, value_content_start)
+        if value_end < 0:
+            raw_value = self._strip_partial_xml_close_suffix(payload[value_content_start:], self.arg_value_end_token)
+            return key, raw_value, False
+        return key, payload[value_content_start:value_end], True
+
     def _parse_payload(self, payload: str, *, final: bool = False) -> tuple[str | None, dict[str, str]]:
         payload = payload.strip()
         if not payload:
