@@ -34,6 +34,7 @@ class ToolParser:
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
+        self._args_payload_start: int = -1
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
@@ -60,6 +61,7 @@ class ToolParser:
         self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
         self._args_emitted_len = 0
+        self._args_payload_start = -1
         self._tool_payload = ''
 
     def finish_tool_call(self) -> None:
@@ -67,6 +69,7 @@ class ToolParser:
         self._active_tool_call_id = ''
         self._name_emitted = False
         self._args_emitted_len = 0
+        self._args_payload_start = -1
         self._tool_payload = ''
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
@@ -115,7 +118,8 @@ class ToolParser:
 
     def _decode_tool_incremental_json(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._tool_payload += added_text
-        payload = self._tool_payload.strip()
+        raw_payload = self._tool_payload.lstrip()
+        payload = raw_payload.strip()
         if not payload:
             return []
 
@@ -148,11 +152,19 @@ class ToolParser:
         if args_json in ('{}', '[]'):
             return out
 
-        # Emit argument text only when the tool payload is complete. This keeps
-        # streamed argument chunks valid JSON and avoids malformed intermediate
-        # fragments when partial parsers expose transient dict states.
-        if final and len(args_json) > self._args_emitted_len:
-            diff = args_json[self._args_emitted_len:]
+        if self._args_payload_start < 0:
+            args_key = 'arguments' if 'arguments' in obj else 'parameters'
+            self._args_payload_start = self._find_json_key_value_start(raw_payload, args_key)
+        if self._args_payload_start < 0:
+            return out
+
+        args_payload_end = self._find_json_value_end(raw_payload, self._args_payload_start)
+        if args_payload_end < 0:
+            args_payload_end = len(raw_payload)
+
+        args_payload = raw_payload[self._args_payload_start:args_payload_end]
+        if len(args_payload) > self._args_emitted_len:
+            diff = args_payload[self._args_emitted_len:]
             out.append(
                 DeltaToolCall(
                     id=None,
@@ -160,8 +172,79 @@ class ToolParser:
                     type=None,
                     function=DeltaFunctionCall(arguments=diff),
                 ))
-            self._args_emitted_len = len(args_json)
+            self._args_emitted_len = len(args_payload)
         return out
+
+    @staticmethod
+    def _find_json_key_value_start(payload: str, key: str) -> int:
+        depth = 0
+        i = 0
+        while i < len(payload):
+            ch = payload[i]
+            if ch == '"':
+                value, end = ToolParser._read_json_string(payload, i)
+                if end < 0:
+                    return -1
+                j = end
+                while j < len(payload) and payload[j].isspace():
+                    j += 1
+                if depth == 1 and value == key and j < len(payload) and payload[j] == ':':
+                    j += 1
+                    while j < len(payload) and payload[j].isspace():
+                        j += 1
+                    return j if j < len(payload) else -1
+                i = end
+                continue
+            if ch in '{[':
+                depth += 1
+            elif ch in '}]':
+                depth -= 1
+            i += 1
+        return -1
+
+    @staticmethod
+    def _find_json_value_end(payload: str, start: int) -> int:
+        depth = 0
+        i = start
+        while i < len(payload):
+            ch = payload[i]
+            if ch == '"':
+                _, end = ToolParser._read_json_string(payload, i)
+                if end < 0:
+                    return -1
+                i = end
+                continue
+            if ch in '{[':
+                depth += 1
+            elif ch in '}]':
+                if depth == 0:
+                    return i
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            elif depth == 0 and ch in ',':
+                return i
+            i += 1
+        return -1
+
+    @staticmethod
+    def _read_json_string(payload: str, start: int) -> tuple[str, int]:
+        chars: list[str] = []
+        escaped = False
+        i = start + 1
+        while i < len(payload):
+            ch = payload[i]
+            if escaped:
+                chars.append(ch)
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == '"':
+                return ''.join(chars), i + 1
+            else:
+                chars.append(ch)
+            i += 1
+        return '', -1
 
     @staticmethod
     def _parse_tool_call_complete_json(payload: str) -> ToolCall | None:
