@@ -13,11 +13,6 @@ from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
     fused_moe_v4_fp4_ep_low_latency,
     fused_moe_v4_fp4_ep_normal,
 )
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
-
-
 
 def _try_dynamic_compile(func, *args, **kwargs):
     try:
@@ -265,7 +260,8 @@ class V4FP4FusedMoENormal:
     """Prefill EP MoE: dispatch -> scatter -> FP4 GEMM -> gather -> combine."""
 
     def __init__(self, ep_size, ep_group, num_experts, num_local_experts,
-                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype):
+                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype,
+                 num_max_dispatch_tokens_per_rank=128):
         from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcher
         self.num_experts = num_experts
         self.num_local_experts = num_local_experts
@@ -281,6 +277,7 @@ class V4FP4FusedMoENormal:
             num_local_experts=num_local_experts,
             hidden_size=hidden_dim,
             params_dtype=out_dtype,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
         )
 
     def forward(self, hidden_states, topk_weights, topk_ids,
@@ -309,7 +306,8 @@ class V4FP4FusedMoELowLatency:
     """Decode EP MoE: low_latency_dispatch -> masked FP4 GEMM -> low_latency_combine."""
 
     def __init__(self, ep_size, ep_group, num_experts, num_local_experts,
-                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype):
+                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype,
+                 num_max_dispatch_tokens_per_rank=128):
         from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency
         self.num_experts = num_experts
         self.num_local_experts = num_local_experts
@@ -325,6 +323,7 @@ class V4FP4FusedMoELowLatency:
             num_local_experts=num_local_experts,
             hidden_size=hidden_dim,
             params_dtype=out_dtype,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
         )
 
     def forward(self, hidden_states, topk_weights, topk_ids,
@@ -355,7 +354,7 @@ class TritonFusedMoEV4FP4EPImpl:
 
     def __init__(self, ep_size, ep_group, top_k, num_experts, num_local_experts,
                  hidden_dim, ffn_dim, swiglu_limit=0.0, scale_fmt='ue8m0',
-                 layer_idx=0):
+                 layer_idx=0, num_max_dispatch_tokens_per_rank=128):
         self.ep_size = ep_size
         self.ep_group = ep_group
         self.top_k = top_k
@@ -366,13 +365,19 @@ class TritonFusedMoEV4FP4EPImpl:
         self.swiglu_limit = swiglu_limit
         self.scale_fmt = scale_fmt
         self.layer_idx = layer_idx
+        self.num_max_dispatch_tokens_per_rank = num_max_dispatch_tokens_per_rank
 
         try:
-            from deep_ep import Buffer  # noqa: F401
-            get_deepep_state().enable()
-        except ImportError:
-            logger.warning('DeepEP is not installed. V4 FP4 EP MoE requires DeepEP '
-                           'from https://github.com/deepseek-ai/DeepEP')
+            from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, use_deepep
+        except ImportError as exc:
+            raise ImportError('DeepEP is required for V4 FP4 EP MoE implementation. Please install '
+                              'https://github.com/deepseek-ai/DeepEP.') from exc
+        if not use_deepep:
+            raise ImportError('DeepEP is required for V4 FP4 EP MoE implementation. Please install '
+                              'https://github.com/deepseek-ai/DeepEP.')
+        get_deepep_state().enable()
+        if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
+            DeepEPBuffer.set_explicitly_destroy()
 
         # Pre-allocate buffer.
         self.fusedmoe_build(True)
@@ -397,14 +402,16 @@ class TritonFusedMoEV4FP4EPImpl:
                 hidden_dim=self.hidden_dim, ffn_dim=self.ffn_dim,
                 top_k=self.top_k, swiglu_limit=self.swiglu_limit,
                 scale_fmt=self.scale_fmt, layer_idx=self.layer_idx,
-                out_dtype=torch.bfloat16)
+                out_dtype=torch.bfloat16,
+                num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
         return V4FP4FusedMoENormal(
             ep_size=self.ep_size, ep_group=self.ep_group,
             num_experts=self.num_experts, num_local_experts=self.num_local_experts,
             hidden_dim=self.hidden_dim, ffn_dim=self.ffn_dim,
             top_k=self.top_k, swiglu_limit=self.swiglu_limit,
             scale_fmt=self.scale_fmt, layer_idx=self.layer_idx,
-            out_dtype=torch.bfloat16)
+            out_dtype=torch.bfloat16,
+            num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
 
     def forward(self, hidden_states, topk_weights, topk_ids,
                 gate_up_weight, gate_up_scale, down_weight, down_scale,
@@ -416,7 +423,7 @@ class TritonFusedMoEV4FP4EPImpl:
             split_inputs_by_attn_tp(hidden_states, topk_weights, topk_ids)
 
         step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.is_decoding
+        low_latency_mode = step_ctx.global_is_decoding()
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids,
                                   gate_up_weight, gate_up_scale,
@@ -442,7 +449,8 @@ class DeepGemmFusedMoEV4Builder(FusedMoEBuilder):
               out_dtype: torch.dtype = torch.bfloat16,
               ffn_dim: int = 1,
               expert_offset: int = 0,
-              swiglu_limit: float = 0.0):
+              swiglu_limit: float = 0.0,
+              num_max_dispatch_tokens_per_rank: int = 128):
         del renormalize, out_dtype
         if ep_size > 1:
             num_local_experts = num_experts // ep_size
@@ -450,7 +458,8 @@ class DeepGemmFusedMoEV4Builder(FusedMoEBuilder):
                 ep_size=ep_size, ep_group=ep_group, top_k=top_k,
                 num_experts=num_experts, num_local_experts=num_local_experts,
                 hidden_dim=hidden_dim, ffn_dim=ffn_dim,
-                swiglu_limit=swiglu_limit, layer_idx=layer_idx)
+                swiglu_limit=swiglu_limit, layer_idx=layer_idx,
+                num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
         return DeepGemmFusedMoEV4TPImpl(top_k=top_k,
                                         num_experts=num_experts,
                                         hidden_dim=hidden_dim,
@@ -474,7 +483,8 @@ class TritonFusedMoEV4FP4Builder(FusedMoEBuilder):
               ffn_dim: int = 1,
               expert_offset: int = 0,
               swiglu_limit: float = 0.0,
-              scale_fmt: str | None = 'ue8m0'):
+              scale_fmt: str | None = 'ue8m0',
+              num_max_dispatch_tokens_per_rank: int = 128):
         del renormalize, out_dtype
         if ep_size > 1:
             num_local_experts = num_experts // ep_size
@@ -483,7 +493,8 @@ class TritonFusedMoEV4FP4Builder(FusedMoEBuilder):
                 num_experts=num_experts, num_local_experts=num_local_experts,
                 hidden_dim=hidden_dim, ffn_dim=ffn_dim,
                 swiglu_limit=swiglu_limit, scale_fmt=scale_fmt,
-                layer_idx=layer_idx)
+                layer_idx=layer_idx,
+                num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
         return TritonFusedMoEV4FP4TPImpl(top_k=top_k,
                                          num_experts=num_experts,
                                          hidden_dim=hidden_dim,

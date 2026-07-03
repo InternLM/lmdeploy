@@ -5,6 +5,7 @@ from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .base import moe_reduce
 from .base import split_size as _split_size
@@ -201,6 +202,7 @@ class FusedMoEV4FP4(nn.Module):
         self.top_k = top_k
 
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEV4FP4)
+        deep_ep_max_tokens_per_rank = get_build_model_context().deep_ep_max_tokens_per_rank
 
         if self.ep_size > 1:
             # EP mode: each rank holds num_experts // ep_size experts.
@@ -230,7 +232,8 @@ class FusedMoEV4FP4(nn.Module):
                                            expert_offset=expert_offset,
                                            swiglu_limit=swiglu_limit,
                                            ep_size=self.ep_size,
-                                           ep_group=dist_ctx.ep_gpu_group)
+                                           ep_group=dist_ctx.ep_gpu_group,
+                                           num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank)
         else:
             # TP-only mode: all experts, FFN dim sharded by TP rank.
             self.expert_offset = 0

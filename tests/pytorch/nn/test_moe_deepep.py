@@ -289,6 +289,10 @@ def test_all_fused_moe_builders_accept_deepep_token_limit():
 
     assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/cuda/moe/default.py',
                                                             'TritonFusedMoEBuilder')
+    assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/cuda/moe/v4_fp4.py',
+                                                            'TritonFusedMoEV4FP4Builder')
+    assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/cuda/moe/v4_fp4.py',
+                                                            'DeepGemmFusedMoEV4Builder')
     assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/dlinfer/moe.py',
                                                             'DlinferFusedMoEBuilder')
 
@@ -424,6 +428,149 @@ def test_bf16_ep_builder_passes_low_latency_token_limit(monkeypatch):
     assert default.FusedMoEEPImpl.fusedmoe_build(impl, low_latency_mode=True) == 'moe'
 
     assert calls[0][1]['num_max_dispatch_tokens_per_rank'] == 256
+
+
+def test_v4_fp4_ep_builder_passes_low_latency_token_limit(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda.moe import v4_fp4
+
+    calls = []
+
+    class FakeMoE:
+
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(v4_fp4, 'V4FP4FusedMoENormal', FakeMoE)
+    monkeypatch.setattr(v4_fp4, 'V4FP4FusedMoELowLatency', FakeMoE)
+    impl = v4_fp4.TritonFusedMoEV4FP4EPImpl.__new__(v4_fp4.TritonFusedMoEV4FP4EPImpl)
+    impl.ep_size = 2
+    impl.ep_group = object()
+    impl.num_experts = 8
+    impl.num_local_experts = 4
+    impl.hidden_dim = 16
+    impl.ffn_dim = 32
+    impl.top_k = 2
+    impl.swiglu_limit = 0.0
+    impl.scale_fmt = 'ue8m0'
+    impl.layer_idx = 3
+    impl.num_max_dispatch_tokens_per_rank = 256
+
+    assert v4_fp4.TritonFusedMoEV4FP4EPImpl.fusedmoe_build(impl, low_latency_mode=True).__class__ is FakeMoE
+    assert calls[0]['num_max_dispatch_tokens_per_rank'] == 256
+
+    calls.clear()
+    assert v4_fp4.TritonFusedMoEV4FP4EPImpl.fusedmoe_build(impl, low_latency_mode=False).__class__ is FakeMoE
+    assert calls[0]['num_max_dispatch_tokens_per_rank'] == 256
+
+
+def test_v4_fp4_ep_forward_uses_global_decode_mode(monkeypatch):
+    from lmdeploy.pytorch import model_inputs
+    from lmdeploy.pytorch.backends.cuda.moe import ep_utils, v4_fp4
+
+    modes = []
+
+    class FakeMoE:
+
+        def forward(self,
+                    hidden_states,
+                    topk_weights,
+                    topk_ids,
+                    gate_up_weight,
+                    gate_up_scale,
+                    down_weight,
+                    down_scale,
+                    expert_list=None):
+            return hidden_states
+
+    class FakeStepContext:
+        is_decoding = False
+
+        def global_is_decoding(self):
+            return True
+
+    class FakeStepContextManager:
+
+        def current_context(self):
+            return FakeStepContext()
+
+    def fake_fusedmoe_build(low_latency_mode=False):
+        modes.append(low_latency_mode)
+        return FakeMoE()
+
+    monkeypatch.setattr(model_inputs, 'get_step_ctx_manager', lambda: FakeStepContextManager())
+    monkeypatch.setattr(ep_utils, 'split_inputs_by_attn_tp', lambda hidden, weights, ids: (hidden, weights, ids, None))
+    monkeypatch.setattr(ep_utils, 'gather_outputs_by_attn_tp', lambda out_states, split_size: out_states)
+
+    impl = v4_fp4.TritonFusedMoEV4FP4EPImpl.__new__(v4_fp4.TritonFusedMoEV4FP4EPImpl)
+    impl.fusedmoe_build = fake_fusedmoe_build
+
+    hidden_states = torch.empty(2, 4)
+    topk_weights = torch.empty(2, 1)
+    topk_ids = torch.zeros(2, 1, dtype=torch.long)
+    out = v4_fp4.TritonFusedMoEV4FP4EPImpl.forward(
+        impl,
+        hidden_states,
+        topk_weights,
+        topk_ids,
+        gate_up_weight=None,
+        gate_up_scale=None,
+        down_weight=None,
+        down_scale=None,
+    )
+
+    assert out is hidden_states
+    assert modes == [True]
+
+
+def test_v4_fp4_layer_passes_build_context_deepep_token_limit(monkeypatch):
+    from lmdeploy.pytorch.nn.moe import v4_fp4
+
+    calls = []
+
+    class FakeDistConfig:
+
+        def get_tp_by_layer(self, layer_type):
+            return 1, object()
+
+    class FakeDistContext:
+        dist_config = FakeDistConfig()
+        moe_tp_group = type('FakeGroup', (), {'gpu_group': object()})()
+        ep_gpu_group = object()
+
+    class FakeDistManager:
+
+        def current_context(self):
+            return FakeDistContext()
+
+    class FakeBuilder:
+
+        @staticmethod
+        def build(**kwargs):
+            calls.append(kwargs)
+            return object()
+
+    class FakeBackend:
+
+        def get_layer_impl_builder(self, op_type):
+            return FakeBuilder
+
+    class FakeBuildContext:
+        deep_ep_max_tokens_per_rank = 384
+
+    monkeypatch.setattr(v4_fp4, 'get_dist_manager', lambda: FakeDistManager())
+    monkeypatch.setattr(v4_fp4, 'get_ep_world_rank', lambda: (2, 1))
+    monkeypatch.setattr(v4_fp4, 'get_tp_world_rank', lambda *args, **kwargs: (1, 0))
+    monkeypatch.setattr(v4_fp4, 'get_backend', lambda: FakeBackend())
+    monkeypatch.setattr(v4_fp4, 'get_build_model_context', lambda: FakeBuildContext())
+
+    layer = v4_fp4.FusedMoEV4FP4(hidden_dim=16,
+                                 ffn_dim=32,
+                                 num_experts=4,
+                                 top_k=2,
+                                 device=torch.device('cpu'))
+
+    assert layer.impl is not None
+    assert calls[0]['num_max_dispatch_tokens_per_rank'] == 384
 
 
 def test_blocked_fp8_async_prefill_passes_weight_dtype_and_scale_fmt():
