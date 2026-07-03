@@ -1599,7 +1599,8 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         )
 
         predicted_horizon = None
-        if self.aligner.horizon_head is not None:
+        # Explicit horizons do not need horizon prediction.
+        if override_horizon is None and self.aligner.horizon_head is not None:
             pred_horizon = self.aligner.predict_horizon(
                 llm_embedding_input,
                 llm_embedding_mask=llm_embedding_mask,

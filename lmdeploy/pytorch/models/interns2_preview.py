@@ -587,15 +587,18 @@ class InternS2PreviewForConditionalGeneration(Qwen3_5MoeForConditionalGeneration
         params_dict = dict(self.named_parameters())
         buffers_dict = dict(self.named_buffers())
 
+        src_weights = weights
+
         def remaining_weights():
-            for name, loaded_weight in weights:
+            for name, loaded_weight in src_weights:
                 if self._load_forecaster_weight(name, loaded_weight, params_dict, buffers_dict):
                     continue
                 yield name, loaded_weight
 
         # InternS2Preview TS encoders use Whisper layers; HF omits k_proj bias.
-        weights = _create_fake_bias_for_whisper_k_proj(remaining_weights(), '.self_attn.k_proj.weight')
-        super().load_weights(weights)
+        remaining_weights_with_bias = _create_fake_bias_for_whisper_k_proj(remaining_weights(),
+                                                                           '.self_attn.k_proj.weight')
+        super().load_weights(remaining_weights_with_bias)
 
 
 class InternS2PreviewInputProcessor(Qwen3_5MoeInputProcessor):
