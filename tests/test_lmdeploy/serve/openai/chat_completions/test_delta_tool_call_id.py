@@ -119,6 +119,28 @@ def test_decode_tool_incremental_json_keeps_streamed_parameters_when_arguments_a
     assert json.loads(''.join(fragments)) == {'p': 1}
 
 
+def test_chat_stream_suppresses_empty_delta_while_tool_payload_is_buffering():
+    from lmdeploy.serve.openai.api_server import _should_suppress_empty_stream_delta
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    from lmdeploy.serve.parsers import ResponseParserManager
+    from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+
+    cls = ResponseParserManager.get('default')
+    old_reasoning_cls = cls.reasoning_parser_cls
+    old_tool_cls = cls.tool_parser_cls
+    try:
+        cls.reasoning_parser_cls = None
+        cls.tool_parser_cls = ToolParserManager.get('qwen3')
+        parser = cls(ChatCompletionRequest(model='test', messages=[], stream=True, tool_choice='auto'))
+
+        assert _should_suppress_empty_stream_delta(parser) is False
+        assert parser.stream_chunk('<tool_call>', []) == []
+        assert _should_suppress_empty_stream_delta(parser) is True
+    finally:
+        cls.reasoning_parser_cls = old_reasoning_cls
+        cls.tool_parser_cls = old_tool_cls
+
+
 def test_stream_delta_tool_call_omits_null_id_and_type_in_json():
     """Serialized stream chunks should omit null id/type, not emit them as JSON
     null."""

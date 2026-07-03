@@ -266,6 +266,14 @@ def _create_output_token_logprobs(token_ids: list[int] | None = None,
     return output_token_logprobs or None
 
 
+def _should_suppress_empty_stream_delta(response_parser) -> bool:
+    """Return whether an empty parser result is hidden from chat SSE output."""
+    return (
+        getattr(response_parser, 'tool_parser', None) is not None
+        and getattr(response_parser, '_mode', None) == getattr(response_parser, 'MODE_TOOL', None)
+    )
+
+
 @router.get('/health')
 async def health() -> JSONResponse:
     """Health check."""
@@ -581,6 +589,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
         final_usage = None
+        pending_output_ids: list[int] = []
         async for res in result_generator:
             logprobs = None
             output_token_logprobs = None
@@ -603,6 +612,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 # Parser may buffer partial protocol tags and emit no visible delta
                 # while the engine still produced new tokens (e.g. MTP batch). Do not
                 # drop those token ids; emit them once on a placeholder delta.
+                if res.finish_reason is None and _should_suppress_empty_stream_delta(response_parser):
+                    if request.return_token_ids and delta_token_ids:
+                        pending_output_ids.extend(delta_token_ids)
+                    continue
                 if res.finish_reason is None and not delta_token_ids:
                     continue
                 stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
@@ -632,7 +645,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 routed_experts = res.routed_experts if finish_reason is not None else None
                 # Emit token ids once per engine yield on the last parsed delta, when
                 # accumulated delta text and token ids for this step are aligned.
-                stream_output_ids = delta_token_ids if (request.return_token_ids and is_last_delta) else None
+                stream_output_ids = None
+                if request.return_token_ids and is_last_delta:
+                    stream_output_ids = pending_output_ids + delta_token_ids
+                    pending_output_ids = []
 
                 response_json = create_stream_response_json(index=0,
                                                             delta_message=delta_message,
