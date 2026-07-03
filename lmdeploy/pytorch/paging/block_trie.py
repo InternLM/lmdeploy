@@ -1227,10 +1227,10 @@ class BlockTrie:
             node = self.get_root(seq.adapter_name)
             seq.prefix_cache.last_shared_node = node
         elif not self._is_attached_cursor(node):
-            self._warn_unexpected_state(
-                f'reset detached sequence cursor: session_id={seq.session_id} '
-                f'seq_id={seq.seq_id} adapter={seq.adapter_name} '
-                f'cursor_step={node.num_matched}')
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f'Reset detached prefix-cache sequence cursor: session_id={seq.session_id} '
+                             f'seq_id={seq.seq_id} adapter={seq.adapter_name} '
+                             f'cursor_step={node.num_matched}')
             node = self.get_root(seq.adapter_name)
             seq.prefix_cache.last_shared_node = node
 
@@ -1357,9 +1357,9 @@ class BlockTrie:
         leaves = list(leaf for leaf in self.leaves if self._is_evict_candidate_leaf(leaf))
         if len(leaves) != len(self.leaves):
             self.leaves.intersection_update(leaves)
-            self._warn_unexpected_state(
-                f'dropped stale leaf candidates before eviction: '
-                f'old_count={old_leaf_count} new_count={len(leaves)}')
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f'Dropped stale prefix-cache leaf candidates before eviction: '
+                             f'old_count={old_leaf_count} new_count={len(leaves)}')
         if len(leaves) == 0:
             return 0
 
