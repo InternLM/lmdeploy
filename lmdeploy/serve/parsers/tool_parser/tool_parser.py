@@ -147,11 +147,11 @@ class ToolParser:
                     ))
                 self._name_emitted = True
 
-        if 'arguments' in obj:
+        if self._args_payload_key:
+            args_key = self._args_payload_key
+        elif 'arguments' in obj:
             args_key = 'arguments'
         elif 'parameters' in obj:
-            if not final:
-                return out
             args_key = 'parameters'
         else:
             return out

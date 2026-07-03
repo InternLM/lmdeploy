@@ -92,22 +92,21 @@ def test_decode_tool_incremental_json_streams_nested_and_escaped_arguments():
     assert json.loads(''.join(fragments)) == _complete_arguments(payload)
 
 
-def test_decode_tool_incremental_json_streams_parameters_fallback_when_final():
+def test_decode_tool_incremental_json_streams_parameters_fallback_before_payload_complete():
     payload = '{"name":"f","parameters":{"p":1}}'
     fragments = _stream_argument_fragments(
         [
             '{"name":"f","parameters":{"p":',
-            '1}}',
+            '1}',
         ],
-        final_on_last=True,
+        final_on_last=False,
     )
 
     assert fragments
     assert json.loads(''.join(fragments)) == _complete_arguments(payload)
 
 
-def test_decode_tool_incremental_json_prefers_arguments_over_parameters():
-    payload = '{"name":"f","parameters":{"p":1},"arguments":{"a":2}}'
+def test_decode_tool_incremental_json_keeps_streamed_parameters_when_arguments_arrive_later():
     fragments = _stream_argument_fragments(
         [
             '{"name":"f","parameters":{"p":1},',
@@ -117,7 +116,7 @@ def test_decode_tool_incremental_json_prefers_arguments_over_parameters():
     )
 
     assert fragments
-    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
+    assert json.loads(''.join(fragments)) == {'p': 1}
 
 
 def test_stream_delta_tool_call_omits_null_id_and_type_in_json():
