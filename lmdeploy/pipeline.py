@@ -181,15 +181,25 @@ class Pipeline:
         self.internal_thread.close()
         self.async_engine.close()
 
-    def _history_to_messages(self, history, prompt):
+    @staticmethod
+    def _history_to_messages(history, prompt, allowed_media_domains=None):
+        def _messages(prompt):
+            messages = []
+            for item in MultimodalProcessor.format_prompts(
+                    prompt, allowed_media_domains=allowed_media_domains):
+                if isinstance(item, str):
+                    messages.append({'role': 'user', 'content': item})
+                elif isinstance(item, dict):
+                    messages.append(item)
+                else:
+                    messages.extend(item)
+            return messages
+
         messages = []
         for user_prompt, assistant_text in history:
-            user_messages = MultimodalProcessor.format_prompts(
-                user_prompt, allowed_media_domains=self.allowed_media_domains)
-            messages.extend(user_messages)
+            messages.extend(_messages(user_prompt))
             messages.append({'role': 'assistant', 'content': assistant_text})
-        messages.extend(MultimodalProcessor.format_prompts(
-            prompt, allowed_media_domains=self.allowed_media_domains))
+        messages.extend(_messages(prompt))
         return messages
 
     def chat(self,
@@ -216,7 +226,8 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        messages = self._history_to_messages(session.history, prompt)
+        messages = self._history_to_messages(
+            session.history, prompt, allowed_media_domains=self.allowed_media_domains)
         generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,

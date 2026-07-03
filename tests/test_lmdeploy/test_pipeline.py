@@ -5,8 +5,74 @@ import torch
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.messages import Response
+from lmdeploy.pipeline import Pipeline
+from lmdeploy.serve.managers.session_manager import Session
+from lmdeploy.serve.processors import MultimodalProcessor
 
 MODEL_ID = 'Qwen/Qwen3-8B'
+
+
+def test_history_to_messages_wraps_plain_strings_as_user_messages():
+    messages = Pipeline._history_to_messages([('My favorite color is blue.', 'OK')], 'What is my favorite color?')
+
+    assert messages == [
+        {
+            'role': 'user',
+            'content': 'My favorite color is blue.'
+        },
+        {
+            'role': 'assistant',
+            'content': 'OK'
+        },
+        {
+            'role': 'user',
+            'content': 'What is my favorite color?'
+        },
+    ]
+    assert MultimodalProcessor.format_prompts(messages) == messages
+
+
+def test_chat_clears_response_before_streaming_and_records_history():
+    class DummySessionManager:
+        pass
+
+    pipe = Pipeline.__new__(Pipeline)
+    pipe.allowed_media_domains = None
+    pipe.seen_prompts = []
+    pipe.response_at_stream_start = None
+
+    def stream_infer(prompts, sessions, **kwargs):
+        pipe.seen_prompts.append(prompts)
+        pipe.response_at_stream_start = sessions.response
+        yield Response(text='blue', generate_token_len=1, input_token_len=1)
+
+    pipe.stream_infer = stream_infer
+    session = Session(session_id=0, session_mgr=DummySessionManager())
+
+    pipe.chat(prompt='My favorite color is blue.', session=session, stream_response=False)
+    session.response = Response(text='stale', generate_token_len=1, input_token_len=1)
+    pipe.chat(prompt='What is my favorite color?', session=session, stream_response=False)
+
+    assert pipe.response_at_stream_start is None
+    assert pipe.seen_prompts[-1] == [
+        {
+            'role': 'user',
+            'content': 'My favorite color is blue.'
+        },
+        {
+            'role': 'assistant',
+            'content': 'blue'
+        },
+        {
+            'role': 'user',
+            'content': 'What is my favorite color?'
+        },
+    ]
+    assert session.response.text == 'blue'
+    assert session.history == [
+        ('My favorite color is blue.', 'blue'),
+        ('What is my favorite color?', 'blue'),
+    ]
 
 
 @pytest.mark.parametrize('backend', ['pytorch', 'turbomind'], scope='class')
