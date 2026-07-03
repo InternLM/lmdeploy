@@ -96,6 +96,10 @@ class BaseSpecModelAgent:
         'reset graph runner'
         pass
 
+    def reset_runtime_state(self):
+        """Discard request-local runtime state after sleep cancels sessions."""
+        pass
+
     def update_main_model_outputs(self, output: dict[str, torch.Tensor],
                                   model_inputs: ModelInputs):
         """Update outputs of main model."""

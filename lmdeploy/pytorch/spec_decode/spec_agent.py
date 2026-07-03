@@ -127,6 +127,10 @@ class SpecModelAgent(BaseSpecModelAgent):
         # for long context carry-over in chunked decoding
         self._prev_chunk_last = {}
 
+    def reset_runtime_state(self):
+        """Discard request-local draft carry state after sleep cancels sessions."""
+        self._prev_chunk_last.clear()
+
     @contextmanager
     def draft_context(self):
         """Draft-local dist context."""

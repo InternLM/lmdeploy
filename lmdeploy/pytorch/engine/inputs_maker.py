@@ -333,6 +333,17 @@ class InputsMakerAsync:
         # long context chunker
         self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
 
+    def reset_runtime_state(self):
+        """Discard request-local scheduling state after sleep cancels sessions."""
+        self._decode_count = 0
+        self._last_forward_kind = None
+        self._short_prefill_turns_since_long_chunk = 0
+        self.next_is_prefill = True
+        self.forward_inputs = None
+        self.running_seqs = []
+        self.to_evict_seqs.clear()
+        self.long_context_chunker.clear()
+
     def _init_do_prefill(self, config: InputsMakerConfig):
         if config.role == EngineRole.Prefill:
             self.do_prefill = self.do_prefill_pnode
