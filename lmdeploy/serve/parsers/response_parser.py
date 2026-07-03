@@ -285,7 +285,6 @@ class BaseResponseParser(ResponseParser):
         else:
             self._mode = self.MODE_PLAIN
         self._pending = ''
-        self._last_stream_consumed_tool = False
 
     def stream_chunk(
         self,
@@ -323,7 +322,6 @@ class BaseResponseParser(ResponseParser):
 
         self._accumulated_text += delta_text
         self._pending += delta_text
-        self._last_stream_consumed_tool = False
         produced_any = False
         deltas: list[tuple[DeltaMessage, bool]] = []
 
@@ -346,8 +344,6 @@ class BaseResponseParser(ResponseParser):
                 # self._consume_plain() might change the mode to MODE_TOOL
                 # so we need to check the mode again
                 new_calls, progressed = self._consume_tool()
-                if progressed:
-                    self._last_stream_consumed_tool = True
                 if new_calls:
                     deltas.append((DeltaMessage(role='assistant', tool_calls=new_calls), True))
                     produced_any = True
