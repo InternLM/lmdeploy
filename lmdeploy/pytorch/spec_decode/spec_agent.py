@@ -124,7 +124,10 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
-        # for long context carry-over in chunked decoding
+        self._init_runtime_state()
+
+    def _init_runtime_state(self):
+        """Initialize request-local draft carry state."""
         self._prev_chunk_last = {}
 
     def reset_runtime_state(self):
