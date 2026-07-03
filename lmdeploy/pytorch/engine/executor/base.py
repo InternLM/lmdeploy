@@ -276,9 +276,12 @@ class ExecutorBase:
             num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
+        model_config = getattr(self, 'model_config', None)
+        state_specs = getattr(model_config, 'state_cache_specs', None)
+        num_layers = getattr(model_config, 'num_layers', None)
         mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes,
-                                                     state_specs=self.model_config.state_cache_specs,
-                                                     num_layers=self.model_config.num_layers)
+                                                     state_specs=state_specs,
+                                                     num_layers=num_layers)
         mems *= num_state_caches
 
         return mems
