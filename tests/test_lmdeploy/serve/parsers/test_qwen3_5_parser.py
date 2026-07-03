@@ -55,6 +55,21 @@ def _stream_tool_arguments(parser, chunks):
     return ''.join(argument_fragments)
 
 
+def _stream_tool_arguments_by_chunk(parser, chunks):
+    parser.start_tool_call()
+    argument_fragments = []
+    per_chunk = []
+    for chunk in chunks:
+        chunk_fragments = []
+        for call in parser.decode_tool_incremental(chunk, final=False):
+            if call.function and call.function.arguments is not None:
+                argument_fragments.append(call.function.arguments)
+                chunk_fragments.append(call.function.arguments)
+        per_chunk.append(''.join(chunk_fragments))
+    parser.finish_tool_call()
+    return ''.join(argument_fragments), per_chunk
+
+
 REFERENCE_CHUNKS = [
     ('计划', [{'reasoning_content': '计划', 'tool_emitted': False}]),
     ('调用', [{'reasoning_content': '调用', 'tool_emitted': False}]),
@@ -291,6 +306,21 @@ null
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
 
+    def test_stream_chunk_emits_quoted_string_value_before_parameter_close(self):
+        parser = Qwen3CoderToolParser()
+        payload = '<function=find_user><parameter=name>"Chen"</parameter></function>'
+
+        streamed_arguments, per_chunk = _stream_tool_arguments_by_chunk(
+            parser,
+            ['<function=find_user>', '<parameter=name>', '"Ch', 'en"', '</parameter></function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert per_chunk[2]
+        assert per_chunk[3]
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
+
     def test_streamed_arguments_match_complete_parse_for_invalid_integer_value(self):
         parser = Qwen3CoderToolParser()
         request = ChatCompletionRequest(
@@ -321,6 +351,41 @@ null
         )
         complete_tool_call = parser.parse_tool_call_complete(payload)
 
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_stream_chunk_emits_valid_integer_value_before_parameter_close(self):
+        parser = Qwen3CoderToolParser()
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'age': {
+                                'type': 'integer'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+        payload = '<function=typed_tool><parameter=age>29</parameter></function>'
+
+        streamed_arguments, per_chunk = _stream_tool_arguments_by_chunk(
+            parser,
+            ['<function=typed_tool>', '<parameter=age>', '2', '9', '</parameter></function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert per_chunk[2]
+        assert per_chunk[3]
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
 

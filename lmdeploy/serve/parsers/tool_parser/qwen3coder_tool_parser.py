@@ -45,6 +45,9 @@ class Qwen3CoderToolParser(XmlToolParser):
     def _close_json_on_final(self) -> bool:
         return False
 
+    def _stream_quoted_string_without_schema(self) -> bool:
+        return True
+
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
         return '<tool_call>'
