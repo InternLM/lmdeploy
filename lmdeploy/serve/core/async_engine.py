@@ -433,6 +433,9 @@ class AsyncEngine:
         kwargs.pop('multimodal', None)
 
         async def cleanup_after_exception():
+            # Use asyncio.shield to protect cleanup coroutines from being cancelled.
+            # When a task is in cancelling state, bare `await` raises CancelledError
+            # immediately. shield ensures the inner coroutine runs to completion.
             try:
                 await asyncio.shield(handle.async_cancel(session.session_id))
             except asyncio.CancelledError:
@@ -495,10 +498,6 @@ class AsyncEngine:
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
-        removed_kwargs = {'sequence_start', 'sequence_end', 'step'} & kwargs.keys()
-        if removed_kwargs:
-            names = ', '.join(sorted(removed_kwargs))
-            raise TypeError(f'AsyncEngine.generate() got removed argument(s): {names}')
         metrics_processor.increase_total_requests()
 
         if (messages is not None) ^ (input_ids is None):

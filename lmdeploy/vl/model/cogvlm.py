@@ -57,7 +57,9 @@ class CogVLMVisionModel(VisionModel):
         """Apply chat template to get the prompt."""
         chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
-        for message in messages:
+        image_prefixes = {}
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+        for idx, message in enumerate(messages):
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
                 continue
@@ -65,22 +67,16 @@ class CogVLMVisionModel(VisionModel):
                 continue
             content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            prompt = content[0]
+            if n_images > 0:
+                sentinel = f'__LMDEPLOY_COGVLM_IMAGE_{idx}__'
+                image_prefixes[sentinel] = IMAGE_TOKEN * n_images
+                prompt = f'{sentinel}{prompt}'
+            prompt_messages.append(dict(role='user', content=prompt))
 
-            prompt_messages.append(dict(role='user', content=content[0], num_images=n_images))
-
-        from lmdeploy.model import Vicuna
-        llm_chat_template = Vicuna(eoa='</s>', stop_words=chat_template.stop_words)
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for i, msg in enumerate(prompt_messages):
-            num_images = msg.pop('num_images', 0)
-            if num_images == 0:
-                role = msg['role']
-                msg = llm_chat_template.messages2prompt([msg])
-                msg = dict(role=role, content=msg)
-            if num_images > 0:
-                msg['content'] = (IMAGE_TOKEN * num_images) + msg['content']
-            prompt_messages[i] = msg
         prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
+        for sentinel, image_prefix in image_prefixes.items():
+            prompt = prompt.replace(f'{chat_template.user}{sentinel}', f'{image_prefix}{chat_template.user}', 1)
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):

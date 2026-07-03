@@ -51,18 +51,6 @@ class TestInternVLChatTemplate:
         return models
 
     @pytest.fixture(scope='module')
-    def internvl2(self):
-        model_list = [
-            'OpenGVLab/InternVL2-Llama3-76B',
-            'OpenGVLab/InternVL2-40B',
-            'OpenGVLab/InternVL2-26B',
-            'OpenGVLab/InternVL2-8B',
-            'OpenGVLab/InternVL2-2B'
-        ]
-        models = [get_model_and_chat_template(model_path, trust_remote_code=True) for model_path in model_list]
-        return models
-
-    @pytest.fixture(scope='module')
     def mock_messages(self):
         return [
             dict(role='user',
@@ -132,28 +120,5 @@ Describe the following images in detail<|im_end|>
 <|im_start|>assistant
 """
         for model, chat_template in internvl3:
-            prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template)
-            assert prompt == reference
-
-    def test_internvl2(self, internvl2, mock_messages):
-        reference = """<|im_start|>user
-Describe the following images in detail<img><IMG_CONTEXT></img>
-<img><IMG_CONTEXT></img>
-How many cats are there in total?<|im_end|>
-<|im_start|>assistant
-"""
-        for model, chat_template in internvl2:
-            prompt, _ = model.proc_messages(mock_messages, chat_template)
-            assert prompt == reference
-
-    def test_internvl2_backward_compatibility(self, internvl2, mock_IMAGE_TOKEN_messages):
-        reference = """<|im_start|>system
-你是书生·万象，英文名是InternVL，是由上海人工智能实验室、清华大学及多家合作单位联合开发的多模态大语言模型。<|im_end|>
-<|im_start|>user
-<img><IMG_CONTEXT></img>
-Describe the following images in detail<|im_end|>
-<|im_start|>assistant
-"""
-        for model, chat_template in internvl2:
             prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template)
             assert prompt == reference

@@ -1099,13 +1099,12 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     - **input**: the prompt to be encoded. In str or list[str] format.
     - **do_preprocess**: whether do preprocess or not. Default to False.
-    - **add_bos**: True when it is the beginning of a conversation. False when it
-      is not. Default to True.
+    - **add_bos**: Whether to add a BOS token when encoding. Default to True.
     """
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt, sequence_start=add_bos)
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt)
         input_ids = VariableInterface.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
         return input_ids
 

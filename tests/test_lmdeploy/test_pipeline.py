@@ -186,65 +186,74 @@ class TestBackendInference:
             full_text = ''.join([c.text for c in chunks])
             assert len(full_text) > 0
 
-    def test_stream_infer_with_session(self, pipe, backend):
-        """Multi-turn interactive session.
+    def test_stream_infer_with_session(self, pipe):
+        """Test stream_infer accepts a request session without KV continuation
+        state."""
+        session = pipe.session()
+        prompt = 'Hello! My name is Alice.'
 
-        PyTorch supports stateful multi-turn inference. TurboMind is stateless-only and rejects any request that is not
-        (sequence_start and sequence_end) with ResponseType.NOT_SUPPORTED, which surfaces as an error string in the
-        response text.
-        """
+        generator = pipe.stream_infer(prompts=prompt,
+                                      sessions=session,
+                                      gen_config=GenerationConfig(max_new_tokens=30),
+                                      enable_thinking=False)
+        resp = None
+        for out in generator:
+            resp = resp.extend(out) if resp else out
+
+        assert resp.text
+        assert not hasattr(session, 'step')
+
+    def test_chat_streaming(self, pipe):
+        """Test chat method with streaming output."""
+        prompt = 'Tell me a short story'
         session = pipe.session()
 
-        if backend == 'turbomind':
-            generator = pipe.stream_infer(prompts='Hello! My name is Alice.',
-                                          sessions=session,
-                                          gen_config=GenerationConfig(max_new_tokens=30),
-                                          sequence_start=True,
-                                          sequence_end=False,
-                                          enable_thinking=False)
-            text = ''.join(out.text for out in generator if out.text)
-            assert 'NOT_SUPPORTED' in text
-            return
+        generator = pipe.chat(prompt=prompt,
+                              session=session,
+                              stream_response=True,
+                              gen_config=GenerationConfig(max_new_tokens=50))
 
-        prompt1 = 'Hello! My name is Alice.'
-        step = 0
+        chunks = []
+        for chunk in generator:
+            chunks.append(chunk)
+            assert isinstance(chunk, Response)
 
+        assert len(chunks) > 0
+        assert session.response is not None
+        assert not hasattr(session, 'step')
+        assert len(session.history) == 1
+
+    def test_chat_non_streaming(self, pipe):
+        """Test chat method with non-streaming output."""
+        prompt = 'What is 2+2?'
+        session = pipe.chat(prompt=prompt,
+                            stream_response=False,
+                            gen_config=GenerationConfig(max_new_tokens=20),
+                            enable_thinking=False)
+
+        assert session is not None
+        assert hasattr(session, 'response')
+        assert hasattr(session, 'history')
+        assert len(session.history) == 1
+        assert '4' in session.response.text or 'four' in session.response.text.lower()
+
+    def test_chat_multi_turn(self, pipe):
+        """Test chat method with multi-turn conversation."""
         # First turn
-        generator = pipe.stream_infer(prompts=prompt1,
-                                      sessions=session,
-                                      gen_config=GenerationConfig(max_new_tokens=30),
-                                      sequence_start=True,
-                                      sequence_end=False,
-                                      enable_thinking=False)
-        resp = None
-        for out in generator:
-            resp = resp.extend(out) if resp else out
-
-        step += resp.generate_token_len + resp.input_token_len
-
-        response1 = resp.text
-
-        assert response1
+        session = pipe.chat(prompt='My favorite color is blue.',
+                            stream_response=False,
+                            gen_config=GenerationConfig(max_new_tokens=80),
+                            enable_thinking=False)
 
         # Second turn should remember context
-        prompt2 = 'What is my name?'
-        session.step = step
-        generator = pipe.stream_infer(prompts=prompt2,
-                                      sessions=session,
-                                      gen_config=GenerationConfig(max_new_tokens=30),
-                                      sequence_start=False,
-                                      sequence_end=False,
-                                      enable_thinking=False)
+        session = pipe.chat(prompt='What is my favorite color?',
+                            session=session,
+                            stream_response=False,
+                            gen_config=GenerationConfig(max_new_tokens=80),
+                            enable_thinking=False)
 
-        resp = None
-        for out in generator:
-            resp = resp.extend(out) if resp else out
-
-        step += out.generate_token_len + out.input_token_len
-
-        response2 = resp.text
-
-        assert 'alice' in response2.lower()
+        assert 'blue' in session.response.text.lower()
+        assert len(session.history) == 2
 
     def test_session_creation(self, pipe):
         """Test session method to create new sessions."""

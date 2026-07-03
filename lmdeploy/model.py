@@ -179,8 +179,10 @@ class BaseChatTemplate:
             role = message['role']
             content = get_text(message['content'])
             ret += f'{box_map[role]}{content}{eox_map[role]}'
-        if len(messages) and messages[-1]['role'] == 'assistant' and len(eox_map['assistant']) > 0:
-            return ret[:-len(eox_map['assistant'])]  # prefix of response
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            if len(eox_map['assistant']) > 0:
+                return ret[:-len(eox_map['assistant'])]  # prefix of response
+            return ret
         ret += f'{self.assistant}'
         return ret
 
@@ -261,7 +263,10 @@ class Vicuna(BaseChatTemplate):
     def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
             return self.get_prompt(messages)
-        return super().messages2prompt(messages, **kwargs)[:-1]
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -393,15 +398,13 @@ class ChatGLM2(BaseChatTemplate):
         self._assistant = assistant
         self._eoh = eoh
         self._eoa = eoa
-        self.count = 0
 
     def get_prompt(self, prompt):
         """Get prompt."""
         # need more check
         # https://github.com/THUDM/ChatGLM2-6B/issues/48
         # [64790, 64792] to be prepended
-        self.count += 1
-        ret = f'[Round {self.count}]\n\n'
+        ret = '[Round 1]\n\n'
         ret += f'{self._user}{prompt}{self._eoh}'
         ret += f'{self._assistant}'
         return ret
@@ -476,7 +479,10 @@ class InternVLZH(BaseChatTemplate):
     def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
             return self.get_prompt(messages)
-        return super().messages2prompt(messages, **kwargs)[:-1]
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -518,7 +524,10 @@ class DeepseekVL(BaseChatTemplate):
     def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
             return self.get_prompt(messages)
-        return super().messages2prompt(messages, **kwargs)[:-1]
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -557,7 +566,10 @@ class DeepseekVL2(BaseChatTemplate):
     def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
             return self.get_prompt(messages)
-        return super().messages2prompt(messages, **kwargs)[:-1]
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -632,7 +644,6 @@ class HFChatTemplate(BaseChatTemplate):
             # Verify if the model can perform apply_chat_template with different roles.
             self.user_start, self.user_end, _, _ = self._user_instruction()
             self.assistant_start, self.assistant_end, _, _ = self._assistant_instruction()
-            _, _, self.sentinel_system_messages, self.sentinel_system_prompt = self._system_instruction()
             self.stop_words = []
             if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token is not None:
                 self.stop_words.append(self.tokenizer.eos_token)
