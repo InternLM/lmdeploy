@@ -152,14 +152,17 @@ class TestQwenResponseParserStreaming:
               after streaming completes.
         """
 
-        expected = [
-            (exp_reasoning, exp_content, exp_tool_emitted, exp_function_name, exp_function_arguments, exp_type)
-            for (_, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted, exp_function_name,
-                 exp_function_arguments, exp_type) in reference_chunks
-            if exp_delta_msg
-        ]
+        expected_reasoning = [row[2] for row in reference_chunks if row[1] and row[2] is not None]
+        expected_content = [row[3] for row in reference_chunks if row[1] and row[3] is not None]
+        expected_names = [row[5] for row in reference_chunks if row[1] and row[5] is not None]
+        expected_types = [row[7] for row in reference_chunks if row[1] and row[7] is not None]
+        expected_arguments = ''.join(row[6] or '' for row in reference_chunks if row[1])
 
-        actual = []
+        actual_reasoning = []
+        actual_content = []
+        actual_names = []
+        actual_types = []
+        actual_arguments = []
         for (delta_text, *_) in reference_chunks:
             if delta_text is None:
                 continue
@@ -169,23 +172,39 @@ class TestQwenResponseParserStreaming:
             ):
                 if delta_msg is None:
                     continue
-                actual.append((delta_msg, tool_emitted))
+                if delta_msg.reasoning_content is not None:
+                    actual_reasoning.append(delta_msg.reasoning_content)
+                    assert tool_emitted is False
+                if delta_msg.content is not None:
+                    actual_content.append(delta_msg.content)
+                    assert tool_emitted is False
+                if delta_msg.tool_calls:
+                    assert tool_emitted is True
+                    assert len(delta_msg.tool_calls) == 1
+                    call = delta_msg.tool_calls[0]
+                    assert isinstance(call, DeltaToolCall)
+                    assert call.function is not None
+                    if call.type is not None:
+                        actual_types.append(call.type)
+                    if call.function.name is not None:
+                        actual_names.append(call.function.name)
+                    if call.function.arguments is not None:
+                        actual_arguments.append(call.function.arguments)
+                else:
+                    assert tool_emitted is False
 
-        assert len(actual) == len(expected)
-        for (delta_msg, tool_emitted), (exp_reasoning, exp_content, exp_tool_emitted, exp_function_name,
-                                        exp_function_arguments, exp_type) in zip(actual, expected):
-            assert delta_msg.reasoning_content == exp_reasoning
-            assert delta_msg.content == exp_content
-            assert tool_emitted == exp_tool_emitted
-            if tool_emitted:
-                assert delta_msg.tool_calls is not None
-                assert len(delta_msg.tool_calls) == 1
-                call = delta_msg.tool_calls[0]
-                assert isinstance(call, DeltaToolCall)
-                assert call.type == exp_type
-                assert call.function is not None
-                assert call.function.name == exp_function_name
-                assert call.function.arguments == exp_function_arguments
+        assert actual_reasoning == expected_reasoning
+        assert actual_content == expected_content
+        assert actual_names == expected_names
+        assert actual_types == expected_types
+        assert ''.join(actual_arguments) == expected_arguments
+        if actual_arguments:
+            assert actual_arguments[0] != expected_arguments
+            assert len(actual_arguments) > 1
+            assert all(fragment for fragment in actual_arguments)
+            complete_text = ''.join(row[0] or '' for row in reference_chunks)
+            _, complete_tool_calls, _ = response_parser.parse_complete(complete_text)
+            assert complete_tool_calls[0].function.arguments == expected_arguments
 
     def test_stream_chunk_handles_mixed_reasoning_content_tool(self, response_parser):
         """A single delta may contain reasoning/content/tool segments together.
