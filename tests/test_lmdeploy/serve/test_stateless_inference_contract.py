@@ -35,11 +35,23 @@ def test_async_engine_generate_signature_is_stateless():
 
 
 def test_async_engine_generate_rejects_removed_stateful_kwargs():
+    from lmdeploy.metrics.metrics_processor import metrics_processor
+    from lmdeploy.metrics.stats import SchedulerStats
+
     engine = AsyncEngine.__new__(AsyncEngine)
 
-    generator = engine.generate(None, 0, input_ids=[1], sequence_start=True)
-    with pytest.raises(TypeError, match=r'removed argument\(s\): sequence_start'):
-        asyncio.run(generator.__anext__())
+    old_stats = metrics_processor.scheduler_stats
+    metrics_processor.scheduler_stats = SchedulerStats()
+    try:
+        generator = engine.generate(None, 0, input_ids=[1], sequence_start=True)
+        with pytest.raises(TypeError, match=r'removed argument\(s\): sequence_start'):
+            asyncio.run(generator.__anext__())
+
+        stats = metrics_processor.scheduler_stats
+        assert stats.num_total_reqs == 0
+        assert stats.num_uncompleted_reqs == 0
+    finally:
+        metrics_processor.scheduler_stats = old_stats
 
 
 def test_session_has_no_step_state():

@@ -118,6 +118,10 @@ class Session:
         if self._handle is not None:
             await self.async_abort()
             await self._active.wait()
+        session_mgr_ref = self._session_mgr
+        session_mgr = session_mgr_ref() if session_mgr_ref is not None else None
+        if session_mgr is not None:
+            session_mgr.remove(self)
         self.reset()
 
     def abort(self):

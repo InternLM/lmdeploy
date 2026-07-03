@@ -63,6 +63,25 @@ def test_stale_session_cleanup_does_not_remove_reused_session_id():
     assert session_mgr.user_session_id_map[42] == session_id
 
 
+async def _run_idle_async_close_removes_session_and_allows_reuse():
+    session_mgr = SessionManager()
+    session_mgr.build_request_handle_pool(_FakeEngine(), 1)
+    session_id = 260606
+    session = session_mgr.get(session_id)
+
+    await session.async_close()
+
+    assert session_id not in session_mgr.sessions
+
+    new_session = session_mgr.get(session_id)
+    async with new_session.request_handle():
+        pass
+
+
+def test_idle_async_close_removes_session_and_allows_reuse():
+    asyncio.run(_run_idle_async_close_removes_session_and_allows_reuse())
+
+
 async def _run_api_wrapper_cleanup_after_cancel():
     from lmdeploy.serve.openai.api_server import VariableInterface, _with_request_cleanup
 

@@ -701,9 +701,6 @@ class TurboMindInstance:
                                  input_embedding_ranges=None,
                                  input_meta: dict[str, Any] = None,
                                  multimodal: list[dict[str, Any]] = None,
-                                 sequence_start: bool = True,
-                                 sequence_end: bool = False,
-                                 step=0,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
@@ -715,21 +712,12 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            sequence_start (bool): must be True; TurboMind is stateless-only
-            sequence_end (bool): must be True; TurboMind is stateless-only
-            step (int): the offset of the k/v cache
+            stop (bool): indicator for cancelling the session
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
         logger.info(f'[async_stream_infer] session {session_id} start')
-        if not (sequence_start and sequence_end):
-            logger.error(f'[async_stream_infer] session {session_id}: TurboMind supports only '
-                         f'stateless requests; stateful/interactive inference '
-                         f'(sequence_start={sequence_start}, sequence_end={sequence_end}) is not '
-                         f'supported - use prefix caching instead')
-            yield EngineOutput(ResponseType.NOT_SUPPORTED, [])
-            return
         gen_cfg = self._get_generation_config(gen_config)
 
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
@@ -773,7 +761,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step)
+        session = _tm.SessionParam(id=session_id, step=0)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)
@@ -794,7 +782,7 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        prev_len = step + input_len
+        prev_len = input_len
         try:
             while True:
                 await sem.acquire()
