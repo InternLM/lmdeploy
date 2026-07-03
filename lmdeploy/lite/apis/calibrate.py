@@ -12,21 +12,16 @@ from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders, load_
 from lmdeploy.vl.model.builder import load_vl_model
 
 LAYER_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMDecoderLayer',
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
     'InternLM3ForCausalLM': 'InternLM3DecoderLayer',
-    'QWenLMHeadModel': 'QWenBlock',
     'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
     'Qwen3ForCausalLM': 'Qwen3DecoderLayer',
     'Qwen3MoeForCausalLM': 'Qwen3MoeDecoderLayer',
     'Qwen3_5ForConditionalGeneration': 'Qwen3_5DecoderLayer',
     'Qwen3_5MoeForConditionalGeneration': 'Qwen3_5MoeDecoderLayer',
-    'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
-    'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewDecoderLayer',
     'Phi3ForCausalLM': 'Phi3DecoderLayer',
     'ChatGLMForConditionalGeneration': 'GLMBlock',
@@ -37,21 +32,16 @@ LAYER_TYPE_MAP = {
 }
 
 NORM_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMRMSNorm',
     'InternLM2ForCausalLM': 'InternLM2RMSNorm',
     'InternLM3ForCausalLM': 'InternLM3RMSNorm',
-    'QWenLMHeadModel': 'RMSNorm',
     'Qwen2ForCausalLM': 'Qwen2RMSNorm',
     'Qwen3ForCausalLM': 'Qwen3RMSNorm',
     'Qwen3MoeForCausalLM': 'Qwen3MoeRMSNorm',
     'Qwen3_5ForConditionalGeneration': 'Qwen3_5RMSNorm',
     'Qwen3_5MoeForConditionalGeneration': 'Qwen3_5MoeRMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
-    'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewRMSNorm',
     'Phi3ForCausalLM': 'Phi3RMSNorm',
     'ChatGLMForConditionalGeneration': 'RMSNorm',
@@ -62,21 +52,16 @@ NORM_TYPE_MAP = {
 }
 
 HEAD_NAME_MAP = {
-    'InternLMForCausalLM': 'lm_head',
     'InternLM2ForCausalLM': 'output',
     'InternLM3ForCausalLM': 'output',
-    'QWenLMHeadModel': 'lm_head',
     'Qwen2ForCausalLM': 'lm_head',
     'Qwen3ForCausalLM': 'lm_head',
     'Qwen3MoeForCausalLM': 'lm_head',
     'Qwen3_5ForConditionalGeneration': 'lm_head',
     'Qwen3_5MoeForConditionalGeneration': 'lm_head',
-    'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
-    'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
     'LlamaForCausalLM': 'lm_head',
     'LlavaLlamaForCausalLM': 'lm_head',
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'output',
     'InternS2PreviewForConditionalGeneration': 'lm_head',
     'Phi3ForCausalLM': 'lm_head',
     'ChatGLMForConditionalGeneration': 'output_layer',
@@ -89,30 +74,23 @@ HEAD_NAME_MAP = {
 
 def check_vl_llm(backend: str, config: dict) -> bool:
     """Check if the model is a vl model from model config."""
-    if 'auto_map' in config:
-        for _, v in config['auto_map'].items():
-            if 'InternLMXComposer2ForCausalLM' in v:
-                return True
-
     if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
             'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
         return True
 
     arch = config['architectures'][0]
     supported_archs = set([
-        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
-        'InternVLChatModel', 'MiniCPMV', 'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration',
-        'Phi3VForCausalLM', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
+        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternVLChatModel', 'MiniCPMV',
+        'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
+        'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
         'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
-        'Qwen3_5MoeForConditionalGeneration', 'MllamaForConditionalGeneration', 'MolmoForCausalLM',
-        'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
-        'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
+        'Qwen3_5MoeForConditionalGeneration', 'MolmoForCausalLM', 'Gemma3ForConditionalGeneration',
+        'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration',
+        'InternS1ProForConditionalGeneration',
         'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
         'InternS2PreviewForConditionalGeneration'
     ])
-    if arch == 'QWenLMHeadModel' and 'visual' in config:
-        return True
-    elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
+    if arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
     elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
         return True
@@ -354,14 +332,6 @@ def calibrate(model: str,
 
     if model_type in ['MixtralForCausalLM']:
         update_moe_mapping(model, model_type)
-
-    if model_type == 'QWenLMHeadModel':
-        try:
-            import flash_attn  # noqa: F401
-        except ImportError:
-            raise RuntimeError('When using Qwen, you need to `pip install flash-attn` first, '
-                               'otherwise calibration and quantification will not work '
-                               'properly.')
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
