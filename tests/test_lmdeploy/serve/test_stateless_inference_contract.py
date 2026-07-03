@@ -34,6 +34,14 @@ def test_async_engine_generate_signature_is_stateless():
     assert 'step' not in params
 
 
+def test_async_engine_generate_rejects_removed_stateful_kwargs():
+    engine = AsyncEngine.__new__(AsyncEngine)
+
+    generator = engine.generate(None, 0, input_ids=[1], sequence_start=True)
+    with pytest.raises(TypeError, match=r'removed argument\(s\): sequence_start'):
+        asyncio.run(generator.__anext__())
+
+
 def test_session_has_no_step_state():
     session = Session(0, SessionManager())
 
