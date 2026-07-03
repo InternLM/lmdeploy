@@ -42,7 +42,7 @@ def test_decode_tool_incremental_json_streams_empty_arguments():
         def decode_tool_incremental(self, added_text, *, final): return []
         def parse_tool_call_complete(self, payload): return None
 
-    for arguments in ('{}', '[]'):
+    for arguments in ('{}', '[]', 'null'):
         parser = TestToolParser()
         parser.start_tool_call()
 

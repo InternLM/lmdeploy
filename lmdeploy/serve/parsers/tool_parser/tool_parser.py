@@ -144,12 +144,14 @@ class ToolParser:
                     ))
                 self._name_emitted = True
 
-        args_obj = obj.get('arguments', obj.get('parameters', None))
-        if args_obj is None:
+        if 'arguments' in obj:
+            args_key = 'arguments'
+        elif 'parameters' in obj:
+            args_key = 'parameters'
+        else:
             return out
 
         if self._args_payload_start < 0:
-            args_key = 'arguments' if 'arguments' in obj else 'parameters'
             self._args_payload_start = self._find_json_key_value_start(raw_payload, args_key)
         if self._args_payload_start < 0:
             return out
