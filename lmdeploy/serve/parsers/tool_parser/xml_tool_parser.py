@@ -122,6 +122,10 @@ class XmlToolParser(ToolParser):
         param_name = self._xml_streaming_param_name
         if param_name is None or param_name not in args_dict or param_name not in self._xml_emitted_param_names:
             return
+        value = args_dict[param_name]
+        if isinstance(value, str) and len(value) > self._xml_streaming_param_emitted_raw_len:
+            diff = value[self._xml_streaming_param_emitted_raw_len:]
+            json_fragments.append(json.dumps(diff, ensure_ascii=False)[1:-1])
         if self._xml_streaming_param_quote_opened:
             json_fragments.append('"')
         self._reset_streaming_param()

@@ -342,3 +342,16 @@ null
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_when_close_chunk_has_value_tail(self):
+        parser = Qwen3CoderToolParser()
+        payload = '<function=f><parameter=a>San Francisco</parameter></function>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            ['<function=f>', '<parameter=a>San ', 'Francisco</parameter></function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments

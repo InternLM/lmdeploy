@@ -413,3 +413,21 @@ class TestGlm47ToolParserComplete:
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_when_close_chunk_has_value_tail(self):
+        parser = Glm47ToolParser()
+        payload = 'f<arg_key>a</arg_key><arg_value>San Francisco</arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('f', False),
+                ('<arg_key>a</arg_key><arg_value>San ', False),
+                ('Francisco</arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
