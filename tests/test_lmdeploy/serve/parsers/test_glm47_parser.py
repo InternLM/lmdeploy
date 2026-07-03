@@ -7,8 +7,6 @@ from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import Glm47ToolParser, ToolParserManager
 
-from .helpers import first_stream_delta
-
 MODEL_ID = 'zai-org/GLM-4.7'
 
 
@@ -41,15 +39,36 @@ def response_parser_with_reasoning():
     return cls(request=request)
 
 
+def _flatten_stream_deltas(deltas):
+    events = []
+    for delta_msg, tool_emitted in deltas:
+        if delta_msg is None:
+            continue
+        if delta_msg.reasoning_content is not None:
+            events.append({'reasoning_content': delta_msg.reasoning_content, 'tool_emitted': tool_emitted})
+        if delta_msg.content is not None:
+            events.append({'content': delta_msg.content, 'tool_emitted': tool_emitted})
+        if delta_msg.tool_calls:
+            for call in delta_msg.tool_calls:
+                events.append({
+                    'tool_emitted': tool_emitted,
+                    'type': call.type,
+                    'name': call.function.name if call.function else None,
+                    'arguments': call.function.arguments if call.function else None,
+                })
+    return events
+
+
 REFERENCE_CHUNKS = [
-    # (delta_text, emitted_delta_msg, content, tool_emitted, function_name, function_arguments, tool_call_type)
-    ('prefix ', True, 'prefix ', False, None, None, None),
-    ('<tool_call>', False, None, False, None, None, None),
-    # Name is deferred until the first ``<arg_key>`` appears in the payload.
-    ('get_weather', False, None, False, None, None, None),
-    ('<arg_key>location</arg_key>', True, None, True, 'get_weather', None, 'function'),
-    ('<arg_value>Beijing</arg_value>', True, None, True, None, '{"location": "Beijing"', None),
-    ('</tool_call>', True, None, True, None, '}', None),
+    ('prefix ', [{'content': 'prefix ', 'tool_emitted': False}]),
+    ('<tool_call>', []),
+    ('get_weather', []),
+    ('<arg_key>location</arg_key>',
+     [{'tool_emitted': True, 'type': 'function', 'name': 'get_weather', 'arguments': None}]),
+    ('<arg_value>Bei', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': '{"location": "Bei'}]),
+    ('jing', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': 'jing'}]),
+    ('</arg_value>', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': '"'}]),
+    ('</tool_call>', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': '}'}]),
 ]
 
 
@@ -58,24 +77,35 @@ class TestGlm47ResponseParserStreaming:
     parser."""
 
     def test_stream_chunk_matches_reference(self, response_parser):
-        for (delta_text, exp_delta_msg, exp_content, exp_tool_emitted,
-             exp_function_name, exp_function_arguments, exp_type) in REFERENCE_CHUNKS:
-            delta_msg, tool_emitted = first_stream_delta(response_parser.stream_chunk(
-                delta_text=delta_text, delta_token_ids=[]))
-            if not exp_delta_msg:
-                assert delta_msg is None
-                continue
-            assert delta_msg is not None
-            assert delta_msg.content == exp_content
-            assert tool_emitted == exp_tool_emitted
-            if tool_emitted:
-                assert delta_msg.tool_calls is not None
-                assert len(delta_msg.tool_calls) == 1
-                call = delta_msg.tool_calls[0]
-                assert call.type == exp_type
-                assert call.function is not None
-                assert call.function.name == exp_function_name
-                assert call.function.arguments == exp_function_arguments
+        actual = []
+        expected = []
+        for delta_text, expected_events in REFERENCE_CHUNKS:
+            actual.extend(
+                _flatten_stream_deltas(response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])))
+            expected.extend(expected_events)
+        assert actual == expected
+
+    def test_stream_chunk_emits_arg_value_before_arg_value_close(self, response_parser):
+        chunks = [
+            '<tool_call>',
+            'get_weather',
+            '<arg_key>location</arg_key>',
+            '<arg_value>San',
+            ' Francisco',
+            ', CA',
+        ]
+
+        argument_fragments = []
+        emitted_before_close = False
+        for chunk in chunks:
+            for event in _flatten_stream_deltas(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])):
+                fragment = event.get('arguments')
+                if fragment:
+                    argument_fragments.append(fragment)
+                    emitted_before_close = True
+
+        assert emitted_before_close is True
+        assert ''.join(argument_fragments) == '{"location": "San Francisco, CA'
 
     def test_stream_chunk_function_name_split_before_arg_key(self, response_parser):
         """Callee name streamed in many deltas before ``<arg_key>`` must not
@@ -91,14 +121,13 @@ class TestGlm47ResponseParserStreaming:
         emitted_name = None
         emitted_args = ''
         for chunk in chunks:
-            delta, tool_emitted = first_stream_delta(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
-            if not tool_emitted or delta is None or not delta.tool_calls:
-                continue
-            for call in delta.tool_calls:
-                if call.function and call.function.name:
-                    emitted_name = call.function.name
-                if call.function and call.function.arguments:
-                    emitted_args += call.function.arguments
+            for event in _flatten_stream_deltas(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])):
+                if not event.get('tool_emitted'):
+                    continue
+                if event.get('name'):
+                    emitted_name = event['name']
+                if event.get('arguments'):
+                    emitted_args += event['arguments']
         assert emitted_name == 'get_current_temperature'
         assert json.loads(emitted_args) == {'location': '北京'}
 
@@ -117,34 +146,28 @@ class TestGlm47ResponseParserStreaming:
         emitted_args = ''
 
         for chunk in chunks:
-            delta, tool_emitted = first_stream_delta(response_parser_with_reasoning.stream_chunk(
-                delta_text=chunk, delta_token_ids=[]))
-            if delta is not None:
-                if delta.reasoning_content:
-                    reasoning_seen.append(delta.reasoning_content)
-                if delta.content:
-                    content_seen.append(delta.content)
-            if tool_emitted and delta and delta.tool_calls:
-                for call in delta.tool_calls:
-                    if call.function and call.function.name:
-                        emitted_name = call.function.name
-                    if call.function and call.function.arguments:
-                        emitted_args += call.function.arguments
+            for event in _flatten_stream_deltas(
+                    response_parser_with_reasoning.stream_chunk(delta_text=chunk, delta_token_ids=[])):
+                if event.get('reasoning_content'):
+                    reasoning_seen.append(event['reasoning_content'])
+                if event.get('content'):
+                    content_seen.append(event['content'])
+                if event.get('tool_emitted') and event.get('name'):
+                    emitted_name = event['name']
+                if event.get('tool_emitted') and event.get('arguments'):
+                    emitted_args += event['arguments']
 
         for _ in range(3):
-            delta, tool_emitted = first_stream_delta(response_parser_with_reasoning.stream_chunk(
-                delta_text='', delta_token_ids=[]))
-            if delta is not None:
-                if delta.reasoning_content:
-                    reasoning_seen.append(delta.reasoning_content)
-                if delta.content:
-                    content_seen.append(delta.content)
-            if tool_emitted and delta and delta.tool_calls:
-                for call in delta.tool_calls:
-                    if call.function and call.function.name:
-                        emitted_name = call.function.name
-                    if call.function and call.function.arguments:
-                        emitted_args += call.function.arguments
+            for event in _flatten_stream_deltas(
+                    response_parser_with_reasoning.stream_chunk(delta_text='', delta_token_ids=[])):
+                if event.get('reasoning_content'):
+                    reasoning_seen.append(event['reasoning_content'])
+                if event.get('content'):
+                    content_seen.append(event['content'])
+                if event.get('tool_emitted') and event.get('name'):
+                    emitted_name = event['name']
+                if event.get('tool_emitted') and event.get('arguments'):
+                    emitted_args += event['arguments']
 
         assert ''.join(reasoning_seen) == 'first reason'
         assert ''.join(content_seen) == '\nAnswer: '
@@ -162,14 +185,13 @@ class TestGlm47ResponseParserStreaming:
         emitted_name = None
         emitted_args = ''
         for chunk in chunks:
-            delta, tool_emitted = first_stream_delta(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
-            if not tool_emitted or delta is None or not delta.tool_calls:
-                continue
-            for call in delta.tool_calls:
-                if call.function and call.function.name:
-                    emitted_name = call.function.name
-                if call.function and call.function.arguments:
-                    emitted_args += call.function.arguments
+            for event in _flatten_stream_deltas(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])):
+                if not event.get('tool_emitted'):
+                    continue
+                if event.get('name'):
+                    emitted_name = event['name']
+                if event.get('arguments'):
+                    emitted_args += event['arguments']
         assert emitted_name == 'no_schema_tool'
         assert emitted_args == '{"zip": "77004", "active": "true"}'
 

@@ -1,12 +1,10 @@
 import json
 
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
-
-from .helpers import first_stream_delta
 
 MODEL_ID = 'Qwen/Qwen3.5-35B-A3B'
 
@@ -26,54 +24,69 @@ def _build_response_parser():
     return cls(request=request)
 
 
+def _flatten_stream_deltas(deltas):
+    events = []
+    for delta_msg, tool_emitted in deltas:
+        if delta_msg is None:
+            continue
+        if delta_msg.reasoning_content is not None:
+            events.append({'reasoning_content': delta_msg.reasoning_content, 'tool_emitted': tool_emitted})
+        if delta_msg.content is not None:
+            events.append({'content': delta_msg.content, 'tool_emitted': tool_emitted})
+        if delta_msg.tool_calls:
+            for call in delta_msg.tool_calls:
+                events.append({
+                    'tool_emitted': tool_emitted,
+                    'type': call.type,
+                    'name': call.function.name if call.function else None,
+                    'arguments': call.function.arguments if call.function else None,
+                })
+    return events
+
+
 REFERENCE_CHUNKS = [
-    # (delta_text, emitted_delta_msg, reasoning_content, content,
-    # tool_emitted, function_name, function_arguments, tool_call_type)
-    # Short representative reasoning stream; literal text is irrelevant.
-    ('计划', True, '计划', None, False, None, None, None),
-    ('调用', True, '调用', None, False, None, None, None),
-    ('get', True, 'get', None, False, None, None, None),
-    ('_current', True, '_current', None, False, None, None, None),
-    ('_temperature', True, '_temperature', None, False, None, None, None),
-    ('函数', True, '函数', None, False, None, None, None),
-    ('并提供', True, '并提供', None, False, None, None, None),
-    ('location', True, 'location', None, False, None, None, None),
-    ('参数', True, '参数', None, False, None, None, None),
-    ('。', True, '。', None, False, None, None, None),
-    ('\n', True, '\n', None, False, None, None, None),
-    ('</think>', False, None, None, False, None, None, None),
-    ('\n\n', True, None, '\n\n', False, None, None, None),
-    # Tool call section: placeholder; will be updated to match Qwen3.5 XML-style.
-    ('<tool_call>', False, None, None, False, None, None, None),
-    ('\n', False, None, None, False, None, None, None),
-    ('<', False, None, None, False, None, None, None),
-    ('function', False, None, None, False, None, None, None),
-    ('=get', False, None, None, False, None, None, None),
-    ('_current', False, None, None, False, None, None, None),
-    ('_temperature', False, None, None, False, None, None, None),
-    ('>', True, None, None, True, 'get_current_temperature', None, 'function'),
-    ('\n', False, None, None, False, None, None, None),
-    ('<', False, None, None, False, None, None, None),
-    ('parameter', False, None, None, False, None, None, None),
-    ('=location', False, None, None, False, None, None, None),
-    ('>', False, None, None, False, None, None, None),
-    ('\n', False, None, None, False, None, None, None),
-    ('Be', False, None, None, False, None, None, None),
-    ('ijing', False, None, None, False, None, None, None),
-    (',', False, None, None, False, None, None, None),
-    (' China', False, None, None, False, None, None, None),
-    ('\n', False, None, None, False, None, None, None),
-    ('</', False, None, None, False, None, None, None),
-    ('parameter', False, None, None, False, None, None, None),
-    # Tokenizer maps this `>` to a single id; Qwen3Coder may emit accumulated JSON args in one delta.
-    ('>', True, None, None, True, None, '{"location": "Beijing, China"', None),
-    ('\n', False, None, None, False, None, None, None),
-    ('</', False, None, None, False, None, None, None),
-    ('function', False, None, None, False, None, None, None),
-    ('>', True, None, None, True, None, '}', None),
-    ('\n', False, None, None, False, None, None, None),
-    ('</tool_call>', False, None, None, False, None, None, None),
-    ('', True, None, '', False, None, None, None),
+    ('计划', [{'reasoning_content': '计划', 'tool_emitted': False}]),
+    ('调用', [{'reasoning_content': '调用', 'tool_emitted': False}]),
+    ('get', [{'reasoning_content': 'get', 'tool_emitted': False}]),
+    ('_current', [{'reasoning_content': '_current', 'tool_emitted': False}]),
+    ('_temperature', [{'reasoning_content': '_temperature', 'tool_emitted': False}]),
+    ('函数', [{'reasoning_content': '函数', 'tool_emitted': False}]),
+    ('并提供', [{'reasoning_content': '并提供', 'tool_emitted': False}]),
+    ('location', [{'reasoning_content': 'location', 'tool_emitted': False}]),
+    ('参数', [{'reasoning_content': '参数', 'tool_emitted': False}]),
+    ('。', [{'reasoning_content': '。', 'tool_emitted': False}]),
+    ('\n', [{'reasoning_content': '\n', 'tool_emitted': False}]),
+    ('</think>', []),
+    ('\n\n', [{'content': '\n\n', 'tool_emitted': False}]),
+    ('<tool_call>', []),
+    ('\n', []),
+    ('<', []),
+    ('function', []),
+    ('=get', []),
+    ('_current', []),
+    ('_temperature', []),
+    ('>', [{'tool_emitted': True, 'type': 'function', 'name': 'get_current_temperature', 'arguments': None}]),
+    ('\n', []),
+    ('<', []),
+    ('parameter', []),
+    ('=location', []),
+    ('>', []),
+    ('\n', []),
+    ('Be', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': '{"location": "Be'}]),
+    ('ijing', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': 'ijing'}]),
+    (',', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': ','}]),
+    (' China', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': ' China'}]),
+    ('\n', []),
+    ('</', []),
+    ('parameter', []),
+    ('>', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': '"'}]),
+    ('\n', []),
+    ('</', []),
+    ('function', []),
+    ('>', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': '}'}]),
+    ('\n', []),
+    ('</tool_call>', []),
+    ('', [{'content': '', 'tool_emitted': False}]),
 ]
 
 
@@ -82,50 +95,38 @@ class TestQwen3_5ResponseParserStreaming:
     parsers."""
 
     def test_stream_chunk_matches_reference(self):
-        """Feed the real streaming sequence into ResponseParser.stream_chunk
-        and verify each parsed chunk.
-
-        Expectations for tool_calls will be refined once the Qwen3.5 ground-truth stream is finalized.
-        """
-
         response_parser = _build_response_parser()
-        for (delta_text, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted,
-             exp_function_name, exp_function_arguments,
-             exp_type) in REFERENCE_CHUNKS:
-            delta_msg, tool_emitted = first_stream_delta(response_parser.stream_chunk(
-                delta_text=delta_text,
-                delta_token_ids=[],
-            ))
-            if exp_delta_msg is False:
-                assert delta_msg is None
-                continue
+        actual = []
+        expected = []
+        for delta_text, expected_events in REFERENCE_CHUNKS:
+            actual.extend(
+                _flatten_stream_deltas(response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])))
+            expected.extend(expected_events)
+        assert actual == expected
 
-            assert delta_msg.reasoning_content == exp_reasoning
-            assert delta_msg.content == exp_content
+    def test_stream_chunk_emits_parameter_value_before_parameter_close(self):
+        response_parser = _build_response_parser()
+        chunks = [
+            '</think>',
+            '<tool_call>',
+            '<function=get_current_temperature>',
+            '<parameter=location>',
+            'San',
+            ' Francisco',
+            ', CA',
+        ]
 
-            # Tool-call expectations in this fixture are placeholders for now.
-            # Only enforce the exact tool_emitted flag when an explicit tool
-            # delta shape is provided.
-            if (
-                exp_function_name is None
-                and exp_function_arguments is None
-                and exp_type is None
-                and exp_reasoning is None
-                and exp_content is None
-            ):
-                continue
+        argument_fragments = []
+        emitted_before_close = False
+        for chunk in chunks:
+            for event in _flatten_stream_deltas(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])):
+                fragment = event.get('arguments')
+                if fragment:
+                    argument_fragments.append(fragment)
+                    emitted_before_close = True
 
-            assert tool_emitted == exp_tool_emitted
-
-            if tool_emitted:
-                assert delta_msg.tool_calls is not None
-                assert len(delta_msg.tool_calls) == 1
-                call = delta_msg.tool_calls[0]
-                assert isinstance(call, DeltaToolCall)
-                assert call.type == exp_type
-                assert call.function is not None
-                assert call.function.name == exp_function_name
-                assert call.function.arguments == exp_function_arguments
+        assert emitted_before_close is True
+        assert ''.join(argument_fragments) == '{"location": "San Francisco, CA'
 
     def test_parse_complete_parallel_tool_calls_keep_distinct_arguments(self):
         """Regression: parallel tool calls must not reuse the first call's args."""
