@@ -4,6 +4,7 @@ a100:
   env_tag: a100
   device: cuda
   paths:
+    model_path_layout: join
     model_path: /nvme/qa_test_models
     resource_path: /nvme/qa_test_models/resource
     log_path: /nvme/qa_test_models/autotest_log
@@ -17,7 +18,9 @@ h:
   env_tag: h
   device: cuda
   paths:
-    model_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/model
+    model_path_layout: hf_hub
+    model_path: /mnt/shared-storage-gpfs2/gpfs2-shared-public/huggingface/hub
+    model_work_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/model
     resource_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/resource
     log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/log
     server_log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/server_log
@@ -30,6 +33,7 @@ h:
   env_tag: 3090
   device: cuda
   paths:
+    model_path_layout: join
     model_path: /nvme/qa_test_models
     resource_path: /nvme/qa_test_models/resource
     log_path: /nvme/qa_test_models/autotest_log
@@ -42,6 +46,7 @@ h:
   env_tag: 5080
   device: cuda
   paths:
+    model_path_layout: join
     model_path: /nvme/qa_test_models
     resource_path: /nvme/qa_test_models/resource
     log_path: /nvme/qa_test_models/autotest_log
@@ -54,12 +59,13 @@ ascend:
   env_tag: ascend
   device: ascend
   paths:
-    model_path: /mnt/vc-intern-delivery/qa-llm-cicd/qa_test_models
-    resource_path: /mnt/vc-intern-delivery/qa-llm-cicd/resource
-    log_path: /mnt/vc-intern-delivery/qa-llm-cicd/log
-    server_log_path: /mnt/vc-intern-delivery/qa-llm-cicd/server_log
-    eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/evaluation_report
-    mllm_eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/mllm_evaluation_report
-    benchmark_path: /mnt/vc-intern-delivery/qa-llm-cicd/benchmark_report
-    dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
-    prefix_dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/prefix_cache_test.json
+    model_path_layout: join
+    model_path: /mnt/hwfile/llmrazor/qa-llm-cicd/qa_test_models
+    resource_path: /mnt/hwfile/llmrazor/qa-llm-cicd/resource
+    log_path: /mnt/hwfile/llmrazor/qa-llm-cicd/log
+    server_log_path: /mnt/hwfile/llmrazor/qa-llm-cicd/server_log
+    eval_path: /mnt/hwfile/llmrazor/qa-llm-cicd/evaluation_report
+    mllm_eval_path: /mnt/hwfile/llmrazor/qa-llm-cicd/mllm_evaluation_report
+    benchmark_path: /mnt/hwfile/llmrazor/qa-llm-cicd/benchmark_report
+    dataset_path: /mnt/hwfile/llmrazor/qa-llm-cicd/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+    prefix_dataset_path: /mnt/hwfile/llmrazor/qa-llm-cicd/datasets/prefix_cache_test.json

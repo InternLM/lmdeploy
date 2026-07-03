@@ -103,7 +103,8 @@ class DlinferFusedMoEBuilder(FusedMoEBuilder):
               ep_size: int = 1,
               ep_group: torch.distributed.ProcessGroup = None,
               layer_idx: int = 0,
-              out_dtype: torch.dtype = torch.bfloat16):
+              out_dtype: torch.dtype = torch.bfloat16,
+              num_max_dispatch_tokens_per_rank: int = 128):
         """Build from mlp."""
         return DlinferFusedMoEImpl(top_k=top_k,
                                    num_experts=num_experts,

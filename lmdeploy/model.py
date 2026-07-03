@@ -310,69 +310,6 @@ class Llavav1(Vicuna):
             return 'llava-v1'
 
 
-@MODELS.register_module(name='internlm')
-class InternLMChat7B(BaseChatTemplate):
-    """Chat template of InternLM model."""
-
-    def __init__(
-            self,
-            system='<|System|>:',
-            meta_instruction="""You are an AI assistant whose name is InternLM (书生·浦语).
-- InternLM (书生·浦语) is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
-- InternLM (书生·浦语) can understand and communicate fluently in the language chosen by the user such as English and 中文.
-""",  # noqa: E501
-            eosys='\n',
-            user='<|User|>:',
-            eoh='\n',
-            assistant='<|Bot|>:',
-            eoa='<eoa>',
-            separator='\n',
-            stop_words=['<eoa>'],
-            **kwargs):
-        super().__init__(system=system,
-                         meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         separator=separator,
-                         stop_words=stop_words,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if all([c not in path for c in ['internlm3', 'internlm2', '8k']]) and \
-                all([c in path for c in ['internlm', 'chat']]):
-            return 'internlm'
-
-
-@MODELS.register_module(name='baichuan2')
-class Baichuan2(BaseChatTemplate):
-    """Chat template and generation parameters of Baichuan2-7B-Base and
-    Baichuan2-7B-Chat models."""
-
-    def __init__(self, user='<reserved_106>', assistant='<reserved_107>', **kwargs):
-        super().__init__(user=user, assistant=assistant, **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'baichuan2' in path and 'chat' in path:
-            return 'baichuan2'
-
-
 @MODELS.register_module(name='llama2')
 class Llama2(BaseChatTemplate):
     """Chat template of LLaMA2 model."""

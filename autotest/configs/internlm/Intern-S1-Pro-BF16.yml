@@ -5,6 +5,9 @@ ascend:
   engine_config:
     dp: 64
     ep: 64
+    extra:
+      session-len: 65536
+      max-batch-size: 128
   backends:
   - name: pytorch
     communicators:

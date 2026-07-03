@@ -52,7 +52,7 @@ ______________________________________________________________________
 - \[2024/09\] LMDeploy PyTorchEngine achieves 1.3x faster on Llama3-8B inference by introducing CUDA graph
 - \[2024/08\] LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
 - \[2024/07\] Support Llama3.1 8B, 70B and its TOOLS CALLING
-- \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
+- \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, InternLM-XComposer2.5 and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
 - \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
@@ -128,11 +128,9 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
   <li>Llama3.2 (1B, 3B)</li>
-  <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM3 (8B)</li>
   <li>InternLM2.5 (7B)</li>
-  <li>Qwen (1.8B - 72B)</li>
   <li>Qwen1.5 (0.5B - 110B)</li>
   <li>Qwen1.5 - MoE (0.5B - 72B)</li>
   <li>Qwen2 (0.5B - 72B)</li>
@@ -140,8 +138,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
   <li>Qwen3-Next(80B)</li>
-  <li>Baichuan (7B)</li>
-  <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
   <li>GLM-4 (9B)</li>
@@ -156,7 +152,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>DeepSeek-V3.2 (685B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
-  <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
@@ -171,9 +166,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
-  <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
-  <li>InternLM-XComposer2.5 (7B)</li>
-  <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>Qwen3-VL (2B - 235B)</li>
@@ -190,7 +182,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Intern-S1-mini (8.3B)</li>
   <li>Intern-S1-Pro (1TB)</li>
   <li>Intern-S2-Preview (35B-A3B)</li>
-  <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -200,7 +191,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>GLM-4.1V-Thinking (9B)</li>
-  <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
   <li>Llama4 (Scout, Maverick)</li>

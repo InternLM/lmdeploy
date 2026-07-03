@@ -193,6 +193,11 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         dllm_mask: np.ndarray = _to_ndarray(dllm_mask)
 
         if mode == UpdateTokenMode.INPUTS:
+            self.cached_tokens = 0
+            self.prefix_cache.suppress_match_stats = False
+            self.prefix_cache.match_start_step = -1
+            self.input_start_pos = self.num_valid_ids
+            self.input_end_pos = self.input_start_pos + len(token_ids)
             self._update_token_ids_inputs(token_ids, dllm_mask)
         elif mode == UpdateTokenMode.PREFILL:
             self._update_token_ids_prefill(token_ids, dllm_mask)

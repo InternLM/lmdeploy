@@ -39,13 +39,17 @@ class SubCliServe:
                             ' which is converted by `lmdeploy convert` command or '
                             'download from ii) and iii). - ii) the model_id of a '
                             'lmdeploy-quantized model hosted inside a model repo on '
-                            'huggingface.co, such as "internlm/internlm-chat-20b-4bit",'
-                            ' "lmdeploy/llama2-chat-70b-4bit", etc. - iii) the model_id'
-                            ' of a model hosted inside a model repo on huggingface.co,'
-                            ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
-                            ', "baichuan-inc/baichuan2-7b-chat" and so on')
+                            'huggingface.co, such as "lmdeploy/llama2-chat-70b-4bit",'
+                            ' etc. - iii) the model_id of a model hosted inside a model'
+                            ' repo on huggingface.co, such as "internlm/internlm2_5-7b-chat",'
+                            ' "internlm/Intern-S2-Preview" and so on')
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for serving')
-        parser.add_argument('--server-port', type=int, default=23333, help='Server port')
+        parser.add_argument('--server-port',
+                            type=int,
+                            default=None,
+                            help='Server port. Effective default is 23333 when unset. '
+                            'In DP mode with --proxy-url, ports are auto-selected unless '
+                            'this flag is explicitly set.')
         parser.add_argument('--allow-origins',
                             nargs='+',
                             type=str,
@@ -107,9 +111,11 @@ class SubCliServe:
         ArgumentHelper.enable_return_routed_experts(pt_group)
         ArgumentHelper.distributed_executor_backend(pt_group)
         ArgumentHelper.kernel_block_size(pt_group)
+        ArgumentHelper.prefix_cache_state_budget(pt_group)
+        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
 
         # common engine args
-        disable_vision_encoder = ArgumentHelper.disable_vision_encoder(pt_group)
+        language_model_only = ArgumentHelper.language_model_only(pt_group)
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
@@ -128,6 +134,7 @@ class SubCliServe:
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
+        ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -150,7 +157,7 @@ class SubCliServe:
         tb_group._group_actions.append(hf_overrides)
         tb_group._group_actions.append(disable_metrics)
         tb_group._group_actions.append(dp)
-        tb_group._group_actions.append(disable_vision_encoder)
+        tb_group._group_actions.append(language_model_only)
         ArgumentHelper.cp(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
@@ -233,10 +240,13 @@ class SubCliServe:
                 session_len=args.session_len,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
+                prefix_cache_state_budget=args.prefix_cache_state_budget,
+                prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,
                 max_prefill_token_num=args.max_prefill_token_num,
+                cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,
                 enable_metrics=not args.disable_metrics,
@@ -244,7 +254,7 @@ class SubCliServe:
                 migration_backend=MigrationBackend[args.migration_backend],
                 model_format=args.model_format,
                 hf_overrides=args.hf_overrides,
-                disable_vision_encoder=args.disable_vision_encoder,
+                language_model_only=args.language_model_only,
                 logprobs_mode=args.logprobs_mode,
                 dllm_block_length=args.dllm_block_length,
                 dllm_unmasking_strategy=args.dllm_unmasking_strategy,
@@ -275,7 +285,7 @@ class SubCliServe:
                                                    max_prefill_iters=args.max_prefill_iters,
                                                    async_=args.async_,
                                                    communicator=args.communicator,
-                                                   disable_vision_encoder=args.disable_vision_encoder,
+                                                   language_model_only=args.language_model_only,
                                                    enable_metrics=not args.disable_metrics,
                                                    hf_overrides=args.hf_overrides)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
@@ -294,7 +304,7 @@ class SubCliServe:
                 chat_template_config=chat_template_config,
                 vision_config=vision_config,
                 server_name=args.server_name,
-                server_port=args.server_port,
+                server_port=args.server_port if args.server_port is not None else 23333,
                 allow_origins=args.allow_origins,
                 allow_credentials=args.allow_credentials,
                 allow_methods=args.allow_methods,

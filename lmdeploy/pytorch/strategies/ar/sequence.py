@@ -50,8 +50,13 @@ class SchedulerSequenceDefault(SchedulerSequence):
         self.append_routed_experts(routed_experts)
 
         if mode == UpdateTokenMode.INPUTS:
+            self.cached_tokens = 0
+            self.prefix_cache.suppress_match_stats = False
+            self.prefix_cache.match_start_step = -1
+            self.input_start_pos = self.num_all_ids
+            self.input_end_pos = self.input_start_pos + num_valid
             self.arrive_time = time.perf_counter()
-            self.output_start_pos = self.num_all_ids + len(token_ids)
+            self.output_start_pos = self.input_end_pos
             self._num_token_ids += num_valid
             self.num_new_tokens = 0
         else:

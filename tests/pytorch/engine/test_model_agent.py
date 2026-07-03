@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -38,6 +39,46 @@ def _make_agent_with_queues():
     agent._in_que = asyncio.Queue()
     agent._out_que = asyncio.Queue()
     return agent
+
+
+def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefill():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    prev_output = {'model_metas': [{'chunk': 1}]}
+    agent._prev_chunk_output = prev_output
+
+    normal_prefill = SimpleNamespace(is_chunk=False,
+                                     is_first_chunk=False,
+                                     is_last_chunk=False,
+                                     model_metas=[{
+                                         'normal': 1
+                                     }])
+
+    agent._prepare_inputs_prefill(normal_prefill, delta=None)
+
+    assert agent._prev_chunk_output is prev_output
+    assert normal_prefill.model_metas == [{'normal': 1}]
+
+    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False, model_metas=None)
+
+    agent._prepare_inputs_prefill(middle_chunk, delta=None)
+
+    assert middle_chunk.model_metas == [{'chunk': 1}]
+    assert agent._prev_chunk_output is prev_output
+
+
+def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent._prev_chunk_output = {'model_metas': [{'chunk': 1}]}
+    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True, model_metas=None)
+
+    agent._prepare_inputs_prefill(final_chunk, delta=None)
+
+    assert final_chunk.model_metas == [{'chunk': 1}]
+    assert agent._prev_chunk_output is None
 
 
 class TestDrainQueues:
@@ -285,4 +326,32 @@ class TestResetGraphRunner:
             'enter_draft_context',
             'reset',
             'exit_draft_context',
+        ]
+
+
+class TestModelAgentWakeup:
+
+    def test_dp_kv_cache_wakeup_warms_before_releasing_forward_task(self):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
+
+        events = []
+
+        model_agent = BaseModelAgent.__new__(BaseModelAgent)
+        model_agent.state = SleepWakeupState()
+        model_agent.state.is_sleeping = True
+        model_agent.dist_config = SimpleNamespace(dp=2)
+        model_agent.build_cache_engine = lambda: events.append('build_cache_engine')
+
+        def _warmup():
+            events.append(('warmup', model_agent.state.is_sleeping, model_agent.state.to_wakeup.is_set()))
+
+        model_agent.warmup = _warmup
+
+        model_agent.wakeup(['kv_cache'])
+
+        assert model_agent.state.is_sleeping is False
+        assert model_agent.state.to_wakeup.is_set()
+        assert events == [
+            'build_cache_engine',
+            ('warmup', True, False),
         ]

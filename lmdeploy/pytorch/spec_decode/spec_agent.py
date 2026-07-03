@@ -185,7 +185,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         with self.draft_context():
             draft_dp_meta = DPMeta.build(input_ids.numel(), all_num_tokens)
         draft_dp_meta.dp_batches = dp_meta.dp_batches
-        draft_dp_meta.is_decoding = dp_meta.is_decoding
         draft_dp_meta.dp_is_decoding = dp_meta.dp_is_decoding
         return draft_dp_meta
 
@@ -205,10 +204,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
-            # Dummy inputs are DP placeholders and should not disturb
-            # local long-context carry-over state.
-            if not model_inputs.is_dummy:
-                self._prev_chunk_last.clear()
+            # Non-chunk prefill/decode can be interleaved between long-context
+            # chunks. Keep pending chunk carry here; a new first chunk clears it
+            # explicitly, and the final chunk consumes it.
             # Case A: non-chunked — shift left by 1, place next_token at end
             input_ids = model_inputs.input_ids.clone()
             input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
@@ -289,8 +287,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                 if mrope_pos_ids is not None:
                     mrope_pos_ids = self._prepare_long_context_chunk_prepend_saved('mrope_pos_ids', mrope_pos_ids)
 
-        # update when dp > 1
-        is_decoding = model_inputs.is_decoding if model_inputs.dp_meta is None else model_inputs.dp_meta.dp_is_decoding
+        # Keep draft model local decoding state; DP-global state stays in dp_meta.
+        is_decoding = model_inputs.is_decoding
         dp_meta = self._build_dp_meta_from_main(input_ids, model_inputs.dp_meta)
 
         new_model_inputs = ModelInputs(
@@ -316,7 +314,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         # update if dp > 1
         if dp_meta is not None:
-            if is_decoding:
+            if new_model_inputs.global_is_decoding():
                 padding_batch_size = max(dp_meta.dp_batches)
                 meta = self.proposer.model.get_meta()
                 meta.padding_batch_size = padding_batch_size
@@ -540,6 +538,19 @@ class SpecModelAgent(BaseSpecModelAgent):
         draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, extra_inputs)
         return await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
 
+    def _build_warmup_dp_meta(self, inputs: ModelInputs):
+        """Build dp_meta for warmup dummy inputs.
+
+        During warmup all ranks use the same dummy batch size, so the local token count can be broadcast to every rank
+        entry in num_tokens. Must be called inside draft_context so DPMeta.build uses the correct dist groups.
+        """
+        draft_dist_config = self.draft_dist_ctx.dist_config
+        if draft_dist_config.dp > 1:
+            num_tokens = inputs.input_ids.numel()
+            with self.draft_context():
+                inputs.build_dp_meta([num_tokens] * draft_dist_config.world_size)
+            inputs.dp_meta.dp_is_decoding = inputs.is_decoding
+
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""
         target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
@@ -553,7 +564,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  target_dtype=self.model_config.dtype,
                                                  meta=self.make_dummy_meta)
 
-        # warmup prefill
+        self._build_warmup_dp_meta(inputs)
         self._forward_impl(inputs)
 
         capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
@@ -570,6 +581,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                     target_hidden_size=target_hidden_size,
                                                     target_dtype=self.model_config.dtype,
                                                     meta=self.make_dummy_meta)
+            self._build_warmup_dp_meta(inputs)
             self._forward_impl(inputs)
             # decode 1 tokens per sequence
             inputs = self.inputs_strategy.make_dummy(batch_size,
@@ -580,6 +592,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                     target_hidden_size=self.model_config.hidden_size,
                                                     target_dtype=self.model_config.dtype,
                                                     meta=self.make_dummy_meta)
+            self._build_warmup_dp_meta(inputs)
             self._forward_impl(inputs)
 
     def reset_graph_runner(self):

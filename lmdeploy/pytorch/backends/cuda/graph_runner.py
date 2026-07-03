@@ -7,7 +7,12 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.selector import get_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    ModelConfig,
+    normalize_cudagraph_capture_batch_sizes,
+)
 from lmdeploy.pytorch.envs import fake_capture
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -67,6 +72,7 @@ class CUDASingleGraphRunner:
         max_tokens: int,
         num_blocks: int,
         is_decoding: bool,
+        decode_query_len: int,
         pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
@@ -92,6 +98,7 @@ class CUDASingleGraphRunner:
             is_ssm=len(model_config.states_shapes) > 0,
             use_mrope=model_config.use_mrope,
             block_size=model_config.block_size,
+            decode_query_len=decode_query_len,
         )
         self.device = device
         self.max_batches = max_batches
@@ -224,19 +231,16 @@ class CUDAGraphRunner(GraphRunner):
                       attn_metadata: TritonAttentionMetadata, inputs_embeds: torch.Tensor, **kwargs):
         """Get graph key."""
         context = self.ctx_mgr.current_context()
-        is_decoding = context.is_decoding
+        is_decoding = context.global_is_decoding()
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
-        # for draft model to distinguish inputs from target model and itself
-        target_hidden_size = None
-        if context.target_hidden_states is not None:
-            target_hidden_size = context.target_hidden_states.size(-1)
+        query_len = input_ids.size(1) // batch_size
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch, target_hidden_size)
+        return (batch_size, is_decoding, enable_microbatch, query_len)
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
@@ -260,7 +264,8 @@ class CUDAGraphRunner(GraphRunner):
             self._try_compile_model_once()
 
         kwargs = self._prepare_inputs(**kwargs)
-        enable_graph = self.enable_graph(**kwargs)
+        context = self.ctx_mgr.current_context()
+        enable_graph = context.global_is_decoding() and self.enable_graph(**kwargs)
 
         if not enable_graph:
             with record_function('forward_eager'):
@@ -270,6 +275,7 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
+        decode_query_len = graph_key[3]
         if graph_key not in self._runner_map:
             max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
             runner = CUDASingleGraphRunner(
@@ -278,6 +284,7 @@ class CUDAGraphRunner(GraphRunner):
                 max_tokens=max_tokens,
                 num_blocks=self.num_blocks,
                 is_decoding=is_decoding,
+                decode_query_len=decode_query_len,
                 pool=self.graph_pool_handle,
                 model_config=self.model_config,
                 device=self.device,
@@ -301,8 +308,8 @@ class CUDAGraphRunner(GraphRunner):
         """Prepare inputs."""
 
         if get_deepep_state().enabled():
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
-            deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
+            from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, DeepEPMode
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
             DeepEPBuffer.set_deepep_mode(deepep_mode)
 
         return self.model.prepare_inputs_for_generation(
@@ -315,7 +322,7 @@ class CUDAGraphRunner(GraphRunner):
         """Remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
         if get_deepep_state().enabled():
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer
+            from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer
 
             if hasattr(DeepEPBuffer, 'destroy'):
                 from torch import distributed as dist
@@ -327,7 +334,7 @@ class CUDAGraphRunner(GraphRunner):
         """Update inputs."""
         if self.backend_config.eager_mode:
             return inputs
-        is_decoding = inputs.is_decoding
+        is_decoding = inputs.global_is_decoding()
         dp_meta = inputs.dp_meta
         if is_decoding and dp_meta is not None:
             meta = self.get_meta()
@@ -340,4 +347,8 @@ class CUDAGraphRunner(GraphRunner):
 
     def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
+        if self.cache_config.cudagraph_capture_batch_sizes is not None:
+            self.cache_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                self.cache_config.cudagraph_capture_batch_sizes, self.cache_config.max_batches)
+            return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
