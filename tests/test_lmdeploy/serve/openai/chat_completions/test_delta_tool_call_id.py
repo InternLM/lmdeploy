@@ -2,7 +2,7 @@
 
 def test_decode_tool_incremental_json_id_only_on_first_chunk():
     """When streaming a tool call, id should appear only on the name-delta
-    chunk, not on subsequent argument-delta chunks."""
+    chunk, not on subsequent argument chunks."""
     from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
 
     class TestToolParser(ToolParser):
@@ -24,11 +24,12 @@ def test_decode_tool_incremental_json_id_only_on_first_chunk():
     assert name_delta.id.startswith('chatcmpl-tool-')
     assert name_delta.type == 'function'
 
-    # Step 2: feed final chunk with arguments
-    deltas = parser._decode_tool_incremental_json('"arguments": {"city": "NYC"}}', final=True)
+    deltas = parser._decode_tool_incremental_json('"arguments": {"city": "NY', final=False)
     assert len(deltas) == 1
     args_delta = deltas[0]
-    assert args_delta.function.arguments is not None
+    assert args_delta.id is None
+    assert args_delta.type is None
+    assert args_delta.function.arguments
 
 
 def test_stream_delta_tool_call_omits_null_id_and_type_in_json():
