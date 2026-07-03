@@ -178,6 +178,54 @@ def test_deepseek_v4_chat_template_normalizes_lmdeploy_tools():
     assert prompt.endswith('<｜Assistant｜><think>')
 
 
+def test_deepseek_v4_chat_template_normalizes_dict_arguments():
+    model = MODELS.get('deepseek-v4')()
+    prompt = model.messages2prompt(
+        [
+            {'role': 'user', 'content': 'List files'},
+            {
+                'role': 'assistant',
+                'tool_calls': [
+                    {
+                        'type': 'function',
+                        'function': {
+                            'name': 'str_replace_editor',
+                            'arguments': {
+                                'command': 'view',
+                                'path': '/testbed',
+                            },
+                        },
+                    }
+                ],
+            },
+        ],
+        tools=[
+            {
+                'name': 'str_replace_editor',
+                'description': 'Edit files',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'command': {
+                            'type': 'string'
+                        },
+                        'path': {
+                            'type': 'string'
+                        },
+                    },
+                    'required': ['command', 'path'],
+                },
+            }
+        ],
+        enable_thinking=True,
+        drop_thinking=False,
+    )
+    assert '<｜DSML｜tool_calls>' in prompt
+    assert '<｜DSML｜parameter name="command" string="true">view' in prompt
+    assert '<｜DSML｜parameter name="path" string="true">/testbed' in prompt
+    assert 'parameter name="arguments"' not in prompt
+
+
 def test_deepseek_v4_reasoning_effort_does_not_enable_thinking():
     model = MODELS.get('deepseek-v4')()
     prompt = model.messages2prompt(

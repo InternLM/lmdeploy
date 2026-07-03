@@ -136,11 +136,12 @@ def tool_calls_to_openai_format(tool_calls):
     ]
 
 
-def encode_arguments_to_dsml(tool_call: dict[str, str]) -> str:
+def encode_arguments_to_dsml(tool_call: dict[str, Any]) -> str:
     """Encode tool call arguments into DSML parameter format.
 
     Args:
-        tool_call: Dict with "name" and "arguments" (JSON string) keys.
+        tool_call: Dict with "name" and "arguments" keys. Arguments may be a
+            JSON string or an already-normalized dict.
 
     Returns:
         DSML-formatted parameter string.
@@ -148,10 +149,16 @@ def encode_arguments_to_dsml(tool_call: dict[str, str]) -> str:
     p_dsml_template = '<{dsml_token}parameter name="{key}" string="{is_str}">{value}</{dsml_token}parameter>'
     P_dsml_strs = []
 
-    try:
-        arguments = json.loads(tool_call['arguments'])
-    except Exception:
-        arguments = {'arguments': tool_call['arguments']}
+    raw_arguments = tool_call['arguments']
+    if isinstance(raw_arguments, dict):
+        arguments = raw_arguments
+    else:
+        try:
+            arguments = json.loads(raw_arguments)
+        except Exception:
+            arguments = {'arguments': raw_arguments}
+        if not isinstance(arguments, dict):
+            arguments = {'arguments': raw_arguments}
 
     for k, v in arguments.items():
         p_dsml_str = p_dsml_template.format(
