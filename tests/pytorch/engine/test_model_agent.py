@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from collections import deque
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -179,6 +180,26 @@ class TestDrainQueues:
         agent._out_que.put_nowait('new')
         assert agent._out_que.qsize() == 1
         assert agent._out_que.get_nowait() == 'new'
+
+    def test_wakeup_queue_check_logs_nonempty_queues(self, monkeypatch):
+        """Wakeup should report stale queue data if drain did not clear it."""
+        from lmdeploy.pytorch.engine.model_agent import agent as agent_mod
+
+        agent = _make_agent_with_queues()
+        agent.rank = 3
+        agent._out_que.put_nowait('stale_output')
+
+        messages = []
+
+        def _capture_error(msg, *args, **kwargs):
+            messages.append(msg % args)
+
+        monkeypatch.setattr(agent_mod.logger, 'error', _capture_error)
+        agent._log_nonempty_queues_after_wakeup()
+
+        assert len(messages) == 1
+        assert 'ModelAgent wakeup found non-empty queues after sleep drain' in messages[0]
+        assert "'_out_que': 1" in messages[0]
 
 
 class TestDPForwardMeta:
@@ -399,6 +420,7 @@ class TestModelAgentWakeup:
         model_agent._pre_in_que = asyncio.Queue()
         model_agent._in_que = asyncio.Queue()
         model_agent._out_que = asyncio.Queue()
+        model_agent._pending_h2d_transfers = deque()
         model_agent._pre_in_que.put_nowait('stale_middle_chunk_input')
         model_agent._in_que.put_nowait('stale_middle_chunk_cuda_input')
         model_agent._out_que.put_nowait('stale_middle_chunk_output')
@@ -446,6 +468,9 @@ class TestModelAgentWakeup:
             events.append(('warmup', model_agent.state.is_sleeping, model_agent.state.to_wakeup.is_set()))
 
         model_agent.warmup = _warmup
+        model_agent._log_gpu_mem_for_wakeup = lambda *args, **kwargs: None
+        model_agent._log_nonempty_queues_after_wakeup = lambda: events.append(
+            ('queue_check', model_agent.state.to_wakeup.is_set()))
 
         model_agent.wakeup(['kv_cache'])
 
@@ -454,4 +479,5 @@ class TestModelAgentWakeup:
         assert events == [
             'build_cache_engine',
             ('warmup', True, False),
+            ('queue_check', False),
         ]

@@ -1,5 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
+import json
+import os
+import time
+import weakref
+from collections import deque
 from typing import Any
 
 import torch
@@ -23,6 +28,188 @@ from ..graph_runner import GraphRunner
 from .attention import TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
+
+
+_CUDAGRAPH_RCA_RUNNERS: weakref.WeakSet = weakref.WeakSet()
+_CUDAGRAPH_RCA_DUMPED = False
+_CUDAGRAPH_RCA_FILE_WRITE_FAILED = False
+_RCA_FATAL_PATTERNS = (
+    'DeepEP error',
+    'timeout (dispatch CPU)',
+    'CPU recv timeout',
+    'CUDA error',
+    'device-side assert',
+    'illegal memory access',
+    'CUBLAS_STATUS_EXECUTION_FAILED',
+)
+
+
+def _rca_enabled():
+    value = os.getenv('LMDEPLOY_CUDAGRAPH_RCA_TRACE', '0').lower()
+    return value in ('1', 'true', 'yes', 'on')
+
+
+def _rca_dump_on_reset_enabled():
+    value = os.getenv('LMDEPLOY_CUDAGRAPH_RCA_DUMP_ON_RESET', '0').lower()
+    return value in ('1', 'true', 'yes', 'on')
+
+
+def _rca_record_limit():
+    try:
+        return min(max(int(os.getenv('LMDEPLOY_CUDAGRAPH_RCA_RECORDS', '1000')), 1), 1000)
+    except ValueError:
+        return 1000
+
+
+def _safe_filename_part(value):
+    value = str(value)
+    return ''.join(ch if ch.isalnum() or ch in ('-', '_', '.') else '_' for ch in value)
+
+
+def _rca_rank():
+    for env_name in ('RANK', 'OMPI_COMM_WORLD_RANK', 'PMI_RANK', 'SLURM_PROCID'):
+        value = os.getenv(env_name)
+        if value is not None:
+            return value
+    try:
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            return str(torch.distributed.get_rank())
+    except Exception:  # pragma: no cover - debug helper only
+        pass
+    return 'unknown'
+
+
+def _rca_local_rank():
+    for env_name in ('LOCAL_RANK', 'OMPI_COMM_WORLD_LOCAL_RANK', 'MPI_LOCALRANKID', 'SLURM_LOCALID'):
+        value = os.getenv(env_name)
+        if value is not None:
+            return value
+    return 'unknown'
+
+
+def _rca_jsonl_path():
+    log_file = os.getenv('LMDEPLOY_LOG_FILE')
+    if not log_file:
+        return None
+    log_file = os.path.expanduser(log_file)
+    rank = _safe_filename_part(_rca_rank())
+    local_rank = _safe_filename_part(_rca_local_rank())
+    return f'{log_file}.cudagraph_rca.rank{rank}.local{local_rank}.pid{os.getpid()}.jsonl'
+
+
+def _safe_list(value, limit: int = 32):
+    if value is None:
+        return None
+    items = list(value)
+    if len(items) > limit:
+        items = items[:limit] + [f'...({len(items) - limit} more)']
+    return [_safe_value(item) for item in items]
+
+
+def _safe_tensor_value(value: torch.Tensor | None):
+    """Describe tensor metadata without reading tensor contents."""
+    if value is None:
+        return None
+    return dict(
+        shape=list(value.shape),
+        dtype=str(value.dtype),
+        device=str(value.device),
+    )
+
+
+def _safe_value(value):
+    if isinstance(value, torch.Tensor):
+        return _safe_tensor_value(value)
+    if isinstance(value, (list, tuple)):
+        return _safe_list(value)
+    return value
+
+
+def _dp_meta_record(dp_meta):
+    if dp_meta is None:
+        return dict(
+            dp_is_decoding=None,
+            dp_batches=None,
+            tp_sizes=None,
+            moe_tp_sizes=None,
+            dp_draft_num_tokens=None,
+        )
+    return dict(
+        dp_is_decoding=getattr(dp_meta, 'dp_is_decoding', None),
+        dp_batches=_safe_list(getattr(dp_meta, 'dp_batches', None)),
+        tp_sizes=_safe_list(getattr(dp_meta, 'tp_sizes', None)),
+        moe_tp_sizes=_safe_list(getattr(dp_meta, 'moe_tp_sizes', None)),
+        dp_draft_num_tokens=_safe_list(getattr(dp_meta, 'dp_draft_num_tokens', None)),
+    )
+
+
+def _model_role(model: torch.nn.Module):
+    cls_name = type(model).__name__
+    module = type(model).__module__
+    role = 'draft' if 'MTP' in cls_name or module.endswith('_mtp') else 'target'
+    return role, cls_name
+
+
+def _fatal_for_rca(exc: BaseException):
+    message = repr(exc)
+    return any(pattern in message for pattern in _RCA_FATAL_PATTERNS)
+
+
+def _json_line(payload: dict[str, Any]):
+    def json_default(value):
+        if isinstance(value, torch.Tensor):
+            return _safe_tensor_value(value)
+        return str(value)
+
+    return json.dumps(payload, sort_keys=True, separators=(',', ':'), default=json_default)
+
+
+def _append_rca_jsonl(payloads: dict[str, Any] | list[dict[str, Any]]):
+    global _CUDAGRAPH_RCA_FILE_WRITE_FAILED
+    path = _rca_jsonl_path()
+    if path is None:
+        return None
+    if isinstance(payloads, dict):
+        payloads = [payloads]
+    try:
+        log_dir = os.path.dirname(path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        with open(path, 'a', encoding='utf-8') as f:
+            for payload in payloads:
+                f.write(_json_line(payload))
+                f.write('\n')
+    except Exception as exc:  # pragma: no cover - debug helper only
+        if not _CUDAGRAPH_RCA_FILE_WRITE_FAILED:
+            _CUDAGRAPH_RCA_FILE_WRITE_FAILED = True
+            logger.error('[CUDAGRAPH_RCA_JSONL] failed to write %s: %r', path, exc)
+    return path
+
+
+def _dump_all_cudagraph_rca_records(reason: str):
+    global _CUDAGRAPH_RCA_DUMPED
+    if not _rca_enabled() or _CUDAGRAPH_RCA_DUMPED:
+        return
+    _CUDAGRAPH_RCA_DUMPED = True
+    runners = list(_CUDAGRAPH_RCA_RUNNERS)
+    dump_payload = dict(
+        event='dump',
+        reason=reason,
+        runner_count=len(runners),
+        pid=os.getpid(),
+        rank=_rca_rank(),
+        local_rank=_rca_local_rank(),
+    )
+    json_file = _append_rca_jsonl(dump_payload)
+    logger.error(
+        '[CUDAGRAPH_RCA_DUMP] %s',
+        _json_line(dict(**dump_payload, json_file=json_file)),
+    )
+    for runner in runners:
+        try:
+            runner._dump_rca_records(reason)
+        except Exception:  # pragma: no cover - best effort failure dump
+            logger.exception('[CUDAGRAPH_RCA_DUMP] failed to dump runner records')
 
 
 def next_power_of_2(n: int):
@@ -200,6 +387,165 @@ class CUDAGraphRunner(GraphRunner):
         build_ctx = model.ctx_mgr.build_ctx
         strategy_factory: StrategyFactoryBase = build_ctx.strategy_factory
         self.cudagraph_strategy = strategy_factory.build_cudagraph_strategy()
+        self._rca_forward_records = deque(maxlen=_rca_record_limit())
+        self._rca_forward_seq = 0
+        self._rca_last_deepep_mode = 'none'
+        self._rca_forward_total = 0
+        self._rca_local_prefill_forward_count = 0
+        self._rca_local_decode_forward_count = 0
+        self._rca_global_prefill_forward_count = 0
+        self._rca_global_decode_forward_count = 0
+        self._rca_deepep_normal_forward_count = 0
+        self._rca_deepep_low_latency_forward_count = 0
+        self._rca_deepep_none_forward_count = 0
+        _CUDAGRAPH_RCA_RUNNERS.add(self)
+
+    def _append_rca_record(self, record: dict[str, Any]):
+        if not _rca_enabled():
+            return
+        role, model_class = _model_role(self.model)
+        self._rca_forward_seq += 1
+        base = dict(
+            seq=self._rca_forward_seq,
+            timestamp=time.time(),
+            pid=os.getpid(),
+            rank=_rca_rank(),
+            local_rank=_rca_local_rank(),
+            runner_id=f'{id(self):x}',
+            role=role,
+            model_class=model_class,
+        )
+        base.update(record)
+        self._rca_forward_records.append(base)
+
+    def _update_rca_forward_counters(self, local_is_decoding: bool | None, global_is_decoding: bool | None,
+                                     deepep_mode: str):
+        self._rca_forward_total = getattr(self, '_rca_forward_total', 0) + 1
+        self._rca_local_prefill_forward_count = getattr(self, '_rca_local_prefill_forward_count', 0)
+        self._rca_local_decode_forward_count = getattr(self, '_rca_local_decode_forward_count', 0)
+        self._rca_global_prefill_forward_count = getattr(self, '_rca_global_prefill_forward_count', 0)
+        self._rca_global_decode_forward_count = getattr(self, '_rca_global_decode_forward_count', 0)
+        self._rca_deepep_normal_forward_count = getattr(self, '_rca_deepep_normal_forward_count', 0)
+        self._rca_deepep_low_latency_forward_count = getattr(self, '_rca_deepep_low_latency_forward_count', 0)
+        self._rca_deepep_none_forward_count = getattr(self, '_rca_deepep_none_forward_count', 0)
+
+        if local_is_decoding is True:
+            self._rca_local_decode_forward_count += 1
+        elif local_is_decoding is False:
+            self._rca_local_prefill_forward_count += 1
+
+        if global_is_decoding is True:
+            self._rca_global_decode_forward_count += 1
+        elif global_is_decoding is False:
+            self._rca_global_prefill_forward_count += 1
+
+        deepep_mode = str(deepep_mode).upper()
+        if deepep_mode == 'NORMAL':
+            self._rca_deepep_normal_forward_count += 1
+        elif deepep_mode == 'LOW_LATENCY':
+            self._rca_deepep_low_latency_forward_count += 1
+        elif deepep_mode == 'NONE':
+            self._rca_deepep_none_forward_count += 1
+
+        return dict(
+            total=self._rca_forward_total,
+            local_prefill=self._rca_local_prefill_forward_count,
+            local_decode=self._rca_local_decode_forward_count,
+            global_prefill=self._rca_global_prefill_forward_count,
+            global_decode=self._rca_global_decode_forward_count,
+            deepep_normal=self._rca_deepep_normal_forward_count,
+            deepep_low_latency=self._rca_deepep_low_latency_forward_count,
+            deepep_none=self._rca_deepep_none_forward_count,
+        )
+
+    def _record_forward(
+        self,
+        context: StepContext,
+        kwargs: dict[str, Any],
+        *,
+        graph_action: str,
+        enable_graph: bool,
+        graph_key: tuple | None = None,
+        single_runner: CUDASingleGraphRunner | None = None,
+    ):
+        if not _rca_enabled():
+            return
+        input_ids = kwargs.get('input_ids')
+        attn_metadata = kwargs.get('attn_metadata')
+        q_seqlens = getattr(attn_metadata, 'q_seqlens', None)
+        batch_size = q_seqlens.size(0) if q_seqlens is not None else None
+        num_tokens = input_ids.numel() if isinstance(input_ids, torch.Tensor) else None
+        query_len = None
+        if batch_size and num_tokens is not None:
+            query_len = num_tokens // batch_size
+
+        try:
+            global_is_decoding = context.global_is_decoding()
+        except Exception as exc:  # pragma: no cover - debug helper only
+            global_is_decoding = f'error:{type(exc).__name__}'
+        local_is_decoding = getattr(context, 'is_decoding', None)
+        deepep_mode = self._rca_last_deepep_mode
+        forward_counters = self._update_rca_forward_counters(local_is_decoding, global_is_decoding, deepep_mode)
+
+        self._append_rca_record(
+            dict(
+                kind='forward',
+                local_is_decoding=local_is_decoding,
+                global_is_decoding=global_is_decoding,
+                forward_counters=forward_counters,
+                deepep_mode=deepep_mode,
+                num_tokens=num_tokens,
+                batch_size=batch_size,
+                query_len=query_len,
+                max_kv_seqlen=getattr(context, 'max_kv_seqlen', None),
+                sum_kv_seqlen=getattr(context, 'sum_kv_seqlen', None),
+                is_dummy=getattr(context, 'is_dummy', None),
+                is_chunk=getattr(context, 'is_chunk', None),
+                is_first_chunk=getattr(context, 'is_first_chunk', None),
+                is_last_chunk=getattr(context, 'is_last_chunk', None),
+                is_chunk_multimodal=getattr(context, 'is_chunk_multimodal', None),
+                dp_meta=_dp_meta_record(getattr(context, 'dp_meta', None)),
+                enable_graph=enable_graph,
+                graph_key=_safe_value(graph_key),
+                graph_action=graph_action,
+                single_runner_id=f'{id(single_runner):x}' if single_runner is not None else None,
+                runner_map_size=len(self._runner_map),
+                num_gpu_blocks=self.num_blocks,
+            ))
+
+    def _record_reset(self, kind: str, deepep_destroy_called: bool = False):
+        if not _rca_enabled():
+            return
+        self._append_rca_record(
+            dict(
+                kind=kind,
+                runner_map_size=len(self._runner_map),
+                graph_keys=[_safe_value(key) for key in self._runner_map.keys()],
+                num_gpu_blocks=self.num_blocks,
+                deepep_destroy_called=deepep_destroy_called,
+            ))
+
+    def _dump_rca_records(self, reason: str):
+        role, model_class = _model_role(self.model)
+        runner_payload = dict(
+            event='runner',
+            reason=reason,
+            pid=os.getpid(),
+            rank=_rca_rank(),
+            local_rank=_rca_local_rank(),
+            runner_id=f'{id(self):x}',
+            role=role,
+            model_class=model_class,
+            record_count=len(self._rca_forward_records),
+        )
+        json_file = _append_rca_jsonl(
+            [runner_payload] + [dict(event='record', **record) for record in self._rca_forward_records])
+        logger.error(
+            '[CUDAGRAPH_RCA_RUNNER] %s',
+            _json_line(dict(**runner_payload, json_file=json_file)),
+        )
+        for record in self._rca_forward_records:
+            logger.error('[CUDAGRAPH_RCA_RECORD] %s', _json_line(record))
 
     def check_enable_graph(self):
         """Check enable graph."""
@@ -260,43 +606,65 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
-        if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
-            self._try_compile_model_once()
+        try:
+            if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
+                self._try_compile_model_once()
 
-        kwargs = self._prepare_inputs(**kwargs)
-        context = self.ctx_mgr.current_context()
-        enable_graph = context.global_is_decoding() and self.enable_graph(**kwargs)
+            kwargs = self._prepare_inputs(**kwargs)
+            context = self.ctx_mgr.current_context()
+            enable_graph = context.global_is_decoding() and self.enable_graph(**kwargs)
 
-        if not enable_graph:
-            with record_function('forward_eager'):
-                output = self.model(**kwargs)
-                return self.model.make_output_buffers(output)
+            if not enable_graph:
+                self._record_forward(context, kwargs, graph_action='eager', enable_graph=enable_graph)
+                with record_function('forward_eager'):
+                    output = self.model(**kwargs)
+                    return self.model.make_output_buffers(output)
 
-        graph_key = self.get_graph_key(**kwargs)
-        max_batches = graph_key[0]
-        is_decoding = graph_key[1]
-        decode_query_len = graph_key[3]
-        if graph_key not in self._runner_map:
-            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
-            runner = CUDASingleGraphRunner(
-                self.model,
-                max_batches=max_batches,
-                max_tokens=max_tokens,
-                num_blocks=self.num_blocks,
-                is_decoding=is_decoding,
-                decode_query_len=decode_query_len,
-                pool=self.graph_pool_handle,
-                model_config=self.model_config,
-                device=self.device,
-            )
-            output = runner.capture(**kwargs)
-            self._runner_map[graph_key] = runner
-            # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
-            return output
-        else:
-            runner = self._runner_map[graph_key]
-            output = runner.forward(**kwargs)
-            return output
+            graph_key = self.get_graph_key(**kwargs)
+            max_batches = graph_key[0]
+            is_decoding = graph_key[1]
+            decode_query_len = graph_key[3]
+            if graph_key not in self._runner_map:
+                max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
+                runner = CUDASingleGraphRunner(
+                    self.model,
+                    max_batches=max_batches,
+                    max_tokens=max_tokens,
+                    num_blocks=self.num_blocks,
+                    is_decoding=is_decoding,
+                    decode_query_len=decode_query_len,
+                    pool=self.graph_pool_handle,
+                    model_config=self.model_config,
+                    device=self.device,
+                )
+                self._record_forward(
+                    context,
+                    kwargs,
+                    graph_action='capture',
+                    enable_graph=enable_graph,
+                    graph_key=graph_key,
+                    single_runner=runner,
+                )
+                output = runner.capture(**kwargs)
+                self._runner_map[graph_key] = runner
+                # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
+                return output
+            else:
+                runner = self._runner_map[graph_key]
+                self._record_forward(
+                    context,
+                    kwargs,
+                    graph_action='replay',
+                    enable_graph=enable_graph,
+                    graph_key=graph_key,
+                    single_runner=runner,
+                )
+                output = runner.forward(**kwargs)
+                return output
+        except Exception as exc:
+            if _fatal_for_rca(exc):
+                _dump_all_cudagraph_rca_records(repr(exc))
+            raise
 
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
@@ -310,7 +678,10 @@ class CUDAGraphRunner(GraphRunner):
         if get_deepep_state().enabled():
             from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, DeepEPMode
             deepep_mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
+            self._rca_last_deepep_mode = getattr(deepep_mode, 'name', str(deepep_mode))
             DeepEPBuffer.set_deepep_mode(deepep_mode)
+        else:
+            self._rca_last_deepep_mode = 'none'
 
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
@@ -321,6 +692,8 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
         super().reset()
+        deepep_destroy_called = False
+        self._record_reset('reset_start')
         self._runner_map.clear()
         if get_deepep_state().enabled():
             from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer
@@ -329,7 +702,11 @@ class CUDAGraphRunner(GraphRunner):
                 from torch import distributed as dist
 
                 DeepEPBuffer.destroy()
+                deepep_destroy_called = True
                 dist.barrier()
+        self._record_reset('reset_done', deepep_destroy_called=deepep_destroy_called)
+        if _rca_dump_on_reset_enabled():
+            self._dump_rca_records('reset')
 
     def update_inputs(self, inputs):
         """Update inputs."""

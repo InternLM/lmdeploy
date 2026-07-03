@@ -399,13 +399,20 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
     monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(fake_dp_meta_build))
 
     dist_config = DistConfig(dp=2, ep=2)
+    cpu_group = object()
     draft_dist_ctx = DistContext(rank=0,
                                  dp_rank=0,
                                  dist_config=dist_config,
+                                 cpu_group=cpu_group,
                                  attn_tp_group=DistGroup(rank=0),
                                  mlp_tp_group=DistGroup(rank=0),
                                  moe_tp_group=DistGroup(rank=0),
                                  tp_group=DistGroup(rank=0))
+    barrier_calls = []
+    sync_calls = []
+    monkeypatch.setattr(spec_agent_mod.dist, 'barrier', lambda group=None: barrier_calls.append(group))
+    monkeypatch.setattr(spec_agent_mod.torch.cuda, 'synchronize', lambda: sync_calls.append(True))
+
     agent = object.__new__(SpecModelAgent)
     agent.draft_dist_ctx = draft_dist_ctx
     agent.inputs_strategy = DummyInputsStrategy()
@@ -430,6 +437,8 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
 
     agent.warmup(max_batches=4, target_model_config=SimpleNamespace())
 
+    assert barrier_calls == [cpu_group]
+    assert len(sync_calls) == 3
     assert build_calls == [(4, [4, 4]), (8, [8, 8]), (2, [2, 2])]
     assert forwarded == [
         {
