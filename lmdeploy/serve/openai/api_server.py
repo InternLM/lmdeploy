@@ -270,7 +270,10 @@ def _should_suppress_empty_stream_delta(response_parser, delta_message: DeltaMes
     """Return whether an empty parser result is hidden from chat SSE output."""
     if not (
         getattr(response_parser, 'tool_parser', None) is not None
-        and getattr(response_parser, '_mode', None) == getattr(response_parser, 'MODE_TOOL', None)
+        and (
+            getattr(response_parser, '_mode', None) == getattr(response_parser, 'MODE_TOOL', None)
+            or getattr(response_parser, '_last_stream_consumed_tool', False)
+        )
     ):
         return False
     if delta_message is None:

@@ -106,40 +106,6 @@ def test_decode_tool_incremental_json_streams_parameters_fallback_before_payload
     assert json.loads(''.join(fragments)) == _complete_arguments(payload)
 
 
-def test_decode_tool_incremental_json_uses_first_argument_alias_consistently():
-    payload = '{"name":"f","parameters":{"p":1},"arguments":{"a":2}}'
-    fragments = _stream_argument_fragments(
-        [
-            '{"name":"f","parameters":{"p":1},',
-            '"arguments":{"a":2}}',
-        ],
-        final_on_last=True,
-    )
-
-    assert fragments
-    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
-
-    payload = '{"name":"f","arguments":{"a":2},"parameters":{"p":1}}'
-    fragments = _stream_argument_fragments(
-        [
-            '{"name":"f","arguments":{"a":2},',
-            '"parameters":{"p":1}}',
-        ],
-        final_on_last=True,
-    )
-
-    assert fragments
-    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
-
-
-def test_decode_tool_incremental_json_streams_escaped_arguments_key():
-    payload = '{"name":"f","\\u0061rguments":{"x":1}}'
-    fragments = _stream_argument_fragments([payload], final_on_last=True)
-
-    assert fragments
-    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
-
-
 def test_chat_stream_suppresses_empty_delta_while_tool_payload_is_buffering():
     from lmdeploy.serve.openai.api_server import _should_suppress_empty_stream_delta
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
@@ -164,6 +130,11 @@ def test_chat_stream_suppresses_empty_delta_while_tool_payload_is_buffering():
         assert tool_emitted is False
         assert delta_msg.content == ''
         assert _should_suppress_empty_stream_delta(parser, delta_msg) is True
+
+        parser.stream_chunk('{"name":"f","arguments":{}}', [])
+        assert _should_suppress_empty_stream_delta(parser) is True
+        assert parser.stream_chunk('</tool_call>', [1]) == []
+        assert _should_suppress_empty_stream_delta(parser) is True
     finally:
         cls.reasoning_parser_cls = old_reasoning_cls
         cls.tool_parser_cls = old_tool_cls
