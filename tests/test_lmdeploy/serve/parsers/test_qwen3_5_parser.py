@@ -44,6 +44,17 @@ def _flatten_stream_deltas(deltas):
     return events
 
 
+def _stream_tool_arguments(parser, chunks):
+    parser.start_tool_call()
+    argument_fragments = []
+    for chunk in chunks:
+        for call in parser.decode_tool_incremental(chunk, final=False):
+            if call.function and call.function.arguments is not None:
+                argument_fragments.append(call.function.arguments)
+    parser.finish_tool_call()
+    return ''.join(argument_fragments)
+
+
 REFERENCE_CHUNKS = [
     ('计划', [{'reasoning_content': '计划', 'tool_emitted': False}]),
     ('调用', [{'reasoning_content': '调用', 'tool_emitted': False}]),
@@ -266,3 +277,49 @@ null
             'scores': [98, 87],
             'misc': None,
         }
+
+    def test_streamed_arguments_match_complete_parse_for_quoted_string_value(self):
+        parser = Qwen3CoderToolParser()
+        payload = '<function=find_user><parameter=name>"Chen"</parameter></function>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            ['<function=find_user>', '<parameter=name>', '"Chen"', '</parameter>', '</function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_for_invalid_integer_value(self):
+        parser = Qwen3CoderToolParser()
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'age': {
+                                'type': 'integer'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+        payload = '<function=typed_tool><parameter=age>abc</parameter></function>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            ['<function=typed_tool>', '<parameter=age>', 'abc', '</parameter>', '</function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments

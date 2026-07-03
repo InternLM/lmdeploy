@@ -59,6 +59,17 @@ def _flatten_stream_deltas(deltas):
     return events
 
 
+def _stream_tool_arguments(parser, chunks):
+    parser.start_tool_call()
+    argument_fragments = []
+    for chunk, final in chunks:
+        for call in parser.decode_tool_incremental(chunk, final=final):
+            if call.function and call.function.arguments is not None:
+                argument_fragments.append(call.function.arguments)
+    parser.finish_tool_call()
+    return ''.join(argument_fragments)
+
+
 REFERENCE_CHUNKS = [
     ('prefix ', [{'content': 'prefix ', 'tool_emitted': False}]),
     ('<tool_call>', []),
@@ -302,3 +313,83 @@ class TestGlm47ToolParserComplete:
             'active': 'true',
             'meta': '{"city":"Houston"}',
         }
+
+    def test_streamed_arguments_match_complete_parse_for_quoted_string_value(self):
+        parser = Glm47ToolParser()
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'name': {
+                                'type': 'string'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+        payload = 'typed_tool<arg_key>name</arg_key><arg_value>"Chen"</arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('typed_tool', False),
+                ('<arg_key>name</arg_key>', False),
+                ('<arg_value>', False),
+                ('"Chen"', False),
+                ('</arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_for_invalid_integer_value(self):
+        parser = Glm47ToolParser()
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'age': {
+                                'type': 'integer'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+        payload = 'typed_tool<arg_key>age</arg_key><arg_value>abc</arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('typed_tool', False),
+                ('<arg_key>age</arg_key>', False),
+                ('<arg_value>', False),
+                ('abc', False),
+                ('</arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments

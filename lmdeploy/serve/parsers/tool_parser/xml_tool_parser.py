@@ -54,10 +54,7 @@ class XmlToolParser(ToolParser):
         self._payload_parts.clear()
         self._coerced_args.clear()
         self._in_progress_value = False
-        self._xml_streaming_param_name = None
-        self._xml_streaming_param_emitted_raw_len = 0
-        self._xml_streaming_param_schema_type = None
-        self._xml_streaming_param_quote_opened = False
+        self._reset_streaming_param()
         self._reset_incremental_state()
 
     def _reset_incremental_state(self) -> None:
@@ -100,6 +97,8 @@ class XmlToolParser(ToolParser):
             prefix = ', ' if len(self._xml_emitted_param_names) > 0 else ''
             json_fragments.append(f'{prefix}\"{key}\": {json.dumps(value, ensure_ascii=False)}')
             self._xml_emitted_param_names.add(key)
+            if key == self._xml_streaming_param_name:
+                self._reset_streaming_param()
 
         if has_streaming_param and has_streaming_update:
             self._append_streaming_param_fragments(json_fragments, streaming_raw_value, is_param_closed)
@@ -139,9 +138,17 @@ class XmlToolParser(ToolParser):
         param_name = self._xml_streaming_param_name
         if param_name is None:
             return False
+        if not self._can_stream_raw_param_value(raw_value):
+            return False
         if param_name not in self._xml_emitted_param_names:
             return bool(raw_value) or is_param_closed
         return len(raw_value) > self._xml_streaming_param_emitted_raw_len or is_param_closed
+
+    def _can_stream_raw_param_value(self, raw_value: str) -> bool:
+        if self._xml_streaming_param_schema_type not in (None, 'string'):
+            return False
+        stripped_value = raw_value.lstrip()
+        return bool(stripped_value) and not stripped_value.startswith('"')
 
     def _append_streaming_param_fragments(self,
                                           json_fragments: list[str],
@@ -170,10 +177,13 @@ class XmlToolParser(ToolParser):
         if is_param_closed:
             if is_string and self._xml_streaming_param_quote_opened:
                 json_fragments.append('"')
-            self._xml_streaming_param_name = None
-            self._xml_streaming_param_emitted_raw_len = 0
-            self._xml_streaming_param_schema_type = None
-            self._xml_streaming_param_quote_opened = False
+            self._reset_streaming_param()
+
+    def _reset_streaming_param(self) -> None:
+        self._xml_streaming_param_name = None
+        self._xml_streaming_param_emitted_raw_len = 0
+        self._xml_streaming_param_schema_type = None
+        self._xml_streaming_param_quote_opened = False
 
     def _get_param_schema_type(self, func_name: str | None, param_name: str) -> str | None:
         if func_name is None:
