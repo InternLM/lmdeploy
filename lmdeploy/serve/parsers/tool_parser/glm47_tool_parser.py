@@ -10,7 +10,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlToolParser  # type: ignore[reportMissingImports]
+from .xml_tool_parser import XmlToolParser, XmlToolSnapshot  # type: ignore[reportMissingImports]
 
 
 @ToolParserManager.register_module(['glm47'])
@@ -33,11 +33,8 @@ class Glm47ToolParser(XmlToolParser):
     def _reset_incremental_state(self) -> None:
         self._func_name: str | None = None
         self._args: dict[str, str] = {}
-        self._open_arg_key: str | None = None
-        # Offset in accumulated args text where the in-flight value begins
-        # (first char after ``<arg_value>``); -1 when none is open.
+        self._arg_name: str | None = None
         self._value_start = -1
-        # Resume arg scanning after the last completed ``</arg_value>``.
         self._scan_pos = 0
 
     @classmethod
@@ -52,35 +49,29 @@ class Glm47ToolParser(XmlToolParser):
     def get_tool_payload_format(cls) -> str:
         return 'xml'
 
-    def _extract_incremental_state(self,
-                                   payload: str,
-                                   final: bool = False) -> tuple[str | None, dict[str, str], bool]:
-        """Update streaming parse state from accumulated inner tool payload.
-
-        See :meth:`Qwen3CoderToolParser._extract_incremental_state` for the
-        contract. GLM-4.7 uses ``func_name<arg_key>k</arg_key><arg_value>v
-        </arg_value>`` instead of Qwen3Coder XML; ``is_closed`` is always
-        ``False`` because argument JSON is closed by the outer ``</tool_call>``.
-        """
+    def _parse_payload(self, payload: str, *, final: bool) -> XmlToolSnapshot:
         payload = payload.strip()
         if not payload:
-            return self._func_name, dict(self._args), False
+            return XmlToolSnapshot(self._func_name, dict(self._args), None, '', False)
 
         args_start_idx = payload.find(self.arg_key_start_token)
+        args_text = ''
         if args_start_idx >= 0:
             func_name = payload[:args_start_idx].strip()
             if func_name:
                 self._func_name = func_name
-            self._parse_args_incremental(payload[args_start_idx:])
+            args_text = payload[args_start_idx:]
+            self._parse_args(args_text)
         elif final:
             func_name = payload.strip()
             if func_name:
                 self._func_name = func_name
 
-        return self._func_name, dict(self._args), False
+        arg_name, arg_value = self._open_arg(args_text)
+        return XmlToolSnapshot(self._func_name, dict(self._args), arg_name, arg_value, False)
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        func_name, raw_args_dict = self._parse_payload(payload, final=True)
+        func_name, raw_args_dict = self._extract_complete_args(payload)
         if not func_name:
             return None
         args_dict = self._get_coerced_args(func_name, raw_args_dict, use_cache=False)
@@ -89,42 +80,23 @@ class Glm47ToolParser(XmlToolParser):
     def _validate_tool_payload(self, payload: str) -> bool:
         return bool(self._complete_payload_pattern.fullmatch(payload))
 
-    def _complete_open_arg_if_ready(self, args_text: str) -> bool:
-        """Finalize the in-flight arg once ``</arg_value>`` is available.
-
-        Uses ``_value_start`` so we can locate the closing tag without re-parsing
-        the ``<arg_key>`` / ``<arg_value>`` headers on every non-fast-path chunk.
-        """
-        if self._value_start < 0 or not self._open_arg_key:
+    def _complete_open_arg(self, args_text: str) -> bool:
+        if self._value_start < 0 or not self._arg_name:
             return False
         value_end = args_text.find(self.arg_value_end_token, self._value_start)
         if value_end < 0:
             self._in_progress_value = True
             return False
-        self._args[self._open_arg_key] = args_text[self._value_start:value_end]
-        self._open_arg_key = None
+        self._args[self._arg_name] = args_text[self._value_start:value_end]
+        self._arg_name = None
         self._value_start = -1
         self._in_progress_value = False
         self._scan_pos = value_end + len(self.arg_value_end_token)
         return True
 
-    def _parse_args_incremental(self, args_text: str) -> None:
-        """Scan ``<arg_key>k</arg_key><arg_value>v</arg_value>`` blocks and
-        update ``_args``.
-
-        Incomplete arg headers or values are left open in ``_open_arg_key`` /
-        ``_value_start`` until the closing tag arrives in a later stream chunk.
-
-        ``_scan_pos`` only advances past completed ``</arg_value>`` tags; while a
-        value is streaming, it stays before the open ``<arg_key>``. The block
-        below is an optimization (not required for correctness): skip the
-        while-loop header re-scan and try to close the current value directly.
-        If ``</arg_value>`` is still missing, return early because the while
-        loop would reach the same open-tag state anyway.
-        """
-        if self._value_start >= 0:
-            if not self._complete_open_arg_if_ready(args_text):
-                return
+    def _parse_args(self, args_text: str) -> None:
+        if self._value_start >= 0 and not self._complete_open_arg(args_text):
+            return
 
         while True:
             key_start = args_text.find(self.arg_key_start_token, self._scan_pos)
@@ -138,7 +110,7 @@ class Glm47ToolParser(XmlToolParser):
                 self._in_progress_value = True
                 return
 
-            key = args_text[key_content_start:key_end].strip()
+            arg_name = args_text[key_content_start:key_end].strip()
             value_start = args_text.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
             if value_start < 0:
                 self._in_progress_value = True
@@ -147,55 +119,24 @@ class Glm47ToolParser(XmlToolParser):
             value_content_start = value_start + len(self.arg_value_start_token)
             value_end = args_text.find(self.arg_value_end_token, value_content_start)
             if value_end < 0:
-                self._open_arg_key = key
+                self._arg_name = arg_name
                 self._value_start = value_content_start
                 self._in_progress_value = True
                 return
 
             next_pos = value_end + len(self.arg_value_end_token)
-            if key in self._args:
-                self._scan_pos = next_pos
-                continue
-
-            if key:
-                self._args[key] = args_text[value_content_start:value_end]
+            if arg_name and arg_name not in self._args:
+                self._args[arg_name] = args_text[value_content_start:value_end]
             self._scan_pos = next_pos
             self._in_progress_value = False
 
-    def _extract_streaming_param(self, payload: str) -> tuple[str | None, str, bool]:
-        payload = payload.strip()
-        args_start_idx = payload.find(self.arg_key_start_token)
-        args_text = payload[args_start_idx:] if args_start_idx >= 0 else ''
-        if self._open_arg_key is not None and self._value_start >= 0:
-            value_end = args_text.find(self.arg_value_end_token, self._value_start)
-            if value_end < 0:
-                raw_value = self._strip_partial_xml_close_suffix(args_text[self._value_start:],
-                                                                 self.arg_value_end_token)
-                return self._open_arg_key, raw_value, False
-            return self._open_arg_key, args_text[self._value_start:value_end], True
+    def _open_arg(self, args_text: str) -> tuple[str | None, str]:
+        if self._arg_name is None or self._value_start < 0:
+            return None, ''
+        raw_value = self._strip_partial_xml_close_suffix(args_text[self._value_start:], self.arg_value_end_token)
+        return self._arg_name, raw_value
 
-        key_start = payload.rfind(self.arg_key_start_token)
-        if key_start < 0:
-            return None, '', False
-
-        key_content_start = key_start + len(self.arg_key_start_token)
-        key_end = payload.find(self.arg_key_end_token, key_content_start)
-        if key_end < 0:
-            return None, '', False
-
-        key = payload[key_content_start:key_end].strip()
-        value_start = payload.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
-        if value_start < 0:
-            return None, '', False
-
-        value_content_start = value_start + len(self.arg_value_start_token)
-        value_end = payload.find(self.arg_value_end_token, value_content_start)
-        if value_end < 0:
-            raw_value = self._strip_partial_xml_close_suffix(payload[value_content_start:], self.arg_value_end_token)
-            return key, raw_value, False
-        return key, payload[value_content_start:value_end], True
-
-    def _parse_payload(self, payload: str, *, final: bool = False) -> tuple[str | None, dict[str, str]]:
+    def _extract_complete_args(self, payload: str) -> tuple[str | None, dict[str, str]]:
         payload = payload.strip()
         if not payload:
             return None, {}
@@ -205,8 +146,6 @@ class Glm47ToolParser(XmlToolParser):
             func_name = payload[:args_start_idx].strip()
             args_text = payload[args_start_idx:]
         else:
-            if not final:
-                return None, {}
             func_name = payload.strip()
             args_text = ''
         if not func_name:

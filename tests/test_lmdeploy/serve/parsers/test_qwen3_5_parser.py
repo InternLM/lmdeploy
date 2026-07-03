@@ -339,7 +339,7 @@ null
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
 
-    def test_streamed_arguments_emit_typed_parameter_before_parameter_close(self):
+    def test_streamed_arguments_emit_typed_parameter_after_parameter_close(self):
         parser = Qwen3CoderToolParser()
         request = ChatCompletionRequest(
             model=MODEL_ID,
@@ -369,8 +369,9 @@ null
         )
         complete_tool_call = parser.parse_tool_call_complete(payload)
 
-        assert per_chunk[1] == '{"age": '
+        assert per_chunk[1] == ''
         assert per_chunk[2] == ''
+        assert per_chunk[3] == '{"age": 12}'
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
         assert json.loads(streamed_arguments) == {'age': 12}
