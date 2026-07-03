@@ -7,6 +7,7 @@ from utils.config_utils import (
     get_case_str_by_config,
     get_eval_preset_config,
     get_func_config_list,
+    get_model_path_from_config,
     get_workerid,
     resolve_eval_config_name,
 )
@@ -46,7 +47,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
             results.append((pid, content))
 
         try:
-            model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+            model_path = get_model_path_from_config(config, run_config.get('model'))
             extra_config['api-nproc'] = work_num * 16
             mllm_eval_test(model_path,
                            eval_path,
@@ -66,7 +67,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         pid, content = start_openai_service(config, eval_run_config, worker_id)
         try:
             if pid > 0:
-                model_path = os.path.join(config.get('model_path'), eval_run_config.get('model'))
+                model_path = get_model_path_from_config(config, eval_run_config.get('model'))
                 mllm_eval_test(model_path, eval_path, case_name, port=port, test_type=test_type)
             else:
                 assert False, f'Failed to start RESTful API server: {content}'
@@ -89,7 +90,7 @@ def _run_proxy_distributed_mllm_test(
 
     preset_config = get_eval_preset_config(config, run_config, eval_config_name, mllm=True)
     model_name = run_config['model']
-    model_path = os.path.join(config['model_path'], model_name)
+    model_path = get_model_path_from_config(config, model_name)
 
     api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
     api_server.start()
@@ -127,17 +128,6 @@ def get_models(backend, parallel_config):
                                 parallel_config,
                                 model_type='vl_model',
                                 func_type='mllm_evaluate',
-                                extra={
-                                    'session-len': 65536,
-                                    'cache-max-entry-count': 0.6
-                                })
-
-
-def get_mtp_models(parallel_config):
-    return get_func_config_list('pytorch',
-                                parallel_config,
-                                model_type='vl_model',
-                                func_type='mtp_evaluate',
                                 extra={
                                     'session-len': 65536,
                                     'cache-max-entry-count': 0.6
@@ -314,68 +304,6 @@ def test_pytorch_eval_tp8(config, run_config, worker_id):
 @pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 16}))
 def test_pytorch_eval_tp16(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 2}))
-def test_pytorch_vl_infer_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 1}))
-def test_pytorch_vl_infer_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 4}))
-def test_pytorch_vl_infer_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 2}))
-def test_pytorch_vl_eval_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 1}))
-def test_pytorch_vl_eval_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_mtp_models({'tp': 4}))
-def test_pytorch_vl_eval_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
 
 
 @pytest.mark.infer

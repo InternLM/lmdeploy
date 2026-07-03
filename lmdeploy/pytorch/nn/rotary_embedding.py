@@ -11,6 +11,7 @@ from ..backends.rotary_embedding import (
     FopeParameters,
     Llama3Parameters,
     LongRoPEScalingParameters,
+    MropeParameters,
     RopeType,
     YarnParameters,
 )
@@ -127,6 +128,19 @@ def _get_fope_parameters(config: PretrainedConfig):
     return dict(fope_params=params)
 
 
+def _get_mrope_parameters(config: PretrainedConfig):
+    """Get mrope parameters."""
+    rope_scaling = get_rope_parameters(config=config)
+    if rope_scaling is None or 'mrope_section' not in rope_scaling:
+        return dict()
+
+    params = MropeParameters(
+        mrope_section=rope_scaling['mrope_section'],
+        mrope_interleaved=rope_scaling.get('mrope_interleaved', False),
+    )
+    return dict(mrope_params=params)
+
+
 def build_rotary_params(config: PretrainedConfig):
     """Get scaling_factor rotary params, and emb_type."""
     params = dict(emb_type=RopeType.Default)
@@ -135,6 +149,8 @@ def build_rotary_params(config: PretrainedConfig):
     if rope_scaling is not None:
         # BC: "rope_type" was originally "type"
         rope_type_str = rope_scaling.get('rope_type', rope_scaling.get('type', 'default'))
+        if rope_type_str == 'mrope':
+            rope_type_str = 'default'
         if rope_type_str == 'fope':
             rope_type_str = 'default'
         build_funcs = dict(default=_get_default_rope_parameters,
@@ -146,9 +162,12 @@ def build_rotary_params(config: PretrainedConfig):
                            llama3=_get_llama3_parameters)
         params.update(build_funcs[rope_type_str](config))
         params.update(_get_fope_parameters(config))
+        params.update(_get_mrope_parameters(config))
 
     # update partial_rotary_factor
-    partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
+    partial_rotary_factor = getattr(config, 'partial_rotary_factor', None)
+    if partial_rotary_factor is None and rope_scaling is not None:
+        partial_rotary_factor = rope_scaling.get('partial_rotary_factor', None)
     if partial_rotary_factor is not None:
         params['partial_rotary_factor'] = partial_rotary_factor
 
@@ -163,6 +182,7 @@ def build_rotary_embedding(dim: int,
                            longrope_params: LongRoPEScalingParameters = None,
                            llama3_params: Llama3Parameters = None,
                            fope_params: FopeParameters = None,
+                           mrope_params: MropeParameters = None,
                            emb_type: RopeType = RopeType.Default,
                            partial_rotary_factor: float = None,
                            device: torch.device = None) -> nn.Module:
@@ -186,8 +206,9 @@ def build_rotary_embedding(dim: int,
     if fope_params is not None:
         inv_freq = impl.inv_freq
         fope_params.inv_freq = inv_freq
-        fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params, device)
-        return fope
+        impl = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params, device)
+    elif mrope_params is not None:
+        impl = MRotaryEmbedding(impl, mrope_params)
 
     return impl
 
@@ -250,6 +271,107 @@ class ApplyRotaryEmb(nn.Module):
             query = query.view(query_shape)
             key = key.view(key_shape)
         return query, key
+
+
+class MRotaryEmbedding(nn.Module):
+    """Rotary embedding wrapper with multimodal axis selection."""
+
+    def __init__(self, impl: nn.Module, params: MropeParameters):
+        super().__init__()
+        self.impl = impl
+        self.mrope_section = list(params.mrope_section)
+        self.mrope_interleaved = params.mrope_interleaved
+
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
+        """forward."""
+        if position_ids.size(0) != 3:
+            cos, sin = self.impl(x, position_ids)
+            return cos, sin
+
+        if self._uses_static_inv_freq_rope():
+            return self.build_mrope_tables_from_selected_freqs(x, position_ids)
+
+        leading_shape = position_ids.shape[:-1]
+        flat_position_ids = position_ids.flatten(0, -2)
+        cos, sin = self.impl(x, flat_position_ids)
+        cos = cos.reshape(*leading_shape, *cos.shape[1:])
+        sin = sin.reshape(*leading_shape, *sin.shape[1:])
+        return self.apply_mrope(cos), self.apply_mrope(sin)
+
+    def apply_mrope(self, freqs: torch.Tensor):
+        """Select temporal, height, and width rotary bands."""
+        if self.mrope_interleaved:
+            return self.apply_interleaved_mrope(freqs)
+        return self.apply_chunked_mrope(freqs)
+
+    def apply_chunked_mrope(self, freqs: torch.Tensor):
+        """Apply Qwen2-VL style chunked MRoPE."""
+        # Layout is contiguous bands: T..., H..., W..., then repeated for the
+        # duplicated RoPE half if freqs already contains cos/sin table width.
+        mrope_section = self.mrope_section
+        if freqs.size(-1) == sum(self.mrope_section) * 2:
+            mrope_section = mrope_section * 2
+        selected_chunks = []
+        for index, chunk in enumerate(freqs.split(mrope_section, dim=-1)):
+            axis = index % 3
+            selected_chunks.append(chunk[axis])
+        return torch.cat(selected_chunks, dim=-1)
+
+    def apply_interleaved_mrope(self, freqs: torch.Tensor):
+        """Apply Qwen3-VL style interleaved MRoPE."""
+        # Layout is lane-interleaved: T, H, W, T, H, W...; start from T and
+        # overwrite the H/W lanes from their corresponding axes.
+        half_dim = sum(self.mrope_section)
+        has_duplicated_half = freqs.size(-1) == half_dim * 2
+        freqs_t = freqs[0].clone()
+        for dim, offset in enumerate((1, 2), start=1):
+            length = min(self.mrope_section[dim] * 3, half_dim)
+            freqs_t[..., offset:length:3] = freqs[dim, ..., offset:length:3]
+            if has_duplicated_half:
+                freqs_t[..., half_dim + offset:half_dim + length:3] = \
+                    freqs[dim, ..., half_dim + offset:half_dim + length:3]
+        return freqs_t
+
+    def _uses_static_inv_freq_rope(self):
+        """Check whether RoPE is equivalent to position_ids * inv_freq."""
+        if not hasattr(self.impl, 'inv_freq'):
+            return False
+        backend_only_attrs = ('_ntk_inv_freq', 'short_factor', 'long_factor', 'mscale_all_dim')
+        return not any(hasattr(self.impl, attr) for attr in backend_only_attrs)
+
+    def build_mrope_tables_from_selected_freqs(self, x: torch.Tensor, position_ids: torch.Tensor):
+        """Build MRoPE cos/sin tables from selected axis frequencies."""
+        inv_freq = self.impl.inv_freq
+        if inv_freq.device != x.device:
+            self.impl.inv_freq = inv_freq.to(x.device)
+            inv_freq = self.impl.inv_freq
+
+        scaling_factor = getattr(self.impl, 'scaling_factor', 1.0)
+        device_type = x.device.type
+        device_type = device_type if isinstance(device_type, str) and device_type != 'mps' else 'cpu'
+        with torch.autocast(device_type=device_type, enabled=False):
+            position_ids = position_ids.float()
+            if scaling_factor != 1.0:
+                position_ids = position_ids / scaling_factor
+
+            inv_freq = inv_freq.float()
+            freqs = position_ids.unsqueeze(-1) * inv_freq
+            freqs = self.apply_mrope(freqs)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+
+            mscale = getattr(self.impl, 'mscale', None)
+            if mscale is not None:
+                cos = cos * mscale
+                sin = sin * mscale
+
+            attention_scaling = getattr(self.impl, 'attention_scaling', None)
+            if attention_scaling is not None:
+                cos = cos * attention_scaling
+                sin = sin * attention_scaling
+
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
 class FopeRotaryEmbedding(nn.Module):

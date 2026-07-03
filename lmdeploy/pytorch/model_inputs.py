@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Sequence
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -141,6 +142,9 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
+    # Compact SSM prefix-cache checkpoint save pairs for decode forwards.
+    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
+    state_prefix_cache_save_offsets: Sequence[int] | None = None
 
     @property
     def seq_length(self):
@@ -193,7 +197,16 @@ class ModelInputs:
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
+    # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
+    # Frozen checkpoint slot ids to restore from before forward. Compact, no sentinels.
+    state_prefix_cache_offsets: Sequence[int] | None = None
+    # Runtime state slot ids to restore into before forward. Compact, no sentinels.
+    state_prefix_cache_dst_offsets: Sequence[int] | None = None
+    # Runtime state slot ids to save from after forward. Compact, no sentinels.
+    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
+    # Reserved checkpoint slot ids to save into after forward. Compact, no sentinels.
+    state_prefix_cache_save_offsets: Sequence[int] | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
@@ -223,6 +236,10 @@ class ModelInputs:
             history_lengths=self.history_lengths + step_seqlens,
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
+            state_prefix_cache_offsets=None,
+            state_prefix_cache_dst_offsets=None,
+            state_prefix_cache_save_src_offsets=None,
+            state_prefix_cache_save_offsets=None,
             mrope_pos_ids=mrope_pos_ids,
         )
 
@@ -436,7 +453,7 @@ class StepContext:
 @dataclass
 class BuildModelContext:
     """Context for building model."""
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
@@ -445,6 +462,14 @@ class BuildModelContext:
     fp32_lm_head: bool = False
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
+    max_batch_size: int = 0
+
+    @property
+    def deep_ep_max_tokens_per_rank(self) -> int:
+        """Infer DeepEP low-latency max dispatch tokens per rank."""
+        if self.max_batch_size <= 0:
+            return 128
+        return self.max_batch_size * (1 + self.num_spec_tokens)
 
 
 class StepContextManager(CtxMgrBase[StepContext]):

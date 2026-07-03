@@ -4,6 +4,7 @@
 #include <functional>
 
 #include "src/turbomind/engine/request.h"
+#include "src/turbomind/kernels/cross_entropy_kernels.h"
 
 // #include "dbg.h"
 
@@ -36,6 +37,12 @@ struct OutputProcessor::Impl {
 
         vector<std::tuple<int, int, Interval, Interval>> output_states;
         vector<std::tuple<int, int, Interval, Interval>> output_logits;
+
+        Interval full_ce_loss;  // requested range for CE loss logits
+        // Per CE scoring segment: (request_idx, range). `range` is the hidden-buffer position
+        // interval; `ce_targets` is indexed by that same position, so no extra offset is stored.
+        vector<std::tuple<int, Interval>> ce_loss_segments;
+        Buffer_<int>                      ce_targets;
     };
 
     vector<Data> data_;
@@ -71,6 +78,9 @@ struct OutputProcessor::Impl {
                 c.output_logits = g.output_logits == kAll ? Interval{c.step0} : Interval{c.prompt_len - 1};
                 c.logits_offset = c.output_logits.begin();
             }
+            if (g.return_ppl) {
+                c.input_ce_loss = {c.step0, c.prompt_len - 1};
+            }
             if (g.output_last_hidden_state) {
                 c.output_hidden_states =
                     g.output_last_hidden_state == kAll ? Interval{c.step0} : Interval{c.prompt_len - 1};
@@ -86,8 +96,11 @@ struct OutputProcessor::Impl {
 
         const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
 
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+
         vector<Interval> all_tokens;
         vector<Interval> sel_tokens;
+        bool             has_ce = false;
         for (int i = 0; i < rc.size(); ++i) {
             using Size = Interval::Size;
             auto& c    = *rc[i];
@@ -96,10 +109,18 @@ struct OutputProcessor::Impl {
             if (!c.generating) {
                 sel_tokens.back() = {};
             }
+            has_ce = has_ce || (bool)c.input_ce_loss;
             // dbg(&all_tokens.back(), &sel_tokens.back());
         }
 
         const int token_num = *env.at("token_num").data<int>();
+
+        if (has_ce && tp_rank_ == 0) {
+            // Lazily grow the per-phase device target buffer to this step's token count (<= token_num).
+            if (d.ce_targets.size() < token_num) {
+                d.ce_targets = {token_num, kDEVICE};
+            }
+        }
 
         d.full_logits = {INT_MAX, 0};
         d.full_states = {INT_MAX, 0};
@@ -109,6 +130,9 @@ struct OutputProcessor::Impl {
 
         d.output_logits = {};
         d.output_states = {};
+
+        d.full_ce_loss     = {INT_MAX, 0};
+        d.ce_loss_segments = {};
 
         int offset = 0;
 
@@ -142,11 +166,25 @@ struct OutputProcessor::Impl {
                     d.output_logits.emplace_back(i, type, m.src, m.dst);
                 }
             }
+            if (c.input_ce_loss) {
+                if (tp_rank_ == 0 && !c.ce_loss) {
+                    // Per-request accumulator, allocated and zeroed once.
+                    c.ce_loss = {1, kDEVICE};
+                    Clear(c.ce_loss);
+                }
+                Matching m{c.input_ce_loss, /* offset_d */ 0};
+                if (m(all_tokens[i], offset, d.full_ce_loss)) {
+                    if (tp_rank_ == 0) {
+                        copy(c.token_ids + m.dst.begin() + 1, (int)m.src.size(), d.ce_targets.data() + m.src.begin());
+                    }
+                    d.ce_loss_segments.emplace_back(i, m.src);
+                }
+            }
             offset += c.input_len;
         }
 
         // logits depends on hidden states
-        d.full_states = d.full_states | d.full_logits;
+        d.full_states = d.full_states | d.full_logits | d.full_ce_loss;
     }
 
     void Prepare(int phase, TensorMap& env)
@@ -154,6 +192,44 @@ struct OutputProcessor::Impl {
         auto& d = data_.at(phase);
         if (d.full_states) {
             env.produce("output_hidden_states", Tensor{});
+        }
+    }
+
+    void ComputeCeLoss(Data& data, const Tensor& logits, int base, const vector<shared_ptr<RequestCache>>& rs)
+    {
+        if (tp_rank_ != 0 || data.ce_loss_segments.empty()) {
+            return;
+        }
+
+        const auto     stream = core::Context::stream().handle();
+        const Interval rows{base, Interval::Size{(int)logits.shape(0)}};
+
+        for (const auto& [request_idx, range] : data.ce_loss_segments) {
+            if (auto src = range & rows) {
+                const int tokens        = (int)src.size();
+                const int target_offset = src.begin();
+                const int logit_offset  = src.begin() - base;
+                invokeCrossEntropyLoss(rs[request_idx]->ce_loss.data(),
+                                       logits,
+                                       data.ce_targets.data(),
+                                       target_offset,
+                                       logit_offset,
+                                       tokens,
+                                       vocab_size_,
+                                       stream);
+            }
+        }
+    }
+
+    void OutputCELoss(Data& data, BatchCopy& copy, const vector<shared_ptr<RequestCache>>& rs)
+    {
+        if (tp_rank_ != 0) {
+            return;
+        }
+        for (const auto& [i, range] : data.ce_loss_segments) {
+            if (auto& c = *rs[i]; !c.input_ce_loss) {
+                copy(c.ce_loss, 1, c.req->outputs.at("ce_loss").buffer());
+            }
         }
     }
 
@@ -171,7 +247,10 @@ struct OutputProcessor::Impl {
         }
     }
 
-    void ComputeAndOutputLogits(const Data& data, const Tensor& h, const vector<shared_ptr<RequestCache>>& rs)
+    void ComputeAndOutputLogits(Data&                                   data,  //
+                                const Tensor&                           h,
+                                BatchCopy&                              copy,
+                                const vector<shared_ptr<RequestCache>>& rs)
     {
         const int step_size = max_logits_len_;
 
@@ -181,22 +260,26 @@ struct OutputProcessor::Impl {
 
         using Size = Interval::Size;
 
-        bool success = false;
+        bool success = ranges.empty();
         // Erode the range iteratively until empty
-        for (auto r = data.full_logits; r; r = -step_size | r) {
+        for (auto r = data.full_logits | data.full_ce_loss; r; r = -step_size | r) {
             // dbg(&r);
             if (auto chunk = r & Interval{r.begin(), Size{step_size}}) {
                 // dbg(&chunk);
                 // Compute & output full logits by chunks
+                // The chunked logits feeds two independent consumers
                 auto logits = lm_head_(h.slice(chunk.begin(), (int)chunk.size()));
-                success     = OutputLogitsImpl(ranges, p, logits, chunk.begin(), 2, rs);
-                if (success) {  // all requests satisfied, exit early
-                    break;
+                if (!success) {
+                    success = OutputLogitsImpl(ranges, p, logits, chunk.begin(), 2, rs);
                 }
+                ComputeCeLoss(data, logits, chunk.begin(), rs);
             }
         }
 
-        TM_CHECK(success);  // all requests must be satisfied at the end
+        TM_CHECK(success);  // every type-2 logits range must have been output
+
+        // CE loss is fully accumulated now that the chunk loop is done; emit it.
+        OutputCELoss(data, copy, rs);
     }
 
     template<class Ranges>
@@ -260,8 +343,9 @@ struct OutputProcessor::Impl {
             if (!d.output_states.empty()) {
                 OutputHiddenStates(d.output_states, hidden_states, 2, b.rc);
             }
-            if (!d.output_logits.empty() && d.full_logits) {
-                ComputeAndOutputLogits(d, hidden_states, b.rc);
+            if (d.full_logits || d.full_ce_loss) {
+                auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+                ComputeAndOutputLogits(d, hidden_states, copy, b.rc);
             }
         }
 

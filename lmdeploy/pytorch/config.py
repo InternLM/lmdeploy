@@ -14,6 +14,24 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 logger = get_logger('lmdeploy')
 
 
+def normalize_cudagraph_capture_batch_sizes(capture_sizes: list[int] | None, max_batches: int) -> list[int] | None:
+    """Normalize configured cudagraph capture batch sizes."""
+    if capture_sizes is None:
+        return None
+
+    assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
+    assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
+        'cudagraph_capture_batch_sizes should be positive integers')
+
+    capture_sizes = sorted({size for size in capture_sizes if size <= max_batches})
+    assert len(capture_sizes) > 0, (
+        'cudagraph_capture_batch_sizes should contain at least one value '
+        f'<= max_batch_size ({max_batches})')
+    if capture_sizes[-1] != max_batches:
+        capture_sizes.append(max_batches)
+    return capture_sizes
+
+
 def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'auto'):
     """Update the torch dtype from the model config.
 
@@ -99,10 +117,13 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    prefix_cache_state_budget: int = 0
+    prefix_cache_decode_state_interval: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -114,11 +135,18 @@ class CacheConfig:
 
     def __post_init__(self):
         """Post init."""
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
+        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
         if self.kernel_block_size == -1:
             self.kernel_block_size = self.block_size
+        if self.prefix_cache_decode_state_interval > 0:
+            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
+                'prefix_cache_decode_state_interval must be a multiple of block_size')
+        self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+            self.cudagraph_capture_batch_sizes, self.max_batches)
 
 
 class TPMode(enum.Enum):
@@ -430,7 +458,7 @@ class ModelConfig:
         fp32_lm_head = False
         if hf_overrides is not None:
             logger.warning(f'Overriding HF config with {hf_overrides}')
-            fp32_lm_head = hf_overrides.pop('fp32_lm_head', False)
+            fp32_lm_head = hf_overrides.get('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
 
         # for fp32 head
@@ -537,7 +565,7 @@ class MiscConfig:
     empty_init: bool = False
     model_format: str = None
     hf_overrides: dict[str, Any] = None
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
@@ -557,7 +585,7 @@ class MiscConfig:
             prefill_interval=engine_config.prefill_interval,
             model_format=engine_config.model_format,
             hf_overrides=engine_config.hf_overrides,
-            disable_vision_encoder=engine_config.disable_vision_encoder,
+            language_model_only=engine_config.language_model_only,
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
@@ -600,6 +628,7 @@ class SpecDecodeConfig:
                                                    block_size=target_cache_cfg.block_size,
                                                    model_format=model_format,
                                                    hf_overrides=hf_overrides,
+                                                   device_type=target_cache_cfg.device_type,
                                                    )
         cache_config = None
         # include medusa
@@ -612,6 +641,7 @@ class SpecDecodeConfig:
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
+                                       cudagraph_capture_batch_sizes=target_cache_cfg.cudagraph_capture_batch_sizes,
                                        device_type=target_cache_cfg.device_type,
                                        quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)

@@ -1,5 +1,45 @@
 import re
 
+INPUT_LENGTH_ERROR = 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
+
+
+def get_chat_message_text(choice):
+    msg = choice.get('message') or {}
+    texts = []
+    for key in ('reasoning_content', 'content'):
+        value = msg.get(key)
+        if isinstance(value, str):
+            texts.append(value)
+    return ''.join(texts)
+
+
+def get_chat_delta_text(choice):
+    delta = choice.get('delta') or {}
+    texts = []
+    for key in ('reasoning_content', 'content'):
+        value = delta.get(key)
+        if isinstance(value, str):
+            texts.append(value)
+    return ''.join(texts)
+
+
+def assert_chat_message_error(choice, error_message=INPUT_LENGTH_ERROR):
+    msg = choice.get('message') or {}
+    assert msg.get('content') == error_message or msg.get('reasoning_content') == error_message
+
+
+def assert_chat_delta_error(choice, error_message=INPUT_LENGTH_ERROR):
+    delta = choice.get('delta') or {}
+    assert delta.get('content') == error_message or delta.get('reasoning_content') == error_message
+
+
+def assert_chat_message_empty(choice):
+    assert not get_chat_message_text(choice)
+
+
+def assert_chat_delta_empty(choice):
+    assert not get_chat_delta_text(choice)
+
 
 def assert_chat_completions_batch_return(output, model_name, check_logprobs: bool = False, logprobs_num: int = 5):
     assert_usage(output.get('usage'))
@@ -11,8 +51,12 @@ def assert_chat_completions_batch_return(output, model_name, check_logprobs: boo
     for message in output_message:
         assert message.get('finish_reason') in ['stop', 'length']
         assert message.get('index') == 0
-        assert len(message.get('message').get('content')) > 0
-        assert message.get('message').get('role') == 'assistant'
+        msg = message.get('message') or {}
+        content = msg.get('content')
+        reasoning = msg.get('reasoning_content')
+        assert (isinstance(content, str) and len(content) > 0) or (
+            isinstance(reasoning, str) and len(reasoning) > 0)
+        assert msg.get('role') == 'assistant'
         if check_logprobs:
             len(message.get('logprobs').get('content')) == output.get('usage').get('completion_tokens')
             for logprob in message.get('logprobs').get('content'):
@@ -72,7 +116,8 @@ def assert_chat_completions_stream_return(output,
     for message in output_message:
         assert message.get('delta').get('role') == 'assistant'
         assert message.get('index') == 0
-        assert len(message.get('delta').get('content')) >= 0
+        delta = message.get('delta') or {}
+        assert isinstance(delta.get('content'), str) or isinstance(delta.get('reasoning_content'), str)
         if not is_last:
             assert message.get('finish_reason') is None
             if check_logprobs:
@@ -80,7 +125,10 @@ def assert_chat_completions_stream_return(output,
                 for content in message.get('logprobs').get('content'):
                     assert_logprobs(content, logprobs_num)
         if is_last is True:
-            assert len(message.get('delta').get('content')) == 0 or 'error' in message.get('delta').get('content')
+            content = delta.get('content')
+            reasoning = delta.get('reasoning_content')
+            assert content is None or len(content) == 0 or 'error' in content
+            assert reasoning is None or len(reasoning) == 0 or 'error' in reasoning
             assert message.get('finish_reason') in ['stop', 'length', 'error']
             if check_logprobs is True:
                 assert message.get('logprobs') is None

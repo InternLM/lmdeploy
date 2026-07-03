@@ -7,6 +7,7 @@ from utils.config_utils import (
     get_case_str_by_config,
     get_eval_preset_config,
     get_func_config_list,
+    get_model_path_from_config,
     get_workerid,
     resolve_eval_config_name,
 )
@@ -30,7 +31,7 @@ def _run_ray_distributed_test(
     preset_config = get_eval_preset_config(config, run_config, eval_config_name)
 
     if manager.is_master:
-        model_path = os.path.join(config['model_path'], run_config['model'])
+        model_path = get_model_path_from_config(config, run_config['model'])
         eval_path = config.get('eval_path')
 
         # Start API Server for current model (master node starts/stops, worker nodes verify)
@@ -71,7 +72,7 @@ def _run_proxy_distributed_test(config,
 
     preset_config = get_eval_preset_config(config, run_config, eval_config_name)
     model_name = run_config['model']
-    model_path = os.path.join(config['model_path'], model_name)
+    model_path = get_model_path_from_config(config, model_name)
 
     api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
     api_server.start()
@@ -147,7 +148,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
             results.append((pid, content))
 
         try:
-            model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+            model_path = get_model_path_from_config(config, run_config.get('model'))
             eval_test(model_path,
                       eval_path,
                       case_name,
@@ -169,7 +170,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         pid, content = start_openai_service(config, eval_run_config, worker_id)
         try:
             if pid > 0:
-                model_path = os.path.join(config.get('model_path'), eval_run_config.get('model'))
+                model_path = get_model_path_from_config(config, eval_run_config.get('model'))
                 eval_test(model_path,
                           eval_path,
                           case_name,
@@ -338,68 +339,6 @@ def test_pytorch_restful_tp2_longtext_512k(config, run_config, worker_id):
 
 @pytest.mark.infer
 @pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 4}, func_type='mtp_evaluate'))
-def test_pytorch_restful_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp2_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp1_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.eval
-@pytest.mark.pytorch
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.mtp
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 4}, func_type='mtp_evaluate'))
-def test_pytorch_eval_tp4_mtp(config, run_config, worker_id):
-    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='mtp')
-
-
-@pytest.mark.infer
-@pytest.mark.pytorch
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
@@ -439,6 +378,20 @@ def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_config
                               worker_id=worker_id,
                               test_type='infer',
                               manager=shared_ray_manager)
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep32
+@pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 32, 'ep': 32}, func_type='evaluate'))
+def test_pytorch_restful_distributed_dpep32(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager)
 
 
 @pytest.mark.infer
@@ -577,6 +530,16 @@ def test_pytorch_eval_distributed_tp16(config, run_config, worker_id):
 
 @pytest.mark.eval
 @pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep32
+@pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 32, 'ep': 32}, func_type='evaluate'))
+def test_pytorch_eval_distributed_dpep32(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 8, 'ep': 8}, func_type='evaluate'))
@@ -677,3 +640,83 @@ def test_pytorch_eval_tp2_longtext_512k(config, run_config, worker_id):
 @pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'cp': 2, 'tp': 8}, func_type='evaluate'))
 def test_turbomind_eval_cp2tp8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
+
+
+_PREFIX_CACHE_EXTRA = {'enable-prefix-caching': True}
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 1}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_restful_prefix_cache_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 2}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_restful_prefix_cache_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_restful_prefix_cache_dp4ep8(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager,
+                                eval_subpath='prefix_cache')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 1}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_eval_prefix_cache_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='prefix_cache')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 2}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_eval_prefix_cache_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='prefix_cache')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_eval_prefix_cache_dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='prefix_cache')

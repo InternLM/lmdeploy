@@ -31,11 +31,27 @@ SEARCH_TOOL = {
 
 class _FakeSession:
 
-    def __init__(self):
+    def __init__(self, session_id: int):
+        self.session_id = session_id
         self.aborted = False
 
     async def async_abort(self):
         self.aborted = True
+
+
+class _FakeSessionManager:
+
+    def __init__(self):
+        self.next_session_id = 0
+        self.removed = []
+
+    def get(self):
+        session = _FakeSession(self.next_session_id)
+        self.next_session_id += 1
+        return session
+
+    def remove(self, session):
+        self.removed.append(session)
 
 
 class _FakeTokenizer:
@@ -120,6 +136,7 @@ class _FakeServerContext:
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts: bool = True,
     ):
+        self.session_mgr = _FakeSessionManager()
         self.async_engine = _FakeEngine(
             logprobs_mode=logprobs_mode,
             enable_return_routed_experts=enable_return_routed_experts,
@@ -127,7 +144,10 @@ class _FakeServerContext:
         self.response_parser_cls = response_parser_cls
 
     def create_session(self, _session_id: int | None = None):
-        return _FakeSession()
+        return self.session_mgr.get()
+
+    def get_session_manager(self):
+        return self.session_mgr
 
     def get_engine_config(self):
         return self.async_engine.backend_config
@@ -192,12 +212,19 @@ class _IncompleteToolParser(_ToolAndReasoningParser):
         return False
 
 
-def _make_client(response_parser_cls=_BasicParser, *, server_context=None, logprobs_mode='raw_logprobs') -> TestClient:
+def _make_client(response_parser_cls=_BasicParser,
+                 *,
+                 server_context=None,
+                 logprobs_mode='raw_logprobs',
+                 return_context=False):
     app = FastAPI()
     context = server_context or _FakeServerContext(response_parser_cls=response_parser_cls,
                                                   logprobs_mode=logprobs_mode)
     app.include_router(create_anthropic_router(context))
-    return TestClient(app)
+    client = TestClient(app)
+    if return_context:
+        return client, context
+    return client
 
 
 def _messages_payload(**overrides):
@@ -208,6 +235,21 @@ def _messages_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def test_messages_non_stream():
+    client, context = _make_client(return_context=True)
+    response = _post_messages(client)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['type'] == 'message'
+    assert data['content'][0]['type'] == 'text'
+    assert data['content'][0]['text'] == 'Hello world!'
+    assert data['stop_reason'] == 'end_turn'
+    assert data['usage']['input_tokens'] == 8
+    assert data['usage']['output_tokens'] == 2
+    assert len(context.session_mgr.removed) == 1
 
 
 def _post_messages(client: TestClient, **overrides):
@@ -333,7 +375,7 @@ def test_messages_non_stream_validate_complete_marks_parse_error():
 
 
 def test_messages_streaming_usage_matches_anthropic_event_spec():
-    client = _make_client()
+    client, context = _make_client(return_context=True)
     status_code, body = _stream_messages_body(client)
     payloads = _sse_payloads(body)
     message_start = next(item for item in payloads if item['type'] == 'message_start')
@@ -345,6 +387,7 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
         'output_tokens': 1,
     }
     assert message_delta['usage'] == {'output_tokens': 2}
+    assert len(context.session_mgr.removed) == 1
 
 
 def test_messages_streaming_with_reasoning_and_tool_use_events():

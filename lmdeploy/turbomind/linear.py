@@ -73,8 +73,8 @@ def _dequant_linear(linear: Linear, *, data_type) -> Linear:
     """Dequantize a quantized Linear to trivial.
 
     ``TrivialFormat.dequant`` is identity, so already-trivial inputs round-trip
-    safely.  ``AWQFormat.dequant`` and ``FP8Format.dequant`` do real work.
-    GPTQ / CompressedTensor / MXFP4 inherit the base-class
+    safely.  ``AWQFormat.dequant``, ``CompressedTensorFormat.dequant`` and
+    ``FP8Format.dequant`` do real work. GPTQ / MXFP4 inherit the base-class
     ``NotImplementedError`` — calling ``_dequant_linear`` on one of those is a
     broken-fusion-group configuration, and the raise names it at the call site.
     """

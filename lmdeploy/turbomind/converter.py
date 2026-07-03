@@ -133,6 +133,10 @@ def _resolve_dtype(requested: str, hf_model_cfg) -> str:
     has_bf16 = is_bf16_supported()
     dtype = requested
     if dtype == 'auto':
+        if getattr(hf_model_cfg, 'text_config', None):
+            hf_model_cfg = hf_model_cfg.text_config
+        elif getattr(hf_model_cfg, 'llm_config', None):
+            hf_model_cfg = hf_model_cfg.llm_config
         dtype = 'bfloat16' if has_bf16 else 'float16'
         torch_dtype = getattr(hf_model_cfg, 'dtype', None)
         if torch_dtype is None:
@@ -239,14 +243,14 @@ def get_tm_config(model_path,
     model_cls = INPUT_MODELS.get(registered_name)
 
     # VL aggregate classes declare `_vision = True` to opt into the vision-
-    # branch contract: receive `disable_vision_encoder` and a dedicated
+    # branch contract: receive `language_model_only` and a dedicated
     # `vision_resolver` (TrivialFormat only, vision-native dtype). Text-only
     # models leave the flag unset and keep the strict (cfg, *, resolver)
     # signature.
     init_kwargs = {}
     if getattr(model_cls, '_vision', False):
-        init_kwargs['disable_vision_encoder'] = engine_config.disable_vision_encoder
-        if not engine_config.disable_vision_encoder:
+        init_kwargs['language_model_only'] = engine_config.language_model_only
+        if not engine_config.language_model_only:
             init_kwargs['vision_resolver'] = WeightFormatResolver(
                 data_type=_torch_dtype_to_cpp(vision_dtype),
                 formats=[TrivialFormat()])
