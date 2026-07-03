@@ -542,7 +542,9 @@ class AscendOpsBackend(DlinferOpsBackend):
         except ImportError:
             logger.warning('dlinfer framework extensions not found. '
                            'Ascend-specific model patches will not be applied.')
-
+        except Exception as e:
+            logger.warning(f'Error during dlinfer extension initialization: {str(e)}. '
+                           'Ascend-specific model patches may not be applied.')
         try:
             from dlinfer.vendor.ascend.triton_ops.triton_utils import init_device_properties_triton
             init_device_properties_triton()
