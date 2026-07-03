@@ -333,7 +333,6 @@ class AscendOpsBackend(DlinferOpsBackend):
                 max_tokens_across_dp = padded_tokens_current_rank
             return actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp
 
-        @lru_cache
         def init_mc2_token_capacity(tp_size):
             max_num_tokens = min(cls.max_batches * (num_spec_tokens + 1), 512)
             num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
