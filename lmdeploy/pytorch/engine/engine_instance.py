@@ -201,8 +201,9 @@ class EngineInstance(EngineInstanceBase):
         session_added = False
         try:
             logger.debug(f'session[{session_id}] try add session.')
-            self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False))
-            session_added = True
+            add_session_resp = self.req_sender.send_async(RequestType.ADD_SESSION,
+                                                          dict(session_id=session_id, response=False))
+            session_added = not add_session_resp.is_done
             msg = dict(
                 token_ids=input_ids,
                 session_id=session_id,

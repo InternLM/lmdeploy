@@ -165,5 +165,6 @@ class MPEngineInstance(EngineInstanceBase):
             logger.exception(f'MPEngine session {session_id} stream inference failed.')
             raise
         finally:
-            self.session_states.pop(session_id, None)
-            self.engine.pending_cancel_sessions.discard(session_id)
+            if state.init_done.is_set():
+                self.session_states.pop(session_id, None)
+                self.engine.pending_cancel_sessions.discard(session_id)
