@@ -63,6 +63,8 @@ inline size_t reserved_bytes(size_t size, size_t page_size)
     return static_cast<size_t>(ceil_pow2(pages)) * page_size;
 }
 
+constexpr size_t kObjectAllocatorPageBytes = 32UL << 20;  // mirrors MemoryState::kPageSize/kMinSlabSize
+
 }  // namespace
 
 TEST_CASE("memory test binary builds", "[memory][smoke]")
@@ -558,7 +560,7 @@ TEST_CASE("ObjectAllocator construct + Register", "[memory][object]")
     using core::Allocator;
     using core::Buffer;
 
-    // The hard-coded kPageSize/kMinSlabSize inside ObjectAllocator::Impl is 16 MiB,
+    // The hard-coded kPageSize/kMinSlabSize inside ObjectAllocator::Impl is 32 MiB,
     // so the buffer must be large enough to hold at least a couple of slabs.
     constexpr size_t kBytes = 64UL << 20;  // 64 MiB
 
@@ -580,7 +582,7 @@ TEST_CASE("ObjectAllocator Allocate / Deallocate", "[memory][object]")
     using core::Buffer;
 
     constexpr size_t kBytes = 64UL << 20;
-    // Use an object size that yields ~256 objects per 16 MiB slab; tiny
+    // Use an object size that yields 512 objects per 32 MiB slab; tiny
     // sizes here would force Slab::initialize to push hundreds of
     // thousands of list nodes, dominating test runtime.
     constexpr size_t kSize  = 65536;  // 64 KiB
@@ -623,7 +625,9 @@ TEST_CASE("ObjectAllocator multiple registrations", "[memory][object]")
     using core::Allocator;
     using core::Buffer;
 
-    constexpr size_t kBytes = 64UL << 20;
+    // Raw core::Buffer allocations are not guaranteed to be 32 MiB-aligned; one
+    // extra page guarantees two usable ObjectAllocator pages after align_base padding.
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
     constexpr size_t kSize0 = 65536;   // 64 KiB
     constexpr size_t kSize1 = 131072;  // 128 KiB
 
@@ -745,9 +749,9 @@ TEST_CASE("ObjectAllocator IsValid across slab reclaim", "[memory][object][isval
     using core::Allocator;
     using core::Buffer;
 
-    // 64 MiB / 64 KiB objects = 256 objects per 16 MiB slab; 768 fills 3 slabs.
-    // With kMaxEmptySlabs = 2, freeing all 3 reclaims one slab to PageAllocator.
-    constexpr size_t kBytes = 64UL << 20;
+    // 64 KiB objects yield 512 objects per 32 MiB slab; 768 fills two slabs.
+    // kMaxEmptySlabs is zero, so freeing all allocations reclaims both slabs.
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
     constexpr size_t kSize  = 65536;
     constexpr size_t kAlign = 64;
     constexpr size_t kAlloc = 768;
@@ -809,10 +813,10 @@ TEST_CASE("ObjectAllocator composite lifecycle", "[memory][object][composite]")
     using core::Allocator;
     using core::Buffer;
 
-    constexpr size_t kBytes = 64UL << 20;  // 64 MiB
-    constexpr size_t kRec   = 65536;       // recurrent part size
-    constexpr size_t kConv  = 131072;      // conv part size (distinct slab class)
-    constexpr int    kN     = 4;           // recurrent parts
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
+    constexpr size_t kRec   = 65536;   // recurrent part size
+    constexpr size_t kConv  = 131072;  // conv part size (distinct slab class)
+    constexpr int    kN     = 4;       // recurrent parts
 
     Allocator alloc{kCPU};
     Buffer    buf{kBytes, data_type_v<int8_t>, alloc};
@@ -862,7 +866,7 @@ TEST_CASE("ObjectAllocator composite stale handle after recycle", "[memory][obje
     using core::Allocator;
     using core::Buffer;
 
-    constexpr size_t kBytes = 64UL << 20;
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
     Allocator        alloc{kCPU};
     Buffer           buf{kBytes, data_type_v<int8_t>, alloc};
 
@@ -889,12 +893,12 @@ TEST_CASE("ObjectAllocator composite atomic rollback on partial OOM", "[memory][
     using core::Buffer;
     using core::Device;
 
-    // 64 MiB / 16 MiB pages = 4 single-page slots. A 16 MiB object => 1 object
-    // per 16 MiB slab (one page each). The region base must be 16 MiB-aligned so
+    // 128 MiB / 32 MiB pages = 4 single-page slots. A 32 MiB object => 1 object
+    // per 32 MiB slab (one page each). The region base must be 32 MiB-aligned so
     // PageAllocator does not lose a page to align_base padding.
-    constexpr size_t kPage  = 16UL << 20;
-    constexpr size_t kBytes = 64UL << 20;
-    constexpr size_t kObj   = 16UL << 20;  // 16 MiB -> slab_size 16 MiB, 1 obj/slab
+    constexpr size_t kPage  = kObjectAllocatorPageBytes;
+    constexpr size_t kBytes = 4 * kPage;
+    constexpr size_t kObj   = kPage;  // 32 MiB -> slab_size 32 MiB, 1 obj/slab
 
     AlignedRegion region{kPage, kBytes};
     Buffer        buf{region.data(), static_cast<ssize_t>(region.size()), data_type_v<int8_t>, Device{kCPU}};
@@ -909,7 +913,7 @@ TEST_CASE("ObjectAllocator composite atomic rollback on partial OOM", "[memory][
     REQUIRE(h.a == nullptr);                 // batch leaves the slot null on OOM
     REQUIRE(obj.IsValid(h, 0) == false);
 
-    // No leak: a simple 16 MiB object (same aligned size -> shared slab class)
+    // No leak: a simple 32 MiB object (same aligned size -> shared slab class)
     // can fully allocate all 4 pages.
     const int                   sidx = obj.Register(kObj, 1);
     std::vector<object_alloc_t> live(4);
@@ -947,7 +951,7 @@ TEST_CASE("ScratchAllocator composite source independence", "[memory][object][co
     using core::Allocator;
     using core::Buffer;
 
-    constexpr size_t kBytes = 64UL << 20;
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
     Allocator        alloc{kCPU};
     Buffer           buf{kBytes, data_type_v<int8_t>, alloc};
 
@@ -976,7 +980,7 @@ TEST_CASE("ObjectAllocator resolve gives part bases", "[memory][object][resolve]
     using core::Allocator;
     using core::Buffer;
 
-    constexpr size_t kBytes = 64UL << 20;
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
     Allocator        alloc{kCPU};
     Buffer           buf{kBytes, data_type_v<int8_t>, alloc};
 
@@ -1001,11 +1005,11 @@ TEST_CASE("ScratchAllocator reports OOM at capacity", "[memory][object][scratch]
     using core::Buffer;
     using core::Device;
 
-    // 64 MiB / 16 MiB pages = 4 single-page slots. A 16 MiB object => slab_size
-    // 16 MiB, 1 obj/slab, so the region holds exactly 4 such objects.
-    constexpr size_t kPage  = 16UL << 20;
-    constexpr size_t kBytes = 64UL << 20;
-    constexpr size_t kObj   = 16UL << 20;
+    // 128 MiB / 32 MiB pages = 4 single-page slots. A 32 MiB object => slab_size
+    // 32 MiB, 1 obj/slab, so the region holds exactly 4 such objects.
+    constexpr size_t kPage  = kObjectAllocatorPageBytes;
+    constexpr size_t kBytes = 4 * kPage;
+    constexpr size_t kObj   = kPage;
 
     AlignedRegion region{kPage, kBytes};
     Buffer        buf{region.data(), static_cast<ssize_t>(region.size()), data_type_v<int8_t>, Device{kCPU}};

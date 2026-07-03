@@ -36,7 +36,7 @@ inline CacheMode ParseCacheMode(const std::string& s)
 }
 
 // Pure prompt-boundary publish decision, given the mode, whether the geometric
-// plan wants a partial fork_to node (else block-aligned checkpoint clamp), and
+// plan wants a partial sibling node (else block-aligned checkpoint clamp), and
 // whether that partial node's token range holds image tokens. 'all' publishes a
 // partial node whenever the plan is partial and arms the clamp when
 // block-aligned; 'auto' publishes only an image-bearing partial node and never

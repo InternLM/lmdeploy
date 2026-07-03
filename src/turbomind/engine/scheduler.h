@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -98,11 +97,6 @@ public:
 
     ~Scheduler();
 
-    const CacheBlockPool& cache() const noexcept
-    {
-        return cache_;
-    }
-
     const LogicalBlockPool& logical() const noexcept
     {
         return logical_;
@@ -123,21 +117,21 @@ public:
         return enable_prefix_caching_;
     }
 
-    // True if any multimodal span overlaps [lo, hi). Pure; used by SetupForks to
+    // True if any multimodal span overlaps [lo, hi). Pure; used by SetupPartialSiblings to
     // gate the 'auto' prompt-boundary publish. Public so it can be unit-tested.
     static bool HasMultimodalOverlap(const Sequence& s, int lo, int hi);
 
     // Match the prompt against the prefix trie; create missing blocks; set up
-    // fork_from (partial match) and fork_to (prompt-boundary publish point).
-    void Accept(Sequence& s);
+    // the partial sibling edge (matcher bind + prompt-boundary node creation).
+    void AdmitPrompt(Sequence& s);
 
-    // Commit step: per-request planning (Resume/Continue), admission with
-    // scratch allocation + eviction, memory replay, publication, Publish.
+    // Commit step: per-request planning (PlanResume/PlanContinue), admission with
+    // scratch allocation + eviction, memory replay, publication, MarkProduced.
     void Schedule(std::vector<Sequence*> requests, Resource& resource);
 
     // Index generated blocks into the trie; adopt the frontier into the last
     // partial block. Called on normal finish.
-    void PublishGeneration(Sequence& s);
+    void Finalize(Sequence& s);
 
     // Drop the request's references; pool recycling does the rest.
     void Release(Sequence& s);
@@ -145,10 +139,10 @@ public:
     // Observability-only records consumed by the file-local prefix-cache log
     // helpers in scheduler.cc. Public so those file-local helpers can name them.
     struct PublishStat {
-        int  start           = 0;      // first newly-valid prefix block offset (token); Publish()
-        int  reusable_blocks = 0;      // indexed nodes whose is_valid flipped true this pass; Publish()
-        int  end             = 0;      // highest published prefix position (token); Publish()
-        bool forked          = false;  // a fork_to boundary populated this pass; set by CommitResults()
+        int  start           = 0;      // first newly-valid prefix block offset (token); MarkProduced()
+        int  reusable_blocks = 0;      // indexed nodes whose is_valid flipped true this pass; MarkProduced()
+        int  end             = 0;      // highest published prefix position (token); MarkProduced()
+        bool forked          = false;  // a partial sibling populated this pass; set by CommitResults()
         bool ckpt            = false;  // a checkpoint published this pass; set by CommitResults()
     };
     struct ProducerConflict {
@@ -161,13 +155,12 @@ private:
     // replay/admission types stay file-local.
     struct ScheduleState;
 
-    // Optional checkpoint-publication intent set by PlanPromptBoundaryPublication /
-    // PlanFullBlockPublication and allocated in the optional admission phase.
-    // cache_id == 0 => nothing.
+    // Optional checkpoint-publication intent allocated in the optional admission
+    // phase. slot is the target's own (block-owned) checkpoint slot; nullptr => nothing.
     struct PublishPlan {
         LogicalBlock* target{};
         int           end{};
-        int           cache_id{};
+        CacheBlock*   slot{};
     };
 
     // Schedule phases, called in order; see Schedule's body.
@@ -177,47 +170,44 @@ private:
     void ReplayMemory(ScheduleState& pass);
     void CommitResults(ScheduleState& pass);
 
-    // Trie cursor threaded through the Accept phases; defined in scheduler.cc.
+    // Trie cursor threaded through the AdmitPrompt phases; defined in scheduler.cc.
     struct AcceptState;
 
     void MatchPrompt(Sequence& s, AcceptState& cur);
-    void CreateMissingBlocks(Sequence& s, AcceptState& cur);
-    void SetupForks(Sequence& s, AcceptState& cur);
+    void IndexMissingBlocks(Sequence& s, AcceptState& cur);
+    void SetupPartialSiblings(Sequence& s, AcceptState& cur);
 
     // Per-request planning for inactive sequences: find the latest feasible
     // resume step, emit restore copy plans, fill resume_len/alloc/involved.
-    void Resume(Sequence& s);
+    void PlanResume(Sequence& s);
 
     // Per-request planning for sequences active in the last iteration.
-    void Continue(Sequence& s);
+    void PlanContinue(Sequence& s);
 
     // Clear producer marks and mark produced blocks valid for [t0, end). Returns
     // the indexed blocks that became cross-request reusable this pass.
-    PublishStat Publish(Sequence& s, int t0, int end);
+    PublishStat MarkProduced(Sequence& s, int t0, int end);
 
     void             SetProducers(Sequence& s, int t0, int end);
     ProducerConflict CheckProducers(const Sequence& s, int t0, int end) const;
 
-    // Admission-loop helpers (called from Schedule only, after input_len is
-    // fixed). They decide and return optional intent; the slots are allocated in
-    // the optional admission phase. PlanForkToPopulation reserves the fork-to
-    // node's prefix_id in `planned` to dedup intent across requests.
-    LogicalBlock* PlanForkToPopulation(Sequence& s, int end, std::unordered_set<int>& planned);
-    void          PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end);
-    void          PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end);
+    // Land the forward end on a boundary candidate; a result <= begin means
+    // nothing runs this pass. Precedence documented at the definition.
+    int ClampForwardEnd(const Sequence& s, int begin, int desired, int ctx_end) const;
+
+    // Publication planning for a committed forward ending at `end`, routed by
+    // whether this is the prompt-boundary pass (end == B). Finds the node
+    // ending exactly at `end` (the block itself when block-aligned, else its
+    // partial sibling), then decides partial sibling KV population and the
+    // checkpoint. Only records intent; slots are allocated in the optional
+    // admission phase. Reserves the sibling's prefix slot in pass.planned to
+    // dedup intent across requests.
+    void PlanPublication(ScheduleState& pass, int i, Sequence& s, int end, bool at_prompt_boundary);
 
     void EnsureBlocks(Sequence& s);
-    void ReleaseCacheId(int cache_id);
-
-    // The cached CacheBlock::allocation is the allocation-validity flag (set by
-    // the alloc replay, cleared by every deallocation path), so no
-    // ObjectAllocator::IsValid lookup is needed on the hot path.
-    bool ValidAlloc(int cache_id) const
-    {
-        return cache_id != 0 && cache_[cache_id].valid();
-    }
 
     bool      PrefixEligible(const Sequence& s) const noexcept;
+    bool      CheckpointPublicationEligible() const noexcept;
     TokenSpan TokenSegment(const Sequence& s, int offset, int size) const;
 
     void LogProfile(const PerformanceCounter& counter) const;

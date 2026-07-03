@@ -18,6 +18,7 @@ Stdout is plain text in short sections, for example:
   cache_checkpoint_interval: 4096
   cache_prompt: 'auto'
   cache_generation: 'auto'
+  cache_prompt_boundary_skip: 1
   prompt_count: 1
   prompt_source: default
   CUDA_LAUNCH_BLOCKING: 1    (only if --debug was passed)
@@ -141,6 +142,7 @@ DEFAULT_MAX_PREFILL_TOKEN_NUM = 1024
 DEFAULT_CACHE_CHECKPOINT_INTERVAL = 4096
 DEFAULT_CACHE_PROMPT = 'auto'
 DEFAULT_CACHE_GENERATION = 'auto'
+DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP = 1
 DEFAULT_PROMPT = 'Write a short paragraph about the importance of reading books.'
 PROMPT_PREVIEW_LEN = 64
 
@@ -356,6 +358,13 @@ Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit
               f'(TurbomindEngineConfig.cache_generation; default: {DEFAULT_CACHE_GENERATION!r})'),
     )
     parser.add_argument(
+        '--cache-prompt-boundary-skip',
+        type=_positive_int,
+        default=DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP,
+        help=('TurbomindEngineConfig.cache_prompt_boundary_skip '
+              f'(default: {DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP})'),
+    )
+    parser.add_argument(
         '--prompt',
         action='append',
         default=None,
@@ -405,6 +414,7 @@ def run_smoke_infer(
     cache_checkpoint_interval: int = DEFAULT_CACHE_CHECKPOINT_INTERVAL,
     cache_prompt: str = DEFAULT_CACHE_PROMPT,
     cache_generation: str = DEFAULT_CACHE_GENERATION,
+    cache_prompt_boundary_skip: int = DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP,
     debug: bool = False,
 ) -> SmokeResult:
     _validate_engine_params(
@@ -436,6 +446,7 @@ def run_smoke_infer(
         cache_checkpoint_interval=cache_checkpoint_interval,
         cache_prompt=cache_prompt,
         cache_generation=cache_generation,
+        cache_prompt_boundary_skip=cache_prompt_boundary_skip,
     )
     gen_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False)
 
@@ -484,6 +495,7 @@ def print_report(
     cache_checkpoint_interval: int = DEFAULT_CACHE_CHECKPOINT_INTERVAL,
     cache_prompt: str = DEFAULT_CACHE_PROMPT,
     cache_generation: str = DEFAULT_CACHE_GENERATION,
+    cache_prompt_boundary_skip: int = DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP,
     debug: bool = False,
 ) -> None:
     print('--- setup ---')
@@ -498,6 +510,7 @@ def print_report(
     print(f'cache_checkpoint_interval: {cache_checkpoint_interval}')
     print(f'cache_prompt: {cache_prompt!r}')
     print(f'cache_generation: {cache_generation!r}')
+    print(f'cache_prompt_boundary_skip: {cache_prompt_boundary_skip}')
     print(f'max_prefill_token_num: {max_prefill_token_num}')
     print(f'prompt_count: {len(resolved.prompts)}')
     print(f'prompt_source: {resolved.source}')
@@ -543,6 +556,7 @@ def run_smoke_test(
     cache_checkpoint_interval: int = DEFAULT_CACHE_CHECKPOINT_INTERVAL,
     cache_prompt: str = DEFAULT_CACHE_PROMPT,
     cache_generation: str = DEFAULT_CACHE_GENERATION,
+    cache_prompt_boundary_skip: int = DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP,
     debug: bool = False,
     emit_report: bool = True,
 ) -> SmokeResult:
@@ -566,6 +580,7 @@ def run_smoke_test(
         cache_checkpoint_interval=cache_checkpoint_interval,
         cache_prompt=cache_prompt,
         cache_generation=cache_generation,
+        cache_prompt_boundary_skip=cache_prompt_boundary_skip,
         debug=debug,
     )
     if emit_report:
@@ -584,6 +599,7 @@ def run_smoke_test(
             cache_checkpoint_interval=cache_checkpoint_interval,
             cache_prompt=cache_prompt,
             cache_generation=cache_generation,
+            cache_prompt_boundary_skip=cache_prompt_boundary_skip,
             debug=debug,
         )
     return result
@@ -608,6 +624,7 @@ def main() -> None:
         cache_checkpoint_interval=args.cache_checkpoint_interval,
         cache_prompt=args.cache_prompt,
         cache_generation=args.cache_generation,
+        cache_prompt_boundary_skip=args.cache_prompt_boundary_skip,
         debug=args.debug,
         emit_report=True,
     )

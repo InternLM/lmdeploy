@@ -292,8 +292,6 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     {  /// Upload KV cache ptrs
-        const auto& c_pool = *env.at("cache_block_pool").data<const CacheBlockPool*>()[0];
-
         auto blocks  = block_ptrs_buf_.data();
         auto offsets = block_ptrs_offsets_buf_.data();
 
@@ -301,8 +299,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         for (int i = 0; i < rc.size(); ++i) {
             const auto& r = *rc[i];
             for (const auto& h : r.block_ids) {
-                const int cache_id = h->prefix_id;
-                auto&     cb       = c_pool[cache_id];
+                const CacheBlock& cb = *h->prefix;
                 TM_CHECK_NOTNULL(cb.allocation.a);
                 *blocks++ = cb.base(0) + prefix_cache_offset_;
             }

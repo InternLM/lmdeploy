@@ -148,16 +148,16 @@ struct MultiModalSpan {
     Fingerprint fingerprint;  // empty until the generation PR
 };
 
-// A scheduler-planned device copy between two cache blocks of the same
-// category. Resolved to pointers on the engine thread at setup and executed
-// as a whole-object copy by the model executor.
+// A scheduler-planned device copy between two cache blocks of the same category.
+// Setup resolves each block's allocation into byte ranges/device addresses, then
+// the model executor runs it as a whole-object copy.
 struct CacheCopy {
-    int src{};
-    int dst{};
+    CacheBlock* src{};
+    CacheBlock* dst{};
 };
 
 // What set this pass's resume_len. resume_len is a single number, produced by
-// whichever mechanism reached the highest skip position in Scheduler::Resume().
+// whichever mechanism reached the highest skip position in Scheduler::PlanResume().
 // Observability-only; the scheduler stays category-agnostic.
 enum class ResumeSource
 {
@@ -165,7 +165,7 @@ enum class ResumeSource
     kPrefix,      // contiguous valid prefix-category cache (no checkpoint category)
     kFrontier,    // request's own checkpoint frontier (no restore copy)
     kCheckpoint,  // restored a published block checkpoint into the frontier
-    kFork,        // extended from a forked sibling's prefix node
+    kFork,        // sibling-sourced: KV fork extension or partial-sibling checkpoint restore
 };
 
 // Unlike `Request` which is shared by all local TP ranks, each rank has its own `Sequence`.
@@ -217,11 +217,11 @@ struct Sequence {
 
     ////////////////////////// Engine-local execution state ///////////////////////////
 
-    std::vector<BlockHandle> block_ids;  // logical (each holds one request ref)
+    std::vector<LogicalBlockPtr> block_ids;  // logical (each holds one request ref)
 
-    std::vector<int> alloc_cache_ids;     // cache ids needing allocation this schedule pass
-    std::vector<int> involved_cache_ids;  // cache ids stamped for eviction protection (= required alloc set);
-                                          // persistent across Continue, rebuilt by Resume
+    std::vector<CacheBlock*> alloc_blocks;     // cache blocks needing allocation this schedule pass
+    std::vector<CacheBlock*> involved_blocks;  // cache blocks stamped for eviction protection (= required alloc set);
+                                               // persistent across PlanContinue, rebuilt by PlanResume
 
     std::vector<CacheCopy> restore_copies;  // run before BatchOp::kPrepare
     std::vector<CacheCopy> publish_copies;  // run after BatchOp::kUnprep
@@ -232,21 +232,20 @@ struct Sequence {
     int readonly_block_num = 0;  // leading block_ids reused read-only (no KV re-write)
 
     // Prefix-cache logging only; never read by scheduling/admission logic.
-    int          matched_blocks = 0;                    // set at Accept: leading prompt blocks found in trie
-    bool         resuming       = false;                // transient: planned by Resume() this pass
+    int          matched_blocks = 0;                    // set at AdmitPrompt: leading prompt blocks found in trie
+    bool         resuming       = false;                // transient: planned by PlanResume() this pass
     ResumeSource resume_source  = ResumeSource::kNone;  // transient: mechanism that set resume_len
 
-    int           frontier_cache_id = 0;        // checkpoint working state for the next forward
-    int           frontier_pos      = 0;        // sequence position the frontier corresponds to
-    int           publish_cache_id  = 0;        // reserved slot for the next checkpoint publication
-    LogicalBlock* publish_target    = nullptr;  // logical block selected for publication this pass
-    int           publish_end       = 0;        // sequence position of the pending publication
-    int           last_ckpt_pos     = 0;        // end of the last published checkpoint
+    CacheBlockPtr frontier;                  // checkpoint working state for the next forward
+    int           frontier_pos   = 0;        // sequence position the frontier corresponds to
+    LogicalBlock* publish_target = nullptr;  // logical block selected for publication this pass
+    int           publish_end    = 0;        // sequence position of the pending publication
+    int           last_ckpt_pos  = 0;        // end of the last published checkpoint
     bool          prompt_boundary_node =
-        false;                    // a reusable prompt-boundary exists and WILL be published: a partial fork_to
-                                  // node when B is mid-block, else a block-aligned checkpoint clamp target. The
-                                  // producer clamps its forward to prompt_boundary_pos to populate the node's KV
-                                  // (and publish a checkpoint when the model is recurrent). Decided in SetupForks.
+        false;  // a reusable prompt-boundary exists and WILL be published: a partial sibling
+                // node when B is mid-block, else a block-aligned checkpoint clamp target. The
+                // producer clamps its forward to prompt_boundary_pos to populate the node's KV
+                // (and publish a checkpoint when the model is recurrent). Decided in SetupPartialSiblings.
     int prompt_boundary_pos = 0;  // resolved boundary B = prompt_len - cache_prompt_boundary_skip; 0 = none
 
     std::vector<int> tokens;

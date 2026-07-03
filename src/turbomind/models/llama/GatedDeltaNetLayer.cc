@@ -155,13 +155,11 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
     d.input_lens.resize(d.batch_size);
     d.reset_ptrs.clear();
 
-    const auto& c_pool = *env.at("cache_block_pool").data<const CacheBlockPool*>()[0];
-
     for (int i = 0; i < d.batch_size; ++i) {
         auto& s         = *rc[i];
         d.input_lens[i] = s.input_len;
 
-        const auto& cb = c_pool[s.frontier_cache_id];
+        const CacheBlock& cb = *TM_CHECK_NOTNULL(s.frontier.get());
         TM_CHECK_NOTNULL(cb.allocation.a);
 
         conv_state_ptrs_buf_[i] = cb.base(0);  // conv accumulation part
