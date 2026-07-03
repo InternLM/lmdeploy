@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
@@ -551,53 +552,60 @@ class SpecModelAgent(BaseSpecModelAgent):
             num_tokens = inputs.input_ids.numel()
             batch_size = inputs.seq_length.numel()
             world_size = dist_config.world_size
-            with self.draft_context():
-                inputs.build_dp_meta([num_tokens] * world_size)
+            inputs.build_dp_meta([num_tokens] * world_size)
             inputs.dp_meta.dp_batches = [batch_size] * world_size
             inputs.dp_meta.dp_is_decoding = is_decoding
 
-        target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
+        with self.draft_context():
+            dist_config = self.draft_dist_ctx.dist_config
+            if dist_config.dp > 1:
+                dist.barrier(group=self.draft_dist_ctx.cpu_group)
 
-        # warmup prefill
-        inputs = self.inputs_strategy.make_dummy(max_batches,
-                                                 is_decoding=False,
-                                                 device='cuda',
-                                                 vocab_size=self.model_config.vocab_size,
-                                                 target_hidden_size=target_hidden_size,
-                                                 target_dtype=self.model_config.dtype,
-                                                 meta=self.make_dummy_meta)
-        add_warmup_dp_meta(inputs, is_decoding=False)
+            target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
-        # warmup prefill
-        self._forward_impl(inputs)
+            # warmup prefill
+            inputs = self.inputs_strategy.make_dummy(max_batches,
+                                                     is_decoding=False,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     target_hidden_size=target_hidden_size,
+                                                     target_dtype=self.model_config.dtype,
+                                                     meta=self.make_dummy_meta)
+            add_warmup_dp_meta(inputs, is_decoding=False)
 
-        capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
-        capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
-
-        # warmup decode
-        for batch_size in capture_batch_sizes:
-            # decode with num_spec_tokens + 1 per seq
-            inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                    is_decoding=True,
-                                                    device='cuda',
-                                                    vocab_size=self.model_config.vocab_size,
-                                                    max_q_seqlen=self.num_spec_tokens + 1,
-                                                    target_hidden_size=target_hidden_size,
-                                                    target_dtype=self.model_config.dtype,
-                                                    meta=self.make_dummy_meta)
-            add_warmup_dp_meta(inputs, is_decoding=True)
+            # warmup prefill
             self._forward_impl(inputs)
-            # decode 1 tokens per sequence
-            inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                    is_decoding=True,
-                                                    device='cuda',
-                                                    vocab_size=self.model_config.vocab_size,
-                                                    max_q_seqlen=1,
-                                                    target_hidden_size=self.model_config.hidden_size,
-                                                    target_dtype=self.model_config.dtype,
-                                                    meta=self.make_dummy_meta)
-            add_warmup_dp_meta(inputs, is_decoding=True)
-            self._forward_impl(inputs)
+            torch.cuda.synchronize()
+
+            capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
+            capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+
+            # warmup decode
+            for batch_size in capture_batch_sizes:
+                # decode with num_spec_tokens + 1 per seq
+                inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                         is_decoding=True,
+                                                         device='cuda',
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         max_q_seqlen=self.num_spec_tokens + 1,
+                                                         target_hidden_size=target_hidden_size,
+                                                         target_dtype=self.model_config.dtype,
+                                                         meta=self.make_dummy_meta)
+                add_warmup_dp_meta(inputs, is_decoding=True)
+                self._forward_impl(inputs)
+                torch.cuda.synchronize()
+                # decode 1 tokens per sequence
+                inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                         is_decoding=True,
+                                                         device='cuda',
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         max_q_seqlen=1,
+                                                         target_hidden_size=self.model_config.hidden_size,
+                                                         target_dtype=self.model_config.dtype,
+                                                         meta=self.make_dummy_meta)
+                add_warmup_dp_meta(inputs, is_decoding=True)
+                self._forward_impl(inputs)
+                torch.cuda.synchronize()
 
     def reset_graph_runner(self):
         """Reset graph runner."""
