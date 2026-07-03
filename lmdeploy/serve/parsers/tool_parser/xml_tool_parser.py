@@ -81,6 +81,7 @@ class XmlToolParser(ToolParser):
         should_close = is_closed or (final and self._close_json_on_final())
 
         json_fragments: list[str] = []
+        self._append_completed_streaming_param_close(json_fragments, args_dict)
         has_streaming_param = self._prepare_streaming_param(
             func_name,
             streaming_param_name,
@@ -116,6 +117,14 @@ class XmlToolParser(ToolParser):
                     function=DeltaFunctionCall(arguments=''.join(json_fragments)),
                 ))
         return out
+
+    def _append_completed_streaming_param_close(self, json_fragments: list[str], args_dict: dict[str, Any]) -> None:
+        param_name = self._xml_streaming_param_name
+        if param_name is None or param_name not in args_dict or param_name not in self._xml_emitted_param_names:
+            return
+        if self._xml_streaming_param_quote_opened:
+            json_fragments.append('"')
+        self._reset_streaming_param()
 
     def _prepare_streaming_param(self,
                                  func_name: str | None,

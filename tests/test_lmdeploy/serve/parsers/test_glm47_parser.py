@@ -393,3 +393,23 @@ class TestGlm47ToolParserComplete:
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_when_next_arg_starts_with_previous_close(self):
+        parser = Glm47ToolParser()
+        payload = 'two_args<arg_key>a</arg_key><arg_value>one</arg_value><arg_key>b</arg_key><arg_value>two</arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('two_args', False),
+                ('<arg_key>a</arg_key>', False),
+                ('<arg_value>one', False),
+                ('</arg_value><arg_key>b</arg_key><arg_value>two', False),
+                ('</arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
