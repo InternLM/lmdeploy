@@ -166,22 +166,13 @@ class XmlToolParser(ToolParser):
         if not stripped_value:
             return None
         if stripped_value.startswith('"'):
-            if self._xml_streaming_param_schema_type != 'string' and not self._stream_quoted_string_without_schema():
-                return None
-            return self._strip_json_string_framing(stripped_value)
+            return None
         if self._xml_streaming_param_schema_type in (None, 'string'):
             return raw_value
-        if self._xml_streaming_param_schema_type == 'integer':
-            return raw_value if self._looks_like_integer(raw_value) else None
-        if self._xml_streaming_param_schema_type == 'number':
-            return raw_value if self._looks_like_number(raw_value) else None
         return None
 
     def _streaming_param_emits_json_string(self) -> bool:
         return self._xml_streaming_param_schema_type in (None, 'string')
-
-    def _stream_quoted_string_without_schema(self) -> bool:
-        return False
 
     def _append_streaming_param_fragments(self,
                                           json_fragments: list[str],
@@ -237,29 +228,6 @@ class XmlToolParser(ToolParser):
             if close_tag.startswith(raw_value[-suffix_len:]):
                 return raw_value[:-suffix_len]
         return raw_value
-
-    @staticmethod
-    def _strip_json_string_framing(raw_value: str) -> str:
-        value = raw_value[1:]
-        if value.endswith('"') and not value.endswith(r'\"'):
-            return value[:-1]
-        return value
-
-    @staticmethod
-    def _looks_like_integer(raw_value: str) -> bool:
-        value = raw_value.strip()
-        return bool(value) and (value.isdigit() or (value.startswith('-') and value[1:].isdigit()))
-
-    @staticmethod
-    def _looks_like_number(raw_value: str) -> bool:
-        value = raw_value.strip()
-        if not value:
-            return False
-        try:
-            parsed_value = json.loads(value)
-        except json.JSONDecodeError:
-            return False
-        return isinstance(parsed_value, (int, float)) and not isinstance(parsed_value, bool)
 
     def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
         """Build function->parameter schema map from request tools."""
