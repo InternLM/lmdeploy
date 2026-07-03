@@ -44,10 +44,10 @@ class TestRestfulInterfaceBase:
     def test_encode_s1(self, backend, model_case):
         api_client = APIClient(BASE_URL)
         input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
-        input_ids2, length2 = api_client.encode('Hi, pls intro yourself', add_bos=False)
+        input_ids2, length2 = api_client.encode('Hi, pls intro yourself')
         input_ids3, length3 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
-        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True, add_bos=False)
-        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100, add_bos=False)
+        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
+        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100)
 
         assert len(input_ids1) == length1 and length1 > 0
         assert len(input_ids2) == length2 and length2 > 0
@@ -64,10 +64,10 @@ class TestRestfulInterfaceBase:
     def test_encode(self, backend, model_case):
         api_client = APIClient(BASE_URL)
         input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
-        input_ids2, length2 = api_client.encode('Hi, pls intro yourself', add_bos=False)
+        input_ids2, length2 = api_client.encode('Hi, pls intro yourself')
         input_ids3, length3 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
-        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True, add_bos=False)
-        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100, add_bos=False)
+        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
+        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100)
 
         assert len(input_ids1) == length1 and length1 > 0
         assert len(input_ids2) == length2 and length2 > 0
@@ -537,7 +537,7 @@ class TestRestfulInterfaceChatCompletions:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
-        length = api_client.encode(response, add_bos=False)[1]
+        length = api_client.encode(response)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length >= 99 and length <= 101
 
@@ -623,7 +623,7 @@ class TestRestfulInterfaceChatCompletions:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
-        length = api_client.encode(response, add_bos=False)[1]
+        length = api_client.encode(response)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
 
@@ -676,7 +676,7 @@ class TestRestfulInterfaceChatCompletions:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name, check_logprobs=True, logprobs_num=10)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
-        length = api_client.encode(response, add_bos=False)[1]
+        length = api_client.encode(response)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
 
@@ -1026,7 +1026,7 @@ class TestRestfulOpenAI:
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
         api_client = APIClient(BASE_URL)
-        length = api_client.encode(response, add_bos=False)[1]
+        length = api_client.encode(response)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
 
@@ -1080,7 +1080,7 @@ class TestRestfulOpenAI:
             assert_chat_completions_stream_return(outputList[index], model_name, check_logprobs=True, logprobs_num=10)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
         api_client = APIClient(BASE_URL)
-        length = api_client.encode(response, add_bos=False)[1]
+        length = api_client.encode(response)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
 

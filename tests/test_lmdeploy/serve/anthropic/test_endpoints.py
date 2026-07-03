@@ -56,16 +56,14 @@ class _FakeSessionManager:
 
 class _FakeTokenizer:
 
-    def encode(self, text: str, add_bos: bool = True, **kwargs):
+    def encode(self, text: str, **kwargs):
         tokens = text.split()
-        if add_bos:
-            return [0] + list(range(1, len(tokens) + 1))
-        return list(range(len(tokens)))
+        return [0] + list(range(1, len(tokens) + 1))
 
 
 class _FakeChatTemplate:
 
-    def messages2prompt(self, messages, add_bos: bool = True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         parts = [f"{item['role']}:{item['content']}" for item in messages]
         return '\n'.join(parts)
 

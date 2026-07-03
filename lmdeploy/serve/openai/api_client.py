@@ -67,20 +67,17 @@ class APIClient:
 
     def encode(self,
                input: str | list[str],
-               do_preprocess: bool | None = False,
-               add_bos: bool | None = True):
+               do_preprocess: bool | None = False):
         """Encode prompts.
 
         Args:
             input: the prompt to be encoded. In str or list[str] format.
             do_preprocess: whether do preprocess or not. Default to False.
-            add_bos: True when it is the beginning of a conversation. False
-                when it is not. Default to True.
         Return: (input_ids, length)
         """
         response = requests.post(self.encode_v1_url,
                                  headers=self.headers,
-                                 json=dict(input=input, do_preprocess=do_preprocess, add_bos=add_bos),
+                                 json=dict(input=input, do_preprocess=do_preprocess),
                                  stream=False)
         if hasattr(response, 'text'):
             output = json_loads(response.text)

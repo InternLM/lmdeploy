@@ -45,7 +45,7 @@ class MllamaVLModel(VisionModel):
             raise NotImplementedError('turbomind has not supported mllama yet')
 
     @staticmethod
-    def proc_messages(messages, chat_template, add_bos):
+    def proc_messages(messages, chat_template):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<|image|>'
@@ -59,9 +59,9 @@ class MllamaVLModel(VisionModel):
             content = [item['text'] for item in message['content'] if item['type'] == 'text']
             prompt = (IMAGE_TOKEN) * n_images + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, add_bos)
+        prompt = chat_template.messages2prompt(prompt_messages)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, add_bos, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, add_bos)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)
+    def to_pytorch(self, messages, chat_template, tokenizer, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

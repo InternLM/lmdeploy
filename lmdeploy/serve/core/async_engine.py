@@ -524,7 +524,6 @@ class AsyncEngine:
                 self.request_logger.log_prompt(session, prompt=prompt)
                 prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
                                                                             do_preprocess=do_preprocess,
-                                                                            add_bos=True,
                                                                             adapter_name=adapter_name,
                                                                             tools=tools,
                                                                             reasoning_effort=reasoning_effort,

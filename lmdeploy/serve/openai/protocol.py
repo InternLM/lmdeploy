@@ -484,7 +484,6 @@ class EncodeRequest(BaseModel):
     """Encode request."""
     input: str | list[str]
     do_preprocess: bool | None = False
-    add_bos: bool | None = True
 
 
 class EncodeResponse(BaseModel):

@@ -1103,23 +1103,21 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     - **input**: the prompt to be encoded. In str or list[str] format.
     - **do_preprocess**: whether do preprocess or not. Default to False.
-    - **add_bos**: True when it is the beginning of a conversation. False when it
-      is not. Default to True.
     """
 
-    def encode(prompt: str, do_preprocess: bool, add_bos: bool):
+    def encode(prompt: str, do_preprocess: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt, add_bos=add_bos)
-        input_ids = VariableInterface.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt)
+        input_ids = VariableInterface.async_engine.tokenizer.encode(prompt)
         return input_ids
 
     if isinstance(request.input, str):
-        encoded = encode(request.input, request.do_preprocess, request.add_bos)
+        encoded = encode(request.input, request.do_preprocess)
         return EncodeResponse(input_ids=encoded, length=len(encoded))
     else:
         encoded, length = [], []
         for prompt in request.input:
-            ids = encode(prompt, request.do_preprocess, request.add_bos)
+            ids = encode(prompt, request.do_preprocess)
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)

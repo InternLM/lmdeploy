@@ -94,7 +94,7 @@ How many cats are there in total?<|im_end|>
 <|im_start|>assistant
 """
         for model, chat_template in internvl3_5:
-            prompt, _ = model.proc_messages(mock_messages, chat_template, add_bos=True)
+            prompt, _ = model.proc_messages(mock_messages, chat_template)
 
             assert prompt == reference
 
@@ -107,7 +107,7 @@ Describe the following images in detail<|im_end|>
 <|im_start|>assistant
 """
         for model, chat_template in internvl3_5:
-            prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template, add_bos=True)
+            prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template)
             assert prompt == reference
 
     def test_internvl3(self, internvl3, mock_messages):
@@ -120,7 +120,7 @@ How many cats are there in total?<|im_end|>
 <|im_start|>assistant
 """
         for model, chat_template in internvl3:
-            prompt, _ = model.proc_messages(mock_messages, chat_template, add_bos=True)
+            prompt, _ = model.proc_messages(mock_messages, chat_template)
             assert prompt == reference
 
     def test_internvl3_backward_compatibility(self, internvl3, mock_IMAGE_TOKEN_messages):
@@ -132,7 +132,7 @@ Describe the following images in detail<|im_end|>
 <|im_start|>assistant
 """
         for model, chat_template in internvl3:
-            prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template, add_bos=True)
+            prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template)
             assert prompt == reference
 
     def test_internvl2(self, internvl2, mock_messages):
@@ -143,8 +143,7 @@ How many cats are there in total?<|im_end|>
 <|im_start|>assistant
 """
         for model, chat_template in internvl2:
-            # Let add_bos=False to avoid the begin-of-prompt token, such as <|begin_of_text|>, <s>
-            prompt, _ = model.proc_messages(mock_messages, chat_template, add_bos=False)
+            prompt, _ = model.proc_messages(mock_messages, chat_template)
             assert prompt == reference
 
     def test_internvl2_backward_compatibility(self, internvl2, mock_IMAGE_TOKEN_messages):
@@ -156,6 +155,5 @@ Describe the following images in detail<|im_end|>
 <|im_start|>assistant
 """
         for model, chat_template in internvl2:
-            # Let add_bos=False to avoid the begin-of-prompt token, such as <|begin_of_text|>, <s>
-            prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template, add_bos=False)
+            prompt, _ = model.proc_messages(mock_IMAGE_TOKEN_messages, chat_template)
             assert prompt == reference

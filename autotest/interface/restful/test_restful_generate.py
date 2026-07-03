@@ -944,7 +944,7 @@ class TestGenerateComprehensive:
     def test_stop_token_ids(self):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
         api_client = APIClient(BASE_URL)
-        input_ids1, length1 = api_client.encode('.', add_bos=False)
+        input_ids1, length1 = api_client.encode('.')
         print(f'input_ids1={input_ids1}, length1={length1}')
 
         payload = {

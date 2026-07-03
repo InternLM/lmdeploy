@@ -66,6 +66,24 @@ class HuggingFaceTokenizer:
         self._indexes_tokens_deque = deque(maxlen=10)
         self.max_indexes_num = 5
         self.token2id = {}
+        self._warn_legacy()
+
+    def _warn_legacy(self):
+        """Emit warnings for removed legacy APIs and behavior changes."""
+        sample = 'Hello, world!'
+        try:
+            with_bos = self.model.encode(sample, add_special_tokens=True)
+            without_bos = with_bos
+            if self.bos_token_id is not None and with_bos and with_bos[0] == self.bos_token_id:
+                without_bos = with_bos[1:]
+            if with_bos != without_bos:
+                self.logger.warning(
+                    'Tokenizer encode results differ for legacy add_bos=True vs add_bos=False '
+                    f'on sample text {sample!r} (add_bos=True: {len(with_bos)} tokens, '
+                    f'add_bos=False: {len(without_bos)} tokens, bos_token_id={self.bos_token_id}). '
+                    'LMDeploy no longer supports add_bos; use chat template for BOS formatting.')
+        except Exception:
+            pass
 
     def _check_transformers_version(self, model_dir: str, trust_remote_code: bool = False):
         import transformers
@@ -181,7 +199,7 @@ class HuggingFaceTokenizer:
                                 f'indexes may decoding {token}, we will use {indexes} only')
         # there might be token id that exceeds self.vocab_size
         if len(indexes) == 0:
-            indexes = self.encode(token, False)
+            indexes = self.encode(token)
             if len(indexes) != 1:
                 self.logger.warning(f'The token {token}, its length of indexes {indexes} is '
                                     'not 1. Currently, it can not be used as stop words')
@@ -189,24 +207,18 @@ class HuggingFaceTokenizer:
         self._indexes_tokens_deque.append((token, indexes))
         return indexes
 
-    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
+    def encode(self, s: str, add_special_tokens: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
             s: a prompt.
-            add_bos: Whether to add ``bos`` token id when encoding the prompt.
             add_special_tokens: Whether or not to add special tokens
                 when encoding the prompt.
 
         Returns:
             list[int]: token ids.
         """
-        encoded = self.model.encode(s, add_special_tokens=add_special_tokens, **kwargs)
-        if not add_bos:
-            # in the middle of a session
-            if len(encoded) and encoded[0] == self.bos_token_id:
-                encoded = encoded[1:]
-        return encoded
+        return self.model.encode(s, add_special_tokens=add_special_tokens, **kwargs)
 
     def decode(self, t: Sequence[int], offset: int | None = None, skip_special_tokens: bool = True):
         """De-tokenize.
@@ -364,11 +376,11 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
         # fix for transformers>4.45.0
         self.model._pad = __pad
 
-    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
+    def encode(self, s: str, add_special_tokens: bool = True, **kwargs):
         """Tokenize a prompt."""
         # ChtGLM4Tokenizer hardcode `add_speical_tokens=False` when tokenizing
         # a prompt. Refer to https://huggingface.co/THUDM/glm-4-9b-chat/blob/main/tokenization_chatglm.py#L227 # noqa E501
-        return super().encode(s, add_bos, add_special_tokens=False, **kwargs)
+        return super().encode(s, add_special_tokens=False, **kwargs)
 
 
 class ChatGLMTokenizer(HuggingFaceTokenizer):
@@ -462,19 +474,18 @@ class Tokenizer:
         """Get vocab."""
         return self.model.get_vocab()
 
-    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
+    def encode(self, s: str, add_special_tokens: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
             s: a prompt.
-            add_bos: Whether to add ``bos`` token id when encoding the prompt.
             add_special_tokens: Whether or not to add special tokens
                 when encoding the prompt.
 
         Returns:
             list[int]: token ids.
         """
-        encoded = self.model.encode(s, add_bos, add_special_tokens, **kwargs)
+        encoded = self.model.encode(s, add_special_tokens=add_special_tokens, **kwargs)
         if encoded[:2] == [self.bos_token_id] * 2:
             self.logger.warning(f'Detected duplicate bos token {self.bos_token_id} in prompt, '
                                 'this will likely reduce response quality, one of them will be'
@@ -542,7 +553,7 @@ class Tokenizer:
     def indexes_containing_token(self, token):
         """Return all the possible indexes, whose decoding output may contain
         the input token."""
-        encoded = self.encode(token, add_bos=False)
+        encoded = self.encode(token)
         if len(encoded) > 1:
             self.logger.warning(f'The token {token}, its length of indexes {encoded} is over '
                                 'than 1. Currently, it can not be used as stop words')

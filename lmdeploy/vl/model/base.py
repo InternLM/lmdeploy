@@ -262,7 +262,7 @@ class VisionModel(ABC):
         return isinstance(first_item, dict) and isinstance(first_item.get('text'), list)
 
     @staticmethod
-    def get_input_prompt(messages: list[dict], chat_template, add_bos: bool,
+    def get_input_prompt(messages: list[dict], chat_template,
                          chat_template_kwargs: dict | None = None) -> str | list[int]:
         """Return the input prompt for the preprocessor.
 
@@ -274,14 +274,13 @@ class VisionModel(ABC):
         Args:
             messages: Preprocessed message list.
             chat_template: Chat template used to render a text prompt.
-            add_bos: Whether this is the start of a new sequence.
             chat_template_kwargs: Extra kwargs forwarded to ``messages2prompt``.
         Returns:
             A list of token ids when input_ids are embedded, otherwise a str.
         """
         if VisionModel.has_input_ids(messages):
             return messages[0]['content'][0]['text']
-        return chat_template.messages2prompt(messages, add_bos, **(chat_template_kwargs or {}))
+        return chat_template.messages2prompt(messages, **(chat_template_kwargs or {}))
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
@@ -298,7 +297,7 @@ class VisionModel(ABC):
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
-    def to_pytorch(self, messages, chat_template, tokenizer, add_bos, chat_template_kwargs=None, **kwargs):
+    def to_pytorch(self, messages, chat_template, tokenizer, chat_template_kwargs=None, **kwargs):
         """Pack the preprocessing results in a format compatible with what is
         required by pytorch engine. ONLY implement it when the backend is
         pytorch engine.
@@ -307,14 +306,13 @@ class VisionModel(ABC):
             messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
-            add_bos: starting flag of a sequence
-            chat_template_kwargs: additional arguments for chat template
+                        chat_template_kwargs: additional arguments for chat template
                 processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'pytorch':
             raise NotImplementedError()
 
-    def to_turbomind(self, messages, chat_template, tokenizer, add_bos, chat_template_kwargs=None, **kwargs):
+    def to_turbomind(self, messages, chat_template, tokenizer, chat_template_kwargs=None, **kwargs):
         """Pack the forwarding results in a format compatible with what is
         required by turbomind engine. ONLY implement it when the backend is
         turbomind engine.
@@ -323,8 +321,7 @@ class VisionModel(ABC):
             messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
-            add_bos: starting flag of a sequence
-            chat_template_kwargs: additional arguments for chat template
+                        chat_template_kwargs: additional arguments for chat template
                 processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'turbomind':
@@ -418,7 +415,7 @@ class VisionModel(ABC):
 
         return dict(prompt=None, input_ids=input_ids, multimodal=preps)
 
-    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, add_bos):
+    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer):
         """Auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
@@ -428,7 +425,6 @@ class VisionModel(ABC):
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
             tokenzer: the tokenizer model
-            add_bos: starting flag of a sequence
         """
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -448,12 +444,12 @@ class VisionModel(ABC):
                 image_tokens = preps[i - 1]['image_tokens']
                 assert self.image_token_id == preps[i - 1]['image_token_id']
                 input_ids.extend([self.image_token_id] * image_tokens)
-            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and add_bos))
+            token_ids = tokenizer.encode(seg)
             input_ids.extend(token_ids)
 
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
-    def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, add_bos):
+    def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer):
         """Auxiliary function to pack the forwarding results in a format
         compatible with what is required by turbomind engine.
 
@@ -463,7 +459,6 @@ class VisionModel(ABC):
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
             tokenzer: the tokenizer model
-            add_bos: starting flag of a sequence
         """
         # collect image features from messages
         features = [x['content'] for x in messages if x['role'] == 'forward']
@@ -484,7 +479,7 @@ class VisionModel(ABC):
                 begins.append(len(input_ids))
                 ends.append(begins[-1] + image_dim)
                 input_ids.extend([self.image_token_id] * image_dim)
-            seg_ids = tokenizer.encode(seg, add_bos=((i == 0) and add_bos))
+            seg_ids = tokenizer.encode(seg)
             input_ids.extend(seg_ids)
         ranges = np.stack([begins, ends], axis=1).tolist()
         return dict(prompt=prompt, input_ids=input_ids, input_embeddings=features, input_embedding_ranges=ranges)

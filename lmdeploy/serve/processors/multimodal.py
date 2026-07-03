@@ -196,7 +196,6 @@ class MultimodalProcessor:
     async def get_prompt_input(self,
                                prompt: str | list[dict],
                                do_preprocess: bool,
-                               add_bos: bool,
                                adapter_name: str,
                                tools: list[object] | None = None,
                                reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
@@ -212,7 +211,6 @@ class MultimodalProcessor:
         Args:
             prompt: Input prompt as string or list of message dicts.
             do_preprocess: Whether to apply chat template preprocessing.
-            add_bos: Indicator for starting a sequence.
             adapter_name: Adapter name for selecting chat template.
             tools: Optional list of tools.
             reasoning_effort: Optional reasoning effort level.
@@ -229,7 +227,6 @@ class MultimodalProcessor:
         if isinstance(prompt, str):
             return await self._get_text_prompt_input(prompt=prompt,
                                                      do_preprocess=do_preprocess,
-                                                     add_bos=add_bos,
                                                      adapter_name=adapter_name,
                                                      tools=tools,
                                                      reasoning_effort=reasoning_effort,
@@ -245,7 +242,6 @@ class MultimodalProcessor:
             if not has_multimodal_input or self.vl_encoder is None:
                 return await self._get_text_prompt_input(prompt=prompt,
                                                          do_preprocess=do_preprocess,
-                                                         add_bos=add_bos,
                                                          adapter_name=adapter_name,
                                                          tools=tools,
                                                          reasoning_effort=reasoning_effort,
@@ -255,7 +251,6 @@ class MultimodalProcessor:
             # Process multimodal input
             return await self._get_multimodal_prompt_input(messages=prompt,
                                                            do_preprocess=do_preprocess,
-                                                           add_bos=add_bos,
                                                            adapter_name=adapter_name,
                                                            tools=tools,
                                                            chat_template_kwargs=chat_template_kwargs,
@@ -357,7 +352,6 @@ class MultimodalProcessor:
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],
                                      do_preprocess: bool,
-                                     add_bos: bool,
                                      adapter_name: str,
                                      tools: list[object] | None = None,
                                      reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
@@ -376,7 +370,6 @@ class MultimodalProcessor:
             chat_template = BaseChatTemplate()
         chat_template_kwargs = chat_template_kwargs or {}
         prompt = chat_template.messages2prompt(prompt,
-                                               add_bos,
                                                tools=tools,
                                                reasoning_effort=reasoning_effort,
                                                **chat_template_kwargs)
@@ -384,13 +377,12 @@ class MultimodalProcessor:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
             )
-        input_ids = self.tokenizer.encode(prompt, add_bos=add_bos)
+        input_ids = self.tokenizer.encode(prompt)
         return {'prompt': prompt, 'input_ids': input_ids}
 
     async def _get_multimodal_prompt_input(self,
                                            messages: list[dict],
                                            do_preprocess: bool,
-                                           add_bos: bool,
                                            adapter_name: str,
                                            tools: list[object] | None = None,
                                            chat_template_kwargs: dict | None = None,
@@ -406,7 +398,6 @@ class MultimodalProcessor:
             if self.vl_encoder._uses_new_preprocess:
                 input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
                                                                       chat_template=chat_template,
-                                                                      add_bos=add_bos,
                                                                       chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages,
                                                            input_prompt=input_prompt,
@@ -417,14 +408,12 @@ class MultimodalProcessor:
                 results = await self.vl_encoder.wrap_for_turbomind(messages=results,
                                                                 chat_template=chat_template,
                                                                 tokenizer=self.tokenizer,
-                                                                add_bos=add_bos,
                                                                 tools=tools,
                                                                 chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             if self.vl_encoder._uses_new_preprocess:
                 input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
                                                                       chat_template=chat_template,
-                                                                      add_bos=add_bos,
                                                                       chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages,
                                                            input_prompt=input_prompt,
@@ -435,7 +424,6 @@ class MultimodalProcessor:
                 results = await self.vl_encoder.wrap_for_pytorch(messages=results,
                                                                  chat_template=chat_template,
                                                                  tokenizer=self.tokenizer,
-                                                                 add_bos=add_bos,
                                                                  tools=tools,
                                                                  chat_template_kwargs=chat_template_kwargs)
 

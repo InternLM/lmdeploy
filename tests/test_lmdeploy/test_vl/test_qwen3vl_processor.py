@@ -47,7 +47,7 @@ def _preprocess(model, messages, mm_processor_kwargs=None):
     """
     from lmdeploy.model import MODELS
     chat_template = MODELS.module_dict['hf'](model_path=model.model_path)
-    input_prompt = model.get_input_prompt(messages, chat_template, add_bos=True)
+    input_prompt = model.get_input_prompt(messages, chat_template)
     result = model.preprocess(messages=list(messages), input_prompt=input_prompt,
                               mm_processor_kwargs=mm_processor_kwargs)
     return result['multimodal'][0]
@@ -117,7 +117,7 @@ def _preprocess_by_modality(model, messages, mm_processor_kwargs=None):
     modality."""
     from lmdeploy.model import MODELS
     chat_template = MODELS.module_dict['hf'](model_path=model.model_path)
-    input_prompt = model.get_input_prompt(messages, chat_template, add_bos=True)
+    input_prompt = model.get_input_prompt(messages, chat_template)
     result = model.preprocess(messages=list(messages), input_prompt=input_prompt,
                               mm_processor_kwargs=mm_processor_kwargs)
     by_modality = {}

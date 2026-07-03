@@ -254,7 +254,7 @@ class Xcomposer2VisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, add_bos, model_type):
+    def proc_messages(messages, chat_template, model_type):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -278,13 +278,13 @@ class Xcomposer2VisionModel(VisionModel):
             else:
                 prompt = content[0]
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = prefix_image_token + chat_template.messages2prompt(prompt_messages, add_bos)
+        prompt = prefix_image_token + chat_template.messages2prompt(prompt_messages)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, add_bos, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, add_bos, self.model_type)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)
+    def to_pytorch(self, messages, chat_template, tokenizer, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, self.model_type)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, add_bos, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, add_bos, self.model_type)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)
+    def to_turbomind(self, messages, chat_template, tokenizer, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, self.model_type)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

@@ -99,7 +99,7 @@ class LLama4VisionModel(VisionModel):
         raise NotImplementedError()
 
     @staticmethod
-    def proc_messages(messages, chat_template, add_bos):
+    def proc_messages(messages, chat_template):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -115,10 +115,10 @@ class LLama4VisionModel(VisionModel):
             if IMAGE_TOKEN not in prompt:
                 prompt = f'{IMAGE_TOKEN * n_images}' + prompt
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, add_bos)
+        prompt = chat_template.messages2prompt(prompt_messages)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, add_bos):
+    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer):
         """Auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
@@ -128,7 +128,6 @@ class LLama4VisionModel(VisionModel):
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
             tokenzer: the tokenizer model
-            add_bos: starting flag of a sequence
         """
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -149,14 +148,14 @@ class LLama4VisionModel(VisionModel):
                 prep.update(offset=len(input_ids) + 1)
                 assert self.image_token_id == prep['image_token_id']
                 seg = image_prompts + seg
-            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and add_bos))
+            token_ids = tokenizer.encode(seg)
             input_ids.extend(token_ids)
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
-    def to_pytorch(self, messages, chat_template, tokenizer, add_bos, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, add_bos)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)
+    def to_pytorch(self, messages, chat_template, tokenizer, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, add_bos, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, add_bos)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, add_bos)
+    def to_turbomind(self, messages, chat_template, tokenizer, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

@@ -16,7 +16,7 @@ from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer, Tokenizer
 @pytest.mark.parametrize('skip_special_tokens', [True, False])
 def test_tokenizer(model_path, input, interval, add_special_tokens, skip_special_tokens):
     tokenizer = Tokenizer(model_path, trust_remote_code=True).model
-    encoded = tokenizer.encode(input, False, add_special_tokens=add_special_tokens)
+    encoded = tokenizer.encode(input, add_special_tokens=add_special_tokens)
     output = ''
     input = tokenizer.decode(encoded, skip_special_tokens=skip_special_tokens)
     state = DetokenizeState()
@@ -54,7 +54,7 @@ def test_glm4_special_token():
     speicial_token_ids = [i for i in range(151329, 151343)]
 
     for token, token_id in zip(special_tokens, speicial_token_ids):
-        _token_id = tokenizer.encode(token, add_bos=False)
+        _token_id = tokenizer.encode(token)
         assert len(_token_id) == 1 and _token_id[0] == token_id
 
 

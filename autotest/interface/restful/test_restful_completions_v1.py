@@ -28,10 +28,10 @@ class TestRestfulInterfaceBase:
         print(f'[test_encode] backend={backend!r} model_case={model_case!r}')
         api_client = APIClient(BASE_URL)
         input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
-        input_ids2, length2 = api_client.encode('Hi, pls intro yourself', add_bos=False)
+        input_ids2, length2 = api_client.encode('Hi, pls intro yourself')
         input_ids3, length3 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
-        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True, add_bos=False)
-        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100, add_bos=False)
+        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
+        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100)
         assert len(input_ids1) == length1 and length1 > 0
         assert len(input_ids2) == length2 and length2 > 0
         assert len(input_ids3) == length3 and length3 > 0
