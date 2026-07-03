@@ -124,11 +124,13 @@ class XmlToolParser(ToolParser):
             return
         value = args_dict[param_name]
         if self._xml_streaming_param_quote_opened:
-            value_text = json.dumps(value, ensure_ascii=False)[1:-1] if isinstance(value, str) else ''
+            if isinstance(value, str) and len(value) > self._xml_streaming_param_emitted_raw_len:
+                diff = value[self._xml_streaming_param_emitted_raw_len:]
+                json_fragments.append(json.dumps(diff, ensure_ascii=False)[1:-1])
         else:
             value_text = json.dumps(value, ensure_ascii=False)
-        if len(value_text) > self._xml_streaming_param_emitted_raw_len:
-            json_fragments.append(value_text[self._xml_streaming_param_emitted_raw_len:])
+            if len(value_text) > self._xml_streaming_param_emitted_raw_len:
+                json_fragments.append(value_text[self._xml_streaming_param_emitted_raw_len:])
         if self._xml_streaming_param_quote_opened:
             json_fragments.append('"')
         self._reset_streaming_param()

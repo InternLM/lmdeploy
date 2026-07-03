@@ -434,3 +434,29 @@ null
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_for_unquoted_newline_value(self):
+        parser = Qwen3CoderToolParser()
+        payload = '<function=f><parameter=a>A\nB</parameter></function>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            ['<function=f>', '<parameter=a>A\n', 'B</parameter></function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_for_unquoted_quote_value(self):
+        parser = Qwen3CoderToolParser()
+        payload = '<function=f><parameter=a>A"B</parameter></function>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            ['<function=f>', '<parameter=a>A"', 'B</parameter></function>'],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments

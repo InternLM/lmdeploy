@@ -571,3 +571,39 @@ class TestGlm47ToolParserComplete:
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_for_unquoted_newline_value(self):
+        parser = Glm47ToolParser()
+        payload = 'f<arg_key>a</arg_key><arg_value>A\nB</arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('f', False),
+                ('<arg_key>a</arg_key><arg_value>A\n', False),
+                ('B</arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_streamed_arguments_match_complete_parse_for_unquoted_quote_value(self):
+        parser = Glm47ToolParser()
+        payload = 'f<arg_key>a</arg_key><arg_value>A"B</arg_value>'
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('f', False),
+                ('<arg_key>a</arg_key><arg_value>A"', False),
+                ('B</arg_value>', False),
+                ('', True),
+            ],
+        )
+        complete_tool_call = parser.parse_tool_call_complete(payload)
+
+        assert complete_tool_call is not None
+        assert streamed_arguments == complete_tool_call.function.arguments
