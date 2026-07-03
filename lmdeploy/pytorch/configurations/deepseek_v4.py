@@ -12,6 +12,55 @@ from .builder import AutoModelConfigBuilder
 logger = get_logger('lmdeploy')
 
 
+V4_PACKED_TOKEN_DIM = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE + V4_FLASHMLA_NUM_TILES + 1
+V4_SUPPORTED_COMPRESS_RATIOS = (0, 4, 128)
+
+
+def _normalize_v4_block_size(block_size: int) -> int:
+    """Return the logical block size required by DeepSeek-V4 kernels."""
+    if block_size < 256:
+        block_size = 256
+    if block_size % 128 != 0:
+        block_size = ((block_size + 127) // 128) * 128
+        if block_size < 256:
+            block_size = 256
+    return block_size
+
+
+def _get_v4_cache_layers(hf_config):
+    """Normalize compression ratios and return layer-id partitions."""
+    num_layers = hf_config.num_hidden_layers
+    compress_ratios = getattr(hf_config, 'compress_ratios', None)
+    if compress_ratios is None:
+        compress_ratios = [0] * num_layers
+    else:
+        compress_ratios = list(compress_ratios)
+
+    if len(compress_ratios) > num_layers:
+        extra_ratios = compress_ratios[num_layers:]
+        if any(r != 0 for r in extra_ratios):
+            raise ValueError('DeepSeek-V4 compress_ratios has extra non-zero entries beyond '
+                             f'num_hidden_layers={num_layers}: {extra_ratios}.')
+        logger.warning('DeepSeek-V4 compress_ratios has %s entries but num_hidden_layers is %s. '
+                       'Ignoring trailing zero entries.', len(compress_ratios), num_layers)
+        compress_ratios = compress_ratios[:num_layers]
+    elif len(compress_ratios) < num_layers:
+        logger.warning('DeepSeek-V4 compress_ratios has %s entries but num_hidden_layers is %s. '
+                       'Padding missing entries with 0.', len(compress_ratios), num_layers)
+        compress_ratios = compress_ratios + [0] * (num_layers - len(compress_ratios))
+
+    invalid_ratios = sorted({r for r in compress_ratios if r not in V4_SUPPORTED_COMPRESS_RATIOS})
+    if invalid_ratios:
+        raise ValueError('DeepSeek-V4 compress_ratios only supports '
+                         f'{V4_SUPPORTED_COMPRESS_RATIOS}, but got {invalid_ratios}.')
+
+    hf_config.compress_ratios = compress_ratios
+    all_layers = list(range(num_layers))
+    ratio4_layers = [i for i, r in enumerate(compress_ratios) if r == 4]
+    ratio128_layers = [i for i, r in enumerate(compress_ratios) if r == 128]
+    return all_layers, ratio4_layers, ratio128_layers
+
+
 def _check_env_v4(device: str = 'cuda'):
     """Environment check for DeepSeek-V4."""
     if device != 'cuda':
@@ -37,34 +86,22 @@ def _check_env_v4(device: str = 'cuda'):
 
 
 def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
-    adjusted = False
-    if block_size < 256:
-        block_size = 256
-        adjusted = True
-    if block_size % 128 != 0:
-        block_size = ((block_size + 127) // 128) * 128
-        if block_size < 256:
-            block_size = 256
-        adjusted = True
-    if adjusted:
+    normalized_block_size = _normalize_v4_block_size(block_size)
+    if normalized_block_size != block_size:
         logger.warning(f'DeepSeek-V4 requires block_size >= 256 and a multiple of 128. '
-                       f'Adjusting block_size from {model_config.block_size} to {block_size}.')
-        model_config.block_size = block_size
+                       f'Adjusting block_size from {model_config.block_size} to {normalized_block_size}.')
+        model_config.block_size = normalized_block_size
+        block_size = normalized_block_size
 
     hf_config = model_config.hf_config
-    # V4 FlashMLA sparse FP8: 448 fp8 NoPE + 128 bytes (64 bf16) RoPE + 7 e8m0 scales + 1 pad = 584
-    packed_token_dim = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE + V4_FLASHMLA_NUM_TILES + 1
-    num_layers = hf_config.num_hidden_layers
-    compress_ratios = getattr(hf_config, 'compress_ratios', None) or [0] * num_layers
-    ratio4_layers = [i for i, r in enumerate(compress_ratios) if r == 4]
-    ratio128_layers = [i for i, r in enumerate(compress_ratios) if r == 128]
+    _, ratio4_layers, ratio128_layers = _get_v4_cache_layers(hf_config)
 
     block_specs = []
     if ratio4_layers:
         entries_r4 = block_size // 4
         index_head_dim = getattr(hf_config, 'index_head_dim', 128)
         block_specs.append(
-            BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (entries_r4, packed_token_dim),
+            BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (entries_r4, V4_PACKED_TOKEN_DIM),
                            torch.float8_e4m3fn))
         block_specs.append(
             BlockCacheSpec('v4_index_kv_r4', ratio4_layers, (entries_r4, index_head_dim), torch.float8_e4m3fn))
@@ -73,27 +110,23 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
     if ratio128_layers:
         entries_r128 = block_size // 128
         block_specs.append(
-            BlockCacheSpec('v4_compressed_kv_r128_fp8', ratio128_layers, (entries_r128, packed_token_dim),
+            BlockCacheSpec('v4_compressed_kv_r128_fp8', ratio128_layers, (entries_r128, V4_PACKED_TOKEN_DIM),
                            torch.float8_e4m3fn))
 
     model_config.block_cache_specs = block_specs
 
 
 def update_cache_config(cache_config):
-    adjusted = False
-    block_size = cache_config.block_size
-    if block_size < 256:
-        block_size = 256
-        adjusted = True
-    if block_size % 128 != 0:
-        block_size = ((block_size + 127) // 128) * 128
-        if block_size < 256:
-            block_size = 256
-        adjusted = True
-    if adjusted:
+    original_block_size = cache_config.block_size
+    original_kernel_block_size = cache_config.kernel_block_size
+    block_size = _normalize_v4_block_size(original_block_size)
+    if block_size != original_block_size:
         logger.warning(f'DeepSeek-V4 requires block_size >= 256 and a multiple of 128. '
-                       f'Adjusting block_size from {cache_config.block_size} to {block_size}.')
+                       f'Adjusting block_size from {original_block_size} to {block_size}.')
         cache_config.block_size = block_size
+    if cache_config.kernel_block_size != block_size:
+        logger.warning('DeepSeek-V4 requires kernel_block_size to match block_size. '
+                       f'Adjusting kernel_block_size from {original_kernel_block_size} to {block_size}.')
         cache_config.kernel_block_size = block_size
     # V4 manages its sliding window via ring-buffer state caches internally.
     # Setting window_size=-1 selects DefaultBlockManager so blocks are not
@@ -117,10 +150,8 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         """
         bos_token_id = getattr(hf_config, 'bos_token_id', None)
         head_dim = getattr(hf_config, 'head_dim', 512)
-        # V4 FlashMLA sparse FP8: 448 fp8 NoPE + 128 bytes (64 bf16) RoPE + 7 e8m0 scales + 1 pad = 584
-        packed_token_dim = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE + V4_FLASHMLA_NUM_TILES + 1
         num_layers = hf_config.num_hidden_layers
-        compress_ratios = getattr(hf_config, 'compress_ratios', None) or [0] * num_layers
+        all_layers, ratio4_layers, ratio128_layers = _get_v4_cache_layers(hf_config)
 
         config = ModelConfig(
             hidden_size=hf_config.hidden_size,
@@ -139,15 +170,12 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         # ---- block cache specs ----
         # block_cache_specs depend on the final token block_size, so they are
         # materialized in a post-build hook after ModelConfig.block_size is set.
-        all_layers = list(range(num_layers))
-        ratio4_layers = [i for i, r in enumerate(compress_ratios) if r == 4]
-        ratio128_layers = [i for i, r in enumerate(compress_ratios) if r == 128]
         config.block_cache_specs = []
 
         # ---- state cache specs ----
         state_specs = []
         state_specs.append(
-            StateCacheSpec('v4_window_kv_fp8', (hf_config.sliding_window, packed_token_dim), torch.float8_e4m3fn,
+            StateCacheSpec('v4_window_kv_fp8', (hf_config.sliding_window, V4_PACKED_TOKEN_DIM), torch.float8_e4m3fn,
                            layer_ids=all_layers))
         if ratio4_layers:
             # overlap compressor scratch for Attention (kv_state + score_state)
