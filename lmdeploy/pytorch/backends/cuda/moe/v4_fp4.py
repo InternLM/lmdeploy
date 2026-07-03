@@ -387,8 +387,7 @@ class TritonFusedMoEV4FP4EPImpl:
 
     def ep_expert_list(self, world_size, rank):
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            from lmdeploy.pytorch.nn.eplb import EPLBManager
-            return EPLBManager.get_dispatch_info(rank, self.layer_idx)
+            raise NotImplementedError('DeepSeek-V4 FP4 EP does not support enable_eplb yet.')
         expert_per_rank = (self.num_experts + world_size - 1) // world_size
         first_expert = rank * expert_per_rank
         last_expert = min(first_expert + expert_per_rank, self.num_experts)

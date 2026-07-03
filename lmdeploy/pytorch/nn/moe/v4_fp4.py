@@ -201,6 +201,9 @@ class FusedMoEV4FP4(nn.Module):
         self.ffn_dim = ffn_dim
         self.top_k = top_k
 
+        if self.ep_size > 1 and dist_config.enable_eplb:
+            raise NotImplementedError('DeepSeek-V4 FP4 EP does not support enable_eplb yet.')
+
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEV4FP4)
         deep_ep_max_tokens_per_rank = get_build_model_context().deep_ep_max_tokens_per_rank
 

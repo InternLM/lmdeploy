@@ -522,12 +522,65 @@ def test_v4_fp4_ep_forward_uses_global_decode_mode(monkeypatch):
     assert modes == [True]
 
 
+def test_v4_fp4_ep_rejects_eplb(monkeypatch):
+    from lmdeploy.pytorch.nn.moe import v4_fp4
+
+    class FakeDistConfig:
+        enable_eplb = True
+
+        def get_tp_by_layer(self, layer_type):
+            return 1, object()
+
+    class FakeDistContext:
+        dist_config = FakeDistConfig()
+        moe_tp_group = type('FakeGroup', (), {'gpu_group': object()})()
+        ep_gpu_group = object()
+
+    class FakeDistManager:
+
+        def current_context(self):
+            return FakeDistContext()
+
+    monkeypatch.setattr(v4_fp4, 'get_dist_manager', lambda: FakeDistManager())
+    monkeypatch.setattr(v4_fp4, 'get_ep_world_rank', lambda: (2, 0))
+    monkeypatch.setattr(v4_fp4, 'get_tp_world_rank', lambda *args, **kwargs: (1, 0))
+
+    with pytest.raises(NotImplementedError, match='DeepSeek-V4 FP4 EP does not support enable_eplb'):
+        v4_fp4.FusedMoEV4FP4(hidden_dim=16,
+                             ffn_dim=32,
+                             num_experts=4,
+                             top_k=2,
+                             device=torch.device('cpu'))
+
+
+def test_v4_fp4_ep_impl_rejects_eplb_expert_list(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda.moe import v4_fp4
+
+    class FakeDistConfig:
+        enable_eplb = True
+
+    class FakeDistContext:
+        dist_config = FakeDistConfig()
+
+    class FakeDistManager:
+
+        def current_context(self):
+            return FakeDistContext()
+
+    monkeypatch.setattr(v4_fp4, 'get_dist_manager', lambda: FakeDistManager())
+    impl = v4_fp4.TritonFusedMoEV4FP4EPImpl.__new__(v4_fp4.TritonFusedMoEV4FP4EPImpl)
+
+    with pytest.raises(NotImplementedError, match='DeepSeek-V4 FP4 EP does not support enable_eplb'):
+        v4_fp4.TritonFusedMoEV4FP4EPImpl.ep_expert_list(impl, world_size=2, rank=0)
+
+
 def test_v4_fp4_layer_passes_build_context_deepep_token_limit(monkeypatch):
     from lmdeploy.pytorch.nn.moe import v4_fp4
 
     calls = []
 
     class FakeDistConfig:
+        enable_eplb = False
 
         def get_tp_by_layer(self, layer_type):
             return 1, object()
