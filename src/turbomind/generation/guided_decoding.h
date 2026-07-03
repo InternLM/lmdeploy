@@ -30,8 +30,6 @@ private:
     struct Data;
     std::vector<std::shared_ptr<Data>> data_;
 
-    xgrammar::BatchGrammarMatcher batch_matcher_;
-
     Tensor_<int32_t> bitmask_buf_;
     Buffer_<int>     output_ids_buf_;
 
