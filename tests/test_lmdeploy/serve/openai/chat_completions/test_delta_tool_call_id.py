@@ -32,6 +32,31 @@ def test_decode_tool_incremental_json_id_only_on_first_chunk():
     assert args_delta.function.arguments
 
 
+def test_decode_tool_incremental_json_streams_empty_arguments():
+    from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
+
+    class TestToolParser(ToolParser):
+        def get_tool_open_tag(self): return None
+        def get_tool_close_tag(self): return None
+        def get_tool_payload_format(self): return 'json'
+        def decode_tool_incremental(self, added_text, *, final): return []
+        def parse_tool_call_complete(self, payload): return None
+
+    for arguments in ('{}', '[]'):
+        parser = TestToolParser()
+        parser.start_tool_call()
+
+        deltas = parser._decode_tool_incremental_json(
+            '{"name":"f","arguments":' + arguments + '}',
+            final=True,
+        )
+        argument_fragments = [
+            delta.function.arguments for delta in deltas if delta.function and delta.function.arguments
+        ]
+
+        assert argument_fragments == [arguments]
+
+
 def test_stream_delta_tool_call_omits_null_id_and_type_in_json():
     """Serialized stream chunks should omit null id/type, not emit them as JSON
     null."""

@@ -148,10 +148,6 @@ class ToolParser:
         if args_obj is None:
             return out
 
-        args_json = json.dumps(args_obj, ensure_ascii=False)
-        if args_json in ('{}', '[]'):
-            return out
-
         if self._args_payload_start < 0:
             args_key = 'arguments' if 'arguments' in obj else 'parameters'
             self._args_payload_start = self._find_json_key_value_start(raw_payload, args_key)
