@@ -358,7 +358,8 @@ class BaseModelAgent:
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
     def reset_runtime_state(self):
-        """Discard request-local decode and chunk state after sleep cancels sessions."""
+        """Discard request-local decode and chunk state after sleep cancels
+        sessions."""
         self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output = None
         self._prev_chunk_last_logit = None

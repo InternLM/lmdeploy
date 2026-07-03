@@ -131,7 +131,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         self._prev_chunk_last = {}
 
     def reset_runtime_state(self):
-        """Discard request-local draft carry state after sleep cancels sessions."""
+        """Discard request-local draft carry state after sleep cancels
+        sessions."""
         self._prev_chunk_last.clear()
 
     @contextmanager

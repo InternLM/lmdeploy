@@ -198,7 +198,8 @@ class EngineLoop:
         self.has_runable_event.set()
 
     def reset_runtime_state(self):
-        """Discard request-local scheduling state after sleep cancels sessions."""
+        """Discard request-local scheduling state after sleep cancels
+        sessions."""
         self.inputs_maker.reset_runtime_state()
 
     @staticmethod
