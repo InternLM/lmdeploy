@@ -34,6 +34,7 @@ class ToolParser:
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
+        self._args_payload_key: str = ''
         self._args_payload_start: int = -1
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
@@ -61,6 +62,7 @@ class ToolParser:
         self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
         self._args_emitted_len = 0
+        self._args_payload_key = ''
         self._args_payload_start = -1
         self._tool_payload = ''
 
@@ -69,6 +71,7 @@ class ToolParser:
         self._active_tool_call_id = ''
         self._name_emitted = False
         self._args_emitted_len = 0
+        self._args_payload_key = ''
         self._args_payload_start = -1
         self._tool_payload = ''
 
@@ -147,9 +150,16 @@ class ToolParser:
         if 'arguments' in obj:
             args_key = 'arguments'
         elif 'parameters' in obj:
+            if not final:
+                return out
             args_key = 'parameters'
         else:
             return out
+
+        if args_key != self._args_payload_key:
+            self._args_payload_key = args_key
+            self._args_payload_start = -1
+            self._args_emitted_len = 0
 
         if self._args_payload_start < 0:
             self._args_payload_start = self._find_json_key_value_start(raw_payload, args_key)

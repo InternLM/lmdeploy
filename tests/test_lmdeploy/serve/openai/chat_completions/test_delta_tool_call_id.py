@@ -1,18 +1,37 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
+
+from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
+
+
+class _TestToolParser(ToolParser):
+    def get_tool_open_tag(self): return None
+    def get_tool_close_tag(self): return None
+    def get_tool_payload_format(self): return 'json'
+    def decode_tool_incremental(self, added_text, *, final): return []
+    def parse_tool_call_complete(self, payload): return self._parse_tool_call_complete_json(payload)
+
+
+def _stream_argument_fragments(chunks, *, final_on_last):
+    parser = _TestToolParser()
+    parser.start_tool_call()
+    fragments = []
+    for idx, chunk in enumerate(chunks):
+        deltas = parser._decode_tool_incremental_json(chunk, final=final_on_last and idx == len(chunks) - 1)
+        fragments.extend(delta.function.arguments for delta in deltas if delta.function and delta.function.arguments)
+    return fragments
+
+
+def _complete_arguments(payload):
+    call = _TestToolParser._parse_tool_call_complete_json(payload)
+    return json.loads(call.function.arguments)
+
 
 def test_decode_tool_incremental_json_id_only_on_first_chunk():
     """When streaming a tool call, id should appear only on the name-delta
     chunk, not on subsequent argument chunks."""
-    from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
 
-    class TestToolParser(ToolParser):
-        def get_tool_open_tag(self): return None
-        def get_tool_close_tag(self): return None
-        def get_tool_payload_format(self): return 'json'
-        def decode_tool_incremental(self, added_text, *, final): return []
-        def parse_tool_call_complete(self, payload): return None
-
-    parser = TestToolParser()
+    parser = _TestToolParser()
     parser.start_tool_call()
 
     # Step 1: feed partial JSON with name
@@ -33,35 +52,77 @@ def test_decode_tool_incremental_json_id_only_on_first_chunk():
 
 
 def test_decode_tool_incremental_json_streams_empty_arguments():
-    from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
-
-    class TestToolParser(ToolParser):
-        def get_tool_open_tag(self): return None
-        def get_tool_close_tag(self): return None
-        def get_tool_payload_format(self): return 'json'
-        def decode_tool_incremental(self, added_text, *, final): return []
-        def parse_tool_call_complete(self, payload): return None
-
     for arguments in ('{}', '[]', 'null'):
-        parser = TestToolParser()
-        parser.start_tool_call()
-
-        deltas = parser._decode_tool_incremental_json(
-            '{"name":"f","arguments":' + arguments + '}',
-            final=True,
+        argument_fragments = _stream_argument_fragments(
+            ['{"name":"f","arguments":' + arguments + '}'],
+            final_on_last=True,
         )
-        argument_fragments = [
-            delta.function.arguments for delta in deltas if delta.function and delta.function.arguments
-        ]
 
         assert argument_fragments == [arguments]
+
+
+def test_decode_tool_incremental_json_streams_arguments_before_payload_complete():
+    payload = '{"name":"f","arguments":{"city":"New York","units":"c"}}'
+    fragments = _stream_argument_fragments(
+        [
+            '{"name":"f","arguments":{"city":"Ne',
+            'w York","units":"c"}',
+        ],
+        final_on_last=False,
+    )
+
+    assert fragments
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
+
+
+def test_decode_tool_incremental_json_streams_nested_and_escaped_arguments():
+    args = {'outer': {'items': [1, {'text': 'a"b'}], 'path': 'C:\\tmp'}}
+    payload = '{"name":"f","arguments":' + json.dumps(args) + '}'
+    body_without_outer_close = payload[:-1]
+    split_at = body_without_outer_close.find('a\\"b')
+    fragments = _stream_argument_fragments(
+        [
+            body_without_outer_close[:split_at + 2],
+            body_without_outer_close[split_at + 2:],
+        ],
+        final_on_last=False,
+    )
+
+    assert fragments
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
+
+
+def test_decode_tool_incremental_json_streams_parameters_fallback_when_final():
+    payload = '{"name":"f","parameters":{"p":1}}'
+    fragments = _stream_argument_fragments(
+        [
+            '{"name":"f","parameters":{"p":',
+            '1}}',
+        ],
+        final_on_last=True,
+    )
+
+    assert fragments
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
+
+
+def test_decode_tool_incremental_json_prefers_arguments_over_parameters():
+    payload = '{"name":"f","parameters":{"p":1},"arguments":{"a":2}}'
+    fragments = _stream_argument_fragments(
+        [
+            '{"name":"f","parameters":{"p":1},',
+            '"arguments":{"a":2}}',
+        ],
+        final_on_last=True,
+    )
+
+    assert fragments
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
 
 
 def test_stream_delta_tool_call_omits_null_id_and_type_in_json():
     """Serialized stream chunks should omit null id/type, not emit them as JSON
     null."""
-    import json
-
     from lmdeploy.serve.openai.protocol import (
         ChatCompletionResponseStreamChoice,
         ChatCompletionStreamResponse,

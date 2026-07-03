@@ -69,7 +69,7 @@ def test_llama3_streaming_emits_arguments_before_json_payload_complete():
 
     parser.stream_chunk('<|python_tag|>', [])
     chunks = [
-        '{"name":"find_user_id_by_name_zip","parameters":{"first_name":"Ch',
+        '{"name":"find_user_id_by_name_zip","arguments":{"first_name":"Ch',
         'en","last_name":"Johnson","zip":77004',
     ]
 
