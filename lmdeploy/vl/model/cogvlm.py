@@ -53,7 +53,7 @@ class CogVLMVisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start, tools=None, chat_template_kwargs=None):
+    def proc_messages(messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
         chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
@@ -70,23 +70,19 @@ class CogVLMVisionModel(VisionModel):
 
         from lmdeploy.model import Vicuna
         llm_chat_template = Vicuna(eoa='</s>', stop_words=chat_template.stop_words)
-        prompt = ''
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for i, msg in enumerate(prompt_messages):
             num_images = msg.pop('num_images', 0)
             if num_images == 0:
                 role = msg['role']
-                msg = llm_chat_template.messages2prompt([msg], sequence_start and i == 0)
+                msg = llm_chat_template.messages2prompt([msg])
                 msg = dict(role=role, content=msg)
-            render_kwargs = dict(chat_template_kwargs) if i == 0 else {}
-            render_kwargs['tools'] = tools if i == 0 else None
-            prompt_i = chat_template.messages2prompt([msg], sequence_start and i == 0, **render_kwargs)
             if num_images > 0:
-                prompt_i = (IMAGE_TOKEN * num_images) + prompt_i
-            prompt += prompt_i
+                msg['content'] = (IMAGE_TOKEN * num_images) + msg['content']
+            prompt_messages[i] = msg
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, tools=None, chat_template_kwargs=None,
-                   **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, tools, chat_template_kwargs)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
