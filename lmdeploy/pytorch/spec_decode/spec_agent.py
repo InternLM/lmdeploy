@@ -541,10 +541,8 @@ class SpecModelAgent(BaseSpecModelAgent):
     def _build_warmup_dp_meta(self, inputs: ModelInputs):
         """Build dp_meta for warmup dummy inputs.
 
-        During warmup all ranks use the same dummy batch size, so the local
-        token count can be broadcast to every rank entry in num_tokens.
-        Must be called inside draft_context so DPMeta.build uses the correct
-        dist groups.
+        During warmup all ranks use the same dummy batch size, so the local token count can be broadcast to every rank
+        entry in num_tokens. Must be called inside draft_context so DPMeta.build uses the correct dist groups.
         """
         draft_dist_config = self.draft_dist_ctx.dist_config
         if draft_dist_config.dp > 1:
