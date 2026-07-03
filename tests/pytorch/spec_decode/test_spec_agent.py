@@ -205,6 +205,54 @@ def test_spec_model_agent_method_when_enabled():
     assert agent.method == specdecode_config.method
 
 
+def test_qwen35_mtp_reuses_main_dist_context(monkeypatch):
+    """Qwen3.5 MTP mirrors the target topology, so it should share groups."""
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import base as base_mod
+
+    dist_config = DistConfig(dp=2, ep=2)
+    dist_ctx = DistContext(rank=1, dp_rank=1, dist_config=dist_config, ep_gpu_group=object())
+    specdecode_config = SpecDecodeConfig(model='draft-model',
+                                         method='qwen3_5_mtp',
+                                         dist_config=DistConfig(dp=2, ep=2),
+                                         num_speculative_tokens=3)
+
+    def fail_build(*args, **kwargs):
+        raise AssertionError('qwen3_5_mtp should not build a separate draft DistContext')
+
+    monkeypatch.setattr(base_mod.DistContext, 'build', staticmethod(fail_build))
+
+    assert base_mod._build_draft_dist_ctx(dist_ctx, specdecode_config) is dist_ctx
+
+
+def test_non_qwen35_mtp_builds_draft_dist_context(monkeypatch):
+    """Other speculative methods keep their separate draft distribution
+    path."""
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import base as base_mod
+
+    main_dist_config = DistConfig(dp=2, ep=2)
+    draft_dist_config = DistConfig()
+    dist_ctx = DistContext(rank=1, dp_rank=1, dist_config=main_dist_config)
+    specdecode_config = SpecDecodeConfig(model='draft-model',
+                                         method='mtp',
+                                         dist_config=draft_dist_config,
+                                         num_speculative_tokens=3)
+    draft_dist_ctx = DistContext(rank=1, dist_config=draft_dist_config)
+    build_calls = []
+
+    def fake_build(*, rank, dist_config):
+        build_calls.append((rank, dist_config))
+        return draft_dist_ctx
+
+    monkeypatch.setattr(base_mod.DistContext, 'build', staticmethod(fake_build))
+
+    assert base_mod._build_draft_dist_ctx(dist_ctx, specdecode_config) is draft_dist_ctx
+    assert build_calls == [(dist_ctx.rank, draft_dist_config)]
+
+
 def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     """DP=1 non-last chunks should keep the local shortcut."""
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
