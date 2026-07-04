@@ -151,7 +151,7 @@ class ResponseParser:
         Returns:
             A list of ``(delta_message, tool_calls_emitted)`` pairs. Return
             ``[]`` when this engine step produces no visible delta (for example
-            while buffering a partial protocol tag).
+            while buffering protocol syntax or tool-call payload).
         """
         raise NotImplementedError
 
@@ -303,7 +303,7 @@ class BaseResponseParser(ResponseParser):
             from this stream step. Multiple entries may be returned when one
             engine chunk contains reasoning, content, and tool-call segments.
             Return ``[]`` when this engine step produces no visible delta (for
-            example while buffering a partial protocol tag).
+            example while buffering protocol syntax or tool-call payload).
         """
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty

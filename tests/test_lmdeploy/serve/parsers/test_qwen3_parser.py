@@ -166,10 +166,11 @@ class TestQwenResponseParserStreaming:
         for (delta_text, *_) in reference_chunks:
             if delta_text is None:
                 continue
-            for delta_msg, tool_emitted in response_parser.stream_chunk(
+            deltas = response_parser.stream_chunk(
                 delta_text=delta_text,
                 delta_token_ids=[],
-            ):
+            )
+            for delta_msg, tool_emitted in deltas:
                 if delta_msg is None:
                     continue
                 if delta_msg.reasoning_content is not None:
@@ -290,6 +291,33 @@ class TestQwenResponseParserStreaming:
                     assert delta_msg.tool_calls[0].function is not None
                     assert delta_msg.tool_calls[0].function.name == 'get_weather'
             assert tool_seen is True
+        finally:
+            cls.reasoning_parser_cls = old_reasoning_cls
+            cls.tool_parser_cls = old_tool_cls
+
+    def test_stream_chunk_returns_empty_list_when_tool_syntax_has_no_visible_delta(self):
+        cls = ResponseParserManager.get('default')
+        old_reasoning_cls = cls.reasoning_parser_cls
+        old_tool_cls = cls.tool_parser_cls
+        try:
+            cls.reasoning_parser_cls = None
+            cls.tool_parser_cls = ToolParserManager.get('qwen3')
+            request = ChatCompletionRequest(
+                model=MODEL_ID,
+                messages=[],
+                stream=True,
+                tool_choice='auto',
+                chat_template_kwargs={'enable_thinking': False},
+            )
+            parser = cls(request=request)
+
+            assert parser.stream_chunk(delta_text='<tool_call>', delta_token_ids=[1]) == []
+            assert parser.stream_chunk(delta_text='\n{"name": "get', delta_token_ids=[2, 3]) == []
+
+            deltas = parser.stream_chunk(delta_text='_weather"', delta_token_ids=[4])
+            delta_msg, tool_emitted = first_stream_delta(deltas)
+            assert tool_emitted is True
+            assert delta_msg.tool_calls[0].function.name == 'get_weather'
         finally:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
