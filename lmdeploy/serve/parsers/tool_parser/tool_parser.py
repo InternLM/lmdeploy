@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import partial_json_parser
 import shortuuid
 from mmengine import Registry
-from partial_json_parser.core.options import Allow
 
 from lmdeploy.serve.openai.protocol import (
     DeltaFunctionCall,
@@ -24,6 +23,12 @@ if TYPE_CHECKING:
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
 
 
+@dataclass
+class JsonToolSnapshot:
+    func_name: str | None
+    args_delta: str
+
+
 class ToolParser:
     """Base class for model-specific tool parsers."""
 
@@ -32,9 +37,14 @@ class ToolParser:
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
-        self._args_emitted_len: int = 0
-        self._args_payload_key: str = ''
-        self._args_payload_start: int = -1
+        self._json_phase: str = 'payload_start'
+        self._json_key: str | None = None
+        self._json_args_key: str | None = None
+        self._json_value_kind: str | None = None
+        self._json_value_depth: int = 0
+        self._json_value_in_string: bool = False
+        self._json_value_escaped: bool = False
+        self._json_payload_closed: bool = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
@@ -60,19 +70,13 @@ class ToolParser:
         self._active_tool_index += 1
         self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
-        self._args_emitted_len = 0
-        self._args_payload_key = ''
-        self._args_payload_start = -1
-        self._tool_payload = ''
+        self._reset_json_stream_state()
 
     def finish_tool_call(self) -> None:
         """Mark end of a tool-call block."""
         self._active_tool_call_id = ''
         self._name_emitted = False
-        self._args_emitted_len = 0
-        self._args_payload_key = ''
-        self._args_payload_start = -1
-        self._tool_payload = ''
+        self._reset_json_stream_state()
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         """Decode incremental tool payload emitted between tool tags."""
@@ -119,120 +123,189 @@ class ToolParser:
         return isinstance(name, str) and bool(name)
 
     def _decode_tool_incremental_json(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        self._tool_payload += added_text
-        raw_payload = self._tool_payload.lstrip()
-        payload = raw_payload.strip()
-        if not payload:
-            return []
+        """Stream raw JSON tool argument text without requiring completion.
 
-        flags = Allow.ALL if self._name_emitted else Allow.ALL & ~Allow.STR
-        try:
-            obj = partial_json_parser.loads(payload, flags)
-        except partial_json_parser.core.exceptions.MalformedJSON:
-            return []
-        if not isinstance(obj, dict):
-            return []
+        ``_tool_payload`` only keeps unconsumed syntax such as a partial key or
+        delimiter. Argument value bytes are emitted as deltas once they are
+        observed, while string/container state is tracked separately.
+        """
+        self._tool_payload += added_text
+        snapshot, consumed = self._consume_json_payload(self._tool_payload)
+        if consumed > 0:
+            self._tool_payload = self._tool_payload[consumed:]
 
         out: list[DeltaToolCall] = []
-        if not self._name_emitted:
-            fn_name = obj.get('name')
-            if isinstance(fn_name, str) and fn_name:
-                out.append(
-                    DeltaToolCall(
-                        id=self._active_tool_call_id,
-                        index=self._active_tool_index,
-                        type='function',
-                        function=DeltaFunctionCall(name=fn_name),
-                    ))
-                self._name_emitted = True
-
-        if self._args_payload_key:
-            args_key = self._args_payload_key
-        elif 'arguments' in obj:
-            args_key = 'arguments'
-        elif 'parameters' in obj:
-            args_key = 'parameters'
-        else:
-            return out
-
-        if args_key != self._args_payload_key:
-            self._args_payload_key = args_key
-            self._args_payload_start = -1
-            self._args_emitted_len = 0
-
-        if self._args_payload_start < 0:
-            self._args_payload_start = self._find_json_key_value_start(raw_payload, args_key)
-        if self._args_payload_start < 0:
-            return out
-
-        args_payload_end = self._find_json_value_end(raw_payload, self._args_payload_start)
-        if args_payload_end < 0:
-            args_payload_end = len(raw_payload)
-
-        args_payload = raw_payload[self._args_payload_start:args_payload_end]
-        if len(args_payload) > self._args_emitted_len:
-            diff = args_payload[self._args_emitted_len:]
+        if snapshot.func_name and not self._name_emitted:
+            out.append(
+                DeltaToolCall(
+                    id=self._active_tool_call_id,
+                    index=self._active_tool_index,
+                    type='function',
+                    function=DeltaFunctionCall(name=snapshot.func_name),
+                ))
+            self._name_emitted = True
+        if snapshot.args_delta:
             out.append(
                 DeltaToolCall(
                     id=None,
                     index=self._active_tool_index,
                     type=None,
-                    function=DeltaFunctionCall(arguments=diff),
+                    function=DeltaFunctionCall(arguments=snapshot.args_delta),
                 ))
-            self._args_emitted_len = len(args_payload)
         return out
 
-    @staticmethod
-    def _find_json_key_value_start(payload: str, key: str) -> int:
-        depth = 0
-        i = 0
-        while i < len(payload):
-            ch = payload[i]
-            if ch == '"':
-                value, end = ToolParser._read_json_string(payload, i)
-                if end < 0:
-                    return -1
-                j = end
-                while j < len(payload) and payload[j].isspace():
-                    j += 1
-                if depth == 1 and value == key and j < len(payload) and payload[j] == ':':
-                    j += 1
-                    while j < len(payload) and payload[j].isspace():
-                        j += 1
-                    return j if j < len(payload) else -1
-                i = end
-                continue
-            if ch in '{[':
-                depth += 1
-            elif ch in '}]':
-                depth -= 1
-            i += 1
-        return -1
+    def _consume_json_payload(self, payload: str) -> tuple[JsonToolSnapshot, int]:
+        pos = 0
+        args_delta_parts: list[str] = []
+        func_name: str | None = None
+        n = len(payload)
 
-    @staticmethod
-    def _find_json_value_end(payload: str, start: int) -> int:
-        depth = 0
+        while pos < n:
+            if self._json_phase == 'payload_start':
+                pos = self._skip_json_ws(payload, pos)
+                if pos >= n:
+                    break
+                if payload[pos] != '{':
+                    break
+                pos += 1
+                self._json_phase = 'key'
+                continue
+
+            if self._json_phase == 'key':
+                pos = self._skip_json_key_prefix(payload, pos)
+                if pos >= n:
+                    break
+                if payload[pos] == '}':
+                    pos += 1
+                    self._json_phase = 'done'
+                    self._json_payload_closed = True
+                    break
+                if payload[pos] != '"':
+                    break
+                key, end = self._read_json_string(payload, pos)
+                if end < 0:
+                    break
+                self._json_key = key
+                pos = end
+                self._json_phase = 'colon'
+                continue
+
+            if self._json_phase == 'colon':
+                pos = self._skip_json_ws(payload, pos)
+                if pos >= n:
+                    break
+                if payload[pos] != ':':
+                    break
+                pos += 1
+                self._json_phase = 'value_start'
+                continue
+
+            if self._json_phase == 'value_start':
+                pos = self._skip_json_ws(payload, pos)
+                if pos >= n:
+                    break
+                if self._json_key == 'name':
+                    if payload[pos] == '"':
+                        name, end = self._read_json_string(payload, pos)
+                        if end < 0:
+                            break
+                        func_name = name
+                        pos = end
+                        self._json_key = None
+                        self._json_phase = 'key'
+                        continue
+                    self._json_phase = 'skip_value'
+                    continue
+                if self._json_key in ('arguments', 'parameters') and self._json_args_key is None:
+                    self._json_args_key = self._json_key
+                    self._json_phase = 'args_value'
+                    continue
+                self._json_phase = 'skip_value'
+                continue
+
+            if self._json_phase == 'args_value':
+                delta, consumed, complete = self._consume_json_value(payload, pos, emit=True)
+                if delta:
+                    args_delta_parts.append(delta)
+                pos += consumed
+                if complete:
+                    self._json_key = None
+                    self._json_phase = 'key'
+                    self._reset_json_value_state()
+                    continue
+                break
+
+            if self._json_phase == 'skip_value':
+                _, consumed, complete = self._consume_json_value(payload, pos, emit=False)
+                pos += consumed
+                if complete:
+                    self._json_key = None
+                    self._json_phase = 'key'
+                    self._reset_json_value_state()
+                    continue
+                break
+
+            break
+
+        return JsonToolSnapshot(func_name, ''.join(args_delta_parts)), pos
+
+    def _consume_json_value(self, payload: str, start: int, *, emit: bool) -> tuple[str, int, bool]:
+        if start >= len(payload):
+            return '', 0, False
+
         i = start
-        while i < len(payload):
+        if self._json_value_kind is None:
             ch = payload[i]
             if ch == '"':
-                _, end = ToolParser._read_json_string(payload, i)
-                if end < 0:
-                    return -1
-                i = end
-                continue
-            if ch in '{[':
-                depth += 1
-            elif ch in '}]':
-                if depth == 0:
-                    return i
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-            elif depth == 0 and ch in ',':
-                return i
+                self._json_value_kind = 'string'
+                self._json_value_escaped = False
+                i += 1
+            elif ch in '{[':
+                self._json_value_kind = 'container'
+                self._json_value_depth = 1
+                self._json_value_in_string = False
+                self._json_value_escaped = False
+                i += 1
+            else:
+                self._json_value_kind = 'scalar'
+
+        complete = False
+        while i < len(payload):
+            ch = payload[i]
+            if self._json_value_kind == 'string':
+                if self._json_value_escaped:
+                    self._json_value_escaped = False
+                elif ch == '\\':
+                    self._json_value_escaped = True
+                elif ch == '"':
+                    i += 1
+                    complete = True
+                    break
+            elif self._json_value_kind == 'container':
+                if self._json_value_in_string:
+                    if self._json_value_escaped:
+                        self._json_value_escaped = False
+                    elif ch == '\\':
+                        self._json_value_escaped = True
+                    elif ch == '"':
+                        self._json_value_in_string = False
+                elif ch == '"':
+                    self._json_value_in_string = True
+                elif ch in '{[':
+                    self._json_value_depth += 1
+                elif ch in '}]':
+                    self._json_value_depth -= 1
+                    if self._json_value_depth == 0:
+                        i += 1
+                        complete = True
+                        break
+            elif ch in ',}]':
+                complete = True
+                break
             i += 1
-        return -1
+
+        consumed = i - start
+        return payload[start:i] if emit else '', consumed, complete
 
     @staticmethod
     def _read_json_string(payload: str, start: int) -> tuple[str, int]:
@@ -252,6 +325,32 @@ class ToolParser:
                 chars.append(ch)
             i += 1
         return '', -1
+
+    @staticmethod
+    def _skip_json_ws(payload: str, pos: int) -> int:
+        while pos < len(payload) and payload[pos].isspace():
+            pos += 1
+        return pos
+
+    @staticmethod
+    def _skip_json_key_prefix(payload: str, pos: int) -> int:
+        while pos < len(payload) and (payload[pos].isspace() or payload[pos] == ','):
+            pos += 1
+        return pos
+
+    def _reset_json_stream_state(self) -> None:
+        self._tool_payload = ''
+        self._json_phase = 'payload_start'
+        self._json_key = None
+        self._json_args_key = None
+        self._json_payload_closed = False
+        self._reset_json_value_state()
+
+    def _reset_json_value_state(self) -> None:
+        self._json_value_kind = None
+        self._json_value_depth = 0
+        self._json_value_in_string = False
+        self._json_value_escaped = False
 
     @staticmethod
     def _parse_tool_call_complete_json(payload: str) -> ToolCall | None:

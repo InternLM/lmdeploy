@@ -534,8 +534,7 @@ class BaseResponseParser(ResponseParser):
             emit = self._pending
             self._pending = ''
             out = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
-            if (self.profile.tool_payload_format == 'json'
-                and self._is_complete_json_object(self.tool_parser._tool_payload)):
+            if self.profile.tool_payload_format == 'json' and self.tool_parser._json_payload_closed:
                 out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
                 self.tool_parser.finish_tool_call()
                 self._mode = self.MODE_PLAIN
@@ -709,15 +708,3 @@ class BaseResponseParser(ResponseParser):
                         best = k
                     break
         return best
-
-    @staticmethod
-    def _is_complete_json_object(payload: str) -> bool:
-        payload = payload.strip()
-        if not payload:
-            return False
-        decoder = json.JSONDecoder()
-        try:
-            obj, end = decoder.raw_decode(payload)
-        except json.JSONDecodeError:
-            return False
-        return isinstance(obj, dict) and end == len(payload)

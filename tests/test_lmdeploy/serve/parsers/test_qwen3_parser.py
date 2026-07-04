@@ -322,6 +322,18 @@ class TestQwenResponseParserStreaming:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
 
+    def test_decode_incremental_keeps_json_argument_buffer_bounded(self):
+        parser = ToolParserManager.get('qwen3')()
+        parser.start_tool_call()
+        try:
+            parser.decode_tool_incremental('{"name":"write_file","arguments":{"content":"', final=False)
+            for _ in range(200):
+                parser.decode_tool_incremental('x' * 32, final=False)
+
+            assert len(parser._tool_payload) <= 1
+        finally:
+            parser.finish_tool_call()
+
     def test_stream_chunk_reasoning_without_open_tag(self, response_parser):
         """Qwen thinking mode may omit ``<think>`` and start directly with
         reasoning.
