@@ -451,6 +451,45 @@ class TestGlm47ToolParserComplete:
         assert streamed_arguments == complete_tool_call.function.arguments
         assert json.loads(streamed_arguments) == {'age': 12}
 
+    def test_streamed_string_arg_after_typed_arg_uses_own_value(self):
+        parser = Glm47ToolParser()
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'age': {
+                                'type': 'integer'
+                            },
+                            'name': {
+                                'type': 'string'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                ('typed_tool<arg_key>age</arg_key><arg_value>', False),
+                ('1', False),
+                ('2</arg_value><arg_key>name</arg_key><arg_value>', False),
+                ('Alice</arg_value>', False),
+                ('', True),
+            ],
+        )
+
+        assert json.loads(streamed_arguments) == {'age': 12, 'name': 'Alice'}
+
     def test_streamed_arguments_match_complete_parse_for_newline_escaped_quoted_string_value(self):
         parser = Glm47ToolParser()
         request = ChatCompletionRequest(
@@ -708,3 +747,16 @@ class TestGlm47ToolParserComplete:
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_decode_incremental_keeps_open_value_buffer_bounded(self):
+        parser = Glm47ToolParser()
+        parser.start_tool_call()
+        try:
+            parser.decode_tool_incremental('write_file<arg_key>content</arg_key><arg_value>', final=False)
+            for _ in range(200):
+                parser.decode_tool_incremental('x' * 32, final=False)
+
+            buffered = ''.join(parser._payload_parts)
+            assert len(buffered) <= len('</arg_value>') - 1
+        finally:
+            parser.finish_tool_call()

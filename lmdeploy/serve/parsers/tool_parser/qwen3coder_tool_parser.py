@@ -17,10 +17,6 @@ from .xml_tool_parser import XmlToolParser, XmlToolSnapshot
 class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
-    func_prefix = '<function='
-    func_suffix = '</function>'
-    param_prefix = '<parameter='
-    param_suffix = '</parameter>'
     _complete_payload_pattern = re.compile(
         r'^\s*<function=[^\s>\n]+>\s*(?:<parameter=[^\s>\n]+>.*?</parameter>\s*)*</function>\s*$',
         re.DOTALL,
@@ -31,8 +27,11 @@ class Qwen3CoderToolParser(XmlToolParser):
         self._args: dict[str, str] = {}
         self._func_closed = False
         self._arg_name: str | None = None
-        self._value_start = -1
-        self._scan_pos = 0
+        self._value_parts: list[str] = []
+        self._phase = 'function'
+        self._stream_started = False
+        self._stream_pending_ws = ''
+        self._stream_blocked = False
 
     # Qwen3Coder closes tool argument JSON only when the model emits the
     # explicit function end marker (</function>). We intentionally avoid
@@ -53,74 +52,145 @@ class Qwen3CoderToolParser(XmlToolParser):
     def get_tool_payload_format(cls) -> str:
         return 'xml'
 
-    def _parse_payload(self, payload: str, *, final: bool) -> XmlToolSnapshot:
-        content = payload.strip()
-        if not content:
-            return XmlToolSnapshot(self._func_name, dict(self._args), None, '', self._func_closed)
+    def _reset_value_stream_state(self) -> None:
+        self._stream_started = False
+        self._stream_pending_ws = ''
+        self._stream_blocked = False
 
-        if self._func_name is None:
-            func_start = content.find(self.func_prefix)
-            if func_start != -1:
-                name_start = func_start + len(self.func_prefix)
-                name_end = content.find('>', name_start)
-                if name_end != -1:
-                    self._func_name = content[name_start:name_end].strip()
+    def _stream_arg_delta(self, raw: str) -> str:
+        if self._stream_blocked:
+            return ''
 
-        self._parse_params(content)
-        self._func_closed = self.func_suffix in content
-        arg_name, arg_value = self._open_arg(content)
-        return XmlToolSnapshot(self._func_name, dict(self._args), arg_name, arg_value, self._func_closed)
+        schema_type = self._get_param_schema_type(self._func_name, self._arg_name or '')
+        if schema_type not in (None, 'string'):
+            self._stream_blocked = True
+            return ''
 
-    def _complete_open_arg(self, content: str) -> bool:
-        if self._value_start < 0 or not self._arg_name:
-            return False
-        value_end = content.find(self.param_suffix, self._value_start)
-        if value_end == -1:
-            self._in_progress_value = True
-            return False
-        self._args[self._arg_name] = content[self._value_start:value_end].strip()
-        self._arg_name = None
-        self._value_start = -1
-        self._in_progress_value = False
-        self._scan_pos = value_end + len(self.param_suffix)
-        return True
+        text = self._stream_pending_ws + raw
+        self._stream_pending_ws = ''
 
-    def _parse_params(self, content: str) -> None:
-        if self._value_start >= 0 and not self._complete_open_arg(content):
-            return
+        if not self._stream_started:
+            text = text.lstrip()
+            if not text:
+                return ''
+            if text.startswith('"'):
+                self._stream_blocked = True
+                return ''
 
-        while True:
-            param_start = content.find(self.param_prefix, self._scan_pos)
-            if param_start == -1:
-                self._in_progress_value = False
-                return
+        stable = text.rstrip()
+        self._stream_pending_ws = text[len(stable):]
+        if not stable:
+            return ''
 
-            name_start = param_start + len(self.param_prefix)
-            name_end = content.find('>', name_start)
-            if name_end == -1:
-                self._in_progress_value = True
-                return
+        self._stream_started = True
+        return stable
 
-            arg_name = content[name_start:name_end].strip()
-            value_start = name_end + 1
-            value_end = content.find(self.param_suffix, value_start)
-            if value_end == -1:
-                self._arg_name = arg_name
-                self._value_start = value_start
-                self._in_progress_value = True
-                return
+    def _consume_payload(self, payload: str, *, final: bool) -> tuple[XmlToolSnapshot, int]:
+        pos = 0
+        arg_delta_parts: list[str] = []
+        n = len(payload)
 
-            next_pos = value_end + len(self.param_suffix)
-            if arg_name not in self._args:
-                self._args[arg_name] = content[value_start:value_end].strip()
-            self._scan_pos = next_pos
-            self._in_progress_value = False
+        while pos < n:
+            remaining = payload[pos:]
 
-    def _open_arg(self, content: str) -> tuple[str | None, str]:
-        if self._arg_name is None or self._value_start < 0:
-            return None, ''
-        raw_value = self._strip_partial_xml_close_suffix(content[self._value_start:], self.param_suffix)
-        return self._arg_name, raw_value.strip()
+            if self._phase == 'function':
+                if self._func_name is not None:
+                    self._phase = 'arg_start'
+                    continue
+
+                token = '<function='
+                if not remaining.startswith(token):
+                    idx = remaining.find(token)
+                    if idx < 0:
+                        if len(remaining) < len(token) and token.startswith(remaining):
+                            break
+                        break
+                    pos += idx
+                    continue
+
+                gt = remaining.find('>', len(token))
+                if gt < 0:
+                    break
+                self._func_name = remaining[len(token):gt].strip()
+                pos += gt + 1
+                self._phase = 'arg_start'
+                continue
+
+            if self._phase == 'arg_start':
+                param_token = '<parameter='
+                close_token = '</function>'
+
+                param_idx = remaining.find(param_token)
+                close_idx = remaining.find(close_token)
+
+                if close_idx >= 0 and (param_idx < 0 or close_idx < param_idx):
+                    pos += close_idx + len(close_token)
+                    self._func_closed = True
+                    self._phase = 'done'
+                    break
+
+                if param_idx < 0:
+                    if len(remaining) < len(param_token) and param_token.startswith(remaining):
+                        break
+                    break
+
+                if param_idx > 0:
+                    pos += param_idx
+                    continue
+
+                pos += len(param_token)
+                self._phase = 'arg_name'
+                continue
+
+            if self._phase == 'arg_name':
+                gt = remaining.find('>')
+                if gt < 0:
+                    break
+                self._arg_name = remaining[:gt].strip()
+                self._value_parts.clear()
+                self._reset_value_stream_state()
+                pos += gt + 1
+                self._phase = 'arg_value'
+                continue
+
+            if self._phase == 'arg_value':
+                close = '</parameter>'
+                close_idx = remaining.find(close)
+                if close_idx >= 0:
+                    raw = remaining[:close_idx]
+                    if raw:
+                        self._value_parts.append(raw)
+                    if self._arg_name:
+                        self._args[self._arg_name] = ''.join(self._value_parts).strip()
+                    self._arg_name = None
+                    self._value_parts.clear()
+                    self._reset_value_stream_state()
+                    pos += close_idx + len(close)
+                    self._phase = 'arg_start'
+                    continue
+
+                raw_delta = self._strip_partial_xml_close_suffix(remaining, close)
+                if not raw_delta:
+                    break
+                pos += len(raw_delta)
+                self._value_parts.append(raw_delta)
+                stream_delta = self._stream_arg_delta(raw_delta)
+                if stream_delta:
+                    arg_delta_parts.append(stream_delta)
+                break
+
+            break
+
+        return (
+            XmlToolSnapshot(
+                self._func_name,
+                dict(self._args),
+                self._arg_name,
+                ''.join(arg_delta_parts),
+                self._func_closed,
+            ),
+            pos,
+        )
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         func_name, raw_args_dict, _ = self._extract_params(payload)
@@ -138,9 +208,9 @@ class Qwen3CoderToolParser(XmlToolParser):
         content = content.strip()
 
         func_name = None
-        func_start = content.find(self.func_prefix)
+        func_start = content.find('<function=')
         if func_start != -1:
-            name_start = func_start + len(self.func_prefix)
+            name_start = func_start + len('<function=')
             name_end = content.find('>', name_start)
             if name_end != -1:
                 func_name = content[name_start:name_end].strip()
@@ -148,11 +218,11 @@ class Qwen3CoderToolParser(XmlToolParser):
         args_dict = {}
         search_idx = 0
         while True:
-            param_start = content.find(self.param_prefix, search_idx)
+            param_start = content.find('<parameter=', search_idx)
             if param_start == -1:
                 break
 
-            name_start = param_start + len(self.param_prefix)
+            name_start = param_start + len('<parameter=')
             name_end = content.find('>', name_start)
             if name_end == -1:
                 break
@@ -160,12 +230,12 @@ class Qwen3CoderToolParser(XmlToolParser):
             param_name = content[name_start:name_end].strip()
 
             val_start = name_end + 1
-            val_end = content.find(self.param_suffix, val_start)
+            val_end = content.find('</parameter>', val_start)
             if val_end == -1:
                 break
 
             args_dict[param_name] = content[val_start:val_end].strip()
-            search_idx = val_end + len(self.param_suffix)
+            search_idx = val_end + len('</parameter>')
 
-        is_func_closed = self.func_suffix in content
+        is_func_closed = '</function>' in content
         return func_name, args_dict, is_func_closed

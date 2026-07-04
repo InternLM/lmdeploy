@@ -21,7 +21,7 @@ class XmlToolSnapshot:
     func_name: str | None
     completed_args: dict[str, str]
     arg_name: str | None
-    arg_value: str
+    arg_delta: str
     payload_closed: bool
 
 
@@ -39,7 +39,6 @@ class XmlToolParser(ToolParser):
         self._xml_emitted_arg_names: set[str] = set()
         self._payload_parts: list[str] = []
         self._coerced_args: dict[str, Any] = {}
-        self._in_progress_value = False
         self._xml_arg_name: str | None = None
         self._xml_arg_emitted_len = 0
         self._xml_arg_schema_type: str | None = None
@@ -63,7 +62,6 @@ class XmlToolParser(ToolParser):
         self._xml_emitted_arg_names.clear()
         self._payload_parts.clear()
         self._coerced_args.clear()
-        self._in_progress_value = False
         self._reset_arg()
         self._reset_incremental_state()
 
@@ -73,7 +71,13 @@ class XmlToolParser(ToolParser):
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._payload_parts.append(added_text)
         payload = ''.join(self._payload_parts)
-        snapshot = self._parse_payload(payload, final=final)
+        snapshot, consumed = self._consume_payload(payload, final=final)
+
+        if consumed > 0:
+            left = payload[consumed:]
+            self._payload_parts.clear()
+            if left:
+                self._payload_parts.append(left)
 
         out: list[DeltaToolCall] = []
         if snapshot.func_name and not self._name_emitted:
@@ -142,49 +146,31 @@ class XmlToolParser(ToolParser):
             self._xml_emitted_arg_names.add(key)
 
     def _append_open_arg(self, json_fragments: list[str], snapshot: XmlToolSnapshot) -> None:
-        if snapshot.arg_name is None:
+        if snapshot.arg_name is None or not snapshot.arg_delta:
             return
 
         if self._xml_arg_name == snapshot.arg_name:
-            value_text = self._streaming_value_text(snapshot.arg_value, self._xml_arg_schema_type)
-            if value_text is None or len(value_text) <= self._xml_arg_emitted_len:
-                return
-            diff = value_text[self._xml_arg_emitted_len:]
-            json_fragments.append(json.dumps(diff, ensure_ascii=False)[1:-1])
-            self._xml_arg_emitted_len = len(value_text)
+            json_fragments.append(json.dumps(snapshot.arg_delta, ensure_ascii=False)[1:-1])
+            self._xml_arg_emitted_len += len(snapshot.arg_delta)
             return
 
         if snapshot.arg_name in self._xml_emitted_arg_names:
             return
 
         schema_type = self._get_param_schema_type(snapshot.func_name, snapshot.arg_name)
-        value_text = self._streaming_value_text(snapshot.arg_value, schema_type)
-        if value_text is None or value_text == '':
+        if schema_type not in (None, 'string'):
             return
 
         self._append_json_start(json_fragments)
         prefix = ', ' if len(self._xml_emitted_arg_names) > 0 else ''
         json_fragments.append(f'{prefix}"{snapshot.arg_name}": "')
-        diff = json.dumps(value_text, ensure_ascii=False)[1:-1]
+        diff = json.dumps(snapshot.arg_delta, ensure_ascii=False)[1:-1]
         json_fragments.append(diff)
         self._xml_emitted_arg_names.add(snapshot.arg_name)
         self._xml_arg_name = snapshot.arg_name
-        self._xml_arg_emitted_len = len(value_text)
+        self._xml_arg_emitted_len = len(snapshot.arg_delta)
         self._xml_arg_schema_type = schema_type
         self._xml_arg_quote_opened = True
-
-    @staticmethod
-    def _streaming_value_text(raw_value: str, schema_type: str | None) -> str | None:
-        stripped_value = raw_value.lstrip()
-        if not stripped_value:
-            return None
-        if stripped_value.startswith('"'):
-            return None
-        if schema_type == 'string' and raw_value != raw_value.strip():
-            return None
-        if schema_type in (None, 'string'):
-            return raw_value
-        return None
 
     def _reset_arg(self) -> None:
         self._xml_arg_name = None
@@ -326,6 +312,7 @@ class XmlToolParser(ToolParser):
     def _close_json_on_final(self) -> bool:
         return True
 
-    def _parse_payload(self, payload: str, *, final: bool) -> XmlToolSnapshot:
-        """Parse accumulated inner tool payload into raw XML tool state."""
+    def _consume_payload(self, payload: str, *, final: bool) -> tuple[XmlToolSnapshot, int]:
+        """Parse available XML payload text and return consumed character
+        count."""
         raise NotImplementedError

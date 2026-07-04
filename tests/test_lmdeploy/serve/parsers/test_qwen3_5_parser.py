@@ -376,6 +376,44 @@ null
         assert streamed_arguments == complete_tool_call.function.arguments
         assert json.loads(streamed_arguments) == {'age': 12}
 
+    def test_streamed_string_parameter_after_typed_parameter_uses_own_value(self):
+        parser = Qwen3CoderToolParser()
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'age': {
+                                'type': 'integer'
+                            },
+                            'name': {
+                                'type': 'string'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+
+        streamed_arguments = _stream_tool_arguments(
+            parser,
+            [
+                '<function=typed_tool><parameter=age>',
+                '1',
+                '2</parameter><parameter=name>',
+                'Alice</parameter></function>',
+            ],
+        )
+
+        assert json.loads(streamed_arguments) == {'age': 12, 'name': 'Alice'}
+
     def test_streamed_arguments_match_complete_parse_for_newline_escaped_quoted_string_value(self):
         parser = Qwen3CoderToolParser()
         payload = r'<function=find_user><parameter=name>"A\nB"</parameter></function>'
@@ -543,3 +581,16 @@ null
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
+
+    def test_decode_incremental_keeps_open_value_buffer_bounded(self):
+        parser = Qwen3CoderToolParser()
+        parser.start_tool_call()
+        try:
+            parser.decode_tool_incremental('<function=write_file><parameter=content>', final=False)
+            for _ in range(200):
+                parser.decode_tool_incremental('x' * 32, final=False)
+
+            buffered = ''.join(parser._payload_parts)
+            assert len(buffered) <= len('</parameter>') - 1
+        finally:
+            parser.finish_tool_call()
