@@ -155,7 +155,7 @@ class Glm47ToolParser(XmlToolParser):
 
         # Open value: keep any partial "</arg_value>" suffix buffered instead
         # of emitting it as argument text.
-        raw_end = self._trim_partial_xml_close_suffix(payload, pos, '</arg_value>')
+        raw_end = self._trim_partial_close_tag_suffix(payload, pos, '</arg_value>')
         if raw_end == pos:
             return None, True
 

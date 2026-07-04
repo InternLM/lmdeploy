@@ -147,7 +147,7 @@ class Qwen3CoderToolParser(XmlToolParser):
 
         # Open value: keep any partial "</parameter>" suffix buffered instead
         # of emitting it as argument text.
-        raw_end = self._trim_partial_xml_close_suffix(payload, pos, '</parameter>')
+        raw_end = self._trim_partial_close_tag_suffix(payload, pos, '</parameter>')
         if raw_end == pos:
             return None, True
 

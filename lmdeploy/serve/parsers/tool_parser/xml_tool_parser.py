@@ -34,15 +34,14 @@ class XmlToolParser(ToolParser):
     def __init__(self):
         super().__init__()
         self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
-        self._xml_has_emitted_json_start = False
-        self._xml_json_closed = False
-        self._xml_emitted_arg_names: set[str] = set()
+        self._has_emitted_json_start = False
+        self._json_closed = False
+        self._emitted_arg_names: set[str] = set()
         self._payload_parts: list[str] = []
         self._coerced_args: dict[str, Any] = {}
-        self._xml_arg_name: str | None = None
-        self._xml_arg_emitted_len = 0
-        self._xml_arg_schema_type: str | None = None
-        self._xml_arg_quote_opened = False
+        self._streamed_arg_name: str | None = None
+        self._streamed_arg_emitted_len = 0
+        self._streamed_arg_quote_opened = False
         self._payload_closed = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
@@ -51,16 +50,16 @@ class XmlToolParser(ToolParser):
 
     def start_tool_call(self) -> None:
         super().start_tool_call()
-        self._reset_xml_stream_state()
+        self._reset_stream_state()
 
     def finish_tool_call(self) -> None:
         super().finish_tool_call()
-        self._reset_xml_stream_state()
+        self._reset_stream_state()
 
-    def _reset_xml_stream_state(self) -> None:
-        self._xml_has_emitted_json_start = False
-        self._xml_json_closed = False
-        self._xml_emitted_arg_names.clear()
+    def _reset_stream_state(self) -> None:
+        self._has_emitted_json_start = False
+        self._json_closed = False
+        self._emitted_arg_names.clear()
         self._payload_parts.clear()
         self._coerced_args.clear()
         self._payload_closed = False
@@ -149,12 +148,12 @@ class XmlToolParser(ToolParser):
         self._append_completed_args(json_fragments, completed_args)
         self._append_open_arg(json_fragments, snapshot)
 
-        if should_close and not self._xml_has_emitted_json_start:
+        if should_close and not self._has_emitted_json_start:
             json_fragments.append('{')
-            self._xml_has_emitted_json_start = True
-        if should_close and self._xml_has_emitted_json_start and not self._xml_json_closed:
+            self._has_emitted_json_start = True
+        if should_close and self._has_emitted_json_start and not self._json_closed:
             json_fragments.append('}')
-            self._xml_json_closed = True
+            self._json_closed = True
 
         if json_fragments:
             out.append(
@@ -167,45 +166,45 @@ class XmlToolParser(ToolParser):
         return out
 
     def _append_json_start(self, json_fragments: list[str]) -> None:
-        if not self._xml_has_emitted_json_start:
+        if not self._has_emitted_json_start:
             json_fragments.append('{')
-            self._xml_has_emitted_json_start = True
+            self._has_emitted_json_start = True
 
     def _append_finished_arg(self, json_fragments: list[str], completed_args: dict[str, Any]) -> None:
-        arg_name = self._xml_arg_name
-        if arg_name is None or arg_name not in completed_args or arg_name not in self._xml_emitted_arg_names:
+        arg_name = self._streamed_arg_name
+        if arg_name is None or arg_name not in completed_args or arg_name not in self._emitted_arg_names:
             return
         value = completed_args[arg_name]
-        if self._xml_arg_quote_opened:
-            if isinstance(value, str) and len(value) > self._xml_arg_emitted_len:
-                diff = value[self._xml_arg_emitted_len:]
+        if self._streamed_arg_quote_opened:
+            if isinstance(value, str) and len(value) > self._streamed_arg_emitted_len:
+                diff = value[self._streamed_arg_emitted_len:]
                 json_fragments.append(json.dumps(diff, ensure_ascii=False)[1:-1])
             json_fragments.append('"')
         else:
             value_text = json.dumps(value, ensure_ascii=False)
-            if len(value_text) > self._xml_arg_emitted_len:
-                json_fragments.append(value_text[self._xml_arg_emitted_len:])
+            if len(value_text) > self._streamed_arg_emitted_len:
+                json_fragments.append(value_text[self._streamed_arg_emitted_len:])
         self._reset_arg()
 
     def _append_completed_args(self, json_fragments: list[str], completed_args: dict[str, Any]) -> None:
         for key, value in completed_args.items():
-            if key in self._xml_emitted_arg_names:
+            if key in self._emitted_arg_names:
                 continue
             self._append_json_start(json_fragments)
-            prefix = ', ' if len(self._xml_emitted_arg_names) > 0 else ''
+            prefix = ', ' if len(self._emitted_arg_names) > 0 else ''
             json_fragments.append(f'{prefix}"{key}": {json.dumps(value, ensure_ascii=False)}')
-            self._xml_emitted_arg_names.add(key)
+            self._emitted_arg_names.add(key)
 
     def _append_open_arg(self, json_fragments: list[str], snapshot: XmlToolSnapshot) -> None:
         if snapshot.arg_name is None or not snapshot.arg_delta:
             return
 
-        if self._xml_arg_name == snapshot.arg_name:
+        if self._streamed_arg_name == snapshot.arg_name:
             json_fragments.append(json.dumps(snapshot.arg_delta, ensure_ascii=False)[1:-1])
-            self._xml_arg_emitted_len += len(snapshot.arg_delta)
+            self._streamed_arg_emitted_len += len(snapshot.arg_delta)
             return
 
-        if snapshot.arg_name in self._xml_emitted_arg_names:
+        if snapshot.arg_name in self._emitted_arg_names:
             return
 
         schema_type = self._get_param_schema_type(snapshot.func_name, snapshot.arg_name)
@@ -213,21 +212,19 @@ class XmlToolParser(ToolParser):
             return
 
         self._append_json_start(json_fragments)
-        prefix = ', ' if len(self._xml_emitted_arg_names) > 0 else ''
+        prefix = ', ' if len(self._emitted_arg_names) > 0 else ''
         json_fragments.append(f'{prefix}"{snapshot.arg_name}": "')
         diff = json.dumps(snapshot.arg_delta, ensure_ascii=False)[1:-1]
         json_fragments.append(diff)
-        self._xml_emitted_arg_names.add(snapshot.arg_name)
-        self._xml_arg_name = snapshot.arg_name
-        self._xml_arg_emitted_len = len(snapshot.arg_delta)
-        self._xml_arg_schema_type = schema_type
-        self._xml_arg_quote_opened = True
+        self._emitted_arg_names.add(snapshot.arg_name)
+        self._streamed_arg_name = snapshot.arg_name
+        self._streamed_arg_emitted_len = len(snapshot.arg_delta)
+        self._streamed_arg_quote_opened = True
 
     def _reset_arg(self) -> None:
-        self._xml_arg_name = None
-        self._xml_arg_emitted_len = 0
-        self._xml_arg_schema_type = None
-        self._xml_arg_quote_opened = False
+        self._streamed_arg_name = None
+        self._streamed_arg_emitted_len = 0
+        self._streamed_arg_quote_opened = False
 
     def _get_param_schema_type(self, func_name: str | None, param_name: str) -> str | None:
         if func_name is None:
@@ -238,7 +235,7 @@ class XmlToolParser(ToolParser):
         return self._resolve_schema_type(param_schema)
 
     @staticmethod
-    def _trim_partial_xml_close_suffix(payload: str, start: int, close_tag: str) -> int:
+    def _trim_partial_close_tag_suffix(payload: str, start: int, close_tag: str) -> int:
         """Return safe value end before any partial close-tag suffix."""
         max_len = min(len(payload) - start, len(close_tag) - 1)
         for suffix_len in range(max_len, 0, -1):
