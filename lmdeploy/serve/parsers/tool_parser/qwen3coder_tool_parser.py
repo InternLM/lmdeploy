@@ -10,7 +10,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlToolParser, XmlToolSnapshot
+from .xml_tool_parser import XmlToolParser
 
 
 @ToolParserManager.register_module(['qwen3coder'])
@@ -25,7 +25,6 @@ class Qwen3CoderToolParser(XmlToolParser):
     def _reset_incremental_state(self) -> None:
         self._func_name: str | None = None
         self._args: dict[str, str] = {}
-        self._func_closed = False
         self._arg_name: str | None = None
         self._value_parts: list[str] = []
         self._phase = 'function'
@@ -85,112 +84,79 @@ class Qwen3CoderToolParser(XmlToolParser):
         self._stream_started = True
         return stable
 
-    def _consume_payload(self, payload: str, *, final: bool) -> tuple[XmlToolSnapshot, int]:
-        pos = 0
-        arg_delta_parts: list[str] = []
-        n = len(payload)
+    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
+        start = payload.find('<function=', pos)
+        if start < 0:
+            return None
 
-        while pos < n:
-            remaining = payload[pos:]
+        name_start = start + len('<function=')
+        name_end = payload.find('>', name_start)
+        if name_end < 0:
+            return None
 
-            if self._phase == 'function':
-                if self._func_name is not None:
-                    self._phase = 'arg_start'
-                    continue
+        self._func_name = payload[name_start:name_end].strip()
+        self._phase = 'arg_start'
+        return name_end + 1
 
-                token = '<function='
-                if not remaining.startswith(token):
-                    idx = remaining.find(token)
-                    if idx < 0:
-                        if len(remaining) < len(token) and token.startswith(remaining):
-                            break
-                        break
-                    pos += idx
-                    continue
+    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+        param_start = payload.find('<parameter=', pos)
+        func_end = payload.find('</function>', pos)
 
-                gt = remaining.find('>', len(token))
-                if gt < 0:
-                    break
-                self._func_name = remaining[len(token):gt].strip()
-                pos += gt + 1
-                self._phase = 'arg_start'
-                continue
+        if func_end >= 0 and (param_start < 0 or func_end < param_start):
+            self._payload_closed = True
+            self._phase = 'done'
+            return func_end + len('</function>')
 
-            if self._phase == 'arg_start':
-                param_token = '<parameter='
-                close_token = '</function>'
+        if param_start < 0:
+            return None
 
-                param_idx = remaining.find(param_token)
-                close_idx = remaining.find(close_token)
+        self._phase = 'arg_name'
+        return param_start + len('<parameter=')
 
-                if close_idx >= 0 and (param_idx < 0 or close_idx < param_idx):
-                    pos += close_idx + len(close_token)
-                    self._func_closed = True
-                    self._phase = 'done'
-                    break
+    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+        name_end = payload.find('>', pos)
+        if name_end < 0:
+            return None
 
-                if param_idx < 0:
-                    if len(remaining) < len(param_token) and param_token.startswith(remaining):
-                        break
-                    break
+        self._arg_name = payload[pos:name_end].strip()
+        self._value_parts.clear()
+        self._reset_value_stream_state()
+        self._phase = 'arg_value'
+        return name_end + 1
 
-                if param_idx > 0:
-                    pos += param_idx
-                    continue
+    def _consume_arg_value(self, payload: str, pos: int, arg_delta_parts: list[str]) -> tuple[int | None, bool]:
+        """Consume a parameter value.
 
-                pos += len(param_token)
-                self._phase = 'arg_name'
-                continue
+        Returns ``(next_pos, should_stop)``. ``should_stop`` is true after
+        streaming an open value delta, because the next bytes may be the
+        parameter close tag and must be checked with the next chunk.
+        """
+        value_end = payload.find('</parameter>', pos)
 
-            if self._phase == 'arg_name':
-                gt = remaining.find('>')
-                if gt < 0:
-                    break
-                self._arg_name = remaining[:gt].strip()
-                self._value_parts.clear()
-                self._reset_value_stream_state()
-                pos += gt + 1
-                self._phase = 'arg_value'
-                continue
+        if value_end >= 0:
+            raw = payload[pos:value_end]
+            if raw:
+                self._value_parts.append(raw)
+            if self._arg_name:
+                self._args[self._arg_name] = ''.join(self._value_parts).strip()
+            self._arg_name = None
+            self._value_parts.clear()
+            self._reset_value_stream_state()
+            self._phase = 'arg_start'
+            return value_end + len('</parameter>'), False
 
-            if self._phase == 'arg_value':
-                close = '</parameter>'
-                close_idx = remaining.find(close)
-                if close_idx >= 0:
-                    raw = remaining[:close_idx]
-                    if raw:
-                        self._value_parts.append(raw)
-                    if self._arg_name:
-                        self._args[self._arg_name] = ''.join(self._value_parts).strip()
-                    self._arg_name = None
-                    self._value_parts.clear()
-                    self._reset_value_stream_state()
-                    pos += close_idx + len(close)
-                    self._phase = 'arg_start'
-                    continue
+        # Open value: keep any partial "</parameter>" suffix buffered instead
+        # of emitting it as argument text.
+        raw_end = self._trim_partial_xml_close_suffix(payload, pos, '</parameter>')
+        if raw_end == pos:
+            return None, True
 
-                raw_delta = self._strip_partial_xml_close_suffix(remaining, close)
-                if not raw_delta:
-                    break
-                pos += len(raw_delta)
-                self._value_parts.append(raw_delta)
-                stream_delta = self._stream_arg_delta(raw_delta)
-                if stream_delta:
-                    arg_delta_parts.append(stream_delta)
-                break
-
-            break
-
-        return (
-            XmlToolSnapshot(
-                self._func_name,
-                dict(self._args),
-                self._arg_name,
-                ''.join(arg_delta_parts),
-                self._func_closed,
-            ),
-            pos,
-        )
+        raw_delta = payload[pos:raw_end]
+        self._value_parts.append(raw_delta)
+        stream_delta = self._stream_arg_delta(raw_delta)
+        if stream_delta:
+            arg_delta_parts.append(stream_delta)
+        return raw_end, True
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         func_name, raw_args_dict, _ = self._extract_params(payload)

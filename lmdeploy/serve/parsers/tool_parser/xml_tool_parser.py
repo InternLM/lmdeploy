@@ -43,6 +43,7 @@ class XmlToolParser(ToolParser):
         self._xml_arg_emitted_len = 0
         self._xml_arg_schema_type: str | None = None
         self._xml_arg_quote_opened = False
+        self._payload_closed = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         self._function_param_schemas = self._build_function_param_schemas(request)
@@ -62,11 +63,61 @@ class XmlToolParser(ToolParser):
         self._xml_emitted_arg_names.clear()
         self._payload_parts.clear()
         self._coerced_args.clear()
+        self._payload_closed = False
         self._reset_arg()
         self._reset_incremental_state()
 
     def _reset_incremental_state(self) -> None:
         """Reset subclass-specific incremental parse state."""
+
+    def _consume_payload(self, payload: str, *, final: bool) -> tuple[XmlToolSnapshot, int]:
+        pos = 0
+        arg_delta_parts: list[str] = []
+
+        while pos < len(payload):
+            if self._phase == 'function':
+                next_pos = self._consume_function(payload, pos, final)
+            elif self._phase == 'arg_start':
+                next_pos = self._consume_arg_start(payload, pos)
+            elif self._phase == 'arg_name':
+                next_pos = self._consume_arg_name(payload, pos)
+            elif self._phase == 'arg_value':
+                next_pos, should_stop = self._consume_arg_value(payload, pos, arg_delta_parts)
+                if next_pos is None:
+                    break
+                pos = next_pos
+                if should_stop:
+                    break
+                continue
+            else:
+                break
+
+            if next_pos is None:
+                break
+            pos = next_pos
+
+        return (
+            XmlToolSnapshot(
+                self._func_name,
+                dict(self._args),
+                self._arg_name,
+                ''.join(arg_delta_parts),
+                self._payload_closed,
+            ),
+            pos,
+        )
+
+    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
+        raise NotImplementedError('XmlToolParser._consume_function has not been implemented!')
+
+    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+        raise NotImplementedError('XmlToolParser._consume_arg_start has not been implemented!')
+
+    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+        raise NotImplementedError('XmlToolParser._consume_arg_name has not been implemented!')
+
+    def _consume_arg_value(self, payload: str, pos: int, arg_delta_parts: list[str]) -> tuple[int | None, bool]:
+        raise NotImplementedError('XmlToolParser._consume_arg_value has not been implemented!')
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._payload_parts.append(added_text)
@@ -187,12 +238,14 @@ class XmlToolParser(ToolParser):
         return self._resolve_schema_type(param_schema)
 
     @staticmethod
-    def _strip_partial_xml_close_suffix(raw_value: str, close_tag: str) -> str:
-        max_len = min(len(raw_value), len(close_tag) - 1)
+    def _trim_partial_xml_close_suffix(payload: str, start: int, close_tag: str) -> int:
+        """Return safe value end before any partial close-tag suffix."""
+        max_len = min(len(payload) - start, len(close_tag) - 1)
         for suffix_len in range(max_len, 0, -1):
-            if close_tag.startswith(raw_value[-suffix_len:]):
-                return raw_value[:-suffix_len]
-        return raw_value
+            suffix_start = len(payload) - suffix_len
+            if close_tag.startswith(payload[suffix_start:]):
+                return suffix_start
+        return len(payload)
 
     def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
         """Build function->parameter schema map from request tools."""
@@ -311,8 +364,3 @@ class XmlToolParser(ToolParser):
 
     def _close_json_on_final(self) -> bool:
         return True
-
-    def _consume_payload(self, payload: str, *, final: bool) -> tuple[XmlToolSnapshot, int]:
-        """Parse available XML payload text and return consumed character
-        count."""
-        raise NotImplementedError
