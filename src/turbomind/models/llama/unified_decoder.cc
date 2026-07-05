@@ -29,24 +29,43 @@ namespace turbomind {
 struct FfnTokenPartition {
     int                 first_token{};
     int                 token_count{};
-    std::vector<size_t> elem_counts;
+    std::vector<size_t> tp_elem_counts;
+    std::vector<size_t> ep_elem_counts;
 
     static FfnTokenPartition
     Make(const std::vector<int>& local_token_nums, int dp_rank, int group_rank, int group_size, size_t hidden_units)
     {
-        const int local_token_num = local_token_nums[dp_rank];
-        const int base            = local_token_num / group_size;
-        const int remainder       = local_token_num % group_size;
+        auto split_count = [group_size](int local_token_num, int rank) {
+            const int base      = local_token_num / group_size;
+            const int remainder = local_token_num % group_size;
+            return base + (rank < remainder ? 1 : 0);
+        };
 
-        const int           first_token = group_rank * base + std::min(group_rank, remainder);
-        const int           token_count = base + (group_rank < remainder ? 1 : 0);
-        std::vector<size_t> elem_counts(group_size);
+        auto first_token = [group_size](int local_token_num, int rank) {
+            const int base      = local_token_num / group_size;
+            const int remainder = local_token_num % group_size;
+            return rank * base + std::min(rank, remainder);
+        };
+
+        const int local_token_num = local_token_nums[dp_rank];
+
+        std::vector<size_t> tp_elem_counts(group_size);
         for (int rank = 0; rank < group_size; ++rank) {
-            const int count   = base + (rank < remainder ? 1 : 0);
-            elem_counts[rank] = static_cast<size_t>(count) * hidden_units;
+            tp_elem_counts[rank] = static_cast<size_t>(split_count(local_token_num, rank)) * hidden_units;
         }
 
-        return FfnTokenPartition{first_token, token_count, std::move(elem_counts)};
+        std::vector<size_t> ep_elem_counts;
+        ep_elem_counts.reserve(local_token_nums.size() * group_size);
+        for (const int dp_token_num : local_token_nums) {
+            for (int rank = 0; rank < group_size; ++rank) {
+                ep_elem_counts.push_back(static_cast<size_t>(split_count(dp_token_num, rank)) * hidden_units);
+            }
+        }
+
+        return FfnTokenPartition{first_token(local_token_num, group_rank),
+                                 split_count(local_token_num, group_rank),
+                                 std::move(tp_elem_counts),
+                                 std::move(ep_elem_counts)};
     }
 };
 
@@ -192,8 +211,8 @@ void UnifiedDecoder::ReduceScatterVResidualRMSnorm(Tensor&                  loca
     TM_CHECK(ep_size_ > 1);
     TM_CHECK(d_comm_);
     TM_CHECK_EQ(local_residual.shape(0), local_hidden_states.shape(0));
-    TM_CHECK_EQ(partition.elem_counts.size(), static_cast<size_t>(d_comm_->n_ranks(attn_tp_group_)));
-    TM_CHECK_EQ(std::accumulate(partition.elem_counts.begin(), partition.elem_counts.end(), size_t{}),
+    TM_CHECK_EQ(partition.tp_elem_counts.size(), static_cast<size_t>(d_comm_->n_ranks(attn_tp_group_)));
+    TM_CHECK_EQ(std::accumulate(partition.tp_elem_counts.begin(), partition.tp_elem_counts.end(), size_t{}),
                 static_cast<size_t>(local_hidden_states.size()));
 
     const auto dtype  = local_hidden_states.dtype();
@@ -202,8 +221,12 @@ void UnifiedDecoder::ReduceScatterVResidualRMSnorm(Tensor&                  loca
     Tensor hidden_slice   = local_hidden_states.slice({partition.first_token, 0}, {partition.token_count, -1});
     Tensor residual_slice = local_residual.slice({partition.first_token, 0}, {partition.token_count, -1});
 
-    d_comm_->ReduceScatterV(
-        local_hidden_states.raw_data(), hidden_slice.raw_data(), partition.elem_counts, dtype, attn_tp_group_, stream);
+    d_comm_->ReduceScatterV(local_hidden_states.raw_data(),
+                            hidden_slice.raw_data(),
+                            partition.tp_elem_counts,
+                            dtype,
+                            attn_tp_group_,
+                            stream);
     TM_CUDA_CHECK(cudaGetLastError());
 
     invokeResidualBiasRMSNorm(hidden_slice.raw_data(),
@@ -227,8 +250,8 @@ void UnifiedDecoder::ResidualRMSnormAllGatherV(Tensor&                  local_hi
     TM_CHECK(ep_size_ > 1);
     TM_CHECK(d_comm_);
     TM_CHECK_EQ(local_residual.shape(0), local_hidden_states.shape(0));
-    TM_CHECK_EQ(partition.elem_counts.size(), static_cast<size_t>(d_comm_->n_ranks(attn_tp_group_)));
-    TM_CHECK_EQ(std::accumulate(partition.elem_counts.begin(), partition.elem_counts.end(), size_t{}),
+    TM_CHECK_EQ(partition.tp_elem_counts.size(), static_cast<size_t>(d_comm_->n_ranks(attn_tp_group_)));
+    TM_CHECK_EQ(std::accumulate(partition.tp_elem_counts.begin(), partition.tp_elem_counts.end(), size_t{}),
                 static_cast<size_t>(local_hidden_states.size()));
 
     const auto dtype  = local_hidden_states.dtype();
@@ -248,8 +271,12 @@ void UnifiedDecoder::ResidualRMSnormAllGatherV(Tensor&                  local_hi
                               stream);
     TM_CUDA_CHECK(cudaGetLastError());
 
-    d_comm_->AllGatherV(
-        hidden_slice.raw_data(), local_hidden_states.raw_data(), partition.elem_counts, dtype, attn_tp_group_, stream);
+    d_comm_->AllGatherV(hidden_slice.raw_data(),
+                        local_hidden_states.raw_data(),
+                        partition.tp_elem_counts,
+                        dtype,
+                        attn_tp_group_,
+                        stream);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -408,14 +435,22 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         std::optional<MoeFfnLayer::ForwardParam> moe_fwd_param;
 
         if (weights.at(layer)->moe_ffn) {
-            moe_fwd_param = MoeFfnLayer::ForwardParam{
-                ffn_hidden_states, ffn_hidden_states, weights.at(layer)->moe_ffn.get(), ffn_layer_ ? 1.f : 0.f, layer};
+            moe_fwd_param = MoeFfnLayer::ForwardParam{ffn_hidden_states,
+                                                      ffn_hidden_states,
+                                                      weights.at(layer)->moe_ffn.get(),
+                                                      ffn_layer_ ? 1.f : 0.f,
+                                                      layer,
+                                                      ep_size_ > 1 ? global_hidden_states : Tensor{},
+                                                      ep_size_ > 1 ? &ffn_partition->ep_elem_counts : nullptr};
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
         if (ffn_layer_ && weights.at(layer)->feed_forward && ffn_hidden_states.shape(0) > 0) {
-            ffn_layer_->forward(
-                {ffn_hidden_states, ffn_hidden_states, weights.at(layer)->feed_forward.get(), (int)layer});
+            auto ffn_output = ffn_hidden_states;
+            if (ep_size_ > 1) {
+                ffn_output = moe_fwd_param->shared_output = core::empty_like(ffn_hidden_states);
+            }
+            ffn_layer_->forward({ffn_hidden_states, ffn_output, weights.at(layer)->feed_forward.get(), (int)layer});
         }
 
         if (moe_fwd_param) {

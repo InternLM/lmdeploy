@@ -63,8 +63,12 @@ struct LlamaLinear::Impl {
         return {B, desc_B, V, desc_V};
     }
 
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>
-    GetOperandA(const LinearWeight& weight, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>  //
+    GetOperandA(const LinearWeight& weight,
+                const Tensor&       input,
+                Buffer_<int>        indices,
+                const Buffer_<int>& offsets,
+                bool                indices_padded)
     {
         auto st = core::Context::stream().handle();
 
@@ -84,13 +88,13 @@ struct LlamaLinear::Impl {
         // SM100+ grouped bf16/fp16: use chunk() weights so Activation() runs separately.
         const bool is_cublas_grouped = offsets && getSMVersion() == 100 && weight.weight_format.dtype == kBfloat16;
         if (indices && (A.dtype() == kFloat8_e4m3 || is_cublas_grouped)) {
-            const auto [bsz, k] = A.shapes(0, 1);
-            const int e         = indices.size() / bsz;
-            Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), e, st));
+            const int  k                = A.shape(1);
+            const int* num_valid_tokens = indices_padded ? offsets.data() + offsets.size() - 1 : nullptr;
+            Tensor     A_e              = {{m, k}, A.dtype(), kDEVICE};
+            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), m, num_valid_tokens, st));
             if (U) {
                 Tensor U_e;
-                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
+                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), m, num_valid_tokens, st));
                 U = U_e;
             }
             A       = A_e;
@@ -117,7 +121,8 @@ struct LlamaLinear::Impl {
                  const Tensor&       input,  //
                  const LinearWeight& weight,
                  const Buffer_<int>& indices,
-                 const Buffer_<int>& offsets)
+                 const Buffer_<int>& offsets,
+                 bool                indices_padded)
     {
         TM_FUNCTION_SCOPE();
         using namespace gemm;
@@ -129,7 +134,7 @@ struct LlamaLinear::Impl {
         op.quant_b   = MakeQuantDesc(weight.weight_format);
         op.batch_dim = 0;
 
-        auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, indices, offsets);
+        auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, indices, offsets, indices_padded);
         auto&& [B, desc_B, V, desc_V] = GetOperandB(weight);
 
         Tensor& D = output;
@@ -195,7 +200,8 @@ void LlamaLinear::Forward(const Tensor&       input,  //
                           const LinearWeight& weight,
                           const Buffer_<int>& indices,
                           const Buffer_<int>& offsets,
-                          Ref<Tensor>         output)
+                          Ref<Tensor>         output,
+                          bool                indices_padded)
 {
     Tensor in = input.view({-1, input.shape(-1)});
 
@@ -203,7 +209,7 @@ void LlamaLinear::Forward(const Tensor&       input,  //
         output.get() = output.get().view({-1, output.get().shape(-1)});
     }
 
-    impl_->Forward(output.get(), in, weight, indices, offsets);
+    impl_->Forward(output.get(), in, weight, indices, offsets, indices_padded);
 }
 
 void LlamaLinear::set_measure(bool measure)

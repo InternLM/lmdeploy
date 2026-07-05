@@ -571,6 +571,32 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 template<int N>
 inline constexpr std::integral_constant<int, N> _Int{};
 
+void invokeMoeScanKernel(int*         f2n,
+                         int*         f2E,
+                         int*         en2f,
+                         int*         offsets,
+                         int8_t*      masks,
+                         const int*   accum,
+                         int          tokens,
+                         int          tokens_padded,
+                         int          experts,
+                         cudaStream_t st)
+{
+    constexpr int base_log_tile = 9;
+    int           log_tile      = base_log_tile;
+    while (((tokens_padded + (1 << log_tile) - 1) >> log_tile) > kMoeGateMaxTiles) {
+        ++log_tile;
+    }
+    const int tiles = ceil_div(tokens_padded, 1 << log_tile);
+
+    constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;
+    const dim3    blocks(tiles, experts + 1);
+
+    MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(
+        f2n, f2E, en2f, offsets, masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
+    TM_CUDA_CHECK(cudaGetLastError());
+}
+
 void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                       int*         f2E,            // [e*n] -> E
                       int*         en2f,           // [e,n] -> n*e
@@ -885,8 +911,13 @@ template<int vec_size, int block_dim, class T>
 __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
                                 const T*   src,  // [  n, d]
                                 const int* f2n,  // [e*n] :: e*n -> n
+                                const int* num_valid_tokens,
                                 int        dims)
 {
+    if (num_valid_tokens && blockIdx.x >= __ldg(num_valid_tokens)) {
+        return;
+    }
+
     using Vec        = Array<T, vec_size>;
     const int64_t bi = blockIdx.x;
 
@@ -899,23 +930,32 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
     }
 }
 
-void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatch(Ref<Tensor>   out_,
+                       const Tensor& src,
+                       const int*    f2n,
+                       int           num_worst_tokens,
+                       const int*    num_valid_tokens,
+                       cudaStream_t  st)
 {
     auto& out    = out_.get();
     auto  invoke = [&](auto t) {
         using T                = decltype(t);
-        auto [num, dim]        = src.shapes(0, 1);
+        const int     dim      = src.shape(1);
         constexpr int threads  = 256;
         constexpr int vec_size = 16 / sizeof(T);
-        // std::cout << num * expert_per_token << " " << dim << "\n";
-        MoeGatherKernel<vec_size, threads><<<num * expert_per_token, threads, 0, st>>>(  //
+        // f2n/out have num_worst_tokens rows; num_valid_tokens limits rows that read f2n.
+        MoeGatherKernel<vec_size, threads><<<num_worst_tokens, threads, 0, st>>>(  //
             (T*)out.raw_data(),
             (const T*)src.raw_data(),
             f2n,
+            num_valid_tokens,
             dim / vec_size);
         TM_CUDA_CHECK(cudaGetLastError());
     };
     TM_CHECK_EQ(src.dtype(), out.dtype());
+    if (num_worst_tokens == 0) {
+        return;
+    }
     const auto elem_size = byte_size(src.dtype());
     if (elem_size == sizeof(uint16_t)) {
         invoke(uint16_t{});
@@ -958,10 +998,14 @@ __global__ void MoeDispatchScales(
 }
 
 template<class T>
-__global__ void
-MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride, const int* f2n, int dim)
+__global__ void MoeDispatchScalesNonaligned(
+    T* dst, const T* src, int dst_stride, int src_stride, const int* f2n, const int* num_valid_tokens, int dim)
 {
     const int bi = blockIdx.x;
+    if (num_valid_tokens && bi >= __ldg(num_valid_tokens)) {
+        return;
+    }
+
     const int ti = f2n[bi];
 
     if (threadIdx.x < dim) {
@@ -969,14 +1013,20 @@ MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride
     }
 }
 
-void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatchScales(Ref<Tensor>   out_,
+                             const Tensor& src,
+                             const int*    f2n,
+                             int           num_worst_tokens,
+                             const int*    num_valid_tokens,
+                             cudaStream_t  st)
 {
     using T                 = float;
     constexpr int alignment = 16 / sizeof(T);
 
-    auto [dim, num] = src.shapes(0, 1);
+    const int dim = src.shape(0);
 
-    const int size         = num * expert_per_token;
+    // Keep the scale layout aligned to num_worst_tokens; num_valid_tokens limits rows that read f2n.
+    const int size         = num_worst_tokens;
     const int aligned_size = round_up<int>(size, alignment);
 
     auto& out = out_.get();
@@ -991,6 +1041,9 @@ void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n
     }
 
     TM_CHECK_LE(dim, 1024);
+    if (size == 0) {
+        return;
+    }
     const int threads = round_up<int>(dim, WARP_SIZE);
     const int blocks  = size;
 
@@ -1001,6 +1054,7 @@ void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n
                                                             out.stride(0),
                                                             src.stride(0),
                                                             f2n,
+                                                            num_valid_tokens,
                                                             dim);
 
     TM_CUDA_CHECK(cudaGetLastError());

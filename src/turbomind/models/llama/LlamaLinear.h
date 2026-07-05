@@ -22,7 +22,8 @@ public:
                  const LinearWeight& weight,
                  const Buffer_<int>& indices,
                  const Buffer_<int>& offsets,
-                 Ref<Tensor>         output);
+                 Ref<Tensor>         output,
+                 bool                indices_padded = false);
 
     void set_measure(bool measure);
 

@@ -44,6 +44,8 @@ static inline ncclDataType_t to_nccl_dtype(DataType type)
             return ncclBfloat16;
         case kUint8:
             return ncclUint8;
+        case kInt64:
+            return ncclInt64;
         default:
             throw std::runtime_error("not supported");
     }
@@ -451,6 +453,16 @@ public:
                    cudaStream_t stream) override
     {
         NCCLCHECK(ncclBroadcast(sendbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
+    }
+
+    void GroupStart() override
+    {
+        NCCLCHECK(ncclGroupStart());
+    }
+
+    void GroupEnd() override
+    {
+        NCCLCHECK(ncclGroupEnd());
     }
 
 private:

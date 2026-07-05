@@ -138,6 +138,9 @@ public:
     {
         throw std::runtime_error("not implemented");
     }
+
+    virtual void GroupStart() {}
+    virtual void GroupEnd() {}
 };
 
 class DeviceComm {
