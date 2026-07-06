@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -20,6 +20,65 @@ def _decode_padded_and_offset(is_padded, extra_topk_length, topk_length,
 
 
 @dataclass
+class _V4DecodeWindowMeta:
+    """Layer-invariant decode metadata for the local FP8 window cache."""
+
+    is_padded: torch.Tensor = None
+    batch_offsets: torch.Tensor = None
+    window_pos: torch.Tensor = None
+    indices: torch.Tensor = None
+    topk_length: torch.Tensor = None
+
+
+@dataclass
+class _V4DecodeCompressMeta:
+    """Layer-invariant decode fallback for compressed KV attention."""
+
+    indices: torch.Tensor = None
+    topk_length: torch.Tensor = None
+
+
+@dataclass
+class _V4PrefillWindowMeta:
+    """Layer-invariant prefill metadata for local-window attention and
+    writes."""
+
+    topk: torch.Tensor = None
+    slot: torch.Tensor = None
+    ring_pos: torch.Tensor = None
+
+
+@dataclass
+class _V4PrefillSharedMeta:
+    """Prefill tensors shared by r4/r128 compressed attention paths."""
+
+    uncompressed_kv_lens: torch.Tensor = None
+    compress_offset: torch.Tensor = None
+
+
+@dataclass
+class _V4PrefillRatioMeta:
+    """Prefill metadata for one compression ratio."""
+
+    max_flat_kv_len: int = None
+    total_flat_kv_tokens: int = None
+    compress_topk: torch.Tensor = None
+    num_vis_compress: torch.Tensor = None
+    flat_kv_lens: torch.Tensor = None
+    cu_seqlens_k: torch.Tensor = None
+    repeat_cu: torch.Tensor = None
+
+
+@dataclass
+class _V4RatioMeta:
+    """Metadata and cached scheduler state keyed by compression ratio."""
+
+    decode: _V4DecodeCompressMeta = None
+    prefill: _V4PrefillRatioMeta = None
+    flash_mla_sched_meta: object = None
+
+
+@dataclass
 class CudaV4AttentionMetadata(V4AttentionMetadata):
     """CUDA-specific V4 attention metadata with pre-computed indices.
 
@@ -28,48 +87,17 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     recompute them per layer.
     """
 
-    # --- Decode pre-computed (all int32 to eliminate per-layer .to(torch.int32)) ---
-    is_padded: torch.Tensor = None                      # [bsz] bool
-    batch_offsets: torch.Tensor = None                  # [bsz, 1, 1] int32
-    decode_window_pos: torch.Tensor = None              # [bsz] int32 (pre-computed remainder)
-    extra_indices_in_kvcache: torch.Tensor = None       # [bsz, 1, window_size] int32
-    extra_topk_length: torch.Tensor = None              # [bsz] int32
-    compress_fallback_indices_r4: torch.Tensor = None   # [bsz, 1, max_comp] int32
-    compress_fallback_topk_r4: torch.Tensor = None      # [bsz] int32
-    compress_fallback_indices_r128: torch.Tensor = None  # [bsz, 1, max_comp] int32
-    compress_fallback_topk_r128: torch.Tensor = None     # [bsz] int32
+    decode_window: _V4DecodeWindowMeta = None
+    prefill_window: _V4PrefillWindowMeta = None
+    prefill_shared: _V4PrefillSharedMeta = None
+    ratio_meta: dict[int, _V4RatioMeta] = field(default_factory=dict)
 
-    # --- FlashMLA schedule meta (per compress_ratio, computed once, reused across layers) ---
-    flash_mla_sched_meta_r4: object = None
-    flash_mla_sched_meta_r128: object = None
-    flash_mla_sched_meta_r0: object = None
-
-    # --- Prefill pre-computed ---
-    prefill_uncompressed_kv_lens: torch.Tensor = None   # [bsz] long (prev_window + raw_kv)
-    prefill_max_flat_kv_len_r4: int = None
-    prefill_total_flat_kv_tokens_r4: int = None
-    prefill_max_flat_kv_len_r128: int = None
-    prefill_total_flat_kv_tokens_r128: int = None
-    prefill_max_compress_width: int = None
-    prefill_window_topk: torch.Tensor = None            # [total_q_tokens, window_size]
-    prefill_compress_topk_r4: torch.Tensor = None       # [total_q_tokens, max_width]
-    prefill_compress_topk_r128: torch.Tensor = None     # [total_q_tokens, max_width]
-    prefill_num_vis_compress_r4: torch.Tensor = None    # [total_q_tokens] int32
-    prefill_num_vis_compress_r128: torch.Tensor = None  # [total_q_tokens] int32
-
-    # --- Prefill pre-computed (layer-invariant, eliminates per-layer repeat_interleave/searchsorted) ---
-    prefill_seq_id: torch.Tensor = None                 # [total_q_tokens] int64
-    prefill_compress_offset: torch.Tensor = None         # [total_q_tokens, 1] (uncompressed_kv_lens[seq_id])
-    prefill_flat_kv_lens_r4: torch.Tensor = None         # [bsz] int32
-    prefill_cu_seqlens_k_r4: torch.Tensor = None         # [bsz+1] int32
-    prefill_repeat_cu_r4: torch.Tensor = None            # [total_q_tokens] int32
-    prefill_flat_kv_lens_r128: torch.Tensor = None       # [bsz] int32
-    prefill_cu_seqlens_k_r128: torch.Tensor = None       # [bsz+1] int32
-    prefill_repeat_cu_r128: torch.Tensor = None          # [total_q_tokens] int32
-
-    # --- Prefill window write indices (pre-computed, reused across all layers) ---
-    prefill_window_slot: torch.Tensor = None              # [total_q_tokens] int64
-    prefill_window_ring_pos: torch.Tensor = None          # [total_q_tokens] int64 (-1 for invalid)
+    def get_ratio_meta(self, ratio: int) -> _V4RatioMeta:
+        ratio_meta = self.ratio_meta.get(ratio)
+        if ratio_meta is None:
+            ratio_meta = _V4RatioMeta()
+            self.ratio_meta[ratio] = ratio_meta
+        return ratio_meta
 
     @classmethod
     def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'CudaV4AttentionMetadata':
@@ -79,43 +107,47 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         meta = super().from_step_context(attn_metadata, step_ctx)
 
         if window_size > 0 and slot is not None:
-            meta.is_padded = slot < 0
             if meta.is_decoding:
-                cls._precompute_decode(meta, window_size)
+                cls._precompute_decode(meta, window_size, slot < 0)
             else:
                 cls._precompute_prefill(meta, window_size, slot)
 
         return meta
 
     @staticmethod
-    def _precompute_decode(meta, window_size):
+    def _precompute_decode(meta, window_size, is_padded):
         from lmdeploy.pytorch.backends.cuda.attention.v4_utils import build_prefix_positions, build_window_positions
         kv_seqlens = meta.kv_seqlens
         block_offsets = meta.block_offsets
         block_size = meta.block_size
 
         # Pre-compute decode window_pos (eliminates per-layer torch.remainder)
-        meta.decode_window_pos = torch.remainder(meta.start_pos, window_size).to(torch.int32)
+        window_pos = torch.remainder(meta.start_pos, window_size).to(torch.int32)
 
         window_positions, window_lens, _ = build_window_positions(kv_seqlens, window_size)
-        meta.extra_indices_in_kvcache = window_positions.unsqueeze(1).to(torch.int32)
-        meta.extra_topk_length = window_lens.to(torch.int32)
+        window_indices = window_positions.unsqueeze(1).to(torch.int32)
+        window_topk_length = window_lens.to(torch.int32)
 
         bsz = kv_seqlens.numel()
-        meta.batch_offsets = (
+        batch_offsets = (
             torch.arange(bsz, device=kv_seqlens.device, dtype=torch.int32).view(-1, 1, 1) * window_size)
+        meta.decode_window = _V4DecodeWindowMeta(
+            is_padded=is_padded,
+            batch_offsets=batch_offsets,
+            window_pos=window_pos,
+            indices=window_indices,
+            topk_length=window_topk_length,
+        )
 
         for ratio in (4, 128):
             num_compressed = torch.div(kv_seqlens, ratio, rounding_mode='floor').to(torch.int32)
             max_comp = max(block_offsets.size(1) * block_size // ratio, 1)
             comp_positions, _ = build_prefix_positions(num_compressed, max_comp)
             indices = comp_positions.unsqueeze(1).to(torch.int32)
-            if ratio == 4:
-                meta.compress_fallback_indices_r4 = indices
-                meta.compress_fallback_topk_r4 = num_compressed
-            else:
-                meta.compress_fallback_indices_r128 = indices
-                meta.compress_fallback_topk_r128 = num_compressed
+            meta.get_ratio_meta(ratio).decode = _V4DecodeCompressMeta(
+                indices=indices,
+                topk_length=num_compressed,
+            )
 
     @staticmethod
     def _precompute_prefill(meta, window_size, slot):
@@ -133,51 +165,44 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         # Uncompressed region = prev_window (ring buffer) + raw_kv (current chunk)
         # prev_window_len = min(start_pos, window_size), raw_kv_len = q_seqlens
         prev_window_lens = start_pos.clamp(max=window_size)
-        meta.prefill_uncompressed_kv_lens = (prev_window_lens + q_seqlens)
+        uncompressed_kv_lens = (prev_window_lens + q_seqlens)
 
         # Safe upper bounds (no CUDA sync): max_unkv <= window_size + max_q,
         # sum_unkv <= sum(kv_seqlens) = sum_kv (since min(sp,ws) <= sp)
         max_q = meta.max_q_seqlen
         max_unkv = min(window_size, max_kv) + max_q
+        meta.get_ratio_meta(0).prefill = _V4PrefillRatioMeta(
+            max_flat_kv_len=max_unkv,
+            total_flat_kv_tokens=sum_kv,
+        )
 
-        for ratio in (4, 128):
-            mfk = max_unkv + max_kv // ratio
-            tfk = sum_kv + sum_kv // ratio
-            if ratio == 4:
-                meta.prefill_max_flat_kv_len_r4 = mfk
-                meta.prefill_total_flat_kv_tokens_r4 = tfk
-            else:
-                meta.prefill_max_flat_kv_len_r128 = mfk
-                meta.prefill_total_flat_kv_tokens_r128 = tfk
-
-        meta.prefill_max_compress_width = max_kv // 4
-
-        meta.prefill_window_topk, _ = build_window_topk_indices(
+        window_topk, _ = build_window_topk_indices(
             total_lens, window_size,
             q_seqlens=q_seqlens, start_pos=start_pos, causal=True)
-        meta.prefill_window_topk = meta.prefill_window_topk.to(torch.int32)
+        meta.prefill_window = _V4PrefillWindowMeta(topk=window_topk.to(torch.int32))
+
+        compress_topk_by_ratio = {}
+        num_vis_compress_by_ratio = {}
 
         for ratio in (4, 128):
             max_width = max_kv // ratio
             compress_topk, num_vis_r = build_compress_topk_indices(
                 total_lens, ratio,
-                offset=meta.prefill_uncompressed_kv_lens,
+                offset=uncompressed_kv_lens,
                 q_seqlens=q_seqlens, start_pos=start_pos,
                 causal=True, max_width=max_width)
-            if ratio == 4:
-                meta.prefill_compress_topk_r4 = compress_topk.to(torch.int32)
-                meta.prefill_num_vis_compress_r4 = num_vis_r.to(torch.int32)
-            else:
-                meta.prefill_compress_topk_r128 = compress_topk.to(torch.int32)
-                meta.prefill_num_vis_compress_r128 = num_vis_r.to(torch.int32)
+            compress_topk_by_ratio[ratio] = compress_topk.to(torch.int32)
+            num_vis_compress_by_ratio[ratio] = num_vis_r.to(torch.int32)
 
         # Pre-compute layer-invariant tensors to eliminate per-layer repeat_interleave/searchsorted
         cu_q_seqlens = meta.cu_q_seqlens
         total_q_tokens = cu_q_seqlens[-1]
         token_seq = torch.arange(total_q_tokens, device=kv_seqlens.device)
-        meta.prefill_seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
-        meta.prefill_compress_offset = (
-            meta.prefill_uncompressed_kv_lens[meta.prefill_seq_id].unsqueeze(-1).to(torch.int32))
+        prefill_seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
+        meta.prefill_shared = _V4PrefillSharedMeta(
+            uncompressed_kv_lens=uncompressed_kv_lens,
+            compress_offset=uncompressed_kv_lens[prefill_seq_id].unsqueeze(-1).to(torch.int32),
+        )
 
         # Pre-compute flat_kv_lens + cu_seqlens_k + repeat_cu per compress_ratio
         raw_kv_lens_t = q_seqlens.long()
@@ -188,17 +213,18 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
             repeat_cu = torch.repeat_interleave(
                 cu_seqlens_k[:-1], q_seqlens, output_size=total_q_tokens)
-            if ratio == 4:
-                meta.prefill_flat_kv_lens_r4 = flat_kv_lens
-                meta.prefill_cu_seqlens_k_r4 = cu_seqlens_k
-                meta.prefill_repeat_cu_r4 = repeat_cu
-            else:
-                meta.prefill_flat_kv_lens_r128 = flat_kv_lens
-                meta.prefill_cu_seqlens_k_r128 = cu_seqlens_k
-                meta.prefill_repeat_cu_r128 = repeat_cu
+            meta.get_ratio_meta(ratio).prefill = _V4PrefillRatioMeta(
+                max_flat_kv_len=max_unkv + max_kv // ratio,
+                total_flat_kv_tokens=sum_kv + sum_kv // ratio,
+                compress_topk=compress_topk_by_ratio[ratio],
+                num_vis_compress=num_vis_compress_by_ratio[ratio],
+                flat_kv_lens=flat_kv_lens,
+                cu_seqlens_k=cu_seqlens_k,
+                repeat_cu=repeat_cu,
+            )
 
         # Pre-compute window write indices (reused across all layers)
-        token_seq = meta.prefill_seq_id
+        token_seq = prefill_seq_id
         cu_q = cu_q_seqlens
         token_slot = slot[token_seq]
         token_pos_in_seq = torch.arange(total_q_tokens, device=kv_seqlens.device) - cu_q[token_seq]
@@ -206,8 +232,8 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         cutoff_pos = (total_lens[token_seq] - window_size).clamp(min=0)
         ring_pos = torch.remainder(token_abs_pos, window_size)
         invalid = token_abs_pos < cutoff_pos
-        meta.prefill_window_slot = token_slot.clamp(min=0)
-        meta.prefill_window_ring_pos = torch.where(invalid, -1, ring_pos)
+        meta.prefill_window.slot = token_slot.clamp(min=0)
+        meta.prefill_window.ring_pos = torch.where(invalid, -1, ring_pos)
 
 
 class V4IndicesUpdater:
@@ -282,32 +308,43 @@ def _try_dynamic_compile(func, *args, **kwargs):
         return func
 
 
-class TritonV4AttentionImpl:
-    """DeepSeek V4 attention using batched FlashMLA sparse decode/prefill.
+class _V4AttentionExecutorBase:
+    """Shared state and helpers for V4 FlashMLA execution paths."""
 
-    The unified ``forward()`` dispatches to ``_forward_decoding()`` or
-    ``_forward_prefilling()`` based on ``attn_metadata.is_decoding``.
-    All window-state management, kernel calls (flatten_v4_kv, pack_window_fp8),
-    index construction, and FlashMLA invocations live here — the model layer
-    only does projections, RoPE, and compressor/indexer calls.
-    """
+    def __init__(self, impl: 'TritonV4AttentionImpl'):
+        self.impl = impl
 
-    def __init__(self, head_size: int, scale: float, window_size: int, compress_ratio: int):
-        self.head_size = head_size
-        self.scale = scale
-        self.window_size = window_size
-        self.compress_ratio = compress_ratio
-        self.v4_updater = V4IndicesUpdater.build()
-        import flash_mla
-        self.flash_mla = flash_mla
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
-        self._flatten_v4_kv = flatten_v4_kv
-        self._pack_window_fp8 = pack_window_tokens_fp8
+    @property
+    def head_size(self):
+        return self.impl.head_size
 
-    # ------------------------------------------------------------------
-    # Shared helpers
-    # ------------------------------------------------------------------
+    @property
+    def scale(self):
+        return self.impl.scale
+
+    @property
+    def window_size(self):
+        return self.impl.window_size
+
+    @property
+    def compress_ratio(self):
+        return self.impl.compress_ratio
+
+    @property
+    def v4_updater(self):
+        return self.impl.v4_updater
+
+    @property
+    def flash_mla(self):
+        return self.impl.flash_mla
+
+    @property
+    def _flatten_v4_kv(self):
+        return self.impl._flatten_v4_kv
+
+    @property
+    def _pack_window_fp8(self):
+        return self.impl._pack_window_fp8
 
     @staticmethod
     def _pad_query_heads(query: torch.Tensor, attn_sink: torch.Tensor):
@@ -349,51 +386,20 @@ class TritonV4AttentionImpl:
         pad = padded_topk - topk
         return torch.nn.functional.pad(indices, (0, pad), value=-1)
 
-    def _write_window_decode(self, kv, attn_caches, slot, attn_metadata):
+
+class _V4DecodeExecutor(_V4AttentionExecutorBase):
+    """Decode-time sparse FlashMLA path."""
+
+    def _write_window(self, kv, attn_caches, slot, attn_metadata):
         """Write decode KV to FP8 window cache."""
-        window_pos = attn_metadata.decode_window_pos
+        window_pos = attn_metadata.decode_window.window_pos
         slot_idx = slot.clamp(min=0)
         kv_decode = kv[:, 0]  # [bsz, head_dim]
         self._pack_window_fp8(kv_decode, attn_caches['window_state_fp8'], slot_idx, window_pos)
         return attn_caches['window_state_fp8'].index_select(0, slot_idx)
 
-    def _write_window_prefill(self, kv, attn_caches, attn_metadata):
-        """Batched ring-buffer FP8 pack for all prefill sequences."""
-        kv_flat = kv.squeeze(0)  # [total_tokens, head_dim]
-        self._pack_window_fp8(kv_flat, attn_caches['window_state_fp8'],
-                              attn_metadata.prefill_window_slot, attn_metadata.prefill_window_ring_pos)
-
-
-    # ------------------------------------------------------------------
-    # Unified forward
-    # ------------------------------------------------------------------
-
     def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
                 caches, slot, index_out=None):
-        """Unified forward — dispatches to decoding or prefilling internally.
-
-        Args:
-            query: Q tensor [bsz, 1, n_heads, head_dim] or [1, total_tokens, n_heads, head_dim]
-            kv: KV tensor [bsz, 1, head_dim] or [1, total_tokens, head_dim]
-            attn_sink: Learnable sink parameter
-            attn_metadata: CudaV4AttentionMetadata with sequence info
-            caches: dict of attention cache tensors
-            slot: state cache slot indices [bsz]
-            index_out: V4IndexerOutput from the indexer call (if any)
-        """
-        if attn_metadata.is_decoding:
-            return self._forward_decoding(query, kv, attn_sink, attn_metadata, caches, slot,
-                                          index_out=index_out)
-        else:
-            return self._forward_prefilling(query, kv, attn_sink, attn_metadata, caches, slot,
-                                            index_out=index_out)
-
-    # ------------------------------------------------------------------
-    # Decode path
-    # ------------------------------------------------------------------
-
-    def _forward_decoding(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
-                          caches, slot, index_out=None):
         # Model sends [1, bsz, n_heads, head_dim] for decode; FlashMLA expects [bsz, 1, ...]
         if query.size(0) == 1 and query.size(1) > 1:
             query = query.transpose(0, 1).contiguous()
@@ -405,12 +411,13 @@ class TritonV4AttentionImpl:
         block_size = attn_metadata.block_size
 
         # Phase 1: Write window state + FP8 pack
-        window_state_fp8 = self._write_window_decode(kv, caches, slot, attn_metadata)
+        window_state_fp8 = self._write_window(kv, caches, slot, attn_metadata)
 
         # Phase 2: Window indices (pre-computed once per step)
-        extra_indices_in_kvcache = attn_metadata.extra_indices_in_kvcache
-        extra_topk_length = attn_metadata.extra_topk_length
-        is_padded = attn_metadata.is_padded
+        decode_window = attn_metadata.decode_window
+        extra_indices_in_kvcache = decode_window.indices
+        extra_topk_length = decode_window.topk_length
+        is_padded = decode_window.is_padded
 
         # Phase 3: Compressed indices (indexer / fallback / no-compress)
         indices_in_kvcache = None
@@ -422,12 +429,10 @@ class TritonV4AttentionImpl:
             if index_out is not None:
                 indices_in_kvcache = index_out.indices_in_kvcache.unsqueeze(1)  # [bsz, 1, topk_width]
                 topk_length = index_out.topk_length
-            elif self.compress_ratio == 4:
-                indices_in_kvcache = attn_metadata.compress_fallback_indices_r4
-                topk_length = attn_metadata.compress_fallback_topk_r4
             else:
-                indices_in_kvcache = attn_metadata.compress_fallback_indices_r128
-                topk_length = attn_metadata.compress_fallback_topk_r128
+                decode_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).decode
+                indices_in_kvcache = decode_ratio.indices
+                topk_length = decode_ratio.topk_length
         else:
             # No compression: -1 sentinel + zero topk_length disables compressed path
             indices_in_kvcache = torch.full((bsz, 1, 1), -1, dtype=torch.int32, device=query.device)
@@ -436,7 +441,7 @@ class TritonV4AttentionImpl:
         # Phase 4: Apply is_padded correction + convert to physical indices
         # Padded sequences (slot < 0) attend to only 1 KV entry to avoid OOB access.
         extra_k_cache = window_state_fp8.view(bsz, self.window_size, 1, -1)
-        batch_offsets = attn_metadata.batch_offsets
+        batch_offsets = decode_window.batch_offsets
         extra_topk_length, topk_length, extra_indices = _decode_padded_and_offset(
             is_padded, extra_topk_length, topk_length,
             extra_indices_in_kvcache, batch_offsets)
@@ -454,11 +459,11 @@ class TritonV4AttentionImpl:
         # when no compression, window cache serves as primary.
         k_cache = compressed_cache_fp8.unsqueeze(2) if compressed_cache_fp8 is not None else extra_k_cache
 
-        ratio_key = f'flash_mla_sched_meta_r{self.compress_ratio}'
-        sched_meta = getattr(attn_metadata, ratio_key)
+        ratio_meta = attn_metadata.get_ratio_meta(self.compress_ratio)
+        sched_meta = ratio_meta.flash_mla_sched_meta
         if sched_meta is None:
             sched_meta, _ = self.flash_mla.get_mla_metadata()
-            object.__setattr__(attn_metadata, ratio_key, sched_meta)
+            ratio_meta.flash_mla_sched_meta = sched_meta
 
         output, _ = self.flash_mla.flash_mla_with_kvcache(
             padded_query,
@@ -483,9 +488,16 @@ class TritonV4AttentionImpl:
             output = output.transpose(0, 1).contiguous()
         return output
 
-    # ------------------------------------------------------------------
-    # Prefill path
-    # ------------------------------------------------------------------
+
+class _V4PrefillExecutor(_V4AttentionExecutorBase):
+    """Prefill-time flatten, sparse index assembly, and FlashMLA path."""
+
+    def _write_window(self, kv, attn_caches, attn_metadata):
+        """Batched ring-buffer FP8 pack for all prefill sequences."""
+        kv_flat = kv.squeeze(0)  # [total_tokens, head_dim]
+        prefill_window = attn_metadata.prefill_window
+        self._pack_window_fp8(kv_flat, attn_caches['window_state_fp8'],
+                              prefill_window.slot, prefill_window.ring_pos)
 
     def _select_compress_topk(self, index_out, attn_metadata: CudaV4AttentionMetadata):
         """Select compress_topk indices and per-token causal visibility count.
@@ -497,30 +509,22 @@ class TritonV4AttentionImpl:
         if not self.compress_ratio:
             return None, None
 
+        prefill_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).prefill
         if index_out is not None:
             compress_topk = index_out.indices_in_kvcache
             # Offset indexer's logical indices into flat_kv positions
             # Preserve -1 sentinels from bitonic_topk (invalid positions)
             neg_mask = compress_topk < 0
-            compress_topk = compress_topk + attn_metadata.prefill_compress_offset
+            compress_topk = compress_topk + attn_metadata.prefill_shared.compress_offset
             compress_topk = compress_topk.masked_fill(neg_mask, -1)
             # Per-token causal limit from the pre-computed ratio-specific count.
             # index_out.topk_length is per-sequence and ignores causal masking.
-            if self.compress_ratio == 128:
-                num_vis_compress = attn_metadata.prefill_num_vis_compress_r128
-            else:
-                num_vis_compress = attn_metadata.prefill_num_vis_compress_r4
-            return compress_topk, num_vis_compress
+            return compress_topk, prefill_ratio.num_vis_compress
 
-        if self.compress_ratio == 4:
-            return (attn_metadata.prefill_compress_topk_r4,
-                    attn_metadata.prefill_num_vis_compress_r4)
-        else:
-            return (attn_metadata.prefill_compress_topk_r128,
-                    attn_metadata.prefill_num_vis_compress_r128)
+        return prefill_ratio.compress_topk, prefill_ratio.num_vis_compress
 
-    def _forward_prefilling(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
-                            caches, slot, index_out=None):
+    def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
+                caches, slot, index_out=None):
         start_pos = attn_metadata.start_pos
         total_lens = attn_metadata.kv_seqlens
         q_seqlens = attn_metadata.q_seqlens
@@ -530,24 +534,12 @@ class TritonV4AttentionImpl:
         compress_topk, num_vis_compress = self._select_compress_topk(index_out, attn_metadata)
 
         # Phase 2: Flatten KV (before window write to preserve prev ring buffer)
-        if self.compress_ratio == 4:
-            max_flat_kv_len = attn_metadata.prefill_max_flat_kv_len_r4
-            total_flat_kv_tokens = attn_metadata.prefill_total_flat_kv_tokens_r4
-            cu_seqlens_k = attn_metadata.prefill_cu_seqlens_k_r4
-            flat_kv_lens = attn_metadata.prefill_flat_kv_lens_r4
-            repeat_cu = attn_metadata.prefill_repeat_cu_r4
-        elif self.compress_ratio == 128:
-            max_flat_kv_len = attn_metadata.prefill_max_flat_kv_len_r128
-            total_flat_kv_tokens = attn_metadata.prefill_total_flat_kv_tokens_r128
-            cu_seqlens_k = attn_metadata.prefill_cu_seqlens_k_r128
-            flat_kv_lens = attn_metadata.prefill_flat_kv_lens_r128
-            repeat_cu = attn_metadata.prefill_repeat_cu_r128
-        else:
-            max_flat_kv_len = attn_metadata.prefill_max_flat_kv_len_r4
-            total_flat_kv_tokens = attn_metadata.prefill_total_flat_kv_tokens_r4
-            cu_seqlens_k = None
-            flat_kv_lens = None
-            repeat_cu = None
+        prefill_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).prefill
+        max_flat_kv_len = prefill_ratio.max_flat_kv_len
+        total_flat_kv_tokens = prefill_ratio.total_flat_kv_tokens
+        cu_seqlens_k = prefill_ratio.cu_seqlens_k
+        flat_kv_lens = prefill_ratio.flat_kv_lens
+        repeat_cu = prefill_ratio.repeat_cu
 
         fp8_compressed_kv_cache = caches['compressed_kv_fp8'] if self.compress_ratio else None
         raw_kv = kv.squeeze(0)  # [total_q_tokens, head_dim]
@@ -564,10 +556,10 @@ class TritonV4AttentionImpl:
             start_pos=start_pos)
 
         # Phase 3: Write window state + FP8 pack
-        self._write_window_prefill(kv, caches, attn_metadata)
+        self._write_window(kv, caches, attn_metadata)
 
         # Phase 4: Assemble topk_indices (cat window + compress) + convert to global
-        window_topk = attn_metadata.prefill_window_topk
+        window_topk = attn_metadata.prefill_window.topk
         if compress_topk is not None:
             topk_indices = torch.cat([window_topk, compress_topk], dim=-1)
         else:
@@ -596,6 +588,40 @@ class TritonV4AttentionImpl:
             sm_scale=self.scale, attn_sink=attn_sink,
             topk_length=topk_length)
         return out[0][:, :num_heads].unsqueeze(0)  # [1, total_q_tokens, n_heads, head_dim]
+
+
+class TritonV4AttentionImpl:
+    """DeepSeek V4 attention using batched FlashMLA sparse decode/prefill.
+
+    The model layer calls this backend once per layer. This class owns kernel imports and dispatch; decode/prefill
+    execution details stay in local executor classes.
+    """
+
+    def __init__(self, head_size: int, scale: float, window_size: int, compress_ratio: int):
+        self.head_size = head_size
+        self.scale = scale
+        self.window_size = window_size
+        self.compress_ratio = compress_ratio
+        self.v4_updater = V4IndicesUpdater.build()
+        import flash_mla
+        self.flash_mla = flash_mla
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        self._flatten_v4_kv = flatten_v4_kv
+        self._pack_window_fp8 = pack_window_tokens_fp8
+        self._decode_executor = _V4DecodeExecutor(self)
+        self._prefill_executor = _V4PrefillExecutor(self)
+
+    def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
+                caches, slot, index_out=None):
+        """Dispatch V4 attention to decode or prefill execution."""
+        if attn_metadata.is_decoding:
+            return self._decode_executor.forward(
+                query, kv, attn_sink, attn_metadata, caches, slot,
+                index_out=index_out)
+        return self._prefill_executor.forward(
+            query, kv, attn_sink, attn_metadata, caches, slot,
+            index_out=index_out)
 
 
 class TritonV4AttentionBuilder:
