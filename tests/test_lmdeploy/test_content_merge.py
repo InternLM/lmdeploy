@@ -1,4 +1,3 @@
-import asyncio
 import sys
 
 import pytest
@@ -242,7 +241,7 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    def fake_load_from_url(data_src, media_io):
+    def fake_load_from_url(data_src, media_io, allowed_media_domains=None):
         load_calls.append((data_src, type(media_io).__name__))
         if isinstance(media_io, FakeVideoMediaIO):
             return f'loaded:{data_src}', {'duration': 2}
@@ -304,7 +303,8 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         ]
     }]
 
-    parsed = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+    parsed = [None] * len(messages)
+    MultimodalProcessor._parse_multimodal_item(0, messages, parsed, {})
     content = parsed[0]['content']
 
     assert content[0] == {'type': 'text', 'text': 'describe'}
@@ -333,22 +333,71 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
     ]
 
 
+def test_async_parse_multimodal_item_passes_allowed_media_domains(monkeypatch):
+    """Test server-owned domain allowlist is forwarded to URL loaders."""
+    load_calls = []
+
+    class FakeVideoMediaIO:
+
+        def __init__(self, image_io=None, **kwargs):
+            self.image_io = image_io
+            self.kwargs = kwargs
+
+    def fake_load_from_url(data_src, media_io, allowed_media_domains=None):
+        load_calls.append((data_src, type(media_io).__name__, allowed_media_domains))
+        if isinstance(media_io, FakeVideoMediaIO):
+            return f'loaded:{data_src}', {'duration': 2}
+        return f'loaded:{data_src}'
+
+    monkeypatch.setattr(multimodal_module, 'VideoMediaIO', FakeVideoMediaIO)
+    monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
+
+    messages = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type': 'image_url',
+                'image_url': {
+                    'url': 'https://example.com/a.png',
+                }
+            },
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': 'https://example.com/a.mp4',
+                }
+            },
+        ]
+    }]
+
+    out_messages = [None] * len(messages)
+    MultimodalProcessor._parse_multimodal_item(0, messages, out_messages, {}, ['example.com'])
+
+    assert load_calls == [
+        ('https://example.com/a.png', 'ImageMediaIO', ['example.com']),
+        ('https://example.com/a.mp4', 'FakeVideoMediaIO', ['example.com']),
+    ]
+
+
 @pytest.mark.parametrize('item', [{'type': 'image_url'}, {'type': 'image', 'image': {}},
                                   {'type': 'time_series', 'time_series': {'sr': 16000}}])
 def test_async_parse_multimodal_item_rejects_missing_payload(item):
     """Test missing multimodal payloads fail with a clear error."""
     messages = [{'role': 'user', 'content': [item]}]
+    out_messages = [None] * len(messages)
 
     with pytest.raises(ValueError, match='Expected .* direct value or a dict containing "url" or "data"'):
-        asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+        MultimodalProcessor._parse_multimodal_item(0, messages, out_messages, {})
 
 
 def test_async_parse_multimodal_item_rejects_unknown_type():
     """Test unknown multimodal item types still fail explicitly."""
     messages = [{'role': 'user', 'content': [{'type': 'unknown_media', 'unknown_media': 'file:///tmp/a.bin'}]}]
+    out_messages = [None] * len(messages)
 
     with pytest.raises(NotImplementedError, match='unknown type: unknown_media'):
-        asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+        MultimodalProcessor._parse_multimodal_item(0, messages, out_messages, {})
 
 
 def test_has_multimodal_input_detects_all_supported_types():

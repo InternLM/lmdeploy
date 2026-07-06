@@ -19,6 +19,7 @@ def pipeline(model_path: str,
              max_log_len: int | None = None,
              trust_remote_code: bool = False,
              speculative_config: SpeculativeConfig | None = None,
+             allowed_media_domains: list[str] | None = None,
              **kwargs):
     """Create a pipeline for inference.
 
@@ -44,6 +45,7 @@ def pipeline(model_path: str,
             being printed in log.
         trust_remote_code: whether to trust remote code from model repositories.
         speculative_config: speculative decoding configuration.
+        allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
         **kwargs: additional keyword arguments passed to the pipeline.
 
     Returns:
@@ -77,6 +79,7 @@ def pipeline(model_path: str,
                     max_log_len=max_log_len,
                     trust_remote_code=trust_remote_code,
                     speculative_config=speculative_config,
+                    allowed_media_domains=allowed_media_domains,
                     **kwargs)
 
 

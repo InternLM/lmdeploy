@@ -40,6 +40,7 @@ class Pipeline:
                  max_log_len: int | None = None,
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs):
         """Initialize Pipeline.
 
@@ -51,6 +52,7 @@ class Pipeline:
             max_log_len: Max number of prompt characters or prompt tokens being printed in log.
             trust_remote_code: whether to trust remote code from model repositories.
             speculative_config: Speculative decoding configuration.
+            allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
             **kwargs: Additional keyword arguments.
         """
 
@@ -82,6 +84,7 @@ class Pipeline:
                                            max_log_len=max_log_len,
                                            trust_remote_code=trust_remote_code,
                                            speculative_config=speculative_config,
+                                           allowed_media_domains=allowed_media_domains,
                                            **kwargs)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None

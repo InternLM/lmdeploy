@@ -71,6 +71,11 @@ class SubCliServe:
                             'engine’s tasks once the maximum number of concurrent requests is '
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
+        parser.add_argument('--allowed-media-domains',
+                            nargs='+',
+                            type=str,
+                            default=None,
+                            help='Exact hostnames allowed for HTTP(S) media URLs.')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -318,6 +323,7 @@ class SubCliServe:
                 reasoning_parser=args.reasoning_parser,
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,
+                allowed_media_domains=args.allowed_media_domains,
             )
         else:
             from lmdeploy.serve.openai.launch_server import launch_server
@@ -350,6 +356,7 @@ class SubCliServe:
                 reasoning_parser=args.reasoning_parser,
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,
+                allowed_media_domains=args.allowed_media_domains,
             )
 
     @staticmethod
