@@ -36,6 +36,9 @@ jobs:
       SERVER_LOG: /nvme/qa_test_models/server_log/${{ github.head_ref }}_${{ github.run_id }}
     container:
       image: openmmlab/lmdeploy:dev-cu12.8
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
       options: --gpus all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
