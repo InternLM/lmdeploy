@@ -9,6 +9,7 @@ import re
 import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing, asynccontextmanager
+from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Literal
@@ -264,6 +265,44 @@ def _create_output_token_logprobs(token_ids: list[int] | None = None,
     for tok, tok_logprobs in zip(token_ids, logprobs):
         output_token_logprobs.append((tok_logprobs[tok], tok))
     return output_token_logprobs or None
+
+
+@dataclass
+class _StreamTokenMetadata:
+    """Token metadata buffered across parser steps with no visible delta."""
+
+    token_ids: list[int]
+    logprobs: list[dict[int, float]]
+
+    @classmethod
+    def from_result(cls, token_ids: list[int] | None, logprobs: list[dict[int, float]] | None):
+        return cls(list(token_ids or []), list(logprobs or []))
+
+    def extend(self, other: _StreamTokenMetadata) -> None:
+        self.token_ids.extend(other.token_ids)
+        self.logprobs.extend(other.logprobs)
+
+    def pop_with(self, current: _StreamTokenMetadata) -> _StreamTokenMetadata:
+        merged = _StreamTokenMetadata(
+            token_ids=self.token_ids + current.token_ids,
+            logprobs=self.logprobs + current.logprobs,
+        )
+        self.token_ids.clear()
+        self.logprobs.clear()
+        return merged
+
+    def output_ids(self, enabled: bool | None) -> list[int] | None:
+        return self.token_ids if enabled else None
+
+    def chat_logprobs(self, tokenizer: PreTrainedTokenizerBase, enabled: bool | None) -> ChoiceLogprobs | None:
+        if not enabled or not self.token_ids or not self.logprobs:
+            return None
+        return _create_chat_completion_logprobs(tokenizer, self.token_ids, self.logprobs)
+
+    def output_token_logprobs(self, enabled: bool | None) -> list[tuple[float, int]] | None:
+        if not enabled:
+            return None
+        return _create_output_token_logprobs(self.token_ids, self.logprobs)
 
 
 @router.get('/health')
@@ -581,31 +620,25 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
         final_usage = None
+        pending_token_metadata = _StreamTokenMetadata.from_result(None, None)
         async for res in result_generator:
-            logprobs = None
-            output_token_logprobs = None
-            if request.logprobs and res.logprobs:
-                logprobs = _create_chat_completion_logprobs(tokenizer, res.token_ids, res.logprobs)
-            if request.return_logprob:
-                output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
                 final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
                     cached_tokens=res.cached_tokens,
                 )
-            delta_token_ids = res.token_ids if res.token_ids is not None else []
+            current_token_metadata = _StreamTokenMetadata.from_result(res.token_ids, res.logprobs)
             stream_deltas = response_parser.stream_chunk(
                 res.response,
-                delta_token_ids
+                current_token_metadata.token_ids
             )
             if not stream_deltas:
-                # Parser may buffer partial protocol tags and emit no visible delta
-                # while the engine still produced new tokens (e.g. MTP batch). Do not
-                # drop those token ids; emit them once on a placeholder delta.
-                if res.finish_reason is None and not delta_token_ids:
+                pending_token_metadata.extend(current_token_metadata)
+                if res.finish_reason is None:
                     continue
-                stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+                current_token_metadata = _StreamTokenMetadata.from_result(None, None)
+                stream_deltas = [(DeltaMessage(role='assistant'), False)]
             should_validate_complete = (
                 res.finish_reason in ('stop', 'length')
                 and (request.return_token_ids or request.return_routed_experts)
@@ -621,8 +654,15 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 # The chat parser may split one engine yield into multiple protocol deltas,
                 # so attach the engine-level metadata to the last parsed delta.
                 finish_reason = res.finish_reason if is_last_delta else None
-                chunk_logprobs = logprobs if is_last_delta else None
-                chunk_output_token_logprobs = output_token_logprobs if is_last_delta else None
+                if is_last_delta:
+                    stream_token_metadata = pending_token_metadata.pop_with(current_token_metadata)
+                    chunk_logprobs = stream_token_metadata.chat_logprobs(tokenizer, request.logprobs)
+                    chunk_output_token_logprobs = stream_token_metadata.output_token_logprobs(request.return_logprob)
+                    stream_output_ids = stream_token_metadata.output_ids(request.return_token_ids)
+                else:
+                    chunk_logprobs = None
+                    chunk_output_token_logprobs = None
+                    stream_output_ids = None
 
                 if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
                     if finish_reason == 'stop' and streaming_tools is True:
@@ -630,10 +670,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
                 # Only output routed_experts in the final chunk
                 routed_experts = res.routed_experts if finish_reason is not None else None
-                # Emit token ids once per engine yield on the last parsed delta, when
-                # accumulated delta text and token ids for this step are aligned.
-                stream_output_ids = delta_token_ids if (request.return_token_ids and is_last_delta) else None
-
                 response_json = create_stream_response_json(index=0,
                                                             delta_message=delta_message,
                                                             finish_reason=finish_reason,
@@ -643,7 +679,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                             output_ids=stream_output_ids)
                 if res.cache_block_ids is not None and is_last_delta:
                     response_json['cache_block_ids'] = res.cache_block_ids
-                    response_json['remote_token_ids'] = res.token_ids
+                    response_json['remote_token_ids'] = current_token_metadata.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
         if final_usage is not None:
             yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
