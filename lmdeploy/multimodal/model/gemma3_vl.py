@@ -4,8 +4,8 @@ import torch
 from transformers import AutoProcessor
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.base import VISION_MODELS, VisionModel
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

@@ -37,11 +37,11 @@ ______________________________________________________________________
 
 - \[2024/08\] 🔥🔥 LMDeployは[modelscope/swift](https://github.com/modelscope/swift)に統合され、VLMs推論のデフォルトアクセラレータとなりました
 - \[2024/07\] 🎉🎉 Llama3.1 8B、70Bおよびそのツールコールをサポート
-- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデルおよびInternLM2.5の[ファンクションコール](docs/en/llm/api_server_tools.md)をサポート
+- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデル、InternLM-XComposer2.5およびInternLM2.5の[ファンクションコール](docs/en/llm/api_server_tools.md)をサポート
 - \[2024/06\] PyTorchエンジンはDeepSeek-V2およびいくつかのVLMs、例えばCogVLM2、Mini-InternVL、LlaVA-Nextをサポート
 - \[2024/05\] 複数のGPUでVLMsをデプロイする際にビジョンモデルをバランスさせる
-- \[2024/05\] InternVL v1.5、LLaVaなどのVLMsで4ビットの重みのみの量子化と推論をサポート
-- \[2024/04\] Llama3およびInternVL v1.1、v1.2、MiniGeminiなどのVLMモデルをサポート
+- \[2024/05\] InternVL v1.5、LLaVa、InternLMXComposer2などのVLMsで4ビットの重みのみの量子化と推論をサポート
+- \[2024/04\] Llama3およびInternVL v1.1、v1.2、MiniGemini、InternLMXComposer2などのVLMモデルをサポート
 - \[2024/04\] TurboMindはすべてのサポートされているデバイスでのオンラインint8/int4 KVキャッシュ量子化と推論を追加しました。詳細なガイドは[こちら](docs/en/quantization/kv_quant.md)を参照してください
 - \[2024/04\] TurboMindの最新アップグレードによりGQAが強化され、[internlm2-20b](https://huggingface.co/internlm/internlm2-20b)モデルの推論が16+ RPSに達し、vLLMの約1.8倍の速さになりました
 - \[2024/04\] Qwen1.5-MOEおよびdbrxをサポート

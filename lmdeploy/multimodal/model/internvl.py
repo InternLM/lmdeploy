@@ -5,9 +5,9 @@ from argparse import Namespace
 import torch
 from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.base import VISION_MODELS, VisionModel
 from lmdeploy.multimodal.model.utils import disable_logging
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

@@ -9,10 +9,10 @@ import torch
 from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
+from lmdeploy.multimodal.constants import Modality
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs, make_multimodal_content_hash
 from lmdeploy.utils import get_logger
-from lmdeploy.multimodal.constants import Modality
 
 from .block import LogicalTokenBlocks
 

@@ -2,8 +2,8 @@
 
 from transformers import AutoProcessor
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

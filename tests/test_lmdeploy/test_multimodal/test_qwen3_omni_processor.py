@@ -2,13 +2,13 @@ from types import SimpleNamespace
 
 import torch
 
-from lmdeploy.pytorch.models.qwen3_omni_moe_thinker import Qwen3OmniInputProcessor
-from lmdeploy.pytorch.models.utils.model import DeployModelMixinV1
-from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.multimodal.constants import Modality
 from lmdeploy.multimodal.model.base import MultimodalSpecialTokens
 from lmdeploy.multimodal.model.preprocess_utils import get_expanded_mm_items
 from lmdeploy.multimodal.model.qwen3_omni import Qwen3OmniModel
+from lmdeploy.pytorch.models.qwen3_omni_moe_thinker import Qwen3OmniInputProcessor
+from lmdeploy.pytorch.models.utils.model import DeployModelMixinV1
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 
 
 class FakeQwen3OmniProcessor:

@@ -3,8 +3,8 @@
 import torch
 from transformers import AutoConfig
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.base import VISION_MODELS, VisionModel
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

@@ -5,8 +5,8 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
-from lmdeploy.utils import get_logger, get_model
 from lmdeploy.multimodal.model.base import VISION_MODELS
+from lmdeploy.utils import get_logger, get_model
 
 from .cogvlm import CogVLMVisionModel  # noqa F401
 from .deepseek import DeepSeekVisionModel  # noqa F401

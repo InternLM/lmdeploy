@@ -5,14 +5,14 @@ from typing import Any, Literal
 import PIL
 
 from lmdeploy.model import MODELS, BaseChatTemplate
-from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.constants import Modality
 from lmdeploy.multimodal.media.audio import AudioMediaIO
 from lmdeploy.multimodal.media.connection import load_from_url
 from lmdeploy.multimodal.media.image import ImageMediaIO
 from lmdeploy.multimodal.media.time_series import TimeSeriesMediaIO
 from lmdeploy.multimodal.media.video import VideoMediaIO
+from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

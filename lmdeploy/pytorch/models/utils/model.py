@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 import torch
 
+from lmdeploy.multimodal.constants import Modality
 from lmdeploy.pytorch.config import QuantizationConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, StepContext
@@ -11,7 +12,6 @@ from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn.embedding import ParallelEmbedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
-from lmdeploy.multimodal.constants import Modality
 
 
 class BaseModelMetaProcessor:

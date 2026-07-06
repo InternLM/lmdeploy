@@ -10,9 +10,9 @@ import torch
 from PIL import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
 from lmdeploy.multimodal.model.utils import disable_logging, rewrite_ctx
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

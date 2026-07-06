@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, Any
 import torch
 import torch.nn.functional as F
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.constants import Modality
+from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
     from lmdeploy.multimodal.model.base import MultimodalSpecialTokens

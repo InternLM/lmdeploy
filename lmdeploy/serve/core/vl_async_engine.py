@@ -19,9 +19,9 @@ class VLAsyncEngine(AsyncEngine):
                  vision_config: VisionConfig | None = None,
                  trust_remote_code: bool = False,
                  **kwargs) -> None:
+        from lmdeploy.multimodal.engine import ImageEncoder
         from lmdeploy.serve.processors import MultimodalProcessor
         from lmdeploy.utils import try_import_deeplink
-        from lmdeploy.multimodal.engine import ImageEncoder
 
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)

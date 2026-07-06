@@ -4,9 +4,9 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoProcessor
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.base import VISION_MODELS, VisionModel
 from lmdeploy.multimodal.model.utils import disable_logging
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

@@ -4,10 +4,10 @@ from typing import Any
 import numpy as np
 import torch
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.base import VISION_MODELS, MultimodalSpecialTokens
 from lmdeploy.multimodal.model.qwen3 import Qwen3VLModel
 from lmdeploy.multimodal.model.utils import disable_logging
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

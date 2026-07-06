@@ -6,9 +6,9 @@ import torch
 from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.base import VISION_MODELS, VisionModel
 from lmdeploy.multimodal.model.utils import disable_logging
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

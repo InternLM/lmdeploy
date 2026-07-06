@@ -4,9 +4,9 @@ import warnings
 
 import torch
 
-from lmdeploy.utils import get_logger
 from lmdeploy.multimodal.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
 from lmdeploy.multimodal.model.utils import disable_logging
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
