@@ -63,13 +63,26 @@ def _normalize_cache_layer_ids(cache_name: str, layer_ids: Sequence[int], num_la
     return normalized
 
 
-def _get_cache_layer_map(cache_name: str, layer_ids: Sequence[int], num_layers: int) -> dict[int, int]:
-    """Map global layer ids to compact cache rows."""
-    normalized = _normalize_cache_layer_ids(cache_name, layer_ids, num_layers)
-    return {
-        layer_id: cache_row
-        for cache_row, layer_id in enumerate(normalized)
-    }
+@dataclass(frozen=True)
+class _LayeredCacheLayout:
+    """Validated compact row layout for a layer-scoped named cache."""
+
+    layer_ids: tuple[int, ...]
+    layer_map: dict[int, int]
+
+    @classmethod
+    def build(cls, cache_name: str, layer_ids: Sequence[int], num_layers: int):
+        layer_ids = tuple(_normalize_cache_layer_ids(cache_name, layer_ids, num_layers))
+        layer_map = {
+            layer_id: cache_row
+            for cache_row, layer_id in enumerate(layer_ids)
+        }
+        return cls(layer_ids=layer_ids, layer_map=layer_map)
+
+    @property
+    def num_rows(self) -> int:
+        """Number of compact cache rows required by this layout."""
+        return len(self.layer_ids)
 
 
 class NamedCacheView(Mapping[str, torch.Tensor]):
@@ -410,7 +423,7 @@ class CacheEngine:
         if model_config is None or len(model_config.block_cache_specs) == 0:
             return {}
         return {
-            spec.name: _get_cache_layer_map(spec.name, spec.layer_ids, model_config.num_layers)
+            spec.name: _LayeredCacheLayout.build(spec.name, spec.layer_ids, model_config.num_layers).layer_map
             for spec in model_config.block_cache_specs
         }
 
@@ -420,12 +433,12 @@ class CacheEngine:
         mem_pools = []
         caches = []
         for spec in model_config.block_cache_specs:
-            layer_ids = _normalize_cache_layer_ids(spec.name, spec.layer_ids, model_config.num_layers)
+            layout = _LayeredCacheLayout.build(spec.name, spec.layer_ids, model_config.num_layers)
             desc = CacheDesc(shape=spec.shape, dtype=spec.dtype, alignment=spec.alignment)
-            mem_pool = torch.zeros((len(layer_ids), num_blocks, desc.aligned_size),
+            mem_pool = torch.zeros((layout.num_rows, num_blocks, desc.aligned_size),
                                    dtype=torch.uint8,
                                    device=device)
-            cache = mem_pool[:, :, :desc.size].view(desc.dtype).view((len(layer_ids), num_blocks, *desc.shape))
+            cache = mem_pool[:, :, :desc.size].view(desc.dtype).view((layout.num_rows, num_blocks, *desc.shape))
             mem_pools.append(mem_pool)
             caches.append(cache)
         return mem_pools, caches
@@ -757,13 +770,15 @@ class StateCacheEngine:
 
         state_specs = state_specs or []
         cache_descs = []
+        cache_layouts = []
         for idx, (shape, dtype) in enumerate(state_shapes):
             spec = state_specs[idx] if idx < len(state_specs) else None
-            layered = spec is not None and spec.layer_ids is not None
-            if layered:
+            layout = None
+            if spec is not None and spec.layer_ids is not None:
                 assert num_layers is not None, 'num_layers is required for layer-scoped state caches'
-                layer_ids = _normalize_cache_layer_ids(spec.name, spec.layer_ids, num_layers)
-                shape = (len(layer_ids), *shape)
+                layout = _LayeredCacheLayout.build(spec.name, spec.layer_ids, num_layers)
+                shape = (layout.num_rows, *shape)
+            cache_layouts.append(layout)
             cache_descs.append(CacheDesc(shape, dtype))
 
         # get mempool size
@@ -777,11 +792,9 @@ class StateCacheEngine:
         # slice caches
         caches = []
         remain_pool = mem_pool
-        for idx, desc in enumerate(cache_descs):
-            spec = state_specs[idx] if idx < len(state_specs) else None
-            layered = spec is not None and spec.layer_ids is not None
+        for desc, layout in zip(cache_descs, cache_layouts):
             cache = remain_pool[:, :desc.size].view(desc.dtype).view((num_caches, *desc.shape))
-            if layered:
+            if layout is not None:
                 dims = list(range(cache.dim()))
                 cache = cache.permute(1, 0, *dims[2:])
             remain_pool = remain_pool[:, desc.aligned_size:]
@@ -797,7 +810,7 @@ class StateCacheEngine:
             if spec.layer_ids is None:
                 continue
             assert num_layers is not None, 'num_layers is required for layer-scoped state caches'
-            layer_maps[spec.name] = _get_cache_layer_map(spec.name, spec.layer_ids, num_layers)
+            layer_maps[spec.name] = _LayeredCacheLayout.build(spec.name, spec.layer_ids, num_layers).layer_map
         return layer_maps
 
     @staticmethod
