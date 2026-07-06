@@ -81,7 +81,7 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M],
 
         response = client.get(parsed.url, headers=headers, timeout=fetch_timeout, allow_redirects=False)
 
-        if 300 <= response.status_code < 400:
+        if response.is_redirect:
             location = response.headers.get('Location')
             if not location:
                 raise ValueError('Redirect response missing Location header')

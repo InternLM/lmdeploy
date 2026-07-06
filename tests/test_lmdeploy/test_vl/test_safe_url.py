@@ -94,8 +94,9 @@ def test_load_http_url_allowed_domain_still_blocks_non_global_ip(mock_get):
     mock_get.assert_not_called()
 
 
-def _mock_response(content=b'data', *, redirect_location=None):
-    response = MagicMock(content=content, status_code=302 if redirect_location is not None else 200)
+def _mock_response(content=b'data', *, redirect_location=None, status_code=None):
+    status_code = status_code if status_code is not None else (302 if redirect_location is not None else 200)
+    response = MagicMock(content=content, status_code=status_code)
     response.is_redirect = redirect_location is not None
     response.headers = {}
     if redirect_location is not None:
@@ -130,11 +131,23 @@ def test_load_http_url_blocks_disallowed_domain_after_redirect(mock_safe, mock_g
 
     assert mock_get.call_count == 1
 
+
+@patch('requests.Session.get')
+@patch('lmdeploy.vl.media.connection._is_safe_url', return_value=(True, ''))
+def test_load_http_url_does_not_treat_all_3xx_as_redirect(mock_safe, mock_get):
+    media_io = MagicMock()
+    media_io.load_bytes.return_value = 'loaded'
+    mock_get.return_value = _mock_response(content=b'cached', status_code=304)
+
+    assert _load_http_url(urlparse('https://example.com/img.jpg'), media_io) == 'loaded'
+    media_io.load_bytes.assert_called_once_with(b'cached')
+
+
 @patch('requests.Session.get')
 @patch('lmdeploy.vl.media.connection._is_safe_url', return_value=(True, ''))
 def test_load_http_url_rejects_redirect_without_location(mock_safe, mock_get):
     media_io = MagicMock()
-    mock_get.return_value = MagicMock(content=b'', status_code=302, headers={})
+    mock_get.return_value = MagicMock(content=b'', status_code=302, is_redirect=True, headers={})
 
     with pytest.raises(ValueError, match='Redirect response missing Location header'):
         _load_http_url(urlparse('https://example.com/img.jpg'), media_io)

@@ -1,3 +1,4 @@
+import asyncio
 import sys
 
 import pytest
@@ -7,6 +8,14 @@ from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.vl.constants import Modality
 
 multimodal_module = sys.modules[MultimodalProcessor.__module__]
+
+
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class TestMergeMessageContent:
@@ -303,8 +312,7 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         ]
     }]
 
-    parsed = [None] * len(messages)
-    MultimodalProcessor._parse_multimodal_item(0, messages, parsed, {})
+    parsed = _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
     content = parsed[0]['content']
 
     assert content[0] == {'type': 'text', 'text': 'describe'}
@@ -371,8 +379,7 @@ def test_async_parse_multimodal_item_passes_allowed_media_domains(monkeypatch):
         ]
     }]
 
-    out_messages = [None] * len(messages)
-    MultimodalProcessor._parse_multimodal_item(0, messages, out_messages, {}, ['example.com'])
+    _run_async(MultimodalProcessor.async_parse_multimodal_item(messages, allowed_media_domains=['example.com']))
 
     assert load_calls == [
         ('https://example.com/a.png', 'ImageMediaIO', ['example.com']),
@@ -429,9 +436,7 @@ def test_async_parse_multimodal_item_preserves_tool_image_content(monkeypatch):
         },
     ]
 
-    parsed = [None] * len(messages)
-    for i in range(len(messages)):
-        MultimodalProcessor._parse_multimodal_item(i, messages, parsed, {})
+    parsed = _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
 
     assert len(parsed) == 3
     assert parsed[2]['role'] == 'tool'
@@ -451,19 +456,17 @@ def test_async_parse_multimodal_item_preserves_tool_image_content(monkeypatch):
 def test_async_parse_multimodal_item_rejects_missing_payload(item):
     """Test missing multimodal payloads fail with a clear error."""
     messages = [{'role': 'user', 'content': [item]}]
-    out_messages = [None] * len(messages)
 
     with pytest.raises(ValueError, match='Expected .* direct value or a dict containing "url" or "data"'):
-        MultimodalProcessor._parse_multimodal_item(0, messages, out_messages, {})
+        _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
 
 
 def test_async_parse_multimodal_item_rejects_unknown_type():
     """Test unknown multimodal item types still fail explicitly."""
     messages = [{'role': 'user', 'content': [{'type': 'unknown_media', 'unknown_media': 'file:///tmp/a.bin'}]}]
-    out_messages = [None] * len(messages)
 
     with pytest.raises(NotImplementedError, match='unknown type: unknown_media'):
-        MultimodalProcessor._parse_multimodal_item(0, messages, out_messages, {})
+        _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
 
 
 def test_has_multimodal_input_detects_all_supported_types():
