@@ -564,7 +564,7 @@ class MiscConfig:
     empty_init: bool = False
     model_format: str = None
     hf_overrides: dict[str, Any] = None
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
@@ -584,7 +584,7 @@ class MiscConfig:
             prefill_interval=engine_config.prefill_interval,
             model_format=engine_config.model_format,
             hf_overrides=engine_config.hf_overrides,
-            disable_vision_encoder=engine_config.disable_vision_encoder,
+            language_model_only=engine_config.language_model_only,
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
@@ -627,6 +627,7 @@ class SpecDecodeConfig:
                                                    block_size=target_cache_cfg.block_size,
                                                    model_format=model_format,
                                                    hf_overrides=hf_overrides,
+                                                   device_type=target_cache_cfg.device_type,
                                                    )
         cache_config = None
         # include medusa

@@ -459,18 +459,9 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
         llm_config = config.llm_config
         self.llm_arch_name = llm_config.architectures[0]
-        self.is_mono = self.llm_arch_name == 'InternLM2VEForCausalLM'
 
         vision_config = config.vision_config
-        if self.is_mono:
-            from .internvl_patch import InternVisionPatchModel
-            self.vision_model = InternVisionPatchModel(
-                vision_config,
-                dtype=dtype,
-                device=device,
-            )
-        else:
-            self.vision_model = InternVisionModel(vision_config, dtype=dtype, device=device)
+        self.vision_model = InternVisionModel(vision_config, dtype=dtype, device=device)
 
         self.language_model = build_model_from_hf_config(llm_config, dtype=dtype, device=device)
         self.lm_head = self.language_model.lm_head
@@ -485,11 +476,6 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                       dtype=dtype,
                       device=device), nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size, bias=True, dtype=dtype, device=device))
-
-        # for Mono-InternVL
-        if self.is_mono:
-            assert dtype != torch.float16, ('Currently Mono-InternVL does not support FP16 due to'
-                                            'numerical instability. Please use BF16 instead.')
 
         self.input_processor = InternVLInputProcessor(self.config, dtype)
 
@@ -554,11 +540,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         """Extract vision feature."""
         assert self.select_layer == -1
         vit_embeds = self.vision_model(pixel_values)
-        if self.is_mono:
-            if int(vit_embeds.shape[1]**0.5)**2 != vit_embeds.shape[1]:
-                vit_embeds = vit_embeds[:, 1:, :]
-        else:
-            vit_embeds = vit_embeds[:, 1:, :]
+        vit_embeds = vit_embeds[:, 1:, :]
 
         h = w = int(vit_embeds.shape[1]**0.5)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
@@ -788,20 +770,11 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
             inputs_embeds = lang_embeds
 
-        if self.is_mono:
-            return self.language_model.forward(input_ids=input_ids,
-                                               inputs_embeds=inputs_embeds,
-                                               past_key_values=past_key_values,
-                                               position_ids=position_ids,
-                                               attn_metadata=attn_metadata,
-                                               vision_embedding_indexing=vision_embedding_indexing,
-                                               text_embedding_indexing=text_embedding_indexing)
-        else:
-            return self.language_model.forward(input_ids=input_ids,
-                                               inputs_embeds=inputs_embeds,
-                                               past_key_values=past_key_values,
-                                               position_ids=position_ids,
-                                               attn_metadata=attn_metadata)
+        return self.language_model.forward(input_ids=input_ids,
+                                           inputs_embeds=inputs_embeds,
+                                           past_key_values=past_key_values,
+                                           position_ids=position_ids,
+                                           attn_metadata=attn_metadata)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -835,10 +808,6 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             else:
                 pixel_values = None
                 image_mask = None
-
-        if self.is_mono and pixel_values is not None:
-            vision_embedding_indexing = torch.arange(input_ids.shape[1], device=input_ids.device)
-            vision_embedding_indexing = vision_embedding_indexing[image_mask[0]]
 
         # get inputs from context
         if vision_embeddings is not None and len(vision_embeddings) > 0:
@@ -893,34 +862,15 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                     # init model metas
                     context.model_metas = [{'new_seqlen': seqlen} for seqlen in seq_lengths.tolist()]
 
-        if self.is_mono and vision_embedding_indexing is not None:
-            all_indices = torch.arange(input_ids.shape[1]).to(input_ids)
-            text_embedding_indexing = all_indices[~torch.isin(all_indices, vision_embedding_indexing)]
-            if vision_embedding_indexing.numel() == 0:
-                vision_embedding_indexing = None
-            if text_embedding_indexing.numel() == 0:
-                text_embedding_indexing = None
-            return dict(input_ids=input_ids,
-                        position_ids=position_ids,
-                        past_key_values=past_key_values,
-                        attn_metadata=attn_metadata,
-                        pixel_values=pixel_values,
-                        image_mask=image_mask,
-                        inputs_embeds=inputs_embeds,
-                        vision_embedding_indexing=vision_embedding_indexing,
-                        text_embedding_indexing=text_embedding_indexing,
-                        image_token_id=image_token_id,
-                        context=context)
-        else:
-            return dict(input_ids=input_ids,
-                        position_ids=position_ids,
-                        past_key_values=past_key_values,
-                        attn_metadata=attn_metadata,
-                        pixel_values=pixel_values,
-                        image_mask=image_mask,
-                        inputs_embeds=inputs_embeds,
-                        image_token_id=image_token_id,
-                        context=context)
+        return dict(input_ids=input_ids,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    attn_metadata=attn_metadata,
+                    pixel_values=pixel_values,
+                    image_mask=image_mask,
+                    inputs_embeds=inputs_embeds,
+                    image_token_id=image_token_id,
+                    context=context)
 
     def load_lora_weights(self, weights: Iterable[tuple[str, torch.Tensor]], adapter_id: int):
         """Load lora weights."""

@@ -173,6 +173,22 @@ def quant_fp8(A: Tensor,
     return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
 
 
+def per_token_group_quant_fp8(A: Tensor,
+                              group_size: int,
+                              dtype: torch.dtype = torch.float8_e4m3fn,
+                              scale_fmt: str | None = None):
+    """Per-token-group FP8 quantization for tensors with arbitrary leading
+    dims."""
+    assert A.dim() >= 2
+    assert A.stride(-1) == 1, f'{A} groups must be contiguous'
+    M = A.numel() // A.size(-1)
+    K = A.size(-1)
+    assert K % group_size == 0
+    out = torch.empty_like(A, dtype=dtype)
+    scales = A.new_empty(*A.shape[:-1], K // group_size, dtype=torch.float32)
+    return _quant_fp8_launcher(A.view(M, K), group_size, out.view(M, K), scales.view(M, K // group_size), scale_fmt)
+
+
 def quant_fp8_tma(A: Tensor,
                   group_size: int,
                   dtype: torch.dtype = torch.float8_e4m3fn,
