@@ -98,13 +98,13 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.attn_dp_size = overlap
         cfg.attn_tp_size = inner_tp_size // cfg.cp
         cfg.attn_cp_size = cfg.cp
+        comm_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
         cfg.mlp_dp_size = 1
-        cfg.mlp_tp_size = total // cfg.ep if cfg.ep > 1 else overlap * inner_tp_size
+        cfg.mlp_tp_size = comm_size // cfg.ep if cfg.ep > 1 else overlap * inner_tp_size
     if cfg.ep > 1:
         assert cfg.communicator == 'nccl', f'{cfg.communicator} communicator does not support ep > 1'
         assert cfg.mlp_tp_size == 1, 'Only support mlp_tp_size == 1 when ep > 1'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size * cfg.ep
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
     cfg.devices = cfg.devices[:cfg.device_num // cfg.nnodes]

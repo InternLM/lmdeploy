@@ -221,16 +221,16 @@ void UnifiedDecoder::ReduceScatterVResidualRMSnorm(Tensor&                  loca
     Tensor hidden_slice   = local_hidden_states.slice({partition.first_token, 0}, {partition.token_count, -1});
     Tensor residual_slice = local_residual.slice({partition.first_token, 0}, {partition.token_count, -1});
 
-    d_comm_->ReduceScatterV(local_hidden_states.raw_data(),
-                            hidden_slice.raw_data(),
+    d_comm_->ReduceScatterV(local_hidden_states.data_or((void*)nullptr),
+                            residual_slice.data_or((void*)nullptr),
                             partition.tp_elem_counts,
                             dtype,
                             attn_tp_group_,
                             stream);
     TM_CUDA_CHECK(cudaGetLastError());
 
-    invokeResidualBiasRMSNorm(hidden_slice.raw_data(),
-                              residual_slice.raw_data(),
+    invokeResidualBiasRMSNorm(hidden_slice.data_or((void*)nullptr),
+                              residual_slice.data_or((void*)nullptr),
                               weight.raw_data(),
                               bias.data_or((void*)nullptr),
                               dtype,
@@ -260,8 +260,8 @@ void UnifiedDecoder::ResidualRMSnormAllGatherV(Tensor&                  local_hi
     Tensor hidden_slice   = local_hidden_states.slice({partition.first_token, 0}, {partition.token_count, -1});
     Tensor residual_slice = local_residual.slice({partition.first_token, 0}, {partition.token_count, -1});
 
-    invokeResidualBiasRMSNorm(hidden_slice.raw_data(),
-                              residual_slice.raw_data(),
+    invokeResidualBiasRMSNorm(hidden_slice.data_or((void*)nullptr),
+                              residual_slice.data_or((void*)nullptr),
                               weight.raw_data(),
                               nullptr,
                               dtype,
@@ -271,8 +271,8 @@ void UnifiedDecoder::ResidualRMSnormAllGatherV(Tensor&                  local_hi
                               stream);
     TM_CUDA_CHECK(cudaGetLastError());
 
-    d_comm_->AllGatherV(hidden_slice.raw_data(),
-                        local_hidden_states.raw_data(),
+    d_comm_->AllGatherV(hidden_slice.data_or((void*)nullptr),
+                        local_hidden_states.data_or((void*)nullptr),
                         partition.tp_elem_counts,
                         dtype,
                         attn_tp_group_,
