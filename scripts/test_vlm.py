@@ -18,7 +18,7 @@ def main():
     os.environ['CUDA_VISIBLE_DEVICES'] = gpus
 
     from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
-    from lmdeploy.vl import load_image
+    from lmdeploy.multimodal import load_image
 
     engine_config = TurbomindEngineConfig(
         async_=1,
