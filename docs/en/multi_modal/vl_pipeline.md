@@ -237,3 +237,27 @@ import gc
 torch.cuda.empty_cache()
 gc.collect()
 ```
+
+## Language-model-only mode
+
+For hybrid vision-language checkpoints (e.g. Qwen3-VL, Qwen3.5, InternVL), you can run text-only inference without loading vision/multimodal encoder modules. This frees GPU memory for the KV cache.
+
+**CLI (serve):**
+
+```bash
+lmdeploy serve api_server Qwen/Qwen3-VL-8B-Instruct --backend pytorch --language-model-only
+```
+
+**Python API:**
+
+```python
+from lmdeploy import pipeline
+from lmdeploy.messages import PytorchEngineConfig
+
+pipe = pipeline(
+    'Qwen/Qwen3-VL-8B-Instruct',
+    backend_config=PytorchEngineConfig(language_model_only=True),
+)
+```
+
+When this mode is enabled, multimodal inputs are ignored with a warning.

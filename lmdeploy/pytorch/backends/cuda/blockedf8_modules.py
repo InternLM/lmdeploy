@@ -50,7 +50,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
             if scatter_size is not None:
                 out = dist.reduce_scatter_by_tp_sizes(out, rank, scatter_size, group=group)
             else:
-                dist.all_reduce(out)
+                dist.all_reduce(out, group=group)
         return out
 
 

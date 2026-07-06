@@ -333,6 +333,70 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
     ]
 
 
+def test_async_parse_multimodal_item_preserves_tool_image_content(monkeypatch):
+    """Tool result images should be parsed in place like vLLM."""
+    load_calls = []
+
+    def fake_load_from_url(data_src, media_io):
+        load_calls.append((data_src, type(media_io).__name__))
+        return f'loaded:{data_src}'
+
+    monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
+
+    image_data_url = 'data:image/png;base64,abc'
+    messages = [
+        {
+            'role': 'user',
+            'content': 'describe the image from the tool result',
+        },
+        {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [{
+                'id': 'call_read',
+                'type': 'function',
+                'function': {
+                    'name': 'file_read',
+                    'arguments': '{}',
+                },
+            }],
+        },
+        {
+            'role':
+            'tool',
+            'tool_call_id':
+            'call_read',
+            'content': [
+                {
+                    'type': 'text',
+                    'text': 'Image file read successfully: file-read-demo.png',
+                },
+                {
+                    'type': 'image_url',
+                    'image_url': {
+                        'url': image_data_url,
+                        'detail': 'auto',
+                    },
+                },
+            ],
+        },
+    ]
+
+    parsed = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+
+    assert len(parsed) == 3
+    assert parsed[2]['role'] == 'tool'
+    assert parsed[2]['tool_call_id'] == 'call_read'
+    assert parsed[2]['content'][0] == {
+        'type': 'text',
+        'text': 'Image file read successfully: file-read-demo.png',
+    }
+    assert parsed[2]['content'][1]['type'] == Modality.IMAGE
+    assert parsed[2]['content'][1]['data'] == f'loaded:{image_data_url}'
+    assert parsed[2]['content'][1]['detail'] == 'auto'
+    assert load_calls == [(image_data_url, 'ImageMediaIO')]
+
+
 @pytest.mark.parametrize('item', [{'type': 'image_url'}, {'type': 'image', 'image': {}},
                                   {'type': 'time_series', 'time_series': {'sr': 16000}}])
 def test_async_parse_multimodal_item_rejects_missing_payload(item):
@@ -360,6 +424,7 @@ def test_has_multimodal_input_detects_all_supported_types():
             'time_series'
     ]:
         assert processor._has_multimodal_input([{'role': 'user', 'content': [{'type': item_type}]}])
+    assert processor._has_multimodal_input([{'role': 'tool', 'content': [{'type': 'image_url'}]}])
     assert not processor._has_multimodal_input([{'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]}])
 
 

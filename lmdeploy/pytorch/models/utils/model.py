@@ -181,8 +181,8 @@ def vlm_model(vlm_cls):
     @functools.wraps(vlm_cls)
     def wrapper(*args, **kwargs):
         bm_ctx = get_build_model_context()
-        disable_vision_encoder = bm_ctx.disable_vision_encoder
-        if disable_vision_encoder:
+        language_model_only = bm_ctx.language_model_only
+        if language_model_only:
             mod = torch.nn.Identity()
             mod._is_dummy_mod = True
             return mod

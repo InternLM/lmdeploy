@@ -62,6 +62,7 @@ class CLI:
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
+        language_model_only = ArgumentHelper.language_model_only(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -72,6 +73,7 @@ class CLI:
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(quant_policy)
+        tb_group._group_actions.append(language_model_only)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
