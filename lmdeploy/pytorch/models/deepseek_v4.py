@@ -188,14 +188,14 @@ class Compressor(nn.Module):
             return 'v4_compress_state_r4'
         return 'v4_compress_state_r128'
 
-    def _get_block_cache_name(self):
+    def _get_index_kv_cache_name(self) -> str | None:
+        """Return the indexer simple-FP8 cache name, if this compressor uses one."""
         if self.rotate:
             return 'v4_index_kv_r4'
-        if self.compress_ratio == 4:
-            return 'v4_compressed_kv_r4'
-        return 'v4_compressed_kv_r128'
+        return None
 
-    def _get_fp8_cache_name(self):
+    def _get_flashmla_fp8_cache_name(self) -> str | None:
+        """Return the FlashMLA packed FP8 cache name, if this compressor uses one."""
         if self.rotate:
             return None
         if self.compress_ratio == 4:
@@ -261,11 +261,11 @@ class Compressor(nn.Module):
 
         # ---- Phase G: Write to paged block cache (via backend dispatch) ----
         block_caches = caches.block_caches
-        cache_name = self._get_block_cache_name()
-        fp8_cache_name = self._get_fp8_cache_name()
-        kv_cache = caches.block_cache(cache_name, self.layer_id) if cache_name in block_caches else None
+        kv_cache_name = self._get_index_kv_cache_name()
+        fp8_cache_name = self._get_flashmla_fp8_cache_name()
+        kv_cache = caches.block_cache(kv_cache_name, self.layer_id) if kv_cache_name else None
         fp8_cache = caches.block_cache(fp8_cache_name, self.layer_id) if fp8_cache_name else None
-        scale_cache_name = f'{cache_name}_scale' if self.rotate else None
+        scale_cache_name = f'{kv_cache_name}_scale' if kv_cache_name else None
         if scale_cache_name and scale_cache_name in block_caches:
             kv_scale_cache = caches.block_cache(scale_cache_name, self.layer_id)
         else:
