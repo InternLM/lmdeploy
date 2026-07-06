@@ -374,11 +374,16 @@ class MultimodalProcessor:
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        chat_template_kwargs = chat_template_kwargs or {}
+        chat_template_kwargs = dict(chat_template_kwargs or {})
+        template_reasoning_effort = reasoning_effort
+        if template_reasoning_effort is None:
+            template_reasoning_effort = chat_template_kwargs.pop('reasoning_effort', None)
+        else:
+            chat_template_kwargs.pop('reasoning_effort', None)
         prompt = chat_template.messages2prompt(prompt,
                                                sequence_start,
                                                tools=tools,
-                                               reasoning_effort=reasoning_effort,
+                                               reasoning_effort=template_reasoning_effort,
                                                **chat_template_kwargs)
         if prompt is None:
             raise ValueError(

@@ -265,7 +265,7 @@ class BaseResponseParser(ResponseParser):
         it into ``chat_template_kwargs`` so downstream parser behavior can rely
         on one normalized source.
         """
-        chat_template_kwargs = request.chat_template_kwargs or {}
+        chat_template_kwargs = dict(request.chat_template_kwargs or {})
         if request.enable_thinking is not None:
             logger.warning('`enable_thinking` will be deprecated in the future, '
                            'please use `chat_template_kwargs` instead.')
