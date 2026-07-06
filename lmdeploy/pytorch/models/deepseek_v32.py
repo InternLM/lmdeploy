@@ -33,6 +33,26 @@ from .deepseek_v2 import (
 )
 
 
+def get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
+    """Return whether a DSA layer computes or reuses top-k indices."""
+    indexer_types = getattr(config, 'indexer_types', None)
+    if indexer_types is None or layer_idx is None or layer_idx >= len(indexer_types):
+        return 'full'
+    return indexer_types[layer_idx]
+
+
+def get_layer_idx_from_weight_name(name: str) -> int | None:
+    """Parse a transformer layer index from a checkpoint parameter name."""
+    for marker in ('.layers.', 'layers.'):
+        if marker not in name:
+            continue
+        try:
+            return int(name.split(marker, 1)[1].split('.', 1)[0])
+        except ValueError:
+            return None
+    return None
+
+
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
     from fast_hadamard_transform import hadamard_transform
@@ -239,7 +259,10 @@ class DeepseekV32Attention(DeepseekV2Attention):
             quant_config=quantization_config,
         )
 
-        self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
+        self.indexer_type = get_layer_indexer_type(config, layer_idx)
+        self.indexer = None
+        if self.indexer_type == 'full':
+            self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
         """Q proj."""
@@ -288,6 +311,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Sequence[torch.Tensor] = None,
         attn_metadata: Any = None,
+        prev_topk_indices: torch.Tensor | None = None,
     ):
         """Rewrite of LlamaAttention.forward."""
         dist_ctx = get_dist_manager().current_context()
@@ -310,7 +334,16 @@ class DeepseekV32Attention(DeepseekV2Attention):
         query_states[..., nope_size:] = q_pe
         key_states[..., nope_size:] = k_pe
 
-        topk_indices = self.indexer(hidden_states, qr, rotary_pos_emb, past_key_value[-2:], attn_metadata=attn_metadata)
+        if self.indexer is None:
+            if prev_topk_indices is None:
+                raise RuntimeError(f'Layer {self.layer_idx} reuses DSA top-k indices but none were provided.')
+            topk_indices = prev_topk_indices
+        else:
+            topk_indices = self.indexer(hidden_states,
+                                        qr,
+                                        rotary_pos_emb,
+                                        past_key_value[-2:],
+                                        attn_metadata=attn_metadata)
 
         attn_output = self.attn_fwd(
             query_states,
@@ -329,7 +362,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         attn_output = attn_bmm_out.flatten(-2, -1)[None]
         attn_output = self.o_proj(attn_output)
 
-        return attn_output
+        return attn_output, topk_indices
 
 
 class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
@@ -364,6 +397,44 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
                                                 config.rms_norm_eps,
                                                 dtype=torch.float32,
                                                 device=device)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
+        attn_metadata: Any = None,
+        prev_topk_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.Tensor | None]:
+
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        if isinstance(self.self_attn, DeepseekV32Attention):
+            hidden_states, topk_indices = self.self_attn(
+                hidden_states=hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                attn_metadata=attn_metadata,
+                prev_topk_indices=prev_topk_indices,
+            )
+        else:
+            hidden_states = self.self_attn(
+                hidden_states=hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                attn_metadata=attn_metadata,
+            )
+            topk_indices = None
+
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
+
+        return hidden_states, residual, topk_indices
 
 
 class DeepseekV32Model(DeepseekV2Model):
@@ -404,6 +475,56 @@ class DeepseekV32Model(DeepseekV2Model):
         rope_params.update(update_params)
         self.rotary_emb = build_rotary_embedding(**rope_params)
 
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        attn_metadata: Any = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+    ):
+        """forward."""
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+        residual = None
+        prev_topk_indices = None
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+        for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual, prev_topk_indices = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                residual=residual,
+                attn_metadata=attn_metadata,
+                prev_topk_indices=prev_topk_indices,
+            )
+
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def forward_microbatch(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        attn_metadata: Any = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+    ):
+        """forward_microbatch."""
+        return self.forward(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )
+
 
 class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
 
@@ -425,3 +546,12 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
+
+    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               update_pe_mapping: list):
+        """Load attention weights."""
+        if '.self_attn.indexer.' in name and name not in params_dict:
+            layer_idx = get_layer_idx_from_weight_name(name)
+            if get_layer_indexer_type(self.config, layer_idx) == 'shared':
+                return
+        return super()._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
