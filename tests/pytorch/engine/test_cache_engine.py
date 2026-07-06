@@ -128,6 +128,14 @@ def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
                                          num_layers=4,
                                          device='meta')
 
+    empty_state_layers = [StateCacheSpec('empty', (1, ), torch.float32, layer_ids=[])]
+    with pytest.raises(ValueError, match='must not be empty'):
+        StateCacheEngine.allocate_caches(num_caches=1,
+                                         state_shapes=[((1, ), torch.float32)],
+                                         state_specs=empty_state_layers,
+                                         num_layers=4,
+                                         device='meta')
+
 
 def test_deepseek_v4_cache_accessors_resolve_layer_scoped_rows():
     from lmdeploy.pytorch.models.deepseek_v4 import V4Caches

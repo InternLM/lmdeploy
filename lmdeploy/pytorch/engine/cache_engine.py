@@ -759,7 +759,7 @@ class StateCacheEngine:
         cache_descs = []
         for idx, (shape, dtype) in enumerate(state_shapes):
             spec = state_specs[idx] if idx < len(state_specs) else None
-            layered = spec is not None and spec.layer_ids
+            layered = spec is not None and spec.layer_ids is not None
             if layered:
                 assert num_layers is not None, 'num_layers is required for layer-scoped state caches'
                 layer_ids = _normalize_cache_layer_ids(spec.name, spec.layer_ids, num_layers)
@@ -779,7 +779,7 @@ class StateCacheEngine:
         remain_pool = mem_pool
         for idx, desc in enumerate(cache_descs):
             spec = state_specs[idx] if idx < len(state_specs) else None
-            layered = spec is not None and spec.layer_ids
+            layered = spec is not None and spec.layer_ids is not None
             cache = remain_pool[:, :desc.size].view(desc.dtype).view((num_caches, *desc.shape))
             if layered:
                 dims = list(range(cache.dim()))
@@ -794,7 +794,7 @@ class StateCacheEngine:
         """Build global-layer-id to local-row maps for named state caches."""
         layer_maps = {}
         for spec in state_specs:
-            if not spec.layer_ids:
+            if spec.layer_ids is None:
                 continue
             assert num_layers is not None, 'num_layers is required for layer-scoped state caches'
             layer_maps[spec.name] = _get_cache_layer_map(spec.name, spec.layer_ids, num_layers)
