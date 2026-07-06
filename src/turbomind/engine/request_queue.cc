@@ -15,7 +15,8 @@ std::unique_ptr<RequestQueue> RequestQueue::create(SchedulePolicy schedule_polic
         case SchedulePolicy::kPriority:
             return std::make_unique<PriorityRequestQueue>();
         default:
-            throw std::invalid_argument("unsupported schedule_policy " + std::to_string(static_cast<int>(schedule_policy)));
+            throw std::invalid_argument("unsupported schedule_policy "
+                                        + std::to_string(static_cast<int>(schedule_policy)));
     }
 }
 
