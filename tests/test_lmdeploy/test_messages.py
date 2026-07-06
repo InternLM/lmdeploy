@@ -24,8 +24,8 @@ def test_chat_completion_request_repetition_ngram_ge_zero():
 
 def test_engine_generation_config():
     tokenizer = Tokenizer('internlm/internlm2-chat-7b', trust_remote_code=True)
-    config = GenerationConfig(n=3, stop_words=['<eoa>'])
-    stop_token_ids = tokenizer.encode('<eoa>', add_bos=False)
+    config = GenerationConfig(n=3, stop_words=['<|im_end|>'])
+    stop_token_ids = tokenizer.encode('<|im_end|>', add_bos=False)
     config.convert_stop_bad_words_to_ids(tokenizer)
     assert stop_token_ids == config.stop_token_ids
     assert isinstance(config.stop_token_ids, list) and \
