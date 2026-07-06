@@ -10,7 +10,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlToolParser
+from .xml_tool_parser import XmlParseResult, XmlToolParser
 
 
 @ToolParserManager.register_module(['qwen3coder'])
@@ -23,14 +23,8 @@ class Qwen3CoderToolParser(XmlToolParser):
     )
 
     def _reset_incremental_state(self) -> None:
-        self._func_name: str | None = None
-        self._args: dict[str, str] = {}
-        self._arg_name: str | None = None
         self._value_parts: list[str] = []
-        self._phase = 'function'
-        self._stream_started = False
-        self._stream_pending_ws = ''
-        self._stream_blocked = False
+        self._reset_value_stream_state()
 
     # Qwen3Coder closes tool argument JSON only when the model emits the
     # explicit function end marker (</function>). We intentionally avoid
@@ -56,13 +50,11 @@ class Qwen3CoderToolParser(XmlToolParser):
         self._stream_pending_ws = ''
         self._stream_blocked = False
 
-    def _stream_arg_delta(self, raw: str) -> str:
-        if self._stream_blocked:
-            return ''
+    def _block_stream_arg_delta(self) -> None:
+        self._stream_blocked = True
 
-        schema_type = self._get_param_schema_type(self._func_name, self._arg_name or '')
-        if schema_type not in (None, 'string'):
-            self._stream_blocked = True
+    def _normalize_stream_arg_delta(self, raw: str, schema_type: str | None) -> str:
+        if self._stream_blocked:
             return ''
 
         text = self._stream_pending_ws + raw
@@ -84,52 +76,72 @@ class Qwen3CoderToolParser(XmlToolParser):
         self._stream_started = True
         return stable
 
-    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
+    def _consume_function(self, payload: str, pos: int, final: bool) -> XmlParseResult:
+        """Read a Qwen ``<function=name>`` opener and publish the function
+        name.
+
+        The parser waits when either the opener or its closing ``>`` is split
+        across chunks.
+        """
         start = payload.find('<function=', pos)
         if start < 0:
-            return None
+            return XmlParseResult(next_pos=None)
 
         name_start = start + len('<function=')
         name_end = payload.find('>', name_start)
         if name_end < 0:
-            return None
+            return XmlParseResult(next_pos=None)
 
-        self._func_name = payload[name_start:name_end].strip()
-        self._phase = 'arg_start'
-        return name_end + 1
+        return XmlParseResult(
+            next_pos=name_end + 1,
+            next_phase='arg_start',
+            func_name=payload[name_start:name_end].strip(),
+        )
 
-    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_start(self, payload: str, pos: int) -> XmlParseResult:
+        """Find the next Qwen parameter opener or the function close marker.
+
+        ``</function>`` closes the XML payload only when it appears before the next
+        ``<parameter=`` marker.
+        """
         param_start = payload.find('<parameter=', pos)
         func_end = payload.find('</function>', pos)
 
         if func_end >= 0 and (param_start < 0 or func_end < param_start):
-            self._payload_closed = True
-            self._phase = 'done'
-            return func_end + len('</function>')
+            return XmlParseResult(
+                next_pos=func_end + len('</function>'),
+                next_phase='done',
+                payload_closed=True,
+            )
 
         if param_start < 0:
-            return None
+            return XmlParseResult(next_pos=None)
 
-        self._phase = 'arg_name'
-        return param_start + len('<parameter=')
+        return XmlParseResult(
+            next_pos=param_start + len('<parameter='),
+            next_phase='arg_name',
+        )
 
-    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_name(self, payload: str, pos: int) -> XmlParseResult:
+        """Read the Qwen parameter name and advance to its value body."""
         name_end = payload.find('>', pos)
         if name_end < 0:
-            return None
+            return XmlParseResult(next_pos=None)
 
-        self._arg_name = payload[pos:name_end].strip()
         self._value_parts.clear()
         self._reset_value_stream_state()
-        self._phase = 'arg_value'
-        return name_end + 1
+        return XmlParseResult(
+            next_pos=name_end + 1,
+            next_phase='arg_value',
+            arg_name=payload[pos:name_end].strip(),
+        )
 
-    def _consume_arg_value(self, payload: str, pos: int, arg_delta_parts: list[str]) -> tuple[int | None, bool]:
-        """Consume a parameter value.
+    def _consume_arg_value(self, payload: str, pos: int) -> XmlParseResult:
+        """Consume Qwen parameter value text.
 
-        Returns ``(next_pos, should_stop)``. ``should_stop`` is true after
-        streaming an open value delta, because the next bytes may be the
-        parameter close tag and must be checked with the next chunk.
+        Closed values are stripped to preserve Qwen's current XML formatting
+        behavior. Open values leave a possible partial ``</parameter>`` suffix
+        buffered so split close tags are not emitted as argument text.
         """
         value_end = payload.find('</parameter>', pos)
 
@@ -137,26 +149,26 @@ class Qwen3CoderToolParser(XmlToolParser):
             raw = payload[pos:value_end]
             if raw:
                 self._value_parts.append(raw)
-            if self._arg_name:
-                self._args[self._arg_name] = ''.join(self._value_parts).strip()
-            self._arg_name = None
+            value = ''.join(self._value_parts).strip()
             self._value_parts.clear()
             self._reset_value_stream_state()
-            self._phase = 'arg_start'
-            return value_end + len('</parameter>'), False
+            return XmlParseResult(
+                next_pos=value_end + len('</parameter>'),
+                next_phase='arg_start',
+                completed_arg_value=value,
+            )
 
-        # Open value: keep any partial "</parameter>" suffix buffered instead
-        # of emitting it as argument text.
         raw_end = self._trim_partial_close_tag_suffix(payload, pos, '</parameter>')
         if raw_end == pos:
-            return None, True
+            return XmlParseResult(next_pos=None, should_stop=True)
 
         raw_delta = payload[pos:raw_end]
         self._value_parts.append(raw_delta)
-        stream_delta = self._stream_arg_delta(raw_delta)
-        if stream_delta:
-            arg_delta_parts.append(stream_delta)
-        return raw_end, True
+        return XmlParseResult(
+            next_pos=raw_end,
+            raw_arg_delta=raw_delta,
+            should_stop=True,
+        )
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         func_name, raw_args_dict, _ = self._extract_params(payload)
