@@ -10,7 +10,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlToolParser  # type: ignore[reportMissingImports]
+from .xml_tool_parser import XmlToolParser
 
 
 @ToolParserManager.register_module(['glm47'])
@@ -21,10 +21,6 @@ class Glm47ToolParser(XmlToolParser):
     ``function_name<arg_key>k</arg_key><arg_value>v</arg_value>...``
     """
 
-    arg_key_start_token = '<arg_key>'
-    arg_key_end_token = '</arg_key>'
-    arg_value_start_token = '<arg_value>'
-    arg_value_end_token = '</arg_value>'
     _complete_payload_pattern = re.compile(
         r'^\s*[^\s<]+(?:\s*<arg_key>[^<]+</arg_key>\s*<arg_value>.*?</arg_value>)*\s*$',
         re.DOTALL,
@@ -33,12 +29,12 @@ class Glm47ToolParser(XmlToolParser):
     def _reset_incremental_state(self) -> None:
         self._func_name: str | None = None
         self._args: dict[str, str] = {}
-        self._open_arg_key: str | None = None
-        # Offset in accumulated args text where the in-flight value begins
-        # (first char after ``<arg_value>``); -1 when none is open.
-        self._value_start = -1
-        # Resume arg scanning after the last completed ``</arg_value>``.
-        self._scan_pos = 0
+        self._arg_name: str | None = None
+        self._value_parts: list[str] = []
+        self._phase = 'function'
+        self._stream_started = False
+        self._stream_pending_ws = ''
+        self._stream_blocked = False
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
@@ -52,35 +48,126 @@ class Glm47ToolParser(XmlToolParser):
     def get_tool_payload_format(cls) -> str:
         return 'xml'
 
-    def _extract_incremental_state(self,
-                                   payload: str,
-                                   final: bool = False) -> tuple[str | None, dict[str, str], bool]:
-        """Update streaming parse state from accumulated inner tool payload.
+    def _reset_value_stream_state(self) -> None:
+        self._stream_started = False
+        self._stream_pending_ws = ''
+        self._stream_blocked = False
 
-        See :meth:`Qwen3CoderToolParser._extract_incremental_state` for the
-        contract. GLM-4.7 uses ``func_name<arg_key>k</arg_key><arg_value>v
-        </arg_value>`` instead of Qwen3Coder XML; ``is_closed`` is always
-        ``False`` because argument JSON is closed by the outer ``</tool_call>``.
+    def _stream_arg_delta(self, raw: str) -> str:
+        if self._stream_blocked:
+            return ''
+
+        schema_type = self._get_param_schema_type(self._func_name, self._arg_name or '')
+        if schema_type not in (None, 'string'):
+            self._stream_blocked = True
+            return ''
+
+        text = self._stream_pending_ws + raw
+        self._stream_pending_ws = ''
+
+        if schema_type == 'string':
+            if not self._stream_started:
+                text = text.lstrip()
+                if not text:
+                    return ''
+                if text.startswith('"'):
+                    self._stream_blocked = True
+                    return ''
+
+            stable = text.rstrip()
+            self._stream_pending_ws = text[len(stable):]
+            if not stable:
+                return ''
+
+            self._stream_started = True
+            return stable
+
+        if not self._stream_started:
+            stripped = text.lstrip()
+            if not stripped:
+                self._stream_pending_ws = text
+                return ''
+            if stripped.startswith('"'):
+                self._stream_blocked = True
+                return ''
+
+        self._stream_started = True
+        return text
+
+    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
+        arg_key_start = payload.find('<arg_key>', pos)
+        if arg_key_start >= 0:
+            name = payload[pos:arg_key_start].strip()
+            if name:
+                self._func_name = name
+            self._phase = 'arg_start'
+            return arg_key_start
+
+        remaining = payload[pos:]
+        if final and remaining.strip():
+            self._func_name = remaining.strip()
+            return len(payload)
+        return None
+
+    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+        arg_key_start = payload.find('<arg_key>', pos)
+        if arg_key_start < 0:
+            return None
+
+        self._phase = 'arg_name'
+        return arg_key_start + len('<arg_key>')
+
+    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+        key_end = payload.find('</arg_key>', pos)
+        if key_end < 0:
+            return None
+
+        value_start = payload.find('<arg_value>', key_end + len('</arg_key>'))
+        if value_start < 0:
+            return None
+
+        self._arg_name = payload[pos:key_end].strip()
+        self._value_parts.clear()
+        self._reset_value_stream_state()
+        self._phase = 'arg_value'
+        return value_start + len('<arg_value>')
+
+    def _consume_arg_value(self, payload: str, pos: int, arg_delta_parts: list[str]) -> tuple[int | None, bool]:
+        """Consume an argument value.
+
+        Returns ``(next_pos, should_stop)``. ``should_stop`` is true after
+        streaming an open value delta, because the next bytes may be the
+        argument close tag and must be checked with the next chunk.
         """
-        payload = payload.strip()
-        if not payload:
-            return self._func_name, dict(self._args), False
+        value_end = payload.find('</arg_value>', pos)
 
-        args_start_idx = payload.find(self.arg_key_start_token)
-        if args_start_idx >= 0:
-            func_name = payload[:args_start_idx].strip()
-            if func_name:
-                self._func_name = func_name
-            self._parse_args_incremental(payload[args_start_idx:])
-        elif final:
-            func_name = payload.strip()
-            if func_name:
-                self._func_name = func_name
+        if value_end >= 0:
+            raw = payload[pos:value_end]
+            if raw:
+                self._value_parts.append(raw)
+            if self._arg_name:
+                self._args[self._arg_name] = ''.join(self._value_parts)
+            self._arg_name = None
+            self._value_parts.clear()
+            self._reset_value_stream_state()
+            self._phase = 'function'
+            return value_end + len('</arg_value>'), False
 
-        return self._func_name, dict(self._args), False
+        # Open value: keep any partial "</arg_value>" suffix buffered instead
+        # of emitting it as argument text.
+        raw_end = self._trim_partial_close_tag_suffix(payload, pos, '</arg_value>')
+        if raw_end == pos:
+            return None, True
+
+        raw_delta = payload[pos:raw_end]
+        self._value_parts.append(raw_delta)
+        stream_delta = self._stream_arg_delta(raw_delta)
+        if stream_delta:
+            arg_delta_parts.append(stream_delta)
+        return raw_end, True
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        func_name, raw_args_dict = self._parse_payload(payload, final=True)
+        func_name, raw_args_dict = self._extract_complete_args(payload)
         if not func_name:
             return None
         args_dict = self._get_coerced_args(func_name, raw_args_dict, use_cache=False)
@@ -89,91 +176,16 @@ class Glm47ToolParser(XmlToolParser):
     def _validate_tool_payload(self, payload: str) -> bool:
         return bool(self._complete_payload_pattern.fullmatch(payload))
 
-    def _complete_open_arg_if_ready(self, args_text: str) -> bool:
-        """Finalize the in-flight arg once ``</arg_value>`` is available.
-
-        Uses ``_value_start`` so we can locate the closing tag without re-parsing
-        the ``<arg_key>`` / ``<arg_value>`` headers on every non-fast-path chunk.
-        """
-        if self._value_start < 0 or not self._open_arg_key:
-            return False
-        value_end = args_text.find(self.arg_value_end_token, self._value_start)
-        if value_end < 0:
-            self._in_progress_value = True
-            return False
-        self._args[self._open_arg_key] = args_text[self._value_start:value_end]
-        self._open_arg_key = None
-        self._value_start = -1
-        self._in_progress_value = False
-        self._scan_pos = value_end + len(self.arg_value_end_token)
-        return True
-
-    def _parse_args_incremental(self, args_text: str) -> None:
-        """Scan ``<arg_key>k</arg_key><arg_value>v</arg_value>`` blocks and
-        update ``_args``.
-
-        Incomplete arg headers or values are left open in ``_open_arg_key`` /
-        ``_value_start`` until the closing tag arrives in a later stream chunk.
-
-        ``_scan_pos`` only advances past completed ``</arg_value>`` tags; while a
-        value is streaming, it stays before the open ``<arg_key>``. The block
-        below is an optimization (not required for correctness): skip the
-        while-loop header re-scan and try to close the current value directly.
-        If ``</arg_value>`` is still missing, return early because the while
-        loop would reach the same open-tag state anyway.
-        """
-        if self._value_start >= 0:
-            if not self._complete_open_arg_if_ready(args_text):
-                return
-
-        while True:
-            key_start = args_text.find(self.arg_key_start_token, self._scan_pos)
-            if key_start < 0:
-                self._in_progress_value = False
-                return
-
-            key_content_start = key_start + len(self.arg_key_start_token)
-            key_end = args_text.find(self.arg_key_end_token, key_content_start)
-            if key_end < 0:
-                self._in_progress_value = True
-                return
-
-            key = args_text[key_content_start:key_end].strip()
-            value_start = args_text.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
-            if value_start < 0:
-                self._in_progress_value = True
-                return
-
-            value_content_start = value_start + len(self.arg_value_start_token)
-            value_end = args_text.find(self.arg_value_end_token, value_content_start)
-            if value_end < 0:
-                self._open_arg_key = key
-                self._value_start = value_content_start
-                self._in_progress_value = True
-                return
-
-            next_pos = value_end + len(self.arg_value_end_token)
-            if key in self._args:
-                self._scan_pos = next_pos
-                continue
-
-            if key:
-                self._args[key] = args_text[value_content_start:value_end]
-            self._scan_pos = next_pos
-            self._in_progress_value = False
-
-    def _parse_payload(self, payload: str, *, final: bool = False) -> tuple[str | None, dict[str, str]]:
+    def _extract_complete_args(self, payload: str) -> tuple[str | None, dict[str, str]]:
         payload = payload.strip()
         if not payload:
             return None, {}
 
-        args_start_idx = payload.find(self.arg_key_start_token)
+        args_start_idx = payload.find('<arg_key>')
         if args_start_idx >= 0:
             func_name = payload[:args_start_idx].strip()
             args_text = payload[args_start_idx:]
         else:
-            if not final:
-                return None, {}
             func_name = payload.strip()
             args_text = ''
         if not func_name:
@@ -182,22 +194,22 @@ class Glm47ToolParser(XmlToolParser):
         args_dict: dict[str, str] = {}
         search_idx = 0
         while True:
-            key_start = args_text.find(self.arg_key_start_token, search_idx)
+            key_start = args_text.find('<arg_key>', search_idx)
             if key_start < 0:
                 break
-            key_content_start = key_start + len(self.arg_key_start_token)
-            key_end = args_text.find(self.arg_key_end_token, key_content_start)
+            key_content_start = key_start + len('<arg_key>')
+            key_end = args_text.find('</arg_key>', key_content_start)
             if key_end < 0:
                 break
             key = args_text[key_content_start:key_end].strip()
-            value_start = args_text.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
+            value_start = args_text.find('<arg_value>', key_end + len('</arg_key>'))
             if value_start < 0:
                 break
-            value_content_start = value_start + len(self.arg_value_start_token)
-            value_end = args_text.find(self.arg_value_end_token, value_content_start)
+            value_content_start = value_start + len('<arg_value>')
+            value_end = args_text.find('</arg_value>', value_content_start)
             if value_end < 0:
                 break
             if key:
                 args_dict[key] = args_text[value_content_start:value_end]
-            search_idx = value_end + len(self.arg_value_end_token)
+            search_idx = value_end + len('</arg_value>')
         return func_name, args_dict

@@ -6,27 +6,11 @@ import pytest
 
 
 def test_parse_tool_call_complete_json_normalizes_arguments():
-    """_parse_tool_call_complete_json validates and re-serializes arguments."""
-    from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
-
-    class TestToolParser(ToolParser):
-        def get_tool_open_tag(self):
-            return None
-
-        def get_tool_close_tag(self):
-            return None
-
-        def get_tool_payload_format(self):
-            return 'json'
-
-        def decode_tool_incremental(self, added_text, *, final):
-            return []
-
-        def parse_tool_call_complete(self, payload):
-            return None
+    """parse_tool_call_complete validates and re-serializes arguments."""
+    from lmdeploy.serve.parsers.tool_parser.json_tool_parser import JsonToolParser
 
     payload = '{"name": "get_weather", "arguments": {"city": "NYC" }  }'
-    result = TestToolParser._parse_tool_call_complete_json(payload)
+    result = JsonToolParser().parse_tool_call_complete(payload)
     assert result is not None
     assert result.function.name == 'get_weather'
     parsed_args = json.loads(result.function.arguments)
@@ -34,26 +18,10 @@ def test_parse_tool_call_complete_json_normalizes_arguments():
 
 
 def test_parse_tool_call_complete_json_invalid_returns_none():
-    """_parse_tool_call_complete_json returns None for invalid JSON."""
-    from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
+    """parse_tool_call_complete returns None for invalid JSON."""
+    from lmdeploy.serve.parsers.tool_parser.json_tool_parser import JsonToolParser
 
-    class TestToolParser(ToolParser):
-        def get_tool_open_tag(self):
-            return None
-
-        def get_tool_close_tag(self):
-            return None
-
-        def get_tool_payload_format(self):
-            return 'json'
-
-        def decode_tool_incremental(self, added_text, *, final):
-            return []
-
-        def parse_tool_call_complete(self, payload):
-            return None
-
-    result = TestToolParser._parse_tool_call_complete_json(
+    result = JsonToolParser().parse_tool_call_complete(
         '{"name": "get_weather", "arguments": {"city":'
     )
     assert result is None

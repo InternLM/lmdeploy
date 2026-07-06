@@ -4,6 +4,7 @@ from .deepseek_v32_tool_parser import DeepSeekV32ToolParser
 from .glm47_tool_parser import Glm47ToolParser
 from .internlm2_tool_parser import Internlm2ToolParser
 from .interns2preview_tool_parser import InternS2PreviewToolParser
+from .json_tool_parser import JsonToolParser
 from .llama3_tool_parser import Llama3JsonToolParser
 from .qwen2d5_tool_parser import Qwen2d5ToolParser
 from .qwen3_tool_parser import Qwen3ToolParser
@@ -14,6 +15,7 @@ from .xml_tool_parser import XmlToolParser
 __all__ = [
     'ToolParser',
     'ToolParserManager',
+    'JsonToolParser',
     'XmlToolParser',
     'DeepSeekV32ToolParser',
     'DeepSeekV4ToolParser',
