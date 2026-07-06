@@ -25,6 +25,27 @@ class XmlToolSnapshot:
     payload_closed: bool
 
 
+@dataclass
+class XmlParseState:
+    phase: str
+    func_name: str | None
+    args: dict[str, str]
+    arg_name: str | None
+    payload_closed: bool
+
+
+@dataclass
+class XmlParseResult:
+    next_pos: int | None
+    next_phase: str | None = None
+    func_name: str | None = None
+    arg_name: str | None = None
+    raw_arg_delta: str = ''
+    completed_arg_value: str | None = None
+    payload_closed: bool = False
+    should_stop: bool = False
+
+
 class XmlToolParser(ToolParser):
     """Base class for XML-like tool parsers.
 
@@ -42,7 +63,7 @@ class XmlToolParser(ToolParser):
         self._streamed_arg_name: str | None = None
         self._streamed_arg_emitted_len = 0
         self._streamed_arg_quote_opened = False
-        self._payload_closed = False
+        self._xml_state = XmlParseState('function', None, {}, None, False)
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         self._function_param_schemas = self._build_function_param_schemas(request)
@@ -62,7 +83,7 @@ class XmlToolParser(ToolParser):
         self._emitted_arg_names.clear()
         self._payload_parts.clear()
         self._coerced_args.clear()
-        self._payload_closed = False
+        self._xml_state = XmlParseState('function', None, {}, None, False)
         self._reset_arg()
         self._reset_incremental_state()
 
@@ -72,51 +93,84 @@ class XmlToolParser(ToolParser):
     def _consume_payload(self, payload: str, *, final: bool) -> tuple[XmlToolSnapshot, int]:
         pos = 0
         arg_delta_parts: list[str] = []
+        state = self._xml_state
 
         while pos < len(payload):
-            if self._phase == 'function':
-                next_pos = self._consume_function(payload, pos, final)
-            elif self._phase == 'arg_start':
-                next_pos = self._consume_arg_start(payload, pos)
-            elif self._phase == 'arg_name':
-                next_pos = self._consume_arg_name(payload, pos)
-            elif self._phase == 'arg_value':
-                next_pos, should_stop = self._consume_arg_value(payload, pos, arg_delta_parts)
-                if next_pos is None:
-                    break
-                pos = next_pos
-                if should_stop:
-                    break
-                continue
+            if state.phase == 'function':
+                result = self._consume_function(payload, pos, final)
+            elif state.phase == 'arg_start':
+                result = self._consume_arg_start(payload, pos)
+            elif state.phase == 'arg_name':
+                result = self._consume_arg_name(payload, pos)
+            elif state.phase == 'arg_value':
+                result = self._consume_arg_value(payload, pos)
             else:
                 break
 
-            if next_pos is None:
+            if result.next_pos is None:
                 break
-            pos = next_pos
+
+            if result.func_name is not None:
+                state.func_name = result.func_name
+            if result.arg_name is not None:
+                state.arg_name = result.arg_name
+            if result.raw_arg_delta:
+                stream_delta = self._stream_arg_delta(result.raw_arg_delta)
+                if stream_delta:
+                    arg_delta_parts.append(stream_delta)
+            if result.completed_arg_value is not None:
+                if state.arg_name is None:
+                    raise RuntimeError('XML parser completed an argument without an active argument name')
+                state.args[state.arg_name] = result.completed_arg_value
+                state.arg_name = None
+            if result.payload_closed:
+                state.payload_closed = True
+            if result.next_phase is not None:
+                state.phase = result.next_phase
+
+            pos = result.next_pos
+            if result.should_stop:
+                break
 
         return (
             XmlToolSnapshot(
-                self._func_name,
-                dict(self._args),
-                self._arg_name,
+                state.func_name,
+                dict(state.args),
+                state.arg_name,
                 ''.join(arg_delta_parts),
-                self._payload_closed,
+                state.payload_closed,
             ),
             pos,
         )
 
-    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
+    def _consume_function(self, payload: str, pos: int, final: bool) -> XmlParseResult:
         raise NotImplementedError('XmlToolParser._consume_function has not been implemented!')
 
-    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_start(self, payload: str, pos: int) -> XmlParseResult:
         raise NotImplementedError('XmlToolParser._consume_arg_start has not been implemented!')
 
-    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_name(self, payload: str, pos: int) -> XmlParseResult:
         raise NotImplementedError('XmlToolParser._consume_arg_name has not been implemented!')
 
-    def _consume_arg_value(self, payload: str, pos: int, arg_delta_parts: list[str]) -> tuple[int | None, bool]:
+    def _consume_arg_value(self, payload: str, pos: int) -> XmlParseResult:
         raise NotImplementedError('XmlToolParser._consume_arg_value has not been implemented!')
+
+    def _stream_arg_delta(self, raw: str) -> str:
+        state = self._xml_state
+        if state.arg_name is None:
+            raise RuntimeError('XML parser streamed an argument value without an active argument name')
+
+        schema_type = self._get_param_schema_type(state.func_name, state.arg_name)
+        if schema_type not in (None, 'string'):
+            self._block_stream_arg_delta()
+            return ''
+        return self._normalize_stream_arg_delta(raw, schema_type)
+
+    def _block_stream_arg_delta(self) -> None:
+        raise NotImplementedError('XmlToolParser._block_stream_arg_delta has not been implemented!')
+
+    def _normalize_stream_arg_delta(self, raw: str, schema_type: str | None) -> str:
+        raise NotImplementedError('XmlToolParser._normalize_stream_arg_delta has not been implemented!')
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._payload_parts.append(added_text)
