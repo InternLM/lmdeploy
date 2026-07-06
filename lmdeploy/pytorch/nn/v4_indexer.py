@@ -20,7 +20,4 @@ class V4Indexer(nn.Module):
                 index_kv_cache,
                 index_kv_scale_cache,
                 meta: V4IndexerMetadata) -> V4IndexerOutput:
-        # Lazy-init block_size on impl from metadata (global constant, same every step)
-        if self.impl._block_size is None:
-            self.impl.block_size = meta.block_size
         return self.impl.forward(query, weights, index_kv_cache, index_kv_scale_cache, meta)

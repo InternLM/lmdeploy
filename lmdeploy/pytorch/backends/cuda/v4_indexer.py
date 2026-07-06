@@ -15,15 +15,6 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         super().__init__()
         self.index_topk = index_topk
         self.compress_ratio = compress_ratio
-        self._block_size = None
-
-    @property
-    def block_size(self) -> int:
-        return self._block_size
-
-    @block_size.setter
-    def block_size(self, value: int):
-        self._block_size = value
 
     def forward(self,
                 query: torch.Tensor,
@@ -35,8 +26,9 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         cu_q_seqlens = meta.cu_q_seqlens
         kv_seqlens = meta.kv_seqlens
         q_seqlens = meta.q_seqlens
-        bsz = kv_seqlens.size(0)
-        block_size = self._block_size
+        block_size = meta.block_size
+        if block_size is None:
+            raise RuntimeError('V4IndexerMetadata.block_size is required.')
 
         # Reshape to fp8_index expected layout upfront.
         # query: [bsz, seqlen, n_heads, head_dim] -> [cum_seqlen, n_heads, head_dim]
@@ -63,14 +55,16 @@ class TritonV4IndexerImpl(BaseV4Indexer):
             num_index = meta.num_index
         else:
             num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
-        max_kv_seqlen = meta.max_kv_seqlen if meta.max_kv_seqlen is not None else block_offsets.size(1) * block_size
+        if meta.is_decoding:
+            # Keep CUDA graph shapes static without using the whole GPU cache pool
+            # as the score width. The block table width is fixed for the captured
+            # graph bucket and is the real per-sequence addressable upper bound.
+            max_kv_seqlen = block_offsets.size(1) * block_size
+        else:
+            max_kv_seqlen = meta.max_kv_seqlen
+            if max_kv_seqlen is None:
+                max_kv_seqlen = block_offsets.size(1) * block_size
         max_index = max(max_kv_seqlen // self.compress_ratio, 1)
-
-        if max_index == 0:
-            total_q = q_3d.size(0)
-            empty = query.new_empty((total_q, 0), dtype=torch.long)
-            return V4IndexerOutput(indices_in_kvcache=empty,
-                                   topk_length=num_index.new_zeros((bsz,), dtype=torch.int32))
 
         # fp8_index: fused scoring kernel
         # k_cache already sliced by layer_id: [num_blocks, entries_per_block, head_dim]

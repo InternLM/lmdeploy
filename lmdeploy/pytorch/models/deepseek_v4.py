@@ -187,13 +187,15 @@ class Compressor(nn.Module):
         return 'v4_compress_state_r128'
 
     def _get_index_kv_cache_name(self) -> str | None:
-        """Return the indexer simple-FP8 cache name, if this compressor uses one."""
+        """Return the indexer simple-FP8 cache name, if this compressor uses
+        one."""
         if self.rotate:
             return 'v4_index_kv_r4'
         return None
 
     def _get_flashmla_fp8_cache_name(self) -> str | None:
-        """Return the FlashMLA packed FP8 cache name, if this compressor uses one."""
+        """Return the FlashMLA packed FP8 cache name, if this compressor uses
+        one."""
         if self.rotate:
             return None
         if self.compress_ratio == 4:

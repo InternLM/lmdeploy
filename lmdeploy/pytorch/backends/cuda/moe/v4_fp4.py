@@ -14,13 +14,30 @@ from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
     fused_moe_v4_fp4_ep_normal,
 )
 
-def _try_dynamic_compile(func, *args, **kwargs):
-    try:
-        compiled_func = torch.compile(func, dynamic=True)
-        compiled_func(*args, **kwargs)
-        return compiled_func
-    except Exception:
-        return func
+
+class _LazyCompileFallback:
+    """Compile on the first real call and keep the eager function as
+    fallback."""
+
+    def __init__(self, func):
+        self._func = func
+        self._compiled_func = None
+
+    def __call__(self, *args, **kwargs):
+        if self._compiled_func is None:
+            try:
+                compiled_func = torch.compile(self._func, dynamic=True)
+                result = compiled_func(*args, **kwargs)
+            except Exception:
+                self._compiled_func = self._func
+                return self._func(*args, **kwargs)
+            self._compiled_func = compiled_func
+            return result
+        return self._compiled_func(*args, **kwargs)
+
+
+def _try_dynamic_compile(func):
+    return _LazyCompileFallback(func)
 
 
 def _v4_swiglu_impl(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:

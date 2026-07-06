@@ -413,7 +413,8 @@ class CacheEngine:
 
     @classmethod
     def _use_layer_packed_block_caches(cls, model_config: ModelConfig):
-        """Whether named block caches can be allocated by declared layer ids."""
+        """Whether named block caches can be allocated by declared layer
+        ids."""
         return (model_config is not None and not model_config.use_standard_kv_cache
                 and len(model_config.block_cache_specs) > 0)
 
