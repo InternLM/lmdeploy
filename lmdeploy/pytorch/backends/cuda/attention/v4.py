@@ -152,8 +152,9 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     @staticmethod
     def _precompute_prefill(meta, window_size, slot):
         from lmdeploy.pytorch.backends.cuda.attention.v4_utils import (
-            build_compress_topk_indices,
-            build_window_topk_indices,
+            build_prefill_compress_topk_indices,
+            build_prefill_token_meta,
+            build_prefill_window_topk_indices,
         )
         kv_seqlens = meta.kv_seqlens
         q_seqlens = meta.q_seqlens
@@ -171,14 +172,12 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         # sum_unkv <= sum(kv_seqlens) = sum_kv (since min(sp,ws) <= sp)
         max_q = meta.max_q_seqlen
         max_unkv = min(window_size, max_kv) + max_q
-        meta.get_ratio_meta(0).prefill = _V4PrefillRatioMeta(
-            max_flat_kv_len=max_unkv,
-            total_flat_kv_tokens=sum_kv,
-        )
+        cu_q_seqlens = meta.cu_q_seqlens
+        token_meta = build_prefill_token_meta(q_seqlens, cu_q_seqlens)
+        total_q_tokens = token_meta.total_tokens
 
-        window_topk, _ = build_window_topk_indices(
-            total_lens, window_size,
-            q_seqlens=q_seqlens, start_pos=start_pos, causal=True)
+        window_topk, _ = build_prefill_window_topk_indices(
+            window_size, start_pos, token_meta)
         meta.prefill_window = _V4PrefillWindowMeta(topk=window_topk.to(torch.int32))
 
         compress_topk_by_ratio = {}
@@ -186,26 +185,36 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
 
         for ratio in (4, 128):
             max_width = max_kv // ratio
-            compress_topk, num_vis_r = build_compress_topk_indices(
+            compress_topk, num_vis_r = build_prefill_compress_topk_indices(
                 total_lens, ratio,
                 offset=uncompressed_kv_lens,
-                q_seqlens=q_seqlens, start_pos=start_pos,
-                causal=True, max_width=max_width)
+                start_pos=start_pos,
+                token_meta=token_meta,
+                max_width=max_width)
             compress_topk_by_ratio[ratio] = compress_topk.to(torch.int32)
             num_vis_compress_by_ratio[ratio] = num_vis_r.to(torch.int32)
 
-        # Pre-compute layer-invariant tensors to eliminate per-layer repeat_interleave/searchsorted
-        cu_q_seqlens = meta.cu_q_seqlens
-        total_q_tokens = cu_q_seqlens[-1]
-        token_seq = torch.arange(total_q_tokens, device=kv_seqlens.device)
-        prefill_seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
+        # Pre-compute layer-invariant tensors to eliminate per-layer gather/scatter setup.
         meta.prefill_shared = _V4PrefillSharedMeta(
             uncompressed_kv_lens=uncompressed_kv_lens,
-            compress_offset=uncompressed_kv_lens[prefill_seq_id].unsqueeze(-1).to(torch.int32),
+            compress_offset=uncompressed_kv_lens[token_meta.seq_id].unsqueeze(-1).to(torch.int32),
         )
 
         # Pre-compute flat_kv_lens + cu_seqlens_k + repeat_cu per compress_ratio
         raw_kv_lens_t = q_seqlens.long()
+        flat_kv_lens = (prev_window_lens + raw_kv_lens_t).to(torch.int32)
+        cu_seqlens_k = torch.zeros(kv_seqlens.numel() + 1, dtype=torch.int32, device=kv_seqlens.device)
+        torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
+        repeat_cu = torch.repeat_interleave(
+            cu_seqlens_k[:-1], q_seqlens, output_size=total_q_tokens)
+        meta.get_ratio_meta(0).prefill = _V4PrefillRatioMeta(
+            max_flat_kv_len=max_unkv,
+            total_flat_kv_tokens=sum_kv,
+            flat_kv_lens=flat_kv_lens,
+            cu_seqlens_k=cu_seqlens_k,
+            repeat_cu=repeat_cu,
+        )
+
         for ratio in (4, 128):
             num_compressed = torch.div(kv_seqlens, ratio, rounding_mode='floor').long()
             flat_kv_lens = (prev_window_lens + raw_kv_lens_t + num_compressed).to(torch.int32)
@@ -224,10 +233,9 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             )
 
         # Pre-compute window write indices (reused across all layers)
-        token_seq = prefill_seq_id
-        cu_q = cu_q_seqlens
+        token_seq = token_meta.seq_id
         token_slot = slot[token_seq]
-        token_pos_in_seq = torch.arange(total_q_tokens, device=kv_seqlens.device) - cu_q[token_seq]
+        token_pos_in_seq = token_meta.token_pos
         token_abs_pos = start_pos[token_seq] + token_pos_in_seq
         cutoff_pos = (total_lens[token_seq] - window_size).clamp(min=0)
         ring_pos = torch.remainder(token_abs_pos, window_size)

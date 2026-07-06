@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from dataclasses import dataclass
+
 import torch
 import triton
 import triton.language as tl
@@ -925,10 +927,8 @@ def _fill_compressed_kv_kernel(
     compress_ratio: tl.constexpr,
     block_size: tl.constexpr,
     is_decoding: tl.constexpr,
-    has_bf16: tl.constexpr,
     has_fp8: tl.constexpr,
     has_fp8_simple: tl.constexpr,
-    BLOCK_D: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
 ):
     group_id = tl.program_id(0)
@@ -964,17 +964,6 @@ def _fill_compressed_kv_kernel(
     block_idx = token_pos // block_size
     block_off = p % entries_per_block
     phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff0 + block_idx * stride_boff1).to(tl.int64)
-
-    # ---- Write to BF16 paged block cache ----
-    if has_bf16:
-        n_tiles = head_dim // BLOCK_D
-        for d_tile in range(n_tiles):
-            d_off = d_tile * BLOCK_D
-            offs_d = d_off + tl.arange(0, BLOCK_D)
-
-            compressed = tl.load(ckv_ptr + write_pos * ckv_stride_s + offs_d * ckv_stride_d)
-            cache_ptrs = kv_cache_ptr + phys_block * kvc_stride_b + block_off * kvc_stride_s + offs_d * kvc_stride_d
-            tl.store(cache_ptrs, compressed.to(kv_cache_ptr.dtype.element_ty))
 
     # ---- Write to FP8 paged block cache (V4 FlashMLA sparse format) ----
     if has_fp8:
@@ -1066,6 +1055,75 @@ def _fill_compressed_kv_kernel(
             tl.store(scale_ptrs, scale)
 
 
+@dataclass
+class _CompressedKVWriteTargets:
+    kv_cache: torch.Tensor
+    kv_scale_cache: torch.Tensor
+    fp8_nope_rope: torch.Tensor
+    fp8_rope_bf16: torch.Tensor
+    fp8_scales_u8: torch.Tensor
+    has_fp8: bool
+    has_fp8_simple: bool
+
+
+def _get_flashmla_fp8_views(fp8_cache: torch.Tensor):
+    """Build typed views for the V4 FlashMLA sparse FP8 packed layout."""
+    num_blocks = fp8_cache.size(0)
+    entries_per_block = fp8_cache.size(1)
+    d_nope = 448
+    d_rope_bf16 = 64  # 64 bf16 values = 128 bytes
+    nr_dim = d_nope + 2 * d_rope_bf16  # 576 bytes per token
+
+    fp8_flat = fp8_cache.view(num_blocks, -1)
+    fp8_nope_rope = fp8_flat[:, :entries_per_block * nr_dim].view(
+        num_blocks, entries_per_block, nr_dim)
+    fp8_nope_rope_bf16 = fp8_nope_rope.view(torch.bfloat16)
+    fp8_rope_bf16 = fp8_nope_rope_bf16[:, :, d_nope // 2:]
+    fp8_scales_u8 = fp8_flat[:, entries_per_block * nr_dim:].view(
+        num_blocks, entries_per_block, 8).view(torch.uint8)
+    return fp8_nope_rope, fp8_rope_bf16, fp8_scales_u8
+
+
+def _prepare_compressed_kv_write_targets(
+    compressed_kv: torch.Tensor,
+    kv_cache: torch.Tensor | None,
+    fp8_cache: torch.Tensor | None,
+    kv_scale_cache: torch.Tensor | None,
+) -> _CompressedKVWriteTargets:
+    has_fp8 = fp8_cache is not None
+    has_fp8_simple = kv_cache is not None and kv_cache.dtype == torch.float8_e4m3fn
+    if kv_cache is not None and not has_fp8_simple:
+        raise RuntimeError('V4 compressed KV cache must be FP8; BF16 cache writes are unsupported.')
+    if has_fp8_simple and kv_scale_cache is None:
+        raise RuntimeError('V4 simple FP8 compressed KV writes require kv_scale_cache.')
+    if not has_fp8 and not has_fp8_simple:
+        raise RuntimeError('V4 compressed KV writes require fp8_cache or FP8 kv_cache.')
+
+    # Dummy tensor for disabled kernel paths. It must be 3D to provide the
+    # expected stride count, and bf16 views need an even final dimension.
+    dummy = compressed_kv.view(1, 1, -1)[:, :, :16]
+
+    if not has_fp8_simple:
+        kv_cache = dummy
+        kv_scale_cache = dummy
+
+    if has_fp8:
+        fp8_nope_rope, fp8_rope_bf16, fp8_scales_u8 = _get_flashmla_fp8_views(fp8_cache)
+    else:
+        fp8_nope_rope = dummy
+        fp8_rope_bf16 = dummy.view(torch.bfloat16)
+        fp8_scales_u8 = dummy.view(torch.uint8)
+
+    return _CompressedKVWriteTargets(
+        kv_cache=kv_cache,
+        kv_scale_cache=kv_scale_cache,
+        fp8_nope_rope=fp8_nope_rope,
+        fp8_rope_bf16=fp8_rope_bf16,
+        fp8_scales_u8=fp8_scales_u8,
+        has_fp8=has_fp8,
+        has_fp8_simple=has_fp8_simple)
+
+
 def fill_compressed_kv(
     compressed_kv: torch.Tensor,
     kv_cache: torch.Tensor | None,
@@ -1082,13 +1140,12 @@ def fill_compressed_kv(
 
     After score_kv produces compressed entries at compression points
     (abs_pos = n*ratio - 1), this kernel scatters those entries into the
-    block-paged kv_cache used by the decode-phase sparse attention.
+    block-paged FP8 caches used by decode-phase sparse attention and the
+    indexer.
 
     When fp8_cache is provided, also writes V4 FlashMLA sparse FP8 packed entries
     directly into fp8_cache, eliminating the need for a separate Python-side
     packing step.
-
-    When kv_cache is None, the BF16 write is skipped (only FP8 is written).
 
     When kv_scale_cache is provided alongside an FP8 kv_cache (e4m3fn dtype),
     the simple FP8 write path is used: the kernel quantizes BF16 compressed_kv
@@ -1115,9 +1172,9 @@ def fill_compressed_kv(
     Args:
         compressed_kv: [S, head_dim] flat tensor with compressed results from score_kv.
             For has_fp8_simple path, this must be BF16 — the kernel quantizes to FP8 internally.
-        kv_cache: [num_blocks, entries_per_block, head_dim] paged block cache, or None
-            to skip the BF16 write. When e4m3fn dtype, triggers the simple FP8 path
-            which quantizes and writes FP8 data + scale.
+        kv_cache: optional [num_blocks, entries_per_block, head_dim] e4m3fn paged
+            block cache. When provided, triggers the simple FP8 path which
+            quantizes and writes FP8 data + scale.
         cu_q_seqlens: [B + 1] cumulative query sequence lengths.
         kv_seqlens: [B] total kv sequence lengths (history + new).
         block_offsets: [B, max_blocks] logical-to-physical block index mapping.
@@ -1133,7 +1190,6 @@ def fill_compressed_kv(
 
     is_decoding = compressed_kv.size(0) == B
 
-    BLOCK_D = 128
     GROUP_SIZE = 128
 
     if is_decoding:
@@ -1142,71 +1198,28 @@ def fill_compressed_kv(
         num_groups = (max_seqlen_q + compress_ratio - 1) // compress_ratio
         grid = (num_groups, B)
 
-    has_bf16 = kv_cache is not None and kv_cache.dtype != torch.float8_e4m3fn
-    has_fp8 = fp8_cache is not None
-    has_fp8_simple = kv_cache is not None and kv_cache.dtype == torch.float8_e4m3fn
-
-    # Dummy tensor for when kv_cache or fp8_cache is None.
-    # Must be 3D to match the kernel's expected stride count (3 strides).
-    # Size must be compatible with view operations (bfloat16 needs even last dim).
-    dummy = compressed_kv.view(1, 1, -1)[:, :, :16]  # [1, 1, 16] — never accessed due to constexpr guards
-
-    if not has_bf16 and not has_fp8_simple:
-        kv_cache = dummy
-
-    if not has_fp8_simple:
-        kv_scale_cache = dummy
-
-    if has_fp8:
-        # V4 FlashMLA sparse FP8 layout: the fp8_cache tensor is
-        # [num_blocks, entries_per_block, 584] but the actual memory layout
-        # has NoPE+RoPE at stride 576 bytes per token, with scales in a
-        # separate region. We create three views matching FlashMLA's addressing:
-        num_blocks = fp8_cache.size(0)
-        entries_per_block_val = fp8_cache.size(1)
-        D_NOPE = 448
-        D_ROPE_BF16 = 64  # 64 bf16 values = 128 bytes
-        NR_DIM = D_NOPE + 2 * D_ROPE_BF16  # 576 bytes per token
-
-        # NoPE+RoPE view: [num_blocks, entries_per_block, 576] e4m3fn
-        fp8_flat = fp8_cache.view(num_blocks, -1)
-        fp8_nope_rope = fp8_flat[:, :entries_per_block_val * NR_DIM].view(
-            num_blocks, entries_per_block_val, NR_DIM)
-
-        # RoPE bf16 view: same memory, viewed as bf16 at offset D_NOPE
-        fp8_nope_rope_bf16 = fp8_nope_rope.view(torch.bfloat16)
-        fp8_rope_bf16 = fp8_nope_rope_bf16[:, :, D_NOPE // 2:]
-
-        # Scales view: [num_blocks, entries_per_block, 8] uint8
-        fp8_scales_u8 = fp8_flat[:, entries_per_block_val * NR_DIM:].view(
-            num_blocks, entries_per_block_val, 8).view(torch.uint8)
-    else:
-        # Dummy views (kernel won't access due to has_fp8=False)
-        fp8_nope_rope = dummy
-        fp8_rope_bf16 = dummy.view(torch.bfloat16)
-        fp8_scales_u8 = dummy.view(torch.uint8)
+    targets = _prepare_compressed_kv_write_targets(
+        compressed_kv, kv_cache, fp8_cache, kv_scale_cache)
 
     _fill_compressed_kv_kernel[grid](
-        compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens, block_offsets,
+        compressed_kv, targets.kv_cache, cu_q_seqlens, kv_seqlens, block_offsets,
         *compressed_kv.stride(),
-        *kv_cache.stride(),
+        *targets.kv_cache.stride(),
         *block_offsets.stride(),
-        fp8_nope_rope,
-        *fp8_nope_rope.stride(),
-        fp8_rope_bf16,
-        *fp8_rope_bf16.stride(),
-        fp8_scales_u8,
-        *fp8_scales_u8.stride(),
-        kv_scale_cache,
-        *kv_scale_cache.stride(),
+        targets.fp8_nope_rope,
+        *targets.fp8_nope_rope.stride(),
+        targets.fp8_rope_bf16,
+        *targets.fp8_rope_bf16.stride(),
+        targets.fp8_scales_u8,
+        *targets.fp8_scales_u8.stride(),
+        targets.kv_scale_cache,
+        *targets.kv_scale_cache.stride(),
         head_dim=head_dim,
         compress_ratio=compress_ratio,
         block_size=block_size,
         is_decoding=is_decoding,
-        has_bf16=has_bf16,
-        has_fp8=has_fp8,
-        has_fp8_simple=has_fp8_simple,
-        BLOCK_D=BLOCK_D,
+        has_fp8=targets.has_fp8,
+        has_fp8_simple=targets.has_fp8_simple,
         GROUP_SIZE=GROUP_SIZE,
         num_warps=4,
     )
