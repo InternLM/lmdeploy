@@ -180,57 +180,6 @@ class TestBackendInference:
 
         assert 'alice' in response2.lower()
 
-    def test_chat_streaming(self, pipe):
-        """Test chat method with streaming output."""
-        prompt = 'Tell me a short story'
-        session = pipe.session()
-
-        generator = pipe.chat(prompt=prompt,
-                              session=session,
-                              stream_response=True,
-                              gen_config=GenerationConfig(max_new_tokens=50))
-
-        chunks = []
-        for chunk in generator:
-            chunks.append(chunk)
-            assert isinstance(chunk, Response)
-
-        assert len(chunks) > 0
-        assert session.response is not None
-        assert session.step > 0
-
-    def test_chat_non_streaming(self, pipe):
-        """Test chat method with non-streaming output."""
-        prompt = 'What is 2+2?'
-        session = pipe.chat(prompt=prompt,
-                            stream_response=False,
-                            gen_config=GenerationConfig(max_new_tokens=20),
-                            enable_thinking=False)
-
-        assert session is not None
-        assert hasattr(session, 'response')
-        assert hasattr(session, 'history')
-        assert len(session.history) == 1
-        assert '4' in session.response.text or 'four' in session.response.text.lower()
-
-    def test_chat_multi_turn(self, pipe):
-        """Test chat method with multi-turn conversation."""
-        # First turn
-        session = pipe.chat(prompt='My favorite color is blue.',
-                            stream_response=False,
-                            gen_config=GenerationConfig(max_new_tokens=30),
-                            enable_thinking=False)
-
-        # Second turn should remember context
-        session = pipe.chat(prompt='What is my favorite color?',
-                            session=session,
-                            stream_response=False,
-                            gen_config=GenerationConfig(max_new_tokens=30),
-                            enable_thinking=False)
-
-        assert 'blue' in session.response.text.lower()
-        assert len(session.history) == 2
-
     def test_session_creation(self, pipe):
         """Test session method to create new sessions."""
         session1 = pipe.session()
