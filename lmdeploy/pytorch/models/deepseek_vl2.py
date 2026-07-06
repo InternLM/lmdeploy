@@ -447,7 +447,8 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
                                      meta=dict(
                                          image_token_id=image_token_id,
                                          images_spatial_crop=images_spatial_crop,
-                                     ))
+                                     ),
+                                     content_hash=input_mm.get('content_hash'))
 
             input_imgs.append(mm_data)
 

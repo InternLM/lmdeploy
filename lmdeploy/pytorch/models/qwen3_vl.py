@@ -682,7 +682,8 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                  start=offset[0],
                                  end=offset[1],
                                  mrope_pos_ids=mrope_pos_ids,
-                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id),
+                                 content_hash=input_mm.get('content_hash'))
         return mm_data
 
     def _make_video_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
@@ -702,7 +703,8 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                  meta=dict(
                                      grid_thw=video_grid_thw,
                                      video_token_id=video_token_id,
-                                 ))
+                                 ),
+                                 content_hash=input_mm.get('content_hash'))
         return mm_data
 
     def _make_time_series_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
@@ -717,7 +719,8 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                  data=ts_values,
                                  start=offset[0],
                                  end=offset[1],
-                                 meta=dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id))
+                                 meta=dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id),
+                                 content_hash=input_mm.get('content_hash'))
         return mm_data
 
     def preprocess_input(self,

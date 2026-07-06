@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.hasher import make_multimodal_content_hash
 
 if TYPE_CHECKING:
     from lmdeploy.vl.model.base import MultimodalSpecialTokens
@@ -200,6 +201,15 @@ def _expand_bundled_audio_items(item: dict, token_id: int) -> list[dict]:
                 offset=item['offset'][i],
                 audio_token_id=token_id,
             ))
+    return expanded_mm_items
+
+
+def attach_multimodal_content_hashes(expanded_mm_items: list[dict[str, Any]]):
+    """Attach processed-item content hashes to expanded multimodal items."""
+    for item in expanded_mm_items:
+        content_view = {key: value for key, value in item.items() if key not in ('content_hash', 'offset')}
+        item['content_hash'] = make_multimodal_content_hash(content_view)
+
     return expanded_mm_items
 
 

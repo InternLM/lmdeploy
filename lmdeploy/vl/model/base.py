@@ -12,6 +12,7 @@ from transformers import AutoConfig, AutoTokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.model.preprocess_utils import (
+    attach_multimodal_content_hashes,
     get_expanded_input_ids,
     get_expanded_mm_items,
     get_mm_items_offset,
@@ -233,6 +234,7 @@ class VisionModel(ABC):
 
         # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
+        attach_multimodal_content_hashes(expanded_mm_items)
 
         result = dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
         return result

@@ -5,12 +5,9 @@ from typing import Any
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.vl import hasher as mm_hasher
 from lmdeploy.vl.constants import Modality
 
 NestedTensor = Tensor | list[Tensor]
-make_multimodal_content_hash = mm_hasher.make_multimodal_content_hash
-ensure_multimodal_content_hashes = mm_hasher.ensure_multimodal_content_hashes
 
 
 @dataclass

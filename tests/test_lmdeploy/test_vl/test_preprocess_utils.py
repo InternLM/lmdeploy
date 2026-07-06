@@ -3,7 +3,8 @@
 import torch
 
 from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.model.preprocess_utils import get_expanded_mm_items
+from lmdeploy.vl.hasher import make_multimodal_content_hash
+from lmdeploy.vl.model.preprocess_utils import attach_multimodal_content_hashes, get_expanded_mm_items
 
 
 class _Tokens:
@@ -97,3 +98,86 @@ def test_expand_audio_items_use_compact_tensor_storage():
     for entry in expanded:
         _assert_compact_storage(entry['input_features'])
         _assert_compact_storage(entry['feature_attention_mask'])
+
+
+def test_attach_multimodal_content_hashes_to_single_image():
+    items = {
+        Modality.IMAGE: {
+            'feature': torch.arange(2, dtype=torch.float32).reshape(2, 1),
+            'image_grid_thw': torch.tensor([[1, 2, 1]]),
+            'offset': [(0, 2)],
+        }
+    }
+    expanded = get_expanded_mm_items(items, _Tokens())
+
+    attach_multimodal_content_hashes(expanded)
+
+    assert len(expanded[0]['content_hash']) == 64
+    content_view = {key: value for key, value in expanded[0].items() if key not in ('content_hash', 'offset')}
+    assert expanded[0]['content_hash'] == make_multimodal_content_hash(content_view)
+
+
+def test_attach_multimodal_content_hashes_ignores_offset():
+    item1 = {
+        'modality': Modality.IMAGE,
+        'pixel_values': torch.arange(2, dtype=torch.float32).reshape(2, 1),
+        'image_grid_thw': torch.tensor([1, 2, 1]),
+        'offset': (0, 2),
+        'image_token_id': 42,
+    }
+    item2 = dict(item1, offset=(10, 12))
+
+    attach_multimodal_content_hashes([item1, item2])
+
+    assert item1['content_hash'] == item2['content_hash']
+
+
+def test_attach_multimodal_content_hashes_changes_with_processed_content():
+    item1 = {
+        'modality': Modality.IMAGE,
+        'pixel_values': torch.arange(2, dtype=torch.float32).reshape(2, 1),
+        'image_grid_thw': torch.tensor([1, 2, 1]),
+        'offset': (0, 2),
+        'image_token_id': 42,
+    }
+    item2 = dict(item1, pixel_values=item1['pixel_values'] + 1)
+
+    attach_multimodal_content_hashes([item1, item2])
+
+    assert item1['content_hash'] != item2['content_hash']
+
+
+def test_attach_multimodal_content_hashes_to_frame_split_videos():
+    items = {
+        Modality.VIDEO: {
+            'feature': torch.arange(8, dtype=torch.float32).reshape(8, 1),
+            'video_grid_thw': torch.tensor([[2, 2, 1], [2, 2, 1]]),
+            'offset': [(0, 1), (1, 2), (2, 3), (3, 4)],
+        }
+    }
+    expanded = get_expanded_mm_items(items, _Tokens())
+
+    attach_multimodal_content_hashes(expanded)
+
+    assert len({entry['content_hash'] for entry in expanded}) == len(expanded)
+
+
+def test_attach_multimodal_content_hashes_preserves_prompt_order_for_mixed_modalities():
+    items = {
+        Modality.AUDIO: {
+            'feature': torch.arange(1 * 2 * 3, dtype=torch.float32).reshape(1, 2, 3),
+            'feature_attention_mask': torch.ones(1, 3, dtype=torch.long),
+            'offset': [(5, 8)],
+        },
+        Modality.IMAGE: {
+            'feature': torch.arange(2, dtype=torch.float32).reshape(2, 1),
+            'image_grid_thw': torch.tensor([[1, 2, 1]]),
+            'offset': [(0, 2)],
+        },
+    }
+    expanded = get_expanded_mm_items(items, _Tokens())
+
+    attach_multimodal_content_hashes(expanded)
+
+    assert [entry['modality'] for entry in expanded] == [Modality.IMAGE, Modality.AUDIO]
+    assert all(len(entry['content_hash']) == 64 for entry in expanded)

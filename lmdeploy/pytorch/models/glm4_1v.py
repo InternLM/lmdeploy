@@ -745,7 +745,8 @@ class Glm4vInputProcessor(BaseModelInputProcessor):
                                      start=offset[0],
                                      end=offset[1],
                                      mrope_pos_ids=mrope_pos_ids,
-                                     meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+                                     meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id),
+                                     content_hash=input_mm.get('content_hash'))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
