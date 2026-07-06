@@ -6,6 +6,7 @@ import torch
 
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
@@ -110,6 +111,24 @@ def test_sync_spec_cache_block_size_updates_kernel_block_size():
 
     assert spec_cache_config.block_size == 32
     assert spec_cache_config.kernel_block_size == 16
+
+
+def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rule():
+    executor = object.__new__(ExecutorBase)
+    executor.cache_config = CacheConfig(max_batches=1,
+                                        block_size=192,
+                                        kernel_block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0)
+    executor.model_config = SimpleNamespace(k_head_dim=512,
+                                            use_flash_mla=False,
+                                            update_cache_config_func=update_deepseek_v4_cache_config)
+
+    executor._adjust_block_size()
+
+    assert executor.cache_config.block_size == 256
+    assert executor.cache_config.kernel_block_size == 256
+    assert executor.cache_config.window_size == -1
 
 
 def test_executor_keeps_prefix_cache_with_spec_decode():

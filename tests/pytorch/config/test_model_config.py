@@ -86,18 +86,39 @@ def test_get_num_qkv_head_by_tp_requires_divisible_heads():
         model_config.get_num_qkv_head_by_tp()
 
 
-def test_deepseek_v4_update_cache_config_forces_kernel_block_size():
+@pytest.mark.parametrize(('block_size', 'kernel_block_size', 'expected_block_size'), [
+    (192, 64, 256),
+    (256, 128, 256),
+    (257, 128, 384),
+])
+def test_deepseek_v4_update_cache_config_normalizes_block_and_kernel_size(block_size, kernel_block_size,
+                                                                          expected_block_size):
     cache_config = CacheConfig(max_batches=1,
-                               block_size=256,
-                               kernel_block_size=128,
+                               block_size=block_size,
+                               kernel_block_size=kernel_block_size,
                                num_cpu_blocks=0,
                                num_gpu_blocks=0)
 
     update_deepseek_v4_cache_config(cache_config)
 
-    assert cache_config.block_size == 256
-    assert cache_config.kernel_block_size == 256
+    assert cache_config.block_size == expected_block_size
+    assert cache_config.kernel_block_size == expected_block_size
     assert cache_config.window_size == -1
+
+
+def test_deepseek_v4_model_config_normalizes_block_cache_spec_shapes():
+    hf_config = _make_deepseek_v4_hf_config([4, 128], num_hidden_layers=2)
+
+    model_config = AutoModelConfigBuilder.build(hf_config)
+    model_config.block_size = 192
+    model_config.post_build_func(model_config, 192)
+
+    assert model_config.block_size == 256
+    block_specs = {spec.name: spec for spec in model_config.block_cache_specs}
+    assert block_specs['v4_compressed_kv_r4_fp8'].shape[0] == 64
+    assert block_specs['v4_index_kv_r4'].shape == (64, 128)
+    assert block_specs['v4_index_kv_r4_scale'].shape == (64, 1)
+    assert block_specs['v4_compressed_kv_r128_fp8'].shape[0] == 2
 
 
 def test_deepseek_v4_model_config_trims_trailing_zero_compress_ratio():
