@@ -1076,7 +1076,7 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
         const int64_t ti = blockIdx.x;
 
-        dst += dim * ti;
+        dst += (int64_t)dim * ti;
 
         if (dst_scales) {
             dst_scale = dst_scales[ti];
@@ -1092,9 +1092,9 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
         PRAGMA_UNROLL
         for (int e = 0; e < exp_k; ++e) {
             int fid = __ldg(&en2f[e * tokens + ti]);
-            src_[e] = src + dim * fid;
+            src_[e] = src + (int64_t)dim * fid;
             if constexpr (has_bias) {
-                bias_[e] = bias + __ldg(&f2E[fid]) * dim;
+                bias_[e] = bias + __ldg(&f2E[fid]) * (int64_t)dim;
             }
             scale[e] = scales ? __ldg(&scales[e * tokens + ti]) : 1.f;
         }
