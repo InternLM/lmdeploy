@@ -84,8 +84,6 @@ def _map_v4_expert_param_name(name: str) -> tuple[str, str] | None:
     return name[:expert_match.start()] + f'.ffn.experts.down.{suffix}', 'down'
 
 @dataclass
-
-@dataclass
 class V4Args:
     dim: int
     n_heads: int
@@ -254,10 +252,6 @@ class Compressor(nn.Module):
         self.apply_rotary.forward_single(kv_rope, cos_c, sin_c, inplace=True, complex_mode=True)
         if self.rotate:
             compressed_kv = self.compressor_impl.rotate_activation(compressed_kv)
-        else:
-            # TODO: FP8 quantize NoPE dims directly and write to FP8 cache,
-            # eliminating the BF16 round-trip that act_quant(inplace=True) did
-            pass
 
         # ---- Phase G: Write to paged block cache (via backend dispatch) ----
         block_caches = caches.block_caches
@@ -527,9 +521,9 @@ class Attention(nn.Module):
             self.compressor(x, slot, caches, compress_pos_emb, v4_compressor_meta=v4_compressor_meta)
 
         # ---- Indexer call (model-level, result passed to backend) ----
+        attn_caches = self._resolve_attention_caches(caches)
         index_out = None
         if self.compress_ratio and self.indexer is not None:
-            attn_caches = self._resolve_attention_caches(caches)
             index_out = self.indexer(x=x, qr=qr, caches=caches, slot=slot,
                                      index_kv_cache=attn_caches['index_kv'],
                                      index_kv_scale_cache=attn_caches['index_kv_scale'],
@@ -539,7 +533,6 @@ class Attention(nn.Module):
                                      v4_compressor_meta=v4_compressor_meta)
 
         # ---- Unified attention (backend dispatches decode/prefill) ----
-        attn_caches = self._resolve_attention_caches(caches)
         out = self.attn_fwd(q, kv, self.attn_sink, v4_meta, attn_caches, slot,
                             index_out=index_out)
 
