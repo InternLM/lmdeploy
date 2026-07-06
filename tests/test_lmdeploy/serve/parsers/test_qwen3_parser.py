@@ -330,7 +330,7 @@ class TestQwenResponseParserStreaming:
             for _ in range(200):
                 parser.decode_tool_incremental('x' * 32, final=False)
 
-            assert len(parser._tool_payload) <= 1
+            assert len(parser._payload) <= 1
         finally:
             parser.finish_tool_call()
 

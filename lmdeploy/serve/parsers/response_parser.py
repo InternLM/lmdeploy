@@ -534,7 +534,7 @@ class BaseResponseParser(ResponseParser):
             emit = self._pending
             self._pending = ''
             out = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
-            if self.profile.tool_payload_format == 'json' and self.tool_parser._json_payload_closed:
+            if self.profile.tool_payload_format == 'json' and self.tool_parser._payload_closed:
                 out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
                 self.tool_parser.finish_tool_call()
                 self._mode = self.MODE_PLAIN
