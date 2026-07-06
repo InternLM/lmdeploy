@@ -603,6 +603,17 @@ class TestEPLowLatency:
             w1=w1_packed, w1_scale=w1_scale,
             w2=w2_packed, w2_scale=w2_scale,
         )
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
+        wrapped_recv = (DisposibleTensor(A_quant.clone()), DisposibleTensor(A_scale.clone()))
+        wrapped_out = fused_moe_v4_fp4_ep_low_latency(
+            wrapped_recv,
+            masked_m,
+            expected_m=max_m,
+            w1=w1_packed, w1_scale=w1_scale,
+            w2=w2_packed, w2_scale=w2_scale,
+        )
+        assert wrapped_recv[0].is_disposed
+        assert wrapped_recv[1].is_disposed
 
         # Reference: run the same grouped GEMM pipeline step by step.
         gateup_output = torch.empty((num_experts, max_m, ffn_dim * 2), dtype=torch.bfloat16, device=device)
@@ -633,3 +644,4 @@ class TestEPLowLatency:
             m = masked_m[e].item()
             if m > 0:
                 torch.testing.assert_close(out[e, :m], ref[e, :m], atol=0.0, rtol=0.0)
+                torch.testing.assert_close(wrapped_out[e, :m], ref[e, :m], atol=0.0, rtol=0.0)

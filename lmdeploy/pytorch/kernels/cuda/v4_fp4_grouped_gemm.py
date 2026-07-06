@@ -270,6 +270,8 @@ def fused_moe_v4_fp4_ep_low_latency(
     Returns:
         [E, max_m, hidden_dim] bf16 tensor for low_latency_combine.
     """
+    from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
+
     A, A_scale = recv_hidden
     E, max_m = A.shape[:2]
     hidden_dim = w2.size(1)
@@ -277,12 +279,14 @@ def fused_moe_v4_fp4_ep_low_latency(
     # --- Gate-up GEMM (masked) ---
     gateup_output = torch.empty((E, max_m, w1.size(1)), dtype=out_dtype, device=A.device)
     m_grouped_fp8_fp4_gemm_nt_masked(
-        (A, A_scale),
+        (DisposibleTensor.maybe_unwrap(A), DisposibleTensor.maybe_unwrap(A_scale)),
         (w1, w1_scale),
         gateup_output,
         masked_m,
         expected_m,
     )
+    DisposibleTensor.maybe_dispose(A)
+    DisposibleTensor.maybe_dispose(A_scale)
 
     # --- SiLU+mul + requantize ---
     _, act_quant, act_scale = silu_and_mul_moe_ep_v4(
