@@ -5,7 +5,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
-from os import getenv, getpid
+from os import getenv
 from typing import Any
 
 import numpy as np
@@ -143,11 +143,6 @@ class BatchedOutputs:
 def msg_with_rank(rank: int, msg: str):
     """Return message with rank."""
     return f'rank[{rank}] - {msg}'
-
-
-def _gib(num_bytes: int) -> float:
-    """Convert bytes to GiB."""
-    return num_bytes / (1 << 30)
 
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
@@ -390,32 +385,6 @@ class BaseModelAgent:
             torch.cuda.empty_cache()
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
-
-    def _log_gpu_mem_for_wakeup(self, phase: str, requested_tags: list[str] | None, effective_tags: list[str]):
-        """Log per-process GPU memory around sleep/wakeup lifecycle."""
-        with self.all_context():
-            device = torch.cuda.current_device()
-            free, total = get_gpu_memory(device)
-            allocated = torch.cuda.memory_allocated(device)
-            reserved = torch.cuda.memory_reserved(device)
-            max_allocated = torch.cuda.max_memory_allocated(device)
-            max_reserved = torch.cuda.max_memory_reserved(device)
-
-        logger.info('ModelAgent wakeup gpu_mem %s: rank=%s pid=%s device=%s requested_tags=%s effective_tags=%s '
-                    'free=%.2fGiB total=%.2fGiB allocated=%.2fGiB reserved=%.2fGiB max_allocated=%.2fGiB '
-                    'max_reserved=%.2fGiB.',
-                    phase,
-                    self.rank,
-                    getpid(),
-                    device,
-                    requested_tags,
-                    effective_tags,
-                    _gib(free),
-                    _gib(total),
-                    _gib(allocated),
-                    _gib(reserved),
-                    _gib(max_allocated),
-                    _gib(max_reserved))
 
     def warmup(self):
         """warmup."""
@@ -1103,26 +1072,6 @@ class BaseModelAgent:
                 if isinstance(item, dict):
                     self._keep_h2d_transfer(item.pop(_H2D_TRANSFER_KEY, None))
 
-    def _queue_sizes(self):
-        """Return internal queue sizes for wakeup consistency checks."""
-        sizes = {}
-        for name in ('_pre_in_que', '_in_que', '_out_que'):
-            queue = getattr(self, name, None)
-            sizes[name] = queue.qsize() if queue is not None else None
-        return sizes
-
-    def _log_nonempty_queues_after_wakeup(self):
-        """Log stale queue items before wakeup releases inference."""
-        queue_sizes = self._queue_sizes()
-        nonempty_queues = {name: size for name, size in queue_sizes.items() if size}
-        if nonempty_queues:
-            logger.error(
-                'ModelAgent wakeup found non-empty queues after sleep drain: rank=%s pid=%s queue_sizes=%s',
-                getattr(self, 'rank', '?'),
-                getpid(),
-                queue_sizes,
-            )
-
     async def get_output_async(self):
         """Async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
@@ -1487,16 +1436,13 @@ class BaseModelAgent:
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
-        requested_tags = tags
         if tags is None:
             tags = ['weights', 'kv_cache']
-
-        self._log_gpu_mem_for_wakeup('before', requested_tags, tags)
 
         if 'weights' in tags:
             device = next(self.patched_model.get_model().parameters()).device
             assert device.type in ['cpu', 'meta']
-            spec_model = self.spec_agent.get_model()
+            spec_model =  self.spec_agent.get_model()
 
             if device.type == 'cpu':
                 self.patched_model.get_model().to(torch.cuda.current_device())
@@ -1514,12 +1460,9 @@ class BaseModelAgent:
             self.build_cache_engine()
             self.warmup()
             self.state.is_sleeping = False
-            self._log_nonempty_queues_after_wakeup()
             # wake up signal
             if self.dist_config.dp > 1:
                 self.state.to_wakeup.set()
-
-        self._log_gpu_mem_for_wakeup('after', requested_tags, tags)
 
     def release(self):
         """release."""
