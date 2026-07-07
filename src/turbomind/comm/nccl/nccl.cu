@@ -279,6 +279,17 @@ public:
 
         TM_CHECK_EQ((int)counts.size(), n_ranks);
 
+        bool equal_counts = true;
+        for (auto i = 1; i < counts.size(); ++i) {
+            if (counts[i] != counts[0]) {
+                equal_counts = false;
+                break;
+            }
+        }
+        if (equal_counts) {
+            return AllGather(sendbuff, recvbuff, counts[0], type, group, stream);
+        }
+
         NCCLCHECK(ncclGroupStart());
         size_t offset = 0;
         for (int i = 0; i < n_ranks; ++i) {
@@ -316,6 +327,17 @@ public:
         ncclComm_t           comm      = groups_.at(group);
 
         TM_CHECK_EQ((int)counts.size(), n_ranks);
+
+        bool equal_counts = true;
+        for (auto i = 1; i < counts.size(); ++i) {
+            if (counts[i] != counts[0]) {
+                equal_counts = false;
+                break;
+            }
+        }
+        if (equal_counts) {
+            return ReduceScatter(sendbuff, recvbuff, counts[0], type, group, stream);
+        }
 
         NCCLCHECK(ncclGroupStart());
         size_t offset = 0;
