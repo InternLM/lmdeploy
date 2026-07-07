@@ -247,6 +247,7 @@ class IterationStats:
                 if req_stats.first_token_time == 0:
                     req_stats.first_token_time = self.iteration_timestamp
                     req_stats.lastest_token_time = self.iteration_timestamp
+                    self.prompt_tokens = req_stats.prompt_tokens
             return
 
         self.new_generation_tokens = new_generation_tokens
