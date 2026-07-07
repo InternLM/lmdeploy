@@ -72,6 +72,9 @@ class EngineHealthMonitor:
         self._task: asyncio.Task | None = None
         self._started_time = time.monotonic()
         self._last_success_time: float | None = None
+        # Background polling and on-demand /health refreshes both update the
+        # cached snapshot, so run backend probes one at a time.
+        self._probe_lock = asyncio.Lock()
         self._snapshot = dict(status='initializing',
                               message='Engine health monitor is starting.')
 
@@ -96,6 +99,10 @@ class EngineHealthMonitor:
             await asyncio.sleep(self.poll_interval)
 
     async def probe_once(self):
+        async with self._probe_lock:
+            await self._probe_once_unlocked()
+
+    async def _probe_once_unlocked(self):
         probe_time = time.monotonic()
         if self.async_engine is None:
             result = dict(status='unhealthy',
@@ -115,6 +122,11 @@ class EngineHealthMonitor:
         if status in ('healthy', 'sleeping'):
             self._last_success_time = probe_time
         self._snapshot = dict(status=status, message=result['message'])
+
+    async def refresh_snapshot(self) -> dict:
+        """Run one bounded probe and return the latest health snapshot."""
+        await self.probe_once()
+        return self.snapshot()
 
     def snapshot(self) -> dict:
         snapshot = dict(self._snapshot)

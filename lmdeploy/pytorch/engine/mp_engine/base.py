@@ -153,6 +153,8 @@ class MPEngineInstance(EngineInstanceBase):
                                                                 state.init_done,
                                                                 *args,
                                                                 **kwargs)
+        # The RPC generator captured the request; release this wrapper's multimodal reference.
+        kwargs.pop('multimodal', None)
 
         try:
             async for result in generator:

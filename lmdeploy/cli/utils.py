@@ -719,12 +719,12 @@ class ArgumentHelper:
                                    help='kvcache migration management backend when PD disaggregation')
 
     @staticmethod
-    def disable_vision_encoder(parser):
-        """Disable loading vision encoder."""
-        return parser.add_argument('--disable-vision-encoder',
+    def language_model_only(parser):
+        """Run as text-only LLM without loading vision/multimodal encoder."""
+        return parser.add_argument('--language-model-only',
                                    action='store_true',
                                    default=False,
-                                   help='disable multimodal encoder')
+                                   help='Run as text-only LLM: do not load vision/multimodal encoder modules.')
 
     @staticmethod
     def logprobs_mode(parser):

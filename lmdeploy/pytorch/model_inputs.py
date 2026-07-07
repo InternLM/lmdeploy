@@ -453,7 +453,7 @@ class StepContext:
 @dataclass
 class BuildModelContext:
     """Context for building model."""
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False

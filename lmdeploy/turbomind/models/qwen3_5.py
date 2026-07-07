@@ -12,7 +12,7 @@ instead of inheritance (mirrors ``InternVLModel``):
   optional ``vision_model``, registered as ``qwen3_5`` / ``qwen3_5-moe``. It
   delegates the two-phase ``__init__`` / ``bind_runtime`` / ``model(pfx)``
   lifecycle to its children, and skips the vision encoder when
-  ``disable_vision_encoder`` is set.
+  ``language_model_only`` is set.
 
 The patcher and position embedding are replicated across TP ranks. Vision
 transformer blocks and merger linears shard with the model TP group.
@@ -575,7 +575,7 @@ class Qwen3_5Model:
 
     def __init__(self, cfg: Qwen3_5Config | Qwen3_5MoeConfig, *, resolver,
                  vision_resolver=None,
-                 disable_vision_encoder: bool = False):
+                 language_model_only: bool = False):
         text_cfg = getattr(cfg, 'text_config', cfg)
         if text_cfg is None:
             raise ValueError(
@@ -583,7 +583,7 @@ class Qwen3_5Model:
         self.text_model = Qwen3_5TextModel(text_cfg, resolver=resolver)
 
         vision_cfg = getattr(cfg, 'vision_config', None)
-        if disable_vision_encoder or vision_cfg is None:
+        if language_model_only or vision_cfg is None:
             self.vision_model = None
         else:
             self.vision_model = Qwen3_5VisionModel(

@@ -269,7 +269,8 @@ class TurbomindEngineConfig:
         devices: the used devices
         empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
-        disable_vision_encoder: Whether to disable loading vision encoder.
+        language_model_only: Whether to run as text-only LLM without loading
+            vision/multimodal encoder modules.
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
@@ -310,7 +311,7 @@ class TurbomindEngineConfig:
     async_: int = 1
     devices: list[int] | None = None
     empty_init: bool = False
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     communicator: str = 'nccl'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
@@ -414,8 +415,8 @@ class PytorchEngineConfig:
         model_format: weight quantization policy, options: ['fp8'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model,
-        disable_vision_encoder: Whether to disable loading vision
-            encoder. Default to False.
+        language_model_only: Whether to run as text-only LLM without loading
+            vision/multimodal encoder modules. Default to False.
         logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs']
         dllm_block_length: Block size of block diffusion model.
         dllm_unmasking_strategy: Dllm unmasking strategy, options:
@@ -462,7 +463,7 @@ class PytorchEngineConfig:
     model_format: str = None
     enable_metrics: bool = True
     hf_overrides: dict[str, Any] | None = None
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     logprobs_mode: str = None
     # router replay
     enable_return_routed_experts: bool = False

@@ -201,6 +201,8 @@ class RayMPEngine(MPEngine):
         """Collective rpc call."""
         # ray generator would try cache every result, which is too verbose.
         stream_task = asyncio.create_task(self._collective_rpc_async('create_stream_task', func, *args, **kwargs))
+        # The startup task captured kwargs; avoid retaining tensors in this streaming wrapper.
+        kwargs.pop('multimodal', None)
 
         def _mark_init_done(task: asyncio.Task):
             init_done.set()

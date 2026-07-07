@@ -34,7 +34,7 @@ class VocabType(Enum):
     """The vocabulary is in the raw format.
 
     The tokens in the vocabulary are kept in their original form without any processing. This kind of tokenizer includes
-    the tiktoken tokenizer, e.g. microsoft/Phi-3-small-8k-instruct, Qwen/Qwen-7B-Chat, etc.
+    the tiktoken tokenizer, e.g. microsoft/Phi-3-small-8k-instruct, Qwen/Qwen2.5-7B-Instruct, etc.
     """
 
     BYTE_FALLBACK = 1
@@ -232,7 +232,7 @@ class TokenizerInfo(_xgr.TokenizerInfo):
 
         elif TokenizerInfo._is_tiktoken_tokenizer(tokenizer):
             # tiktoken tokenizer
-            # e.g. Phi-3-small-8k-instruct, Qwen-7B-Chat, stablelm-2-12b-chat (previously)
+            # e.g. Phi-3-small-8k-instruct, Qwen2.5-7B-Instruct, stablelm-2-12b-chat (previously)
             if stop_token_ids is None:
                 if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
                     stop_token_ids = [tokenizer.eos_token_id]

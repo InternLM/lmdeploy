@@ -342,6 +342,11 @@ class BaseModelAgent:
                                            self.agent_strategy,
                                            misc_config=misc_config,
                                            device=device)
+        if self.spec_agent.is_enabled():
+            from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
+            helper = GuidedSpecHelper(self.guided_decoding_manager)
+            self.spec_agent.guided_helper = helper
+            self.spec_agent.proposer.guided_helper = helper
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
@@ -413,6 +418,7 @@ class BaseModelAgent:
             if dp > 1:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
+                inputs.dp_meta.dp_is_decoding = False
             logger.debug('Warmup prefill start.')
             self._forward_impl(inputs)
             torch.cuda.synchronize()
@@ -433,6 +439,7 @@ class BaseModelAgent:
                 if dp > 1:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)
+                    inputs.dp_meta.dp_is_decoding = True
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
@@ -636,11 +643,11 @@ class BaseModelAgent:
             # for second round chat
             self.step_inputs.reindex(delta)
 
-        if inputs.is_first_chunk or not inputs.is_chunk:
+        if inputs.is_first_chunk:
             self._prev_chunk_output = None
 
         # check long context
-        if self._prev_chunk_output is not None:
+        if inputs.is_chunk and self._prev_chunk_output is not None:
             # update model metas
             model_metas = self._prev_chunk_output.get('model_metas')
             inputs.model_metas = model_metas
@@ -1095,7 +1102,7 @@ class BaseModelAgent:
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
-        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
+        build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
                                             dllm_config=self.misc_config.dllm_config,
                                             strategy_factory=self.strategy_factory,
                                             enable_return_routed_experts=enable_return_routed_experts,

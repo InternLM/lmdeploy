@@ -70,6 +70,21 @@ def env_to_float(
     return value
 
 
+def env_to_choice(
+    env_var: str,
+    default: str,
+    choices: set | list,
+):
+    """Env to selected string."""
+    value = os.getenv(env_var)
+    if value is None:
+        return default
+    value = value.lower().strip()
+    if value not in choices:
+        raise ValueError(f"Invalid environment variable '{env_var}={value}'. Allowed values: {choices}")
+    return value
+
+
 _ENVS = dict()
 
 
@@ -178,6 +193,11 @@ with set_envs():
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior
     fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)
+
+    # opt-ttft
+    opt_ttft_policy = env_to_choice('LMDEPLOY_PT_TTFT_POLICY', 'size', {'fifo', 'size'})
+    opt_ttft_short_turns = max(1, env_to_int('LMDEPLOY_PT_TTFT_SHORT_TURNS', 3))
+    opt_ttft_aging_sec = env_to_float('LMDEPLOY_PT_TTFT_AGING_SEC', 2.0)
 
 
 def get_all_envs():
