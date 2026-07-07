@@ -119,7 +119,12 @@ class ToolParser:
         if not payload:
             return []
 
-        flags = Allow.ALL if self._name_emitted else Allow.ALL & ~Allow.STR
+        # After the function name is emitted, arguments are only surfaced at
+        # final=True. Skip repeated partial_json_parser.loads on growing payload.
+        if self._name_emitted and not final:
+            return []
+
+        flags = Allow.ALL if final else Allow.ALL & ~Allow.STR
         try:
             obj = partial_json_parser.loads(payload, flags)
         except partial_json_parser.core.exceptions.MalformedJSON:

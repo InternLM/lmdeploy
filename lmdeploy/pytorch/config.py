@@ -660,6 +660,7 @@ class SpecDecodeConfig:
                                                    block_size=target_cache_cfg.block_size,
                                                    model_format=model_format,
                                                    hf_overrides=hf_overrides,
+                                                   device_type=target_cache_cfg.device_type,
                                                    )
         cache_config = None
         # include medusa

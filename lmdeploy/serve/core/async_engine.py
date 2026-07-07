@@ -427,6 +427,8 @@ class AsyncEngine:
     @asynccontextmanager
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
+        # async_stream_infer captured its own kwargs; do not retain large multimodal data here.
+        kwargs.pop('multimodal', None)
 
         async def cleanup_after_exception():
             # Use asyncio.shield to protect cleanup coroutines from being cancelled.
@@ -659,6 +661,8 @@ class AsyncEngine:
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
+                # The engine has accepted multimodal data; avoid retaining preprocessed tensors here.
+                prompt_input.pop('multimodal', None)
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats

@@ -487,6 +487,8 @@ class AsyncRPCClient:
                 streaming=streaming,
                 streaming_startup_notify_kwarg=_streaming_startup_notify_kwarg,
             ))
+        # The socket payload has been built; do not also keep original tensor refs in kwargs.
+        kwargs.pop('multimodal', None)
 
         try:
             await self.async_socket.send(data)
@@ -519,6 +521,8 @@ class AsyncRPCClient:
                 _streaming_startup_notify_kwarg=streaming_startup_notify_kwarg,
                 **kwargs,
             ))
+        # The startup task captured kwargs; avoid retaining tensors in this streaming wrapper.
+        kwargs.pop('multimodal', None)
         stream_id = None
         stopped = False
 
