@@ -953,7 +953,13 @@ class BaseModelAgent:
             self._pending_h2d_transfers.popleft()
 
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
-        """Async loop inputs preprocess."""
+        """Move queued CPU-side forward inputs to the CUDA-ready queue.
+
+        ``set_forward_inputs`` writes to ``_pre_in_que``. Until this coroutine
+        finishes H2D/preprocessing and pushes the item to ``_in_que``, the DP
+        input maker treats ``_pre_in_que`` as pending real work and avoids
+        falling back to dummy inputs.
+        """
         non_blocking = True
         keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
