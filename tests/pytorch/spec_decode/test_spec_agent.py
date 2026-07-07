@@ -75,7 +75,18 @@ class _DummyProposer:
 
     def update_inputs_decoding(self, inputs, extra_inputs, draft_token_ids, target_hidden_states, model_metas):
         self.update_inputs_decoding_calls += 1
-        return inputs
+        batch_size = inputs.seq_length.size(0)
+        return inputs.clone(
+            input_ids=draft_token_ids,
+            seq_length=inputs.seq_length.new_ones(batch_size),
+            history_lengths=inputs.history_lengths + inputs.seq_length,
+            is_decoding=True,
+            max_q_seqlen=1,
+            max_kv_seqlen=inputs.max_kv_seqlen + 1,
+            sum_kv_seqlen=inputs.sum_kv_seqlen + batch_size,
+            target_hidden_states=target_hidden_states,
+            model_metas=model_metas,
+        )
 
 
 def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indices():
@@ -282,8 +293,8 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     assert agent.proposer.update_inputs_decoding_calls == 0
 
 
-def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatch):
-    """DP non-last chunks should still execute the full draft-forward loop."""
+def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
+    """DP non-last chunks should pad block offsets for draft decodes."""
     import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
     from lmdeploy.pytorch.model_inputs import DPMeta
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
@@ -296,11 +307,14 @@ def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatc
     agent.rank = 0
     agent.proposer = _DummyProposer()
     agent.guided_helper = GuidedSpecHelper()
+    agent.cache_config = SimpleNamespace(kernel_block_size=1, num_reserved_gpu_blocks=1)
     forward_calls = 0
+    forwarded_inputs = []
 
     def _forward_impl(_inputs):
         nonlocal forward_calls
         forward_calls += 1
+        forwarded_inputs.append(_inputs)
         return {'call': forward_calls}
 
     agent._forward_impl = _forward_impl
@@ -313,6 +327,12 @@ def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatc
     assert agent.proposer.get_outputs_calls == agent.num_spec_tokens
     assert agent.proposer.update_inputs_decoding_calls == 1
     assert agent.proposer.model.update_inputs_calls == agent.num_spec_tokens - 1
+    assert forwarded_inputs[0] is inputs
+    assert [inp.block_offsets.size(1) for inp in forwarded_inputs] == [1, 2, 2]
+    torch.testing.assert_close(forwarded_inputs[1].block_offsets[:, 1], torch.zeros(2, dtype=torch.long))
+    torch.testing.assert_close(forwarded_inputs[2].block_offsets[:, 1], torch.zeros(2, dtype=torch.long))
+    assert all(not inp.is_dummy for inp in forwarded_inputs)
+    assert all(inp.is_decoding for inp in forwarded_inputs[1:])
 
 
 def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypatch):
@@ -323,11 +343,13 @@ def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypa
 
     monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(lambda seqlen, num_tokens: DPMeta()))
     inputs, extra_inputs = _make_non_last_chunk_inputs(dp_meta=DPMeta(dp_batches=[2, 2], dp_is_decoding=True))
+    inputs.is_chunk = False
 
     agent = object.__new__(SpecModelAgent)
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
     forward_calls = 0
 
     def _forward_impl(_inputs):

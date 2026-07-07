@@ -643,7 +643,9 @@ class SpecModelAgent(BaseSpecModelAgent):
                 extra_inputs.last_token_indices = None
                 # for dp > 1, need to update dp_meta and model inputs for next loop
                 dp_meta, padding_batch_size = __build_dp_meta(inputs)
-
+                # pad block_offsets for non-last chunks dummy run when dp>1
+                if dp_meta is not None and inputs.is_chunk and not inputs.is_last_chunk:
+                    inputs.block_offsets = torch.nn.functional.pad(inputs.block_offsets, (0, 1), value=0)
                 for loop_idx in range(loop_count):
                     inputs = _update_dp_model_inputs(inputs, dp_meta, padding_batch_size)
                     outputs = self._forward_impl(inputs)
