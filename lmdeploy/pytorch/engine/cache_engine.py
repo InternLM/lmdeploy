@@ -800,9 +800,8 @@ class StateCacheEngine:
                                    num_layers: int | None = None) -> tuple[_CacheResource, ...]:
         """Build validated state-cache allocation metadata.
 
-        When formal specs are present they own names and optional layer
-        layouts. Plain states_shapes remain the unlayered path used by SSM
-        models such as Qwen3.5.
+        When formal specs are present they own names and optional layer layouts. Plain states_shapes remain the
+        unlayered path used by SSM models such as Qwen3.5.
         """
         resources = []
         state_specs = state_specs or []
