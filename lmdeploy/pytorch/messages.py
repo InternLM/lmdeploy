@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import numpy as np
 import torch
@@ -59,6 +59,11 @@ class PrefixCacheMeta:
     content_hash: str
 
 
+PrefixCacheExtraHash: TypeAlias = tuple[int, int, str, str]
+PrefixCacheExtraHashes: TypeAlias = tuple[PrefixCacheExtraHash, ...]
+PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
+
+
 @dataclass
 class PrefixCacheState:
     """Per-sequence prefix-cache bookkeeping.
@@ -73,18 +78,30 @@ class PrefixCacheState:
     from it.  ``match_start_step`` remembers the sequence step before a
     tentative prefix-cache match so long-context chunking can distinguish
     current-turn cached multimodal spans from older session history.
+    ``match_recompute_blocks`` keeps a small full-block overlap out of prefix
+    reuse for strategies that need target hidden-state bridge data.
+    ``private_recompute_*_step`` marks trie-known blocks that were deliberately
+    dropped from a match and therefore must stay writable/private during the
+    next allocation instead of being deduplicated back to shared trie blocks.
     ``suppress_match_stats`` is set while replaying work after recompute
     eviction; cache reuse may still happen, but it should not affect the public
     prefix-cache hit-rate metric.
     """
 
+    # Persistent request metadata used to build multimodal-aware trie keys.
     metas: list[PrefixCacheMeta] = field(default_factory=list)
-    block_extra_hashes: dict[int, tuple] = field(default_factory=dict, repr=False)
+    block_extra_hashes: PrefixCacheBlockExtraHashes = field(default_factory=dict, repr=False)
     num_indexed_metas: int = 0
+
+    # Trie cursor for the deepest prefix block already shared by this sequence.
     last_shared_node: Any = field(default=None, repr=False)
+
+    # SSM checkpoint restore state pinned by a prefix hit before forward.
     restore_state: int = -1
     restore_state_acquired: bool = False
     restore_node: Any = field(default=None, repr=False)
+
+    # SSM checkpoint save state staged until model forward publishes it.
     save_state: int = -1
     save_step: int = 0
     save_is_decode: bool = False
@@ -92,8 +109,15 @@ class PrefixCacheState:
     save_state_acquired: bool = False
     save_acquired_state: int = -1
     save_acquired_node: Any = field(default=None, repr=False)
+
+    # Latest decode checkpoint node owned by this sequence.
     decode_state_node: Any = field(default=None, repr=False)
+
+    # Tentative match state used for chunking, MTP overlap, and metrics.
     match_start_step: int = -1
+    match_recompute_blocks: int = 0
+    private_recompute_start_step: int = -1
+    private_recompute_end_step: int = -1
     suppress_match_stats: bool = False
 
 
@@ -704,6 +728,9 @@ class SchedulerSequence:
     meta: Any = None
     num_ignored_history: int = 0
     model_meta: dict[str, Any] = None
+    # Exclusive absolute token limit for temporary KV ownership. Non-final
+    # long-context chunks use this to allocate only the computed prefix.
+    kv_token_limit: int | None = None
 
     # For Disaggregation
     migration_request: None | MigrationRequest = None
@@ -913,7 +940,7 @@ class SchedulerSequence:
             return self.history_multimodals.get_datas(match_start, self.num_all_ids)
         return input_multimodals
 
-    def get_prefix_cache_extra_hashes(self, start: int, end: int):
+    def get_prefix_cache_extra_hashes(self, start: int, end: int) -> PrefixCacheExtraHashes:
         """Get canonical multimodal identity entries for a token range.
 
         The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
@@ -969,6 +996,15 @@ class SchedulerSequence:
                 break
             clamped = next_step
         return clamped
+
+    def get_prefix_cache_max_match_step(self):
+        """Get the deepest prefix step allowed for a cache hit."""
+        block_size = self.block_size
+        max_step = ((self.num_valid_ids - 1) // block_size) * block_size
+        recompute_blocks = max(0, self.prefix_cache.match_recompute_blocks)
+        if recompute_blocks > 0:
+            max_step = max(0, max_step - recompute_blocks * block_size)
+        return self.clamp_prefix_cache_match_step(max_step)
 
     def record_event(
         self,

@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -55,9 +56,16 @@ class CounterEvent(asyncio.Event):
 class RunableEventAsync:
     """Awaitable async runable event."""
 
-    def __init__(self, scheduler: 'Scheduler'):
+    def __init__(self, scheduler: 'Scheduler', extra_runable_checker: Callable[[], bool] | None = None):
         self.scheduler = scheduler
+        self.extra_runable_checker = extra_runable_checker
         self.event = asyncio.Event()
+
+    def has_unfinished(self):
+        """Check whether scheduler or engine-local state has runnable work."""
+        if self.scheduler.has_unfinished():
+            return True
+        return self.extra_runable_checker is not None and self.extra_runable_checker()
 
     async def wait(self):
         """Wait event."""
@@ -65,15 +73,15 @@ class RunableEventAsync:
 
     def set(self):
         """Set event."""
-        if self.scheduler.has_unfinished():
+        if self.has_unfinished():
             self.event.set()
         else:
             self.event.clear()
 
 
-def build_runable_event(scheduler: 'Scheduler'):
+def build_runable_event(scheduler: 'Scheduler', extra_runable_checker: Callable[[], bool] | None = None):
     """Build runable event."""
-    return RunableEventAsync(scheduler)
+    return RunableEventAsync(scheduler, extra_runable_checker)
 
 
 @dataclass
@@ -128,7 +136,9 @@ class EngineLoop:
         self.resp_queue = asyncio.Queue()
         self.forward_event = CounterEvent()
         self.migration_event = asyncio.Event()
-        self.has_runable_event = RunableEventAsync(self.scheduler)
+        # Active long-context chunks are owned by InputsMaker, not the
+        # scheduler WAITING/READY queues, so include them in the runnable gate.
+        self.has_runable_event = RunableEventAsync(self.scheduler, self.inputs_maker.has_pending_long_context_chunk)
         # Sleep uses a small handshake with the scheduling loops:
         # 1. sleep() sets _sleep_requested and waits for main/migration drain events.
         # 2. main_loop and migration_loop reach safe boundaries, acknowledge
@@ -387,13 +397,12 @@ class EngineLoop:
 
     async def _main_loop_try_send_next_inputs(self):
         """Try send next inputs."""
-        scheduler = self.scheduler
-        if not scheduler.has_unfinished():
+        if not self.has_runable_event.has_unfinished():
             await self.has_runable_event.wait()
         if self._sleep_requested:
             return None, None
 
-        scheduler.collect_migration_done()
+        self.scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
 
     @staticmethod

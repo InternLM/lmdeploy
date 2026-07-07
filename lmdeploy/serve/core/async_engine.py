@@ -89,15 +89,14 @@ class AsyncEngine:
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "internlm/internlm-chat-7b",
-            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+            huggingface.co, such as "internlm/internlm2-chat-7b",
+            "Qwen/Qwen2.5-7B-Instruct" and so on.
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
@@ -430,6 +429,8 @@ class AsyncEngine:
     @asynccontextmanager
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
+        # async_stream_infer captured its own kwargs; do not retain large multimodal data here.
+        kwargs.pop('multimodal', None)
 
         async def cleanup_after_exception():
             # Use asyncio.shield to protect cleanup coroutines from being cancelled.
@@ -662,6 +663,8 @@ class AsyncEngine:
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
+                # The engine has accepted multimodal data; avoid retaining preprocessed tensors here.
+                prompt_input.pop('multimodal', None)
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats

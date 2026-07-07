@@ -1,13 +1,14 @@
-import json
-
 import pytest
 from openai import BadRequestError
+from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     SEARCH_TOOL,
     WEATHER_TOOL,
     assert_arguments_parseable,
     assert_tool_call_fields,
+    assert_tool_name_single_delta,
     collect_stream_tool_call,
+    validate_stream_tool_call_result,
 )
 
 from .conftest import MESSAGES_ASKING_FOR_SEARCH, MESSAGES_ASKING_FOR_WEATHER, _apply_marks, _ToolCallTestBase
@@ -29,7 +30,7 @@ class TestToolCallBasic(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -53,8 +54,8 @@ class TestToolCallBasic(_ToolCallTestBase):
         assert tc.function.name == WEATHER_TOOL['function']['name']
 
         parsed_args = assert_arguments_parseable(tc.function.arguments)
-        assert isinstance(parsed_args.get('city'), str) and len(parsed_args['city']) > 0
-        assert isinstance(parsed_args.get('state'), str) and len(parsed_args['state']) > 0
+        assert isinstance(parsed_args['city'], str) and len(parsed_args['city']) > 0
+        assert isinstance(parsed_args['state'], str) and len(parsed_args['state']) > 0
 
         # Token usage sanity
         assert response.usage is not None
@@ -63,30 +64,41 @@ class TestToolCallBasic(_ToolCallTestBase):
 
     def test_streaming(self, backend, model_case):
         """Streaming: tool call id / name streamed once, args accumulated."""
-        client, model_name = self._get_client()
+        r = self._stream_tool_call(
+            MESSAGES_ASKING_FOR_WEATHER,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+        )
 
+        assert r['role'] == 'assistant'
+        assert r['chunk_count'] > 0, 'Expected at least one SSE chunk'
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+        )
+
+        streamed_args = assert_arguments_parseable(r['args_str'])
+        assert isinstance(streamed_args['city'], str) and len(streamed_args['city']) > 0
+        assert isinstance(streamed_args['state'], str) and len(streamed_args['state']) > 0
+
+    def test_streaming_function_name_not_fragmented(self, backend, model_case):
+        """Function name must arrive in a single delta (not split across
+        chunks)."""
+        client, model_name = self._get_client()
         stream = client.chat.completions.create(
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=1024,
-            tools=[WEATHER_TOOL, SEARCH_TOOL],
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            tool_choice={
+                'type': 'function',
+                'function': {'name': 'get_current_weather'},
+            },
             logprobs=False,
             stream=True,
         )
-
-        r = collect_stream_tool_call(stream)
-
-        assert r['finish_reason_count'] == 1, (f'Expected exactly 1 finish_reason, got {r["finish_reason_count"]}')
-        assert r['finish_reason'] == 'tool_calls'
-        assert r['role'] == 'assistant'
-        assert isinstance(r['tool_call_id'], str) and len(r['tool_call_id']) >= 1
-        assert r['tool_call_id'].strip() == r['tool_call_id'], 'tool_call_id has leading/trailing whitespace'
-        assert r['function_name'] == WEATHER_TOOL['function']['name']
-
-        streamed_args = assert_arguments_parseable(r['args_str'])
-        assert isinstance(streamed_args.get('city'), str) and len(streamed_args['city']) > 0
-        assert isinstance(streamed_args.get('state'), str) and len(streamed_args['state']) > 0
+        assert_tool_name_single_delta(stream, 'get_current_weather')
 
 
 # ===========================================================================
@@ -101,13 +113,13 @@ class TestToolCallStreamConsistency(_ToolCallTestBase):
     def test_stream_nonstream_consistency(self, backend, model_case):
         client, model_name = self._get_client()
 
-        # Use 1024 tokens to avoid truncation — reasoning models consume
-        # thinking tokens before emitting the tool call JSON.
+        # Use enough completion budget — reasoning models consume thinking tokens
+        # before emitting the tool call JSON.
         common_kwargs = dict(
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -118,14 +130,18 @@ class TestToolCallStreamConsistency(_ToolCallTestBase):
         assert ns_choice.finish_reason == 'tool_calls'
         assert ns_choice.message.tool_calls is not None and len(ns_choice.message.tool_calls) >= 1
         ns_tc = ns_choice.message.tool_calls[0]
+        assert_tool_call_fields(ns_tc)
         ns_name = ns_tc.function.name
-        ns_args = json.loads(ns_tc.function.arguments)
+        ns_args = assert_arguments_parseable(ns_tc.function.arguments)
 
         # Streaming
         stream = client.chat.completions.create(**common_kwargs, stream=True)
         r = collect_stream_tool_call(stream)
-        assert r['finish_reason'] == 'tool_calls'
-        s_args = json.loads(r['args_str'])
+        validate_stream_tool_call_result(
+            r,
+            **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+        )
+        s_args = assert_arguments_parseable(r['args_str'])
 
         assert ns_name == r['function_name'], (f'Function name mismatch: non-stream={ns_name}, '
                                                f'stream={r["function_name"]}')
@@ -152,7 +168,7 @@ class TestToolCallChoice(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='auto',
             logprobs=False,
@@ -183,7 +199,7 @@ class TestToolCallChoice(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='none',
             logprobs=False,
@@ -210,7 +226,7 @@ class TestToolCallChoice(_ToolCallTestBase):
                 model=model_name,
                 messages=MESSAGES_ASKING_FOR_WEATHER,
                 temperature=0,
-                max_completion_tokens=200,
+                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
                 tools=[WEATHER_TOOL, SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
@@ -239,7 +255,7 @@ class TestToolCallChoice(_ToolCallTestBase):
                 model=model_name,
                 messages=MESSAGES_ASKING_FOR_WEATHER,
                 temperature=0,
-                max_completion_tokens=1024,
+                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
                 tools=[WEATHER_TOOL, SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
@@ -248,13 +264,11 @@ class TestToolCallChoice(_ToolCallTestBase):
         except BadRequestError as e:
             pytest.skip(f'tool_choice="required" streaming rejected by server (HTTP 400): {e}')
         r = collect_stream_tool_call(stream)
-
-        # Validation MUST fail loudly
-        assert r['function_name'] is not None, ('tool_choice="required" streaming but no function name received')
-        assert len(r['args_str']) > 0, ('tool_choice="required" streaming but no arguments received')
-        assert r['tool_call_id'] is not None
-        assert_arguments_parseable(r['args_str'])
-        assert r['finish_reason'] == 'tool_calls'
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=None,
+            **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+        )
 
     # -- specific function ---------------------------------------------------
     def test_tool_choice_specific_function(self, backend, model_case):
@@ -265,7 +279,7 @@ class TestToolCallChoice(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice={
                 'type': 'function',
@@ -305,13 +319,14 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
 
         tc = response.choices[0].message.tool_calls[0]
-        parsed = json.loads(tc.function.arguments)
+        assert_tool_call_fields(tc)
+        parsed = assert_arguments_parseable(tc.function.arguments)
 
         assert 'city' in parsed, f'Missing "city": {parsed}'
         assert 'state' in parsed, f'Missing "state": {parsed}'
@@ -320,20 +335,16 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
 
     def test_weather_args_streaming(self, backend, model_case):
         """Streaming: weather tool args should contain city & state."""
-        client, model_name = self._get_client()
-
-        stream = client.chat.completions.create(
-            model=model_name,
-            messages=MESSAGES_ASKING_FOR_WEATHER,
-            temperature=0,
-            max_completion_tokens=1024,
+        r = self._stream_tool_call(
+            MESSAGES_ASKING_FOR_WEATHER,
             tools=[WEATHER_TOOL],
-            logprobs=False,
-            stream=True,
         )
-
-        r = collect_stream_tool_call(stream)
-        parsed = json.loads(r['args_str'])
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
+        parsed = assert_arguments_parseable(r['args_str'])
 
         assert 'city' in parsed
         assert 'state' in parsed
@@ -346,7 +357,7 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_SEARCH,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[SEARCH_TOOL],
             logprobs=False,
         )
@@ -362,7 +373,7 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
         tc = tool_calls[0]
         assert_tool_call_fields(tc)
         assert tc.function.name == 'web_search'
-        parsed = json.loads(tc.function.arguments)
+        parsed = assert_arguments_parseable(tc.function.arguments)
         assert 'query' in parsed
         assert isinstance(parsed['query'], str) and len(parsed['query']) > 0
 
@@ -386,7 +397,7 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
@@ -403,6 +414,7 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
             f'get_current_weather. finish_reason={response.choices[0].finish_reason}, '
             f'content={response.choices[0].message.content!r}')
         tc = tool_calls[0]
-        parsed = json.loads(tc.function.arguments)
+        assert_tool_call_fields(tc)
+        parsed = assert_arguments_parseable(tc.function.arguments)
         if 'unit' in parsed:
             assert parsed['unit'] in ('celsius', 'fahrenheit'), (f'unit should be from enum, got "{parsed["unit"]}"')

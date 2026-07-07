@@ -1,4 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+"""Engine-loop input construction for the LMDeploy PyTorch backend.
+
+This module converts scheduler decisions into model-agent inputs.  Most helpers
+build tensor fields for full-batch ``ModelInputs``; ``InputsMakerAsync`` is the
+coordinator that chooses prefill/chunk/decode work, attaches per-forward
+metadata, dispatches it to the executor, and updates local running state.
+"""
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
@@ -8,6 +15,7 @@ import numpy as np
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.messages import MessageStatus
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, VisionModelInputs
@@ -241,10 +249,47 @@ class LongContextChunker:
         if not self.enabled():
             return
         if self.seq.status != MessageStatus.RUNNING:
+            # A stopped long request no longer has a valid continuation.  We do
+            # not send a cleanup-only worker forward here: normal prefill/decode
+            # ignore chunk carry, and the next first chunk resets carry before
+            # use.  Avoiding a no-work forward also keeps DP ranks aligned.
             self.clear()
 
 
 class InputsMakerAsync:
+    """Coordinate prefill, decode, and long-context input dispatch.
+
+    ``Scheduler`` owns admission, ordering, and cache/KV resources.  This class
+    consumes the scheduler result and builds tensors only after resources have
+    been granted.  Prefill-like work is represented by full ``ModelInputs``:
+    prompt prefill, final long-context chunks, and eager non-final long chunks.
+    Decode is represented by ``ModelInputsDelta`` and reuses persistent
+    model-agent/strategy ``StepInputs`` that were created by earlier prefill and
+    decode forwards.
+
+    ``running_seqs`` is local engine-loop state, not the scheduler's source of
+    truth.  It tracks sequences already sent to the executor so this class can
+    build decode deltas, evict invalid decode requests, and update the local
+    view after outputs return.  Every dispatched forward also carries the
+    strategy-specific ``extra_inputs``, sampling inputs, and stopping criteria
+    expected by the model agent.
+
+    Long-context chunking is coordinated here because it spans scheduling
+    policy and input construction.  ``LongContextChunker`` tracks one active
+    long prefill and selects model-safe chunk boundaries, including indivisible
+    multimodal spans.  Before tensors are created for each chunk, the scheduler
+    reserves the chunk's KV ownership.  Non-final chunks are eager chunk
+    forwards with no user-visible output; the final chunk is treated as normal
+    prefill so it can merge into persistent decode state.
+
+    The current first-slice chunked-prefill policy intentionally uses separate
+    forwards instead of one mixed decode+prefill tensor batch.  After a
+    non-final chunk, runnable decode is preferred and remains on the existing
+    delta/CUDAGraph path; at most one eager non-final long chunk is sent after
+    decode gets a chance to run.  Preserve chunk flags such as
+    ``is_chunk_multimodal`` and ``is_last_chunk`` because VLM and speculative
+    decoding paths interpret them downstream.
+    """
 
     def __init__(
         self,
@@ -274,6 +319,9 @@ class InputsMakerAsync:
 
         # consecutive decode counter for prefill starvation prevention
         self._decode_count = 0
+        self._last_forward_kind = None
+        self._short_prefill_turns_since_long_chunk = 0
+        self._short_prefill_turns_per_long_chunk = max(1, _envs.opt_ttft_short_turns)
 
         # record for next forward.
         self.next_is_prefill = True
@@ -294,6 +342,48 @@ class InputsMakerAsync:
             self.do_prefill = self.do_prefill_chunked
         else:
             self.do_prefill = self.do_prefill_default
+
+    def _has_pending_last_long_context_chunk(self):
+        """Check whether a running long context has only its final chunk
+        left."""
+        return self.long_context_chunker.enabled() and self.long_context_chunker.is_last_chunk()
+
+    def has_pending_long_context_chunk(self):
+        """Check whether engine-local long-context chunk work can run."""
+        self.long_context_chunker.check_enable()
+        return self.long_context_chunker.enabled()
+
+    def _should_defer_long_context_chunk(self, prefill: bool):
+        """Check whether the active long-context chunk should yield this
+        loop."""
+        if self.config.role == EngineRole.Prefill:
+            return False
+        if not self.long_context_chunker.enabled():
+            return False
+        if self.long_context_chunker.is_last_chunk():
+            if len(self.running_seqs) == 0:
+                return False
+            return not prefill
+        return getattr(self, '_last_forward_kind', None) == 'long_context_chunk'
+
+    def _is_long_context_chunk_turn_due(self):
+        """Check if active long chunk should run before another short
+        prefill."""
+        return self._short_prefill_turns_since_long_chunk >= self._short_prefill_turns_per_long_chunk
+
+    def _forward_kind(self, inputs: 'ModelInputs|None', delta: 'ModelInputsDelta|None'):
+        """Classify a queued forward for long-context interleaving policy."""
+        if inputs is None:
+            if delta is not None:
+                return 'decode'
+            return None
+        if inputs.is_chunk and not inputs.is_last_chunk:
+            return 'long_context_chunk'
+        if inputs.is_chunk:
+            return 'last_long_context_chunk'
+        if inputs.is_decoding:
+            return 'decode'
+        return 'prefill'
 
     def _create_vision_model_inputs(self, messages: 'SeqList', model_inputs: ModelInputs):
         """Create vision model inputs."""
@@ -713,7 +803,7 @@ class InputsMakerAsync:
             return
 
         is_decoding = inputs is None
-        if self.long_context_chunker.enabled() and not is_decoding:
+        if self.long_context_chunker.enabled() and not is_decoding and inputs.is_chunk:
             # long context chunk does not need to update running seqs
             self.long_context_chunker.update_step(inputs)
             return
@@ -762,34 +852,53 @@ class InputsMakerAsync:
             extra_inputs = self.model_agent_strategy.make_extra_inputs(seqs, inputs)
             return inputs, delta, extra_inputs
 
-        def __create_inputs_chunk(running: 'SeqList'):
-            chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+        def __create_inputs_chunk(running: 'SeqList', chunk_size: int, multimodals: 'MultiModalInputs|None'):
             inputs = self.create_model_inputs_long_context(running[0], chunk_size, multimodals)
             extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
             return inputs, extra_inputs
 
+        def __reserve_long_context_chunk(seq: 'SchedulerSequence', chunk_size: int, is_last_chunk: bool):
+            if self.config.role == EngineRole.Prefill:
+                prealloc_size = 0
+            elif is_last_chunk:
+                prealloc_size = self.engine_strategy.get_prealloc_size(True)
+            else:
+                prealloc_size = 0
+            return scheduler.reserve_long_context_chunk(seq,
+                                                        chunk_size,
+                                                        prealloc_size=prealloc_size,
+                                                        is_last_chunk=is_last_chunk)
+
         def __create_inputs_long_context_chunk():
             seq = self.long_context_chunker.seq
+            chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+            is_last_chunk = self.long_context_chunker.is_last_chunk()
+            is_chunk_multimodal = self.long_context_chunker.has_multimodal
+            if not __reserve_long_context_chunk(seq, chunk_size, is_last_chunk):
+                return [], None, None, None
             running = [seq]
-            has_multimodal = self.long_context_chunker.has_multimodal
-            if self.long_context_chunker.is_last_chunk():
+            if is_last_chunk:
                 inputs, delta, extra_inputs = __create_model_inputs(running)
                 inputs.is_chunk = True
                 inputs.is_last_chunk = True
                 self.long_context_chunker.clear()
             else:
-                inputs, extra_inputs = __create_inputs_chunk(running)
+                inputs, extra_inputs = __create_inputs_chunk(running, chunk_size, multimodals)
                 delta = None
             inputs.is_first_chunk = False
-            inputs.is_chunk_multimodal = has_multimodal
+            inputs.is_chunk_multimodal = is_chunk_multimodal
+            self._short_prefill_turns_since_long_chunk = 0
             return running, inputs, delta, extra_inputs
 
-        def __create_inputs_prefill():
+        def __create_inputs_prefill(allow_long_prefill: bool = True, prefer_long_prefill: bool = False):
             if self.config.role == EngineRole.Prefill:
                 prealloc_size = 0
             else:
                 prealloc_size = self.engine_strategy.get_prealloc_size(True)
-            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
+            scheduler_output = scheduler.schedule(is_prefill=True,
+                                                  prealloc_size=prealloc_size,
+                                                  allow_long_prefill=allow_long_prefill,
+                                                  prefer_long_prefill=prefer_long_prefill)
             running = scheduler_output.running
             swap_in_map = scheduler_output.swap_in_map
             swap_out_map = scheduler_output.swap_out_map
@@ -810,28 +919,148 @@ class InputsMakerAsync:
                     self.long_context_chunker.clear()
                     inputs, delta, extra_inputs = __create_model_inputs(running)
                 else:
-                    inputs, extra_inputs = __create_inputs_chunk(running)
+                    chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+                    inputs, extra_inputs = __create_inputs_chunk(running, chunk_size, multimodals)
                     inputs.is_first_chunk = True
                     inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
+                    self._short_prefill_turns_since_long_chunk = 0
             elif len(running) > 0:
                 # create inputs
                 inputs, delta, extra_inputs = __create_model_inputs(running)
             return running, inputs, delta, extra_inputs, swap_in_map, swap_out_map
+
+        def __create_short_or_normal_prefill_turn():
+            nonlocal attempted_short_or_normal_prefill
+            attempted_short_or_normal_prefill = True
+            result = __create_inputs_prefill(allow_long_prefill=False)
+            _, prefill_inputs, prefill_delta, _, _, _ = result
+            if prefill_inputs is not None or prefill_delta is not None:
+                self._short_prefill_turns_since_long_chunk += 1
+            return result
+
+        def __is_empty_forward(forward_inputs: 'ModelInputs|None', forward_delta: 'ModelInputsDelta|None'):
+            return forward_inputs is None and forward_delta is None
+
+        def __try_active_long_context_chunk():
+            nonlocal attempted_long_work
+            nonlocal active_long_chunk_blocked_by_kv
+            attempted_long_work = True
+            result = __create_inputs_long_context_chunk()
+            _, chunk_inputs, chunk_delta, _ = result
+            active_long_chunk_blocked_by_kv = __is_empty_forward(chunk_inputs, chunk_delta)
+            return result
+
+        def __should_try_short_prefill_before_active_chunk():
+            """Allow short/normal prefill quota before an active non-final
+            chunk."""
+            if self.long_context_chunker.is_last_chunk():
+                return False
+            if not scheduler.has_waiting():
+                return False
+            return not self._is_long_context_chunk_turn_due()
+
+        def __has_no_forward():
+            return __is_empty_forward(inputs, delta)
+
+        def __can_fallback_to_short_after_long_work():
+            if not __has_no_forward():
+                return False
+            if not attempted_long_work:
+                return False
+            if active_long_chunk_blocked_by_kv:
+                return False
+            if attempted_short_or_normal_prefill:
+                return False
+            return scheduler.has_waiting()
+
+        def __can_try_short_prefill_after_defer():
+            if not __has_no_forward():
+                return False
+            if not deferred_long_context_chunk:
+                return False
+            if self._is_long_context_chunk_turn_due():
+                return False
+            return scheduler.has_waiting()
+
+        def __can_retry_deferred_active_chunk():
+            return __has_no_forward() and deferred_long_context_chunk and self.long_context_chunker.enabled()
 
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
         inputs = None
         delta = None
+        running = []
+        extra_inputs = None
         swap_in_map = {}
         swap_out_map = {}
+        deferred_long_context_chunk = False
+        attempted_long_work = False
+        attempted_short_or_normal_prefill = False
+        active_long_chunk_blocked_by_kv = False
 
+        # Bounded opt-TTFT prefill policy: protect decode before continuing
+        # non-final long chunks, then allow a bounded number of short/normal
+        # prefill turns before forcing one long-work turn. A long-work turn
+        # continues the active chunker first, otherwise it admits one waiting
+        # long prefill through the scheduler.
         self.long_context_chunker.check_enable()
         if self.long_context_chunker.enabled():
-            # long context chunking
-            running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
+            if self._should_defer_long_context_chunk(prefill):
+                deferred_long_context_chunk = True
+            elif __should_try_short_prefill_before_active_chunk():
+                # After a decode turn, keep the short/normal prefill quota in
+                # front of active long chunks; otherwise decode -> long can
+                # repeat and small waiting requests remain gated by the active
+                # chunker even while the long-work turn is not due.
+                (
+                    running,
+                    inputs,
+                    delta,
+                    extra_inputs,
+                    swap_in_map,
+                    swap_out_map,
+                ) = __create_short_or_normal_prefill_turn()
+                if __is_empty_forward(inputs, delta):
+                    running, inputs, delta, extra_inputs = __try_active_long_context_chunk()
+            else:
+                running, inputs, delta, extra_inputs = __try_active_long_context_chunk()
         elif prefill:
             # prefill
+            has_waiting_long_prefill = scheduler.has_waiting_long_prefill()
+            if has_waiting_long_prefill and not self._is_long_context_chunk_turn_due():
+                (
+                    running,
+                    inputs,
+                    delta,
+                    extra_inputs,
+                    swap_in_map,
+                    swap_out_map,
+                ) = __create_short_or_normal_prefill_turn()
+                if __has_no_forward():
+                    (
+                        running,
+                        inputs,
+                        delta,
+                        extra_inputs,
+                        swap_in_map,
+                        swap_out_map,
+                    ) = __create_inputs_prefill(prefer_long_prefill=True)
+            else:
+                (
+                    running,
+                    inputs,
+                    delta,
+                    extra_inputs,
+                    swap_in_map,
+                    swap_out_map,
+                ) = __create_inputs_prefill(prefer_long_prefill=has_waiting_long_prefill)
+                attempted_long_work = has_waiting_long_prefill
+
+        # Waiting-long admission failure can still fall back to short prefills.
+        # Active-long reservation failure means KV is pinned by running work;
+        # admit decode only so existing requests can drain blocks.
+        if __can_fallback_to_short_after_long_work():
             (
                 running,
                 inputs,
@@ -839,11 +1068,7 @@ class InputsMakerAsync:
                 extra_inputs,
                 swap_in_map,
                 swap_out_map,
-            ) = __create_inputs_prefill()
-
-        # reset decode count when non-decoding inputs are produced
-        if inputs is not None and not inputs.is_decoding:
-            self._decode_count = 0
+            ) = __create_short_or_normal_prefill_turn()
 
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
@@ -851,6 +1076,23 @@ class InputsMakerAsync:
             delta, running, invalid_seqs = self.create_model_inputs_delta()
             self.to_evict_seqs = invalid_seqs
             extra_inputs = None
+
+        if __can_try_short_prefill_after_defer():
+            (
+                running,
+                inputs,
+                delta,
+                extra_inputs,
+                swap_in_map,
+                swap_out_map,
+            ) = __create_short_or_normal_prefill_turn()
+
+        if __can_retry_deferred_active_chunk():
+            running, inputs, delta, extra_inputs = __try_active_long_context_chunk()
+
+        # reset decode count when non-decoding inputs are produced
+        if inputs is not None and not inputs.is_decoding:
+            self._decode_count = 0
 
         # skip if enable empty
         if inputs is None and delta is None:
@@ -886,11 +1128,14 @@ class InputsMakerAsync:
     def do_prefill_default(self):
         # decoding if no waiting
         scheduler = self.scheduler
+        pending_last_chunk = self._has_pending_last_long_context_chunk()
 
         # do decoding if not waiting
-        if not scheduler.has_waiting():
+        if not scheduler.has_waiting() and not pending_last_chunk:
             self._decode_count = 0
             return False
+        if pending_last_chunk:
+            return True
 
         # force prefill if too many consecutive decode rounds
         if self._decode_count >= self.config.prefill_interval:
@@ -934,6 +1179,7 @@ class InputsMakerAsync:
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
         await self.executor.forward_async(forward_inputs)
+        self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running

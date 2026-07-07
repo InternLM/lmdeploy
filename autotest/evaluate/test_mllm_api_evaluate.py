@@ -7,6 +7,7 @@ from utils.config_utils import (
     get_case_str_by_config,
     get_eval_preset_config,
     get_func_config_list,
+    get_model_path_from_config,
     get_workerid,
     resolve_eval_config_name,
 )
@@ -46,7 +47,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
             results.append((pid, content))
 
         try:
-            model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+            model_path = get_model_path_from_config(config, run_config.get('model'))
             extra_config['api-nproc'] = work_num * 16
             mllm_eval_test(model_path,
                            eval_path,
@@ -66,7 +67,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         pid, content = start_openai_service(config, eval_run_config, worker_id)
         try:
             if pid > 0:
-                model_path = os.path.join(config.get('model_path'), eval_run_config.get('model'))
+                model_path = get_model_path_from_config(config, eval_run_config.get('model'))
                 mllm_eval_test(model_path, eval_path, case_name, port=port, test_type=test_type)
             else:
                 assert False, f'Failed to start RESTful API server: {content}'
@@ -89,7 +90,7 @@ def _run_proxy_distributed_mllm_test(
 
     preset_config = get_eval_preset_config(config, run_config, eval_config_name, mllm=True)
     model_name = run_config['model']
-    model_path = os.path.join(config['model_path'], model_name)
+    model_path = get_model_path_from_config(config, model_name)
 
     api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
     api_server.start()

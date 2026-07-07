@@ -233,11 +233,10 @@ class Engine(EngineBase):
                 It could be one of the following options:
                     - i) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
-                      "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - ii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "InternLM/internlm-chat-7b",
-                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      on huggingface.co, such as "internlm/internlm2-chat-7b",
+                      "Qwen/Qwen2.5-7B-Instruct"
                       and so on.
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
@@ -410,10 +409,10 @@ class Engine(EngineBase):
                 req_data['input_multimodals'] = None
                 continue
 
-            if self.engine_config.disable_vision_encoder:
+            if self.engine_config.language_model_only:
                 # ignore multimodal inputs
                 req_data['input_multimodals'] = None
-                logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+                logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
                 continue
 
             result = self.input_processor.preprocess_input(input_ids, input_multimodals)
