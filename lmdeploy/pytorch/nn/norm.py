@@ -30,7 +30,7 @@ class RMSNorm(nn.Module):
         quant_method = None
         if quant_config is not None:
             quant_config = get_build_model_context().quant_config
-            quant_method = quant_config.get_quant_method(prefix)
+            quant_method = quant_config.get_quant_method(prefix, module_kind='norm')
 
         w8a8_flag = quant_method == 'smooth_quant'
 
