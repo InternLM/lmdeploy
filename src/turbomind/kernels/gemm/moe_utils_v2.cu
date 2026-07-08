@@ -859,6 +859,8 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                            int          tokens_padded,
                            int          experts,
                            int          exp_per_tok,
+                           int          local_expert_offset,
+                           int          local_expert_num,
                            bool         norm_topk_prob,
                            float        routed_scale,
                            bool         use_sigmoid,
@@ -902,9 +904,19 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                                                           use_sigmoid);
 
     constexpr int scan_threads = (1 << base_log_tile) / kMoeGateVecSize;
-    const dim3    scan_blocks(tiles, experts + 1);
-    MoeScanKernel_v2<scan_threads><<<scan_blocks, scan_threads, 0, st>>>(
-        f2n, f2E, en2f, offsets, (int8_t*)masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
+    const dim3    scan_blocks(tiles, local_expert_num + 1);
+    MoeScanKernel_v2<scan_threads>
+        <<<scan_blocks, scan_threads, 0, st>>>(f2n,
+                                               f2E,
+                                               en2f,
+                                               offsets,
+                                               (int8_t*)masks + local_expert_offset * tokens_padded,
+                                               accum + local_expert_offset * tiles,
+                                               log_tile,
+                                               tiles,
+                                               tokens,
+                                               tokens_padded,
+                                               local_expert_num);
 
     TM_CUDA_CHECK(cudaGetLastError());
 }
