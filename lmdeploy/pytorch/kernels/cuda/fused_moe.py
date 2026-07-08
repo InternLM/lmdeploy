@@ -353,6 +353,152 @@ def _fill_block_meta_kernel(
     tl.store(BlockOffsets + block_base + offs, exp_start + offs * BLOCK_SIZE_M, mask=mask)
 
 
+@triton.jit
+def fused_moe_compact_kernel(
+    A,
+    B,
+    bias,
+    C,
+    SortedIdx,
+    ExpEnd,
+    BlockEnd,
+    BlockExpertIds,
+    BlockOffsets,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    stride_am: tl.constexpr,
+    stride_ak: tl.constexpr,
+    stride_be: tl.constexpr,
+    stride_bn: tl.constexpr,
+    stride_bk: tl.constexpr,
+    stride_cm: tl.constexpr,
+    stride_cn: tl.constexpr,
+    stride_bie: tl.constexpr,
+    stride_bin: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    top_k: tl.constexpr,
+    expert_offset: tl.constexpr,
+    num_local_experts: tl.constexpr,
+    reindex_a: tl.constexpr,
+    reindex_c: tl.constexpr,
+):
+    """Compact routed-block MoE GEMM."""
+    block_id = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    total_blocks = tl.load(BlockEnd + num_local_experts - 1)
+    if block_id >= total_blocks:
+        return
+
+    local_exp = tl.load(BlockExpertIds + block_id)
+    actual_exp = local_exp + expert_offset
+    block_sorted_start = tl.load(BlockOffsets + block_id)
+    exp_end = tl.load(ExpEnd + actual_exp)
+
+    offs_sid = block_sorted_start + tl.arange(0, BLOCK_SIZE_M)
+    mask_sid = offs_sid < exp_end
+    sid = tl.load(SortedIdx + offs_sid, mask=mask_sid, other=0)
+
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    if reindex_a:
+        offs_am = sid // top_k
+    else:
+        offs_am = offs_sid
+    a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
+
+    exp_off = stride_be * local_exp.to(tl.int64)
+    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        a = tl.load(a_ptrs, mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        accumulator = tl.dot(a, b, acc=accumulator)
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
+
+    if bias is not None:
+        bias_ptrs = bias + local_exp * stride_bie + offs_bn * stride_bin
+        bias_val = tl.load(bias_ptrs).to(accumulator.dtype)
+        accumulator += bias_val[None, :]
+
+    c = accumulator.to(A.dtype.element_ty)
+
+    if reindex_c:
+        offs_cm = sid
+    else:
+        offs_cm = offs_sid
+    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_bn[None, :]
+    tl.store(c_ptrs, c, mask=mask_sid[:, None])
+
+
+def fused_moe_compact_kernel_launcher(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    sorted_idx: torch.Tensor,
+    exp_end: torch.Tensor,
+    block_end: torch.Tensor,
+    block_expert_ids: torch.Tensor,
+    block_offsets: torch.Tensor,
+    bias: torch.Tensor = None,
+    top_k: int = 1,
+    expert_offset: int = 0,
+    reindex_a: bool = True,
+    reindex_c: bool = True,
+    block_m: int = 64,
+    block_n: int = 256,
+    block_k: int = 64,
+    num_warps: int = 4,
+    num_stages: int = 3,
+):
+    """Launch compact routed-block MoE kernel."""
+    E, N, K = B.shape
+    max_blocks = block_expert_ids.numel()
+
+    A = A.flatten(0, -2)
+    C = C.flatten(0, -2)
+    enable_bias = bias is not None
+
+    grid = (max_blocks, triton.cdiv(N, block_n))
+    fused_moe_compact_kernel[grid](
+        A,
+        B,
+        bias,
+        C,
+        sorted_idx,
+        exp_end,
+        block_end,
+        block_expert_ids,
+        block_offsets,
+        N=N,
+        K=K,
+        stride_am=A.stride(0),
+        stride_ak=A.stride(1),
+        stride_be=B.stride(0),
+        stride_bn=B.stride(1),
+        stride_bk=B.stride(2),
+        stride_cm=C.stride(0),
+        stride_cn=C.stride(1),
+        stride_bie=bias.stride(0) if enable_bias else 0,
+        stride_bin=bias.stride(1) if enable_bias else 0,
+        top_k=top_k,
+        expert_offset=expert_offset,
+        num_local_experts=E,
+        reindex_a=reindex_a,
+        reindex_c=reindex_c,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_SIZE_N=block_n,
+        BLOCK_SIZE_K=block_k,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
+
+
 
 def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
     """Get sorted idx with 2-phase Triton kernels (4 kernel launches total)."""
@@ -466,6 +612,55 @@ def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device, z
         return torch.empty(shape, dtype=dtype, device=device)
 
 
+def _compact_moe_config(num_tokens: int, num_experts: int, local_ffn_size: int):
+    """Choose a compact MoE config for the profiled TP bf16 shapes."""
+    if num_experts >= 1024 and num_tokens >= 8192:
+        return dict(block_m=64, block_n=512, block_k=64, num_warps=8, num_stages=3)
+    if num_tokens <= 1024:
+        return dict(block_m=64, block_n=256, block_k=32, num_warps=4, num_stages=4)
+    return dict(block_m=64, block_n=512, block_k=64, num_warps=8, num_stages=3)
+
+
+def _supports_compact_moe(hidden_states: torch.Tensor,
+                          w1: torch.Tensor,
+                          w2: torch.Tensor,
+                          topk_ids: torch.Tensor,
+                          num_experts: int):
+    """Return whether this MoE call can use compact routed-block kernels."""
+    if not hidden_states.is_cuda:
+        return False
+    if hidden_states.dtype not in (torch.float16, torch.bfloat16):
+        return False
+    if w1.dtype != hidden_states.dtype or w2.dtype != hidden_states.dtype:
+        return False
+    if topk_ids.dim() != 2 or topk_ids.numel() == 0:
+        return False
+    if topk_ids.size(1) > num_experts:
+        return False
+    if w1.size(0) != num_experts:
+        return False
+    if torch.cuda.get_device_capability(hidden_states.device)[0] < 9:
+        return False
+    return True
+
+
+def _should_use_compact_moe(hidden_states: torch.Tensor,
+                            w1: torch.Tensor,
+                            w2: torch.Tensor,
+                            topk_ids: torch.Tensor,
+                            num_experts: int):
+    """Return whether both MoE projections should use compact scheduling."""
+    if not _supports_compact_moe(hidden_states, w1, w2, topk_ids, num_experts):
+        return False
+
+    local_experts = w1.size(0)
+    if local_experts >= 1024:
+        return True
+
+    avg_routes_per_expert = topk_ids.numel() / num_experts
+    return avg_routes_per_expert >= 32
+
+
 @triton.jit
 def _moe_reduce_kernel(
     hidden_states_ptr,
@@ -570,27 +765,56 @@ def fused_moe(hidden_states: torch.Tensor,
     full_exp = num_experts == E
 
     topk_weights = _renormalize(topk_weights, renormalize)
-    sorted_idx, exp_start, exp_end = _get_sorted_idx(topk_ids, num_experts)
+    use_compact = _should_use_compact_moe(hidden_states, w1, w2, topk_ids, num_experts)
+    if use_compact:
+        compact_cfg = _compact_moe_config(M, num_experts, w2.shape[2])
+        sorted_idx, _, exp_end, block_end, block_expert_ids, block_offsets = _get_sorted_idx_blocks(
+            topk_ids,
+            num_experts,
+            E,
+            expert_offset,
+            compact_cfg['block_m'],
+        )
+    else:
+        sorted_idx, exp_start, exp_end = _get_sorted_idx(topk_ids, num_experts)
 
     intermediate_cache1 = _make_intermediate((M, topk, N),
                                              dtype=hidden_states.dtype,
                                              device=hidden_states.device,
                                              zeros=not full_exp)
     # gate and up
-    fused_moe_kernel_launcher(
-        hidden_states,
-        w1,
-        intermediate_cache1,
-        sorted_idx=sorted_idx,
-        exp_start=exp_start,
-        exp_end=exp_end,
-        bias=w1_bias,
-        top_k=topk,
-        num_tokens=M,
-        expert_offset=expert_offset,
-        reindex_a=True,
-        reindex_c=False,
-    )
+    if use_compact:
+        fused_moe_compact_kernel_launcher(
+            hidden_states,
+            w1,
+            intermediate_cache1,
+            sorted_idx=sorted_idx,
+            exp_end=exp_end,
+            block_end=block_end,
+            block_expert_ids=block_expert_ids,
+            block_offsets=block_offsets,
+            bias=w1_bias,
+            top_k=topk,
+            expert_offset=expert_offset,
+            reindex_a=True,
+            reindex_c=False,
+            **compact_cfg,
+        )
+    else:
+        fused_moe_kernel_launcher(
+            hidden_states,
+            w1,
+            intermediate_cache1,
+            sorted_idx=sorted_idx,
+            exp_start=exp_start,
+            exp_end=exp_end,
+            bias=w1_bias,
+            top_k=topk,
+            num_tokens=M,
+            expert_offset=expert_offset,
+            reindex_a=True,
+            reindex_c=False,
+        )
 
     # activate
     unflat_size = intermediate_cache1.shape[:-1]
@@ -607,20 +831,38 @@ def fused_moe(hidden_states: torch.Tensor,
                                              device=hidden_states.device,
                                              zeros=not full_exp)
     # down
-    fused_moe_kernel_launcher(
-        gate_cache,
-        w2,
-        intermediate_cache2,
-        sorted_idx=sorted_idx,
-        exp_start=exp_start,
-        exp_end=exp_end,
-        bias=w2_bias,
-        top_k=1,
-        num_tokens=M,
-        expert_offset=expert_offset,
-        reindex_a=False,
-        reindex_c=True,
-    )
+    if use_compact:
+        fused_moe_compact_kernel_launcher(
+            gate_cache,
+            w2,
+            intermediate_cache2,
+            sorted_idx=sorted_idx,
+            exp_end=exp_end,
+            block_end=block_end,
+            block_expert_ids=block_expert_ids,
+            block_offsets=block_offsets,
+            bias=w2_bias,
+            top_k=1,
+            expert_offset=expert_offset,
+            reindex_a=False,
+            reindex_c=True,
+            **compact_cfg,
+        )
+    else:
+        fused_moe_kernel_launcher(
+            gate_cache,
+            w2,
+            intermediate_cache2,
+            sorted_idx=sorted_idx,
+            exp_start=exp_start,
+            exp_end=exp_end,
+            bias=w2_bias,
+            top_k=1,
+            num_tokens=M,
+            expert_offset=expert_offset,
+            reindex_a=False,
+            reindex_c=True,
+        )
 
     ret = moe_reduce(intermediate_cache2, topk_weights)
     return ret

@@ -111,6 +111,38 @@ def test_compact_blocked_fp8_down_policy_is_prefill_and_cta_gated(num_tokens, nu
                                                              local_experts=local_experts,
                                                              out_features=out_features) is expected
 
+def test_compact_moe_dispatch_prefers_many_local_experts(monkeypatch):
+    """Large local expert counts should select compact routed-block scheduling."""
+    import importlib
+
+    fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
+    monkeypatch.setattr(fused_moe_module, '_supports_compact_moe', lambda *args: True)
+
+    hidden_states = torch.empty(1, 4)
+    w1 = torch.empty(1024, 8, 4)
+    w2 = torch.empty(1024, 4, 4)
+    topk_ids = torch.zeros(1, 1, dtype=torch.long)
+
+    assert fused_moe_module._should_use_compact_moe(hidden_states, w1, w2, topk_ids, num_experts=1024)
+
+
+def test_compact_moe_dispatch_keeps_dense_route_fallback(monkeypatch):
+    """Keep the existing compact path for dense routing on smaller expert counts."""
+    import importlib
+
+    fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
+    monkeypatch.setattr(fused_moe_module, '_supports_compact_moe', lambda *args: True)
+
+    hidden_states = torch.empty(1, 4)
+    w1 = torch.empty(64, 8, 4)
+    w2 = torch.empty(64, 4, 4)
+
+    sparse_topk_ids = torch.zeros(128, 1, dtype=torch.long)
+    dense_topk_ids = torch.zeros(2048, 1, dtype=torch.long)
+
+    assert not fused_moe_module._should_use_compact_moe(hidden_states, w1, w2, sparse_topk_ids, num_experts=64)
+    assert fused_moe_module._should_use_compact_moe(hidden_states, w1, w2, dense_topk_ids, num_experts=64)
+
 
 def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
     flatten_topk_idx = topk_idx.flatten()
