@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
 from utils.tool_reasoning_definitions import (
@@ -17,6 +19,8 @@ from utils.tool_reasoning_definitions import (
     setup_log_file,
 )
 
+from lmdeploy.serve.processors.multimodal import MULTIMODAL_TYPES
+
 # ---------------------------------------------------------------------------
 # Marks
 # ---------------------------------------------------------------------------
@@ -29,10 +33,25 @@ _CLASS_MARKS = [
     pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
 ]
 
+_CLASS_MARKS_MM = [
+    pytest.mark.order(8),
+    pytest.mark.tool_call,
+    pytest.mark.mm_tool_call,
+    pytest.mark.flaky(reruns=2),
+    pytest.mark.parametrize('backend', BACKEND_LIST),
+    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+]
 
 def _apply_marks(cls):
     """Apply the shared set of marks to *cls* and return it."""
     for m in _CLASS_MARKS:
+        cls = m(cls)
+    return cls
+
+
+def _apply_marks_mm(cls):
+    """Apply multimodal tool-call marks to *cls*."""
+    for m in _CLASS_MARKS_MM:
         cls = m(cls)
     return cls
 
@@ -47,34 +66,163 @@ LLAMA31_SKIP_PARALLEL_REASON = (
     'Meta-Llama 3.1 chat template allows only one tool call per turn '
     '(apply_chat_template: single tool-calls at once)')
 
+MM_TOOL_CALL_SKIP_REASON = (
+    'Multimodal tool-call tests require native VL models (Qwen3.5 / Intern-S2)')
+
+# Test media filenames under config['resource_path'].
+MM_TEST_IMAGE_TIGER = 'tiger.jpeg'
+MM_TEST_IMAGE_BEIJING = 'Beijing_Small.jpeg'
+MM_TEST_IMAGE_POSE = 'human-pose.jpg'
+MM_TEST_VIDEO = 'red-panda.mp4'
+MM_TEST_AUDIO = 'zh.wav'
+
+# MULTIMODAL_TYPES from lmdeploy; local fixtures cover image + video + audio.
+MM_IMAGE_MEDIA_TYPES = (
+    'image_url',
+    'image',
+    'image_data',
+)
+MM_VIDEO_MEDIA_TYPES = (
+    'video_url',
+    'video',
+)
+MM_AUDIO_MEDIA_TYPES = (
+    'audio_url',
+    'audio',
+)
+MM_MEDIA_TYPES_WITH_FIXTURES = (
+    MM_IMAGE_MEDIA_TYPES + MM_VIDEO_MEDIA_TYPES + MM_AUDIO_MEDIA_TYPES
+)
+MM_MEDIA_TYPES_WITHOUT_FIXTURES = tuple(
+    t for t in MULTIMODAL_TYPES if t not in MM_MEDIA_TYPES_WITH_FIXTURES)
+
+MM_VIDEO_EXTRA_BODY = {'media_io_kwargs': {'video': {'num_frames': 3}}}
+
+# Substrings matched against model_case for multimodal tool-call capability.
+_MM_TOOL_CALL_MODEL_MARKERS = (
+    'Qwen3.5',
+    'Intern-S2',
+    'Qwen3-VL',
+)
+
+
+def is_mm_tool_call_capable(model_case: str) -> bool:
+    """True for model families that support image input and tool calling."""
+    name = model_case.lower()
+    return any(marker.lower() in name for marker in _MM_TOOL_CALL_MODEL_MARKERS)
+
+
+def resolve_mm_resource_path(config, filename: str) -> str | None:
+    """Return a local filesystem path for a test media file, or None if
+    missing."""
+    path = os.path.join(config['resource_path'], filename)
+    if os.path.isfile(path):
+        return path
+    return None
+
+
+def resolve_mm_image_url(config, filename: str) -> str | None:
+    """Return a local filesystem URL for a test image, or None if missing."""
+    return resolve_mm_resource_path(config, filename)
+
+
+def build_multimodal_user_message(text: str, image_url: str, *, image_first: bool = False) -> dict:
+    """OpenAI-compatible user message with text + image_url parts."""
+    text_part = {'type': 'text', 'text': text}
+    image_part = {'type': 'image_url', 'image_url': {'url': image_url}}
+    parts = [image_part, text_part] if image_first else [text_part, image_part]
+    return {'role': 'user', 'content': parts}
+
+
+def build_multimodal_user_message_multi(text: str, image_urls: list[str]) -> dict:
+    """User message with one text part followed by multiple images."""
+    parts: list[dict] = [{'type': 'text', 'text': text}]
+    for url in image_urls:
+        parts.append({'type': 'image_url', 'image_url': {'url': url}})
+    return {'role': 'user', 'content': parts}
+
+
+def build_multimodal_media_part(
+        media_type: str,
+        source,
+        **fields) -> dict:
+    """Build one OpenAI-style multimodal content part for *media_type*."""
+    if media_type == 'image_data':
+        from PIL import Image
+        data = source if hasattr(source, 'size') else Image.open(source)
+        return {'type': 'image_data', 'image_data': {'data': data, **fields}}
+    if media_type in ('image_url', 'image', 'video_url', 'video',
+                       'audio_url', 'audio', 'time_series_url', 'time_series'):
+        return {media_type: {'url': source, **fields}, 'type': media_type}
+    raise ValueError(f'Unsupported multimodal media type: {media_type!r}')
+
+
+def build_multimodal_user_message_media(
+        text: str,
+        media_type: str,
+        source,
+        *,
+        media_first: bool = False,
+        **media_fields) -> dict:
+    """User message with text + one multimodal part (any MULTIMODAL_TYPES)."""
+    text_part = {'type': 'text', 'text': text}
+    media_part = build_multimodal_media_part(
+        media_type, source, **media_fields)
+    parts = [media_part, text_part] if media_first else [text_part, media_part]
+    return {'role': 'user', 'content': parts}
+
+
+def mm_media_fixture_filename(media_type: str) -> str:
+    """Map a media type to a filename under resource_path."""
+    if media_type in ('image_url', 'image', 'image_data'):
+        return MM_TEST_IMAGE_TIGER
+    if media_type in ('video_url', 'video'):
+        return MM_TEST_VIDEO
+    if media_type in ('audio_url', 'audio'):
+        return MM_TEST_AUDIO
+    raise ValueError(f'No local fixture for media type {media_type!r}')
+
+
+def mm_create_extra_body_for_media_type(media_type: str) -> dict | None:
+    """Optional extra_body for chat.completions.create per media type."""
+    if media_type in ('video_url', 'video'):
+        return dict(MM_VIDEO_EXTRA_BODY)
+    return None
+
 
 def _llama31_parallel_skip_target(item) -> bool:
     """True for TestToolCallParallel and test_multiple_results (parametrize-
     safe)."""
     cls_name = item.cls.__name__ if item.cls is not None else ''
-    if cls_name == 'TestToolCallParallel':
+    if cls_name in ('TestToolCallParallel', 'TestToolCallMultimodalParallel'):
         return True
     test_name = getattr(item, 'originalname', None) or item.name.split('[')[0]
     return test_name == 'test_multiple_results'
 
 
+def _mm_tool_call_skip_target(item) -> bool:
+    cls_name = item.cls.__name__ if item.cls is not None else ''
+    return cls_name.startswith('TestToolCallMultimodal')
+
+
 def pytest_collection_modifyitems(config, items):
-    """Skip parallel-tool tests on Llama 3.1 at collection time (reliable vs
-    node.name)."""
+    """Skip parallel-tool tests on Llama 3.1; skip MM tool tests on text-only
+    models."""
     for item in items:
-        if not _llama31_parallel_skip_target(item):
-            continue
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
             continue
-        model_case = callspec.params.get('model_case')
-        if model_case and llama31_single_tool_only(model_case):
-            item.add_marker(pytest.mark.skip(reason=LLAMA31_SKIP_PARALLEL_REASON))
+        model_case = callspec.params['model_case']
+        if _llama31_parallel_skip_target(item):
+            if model_case and llama31_single_tool_only(model_case):
+                item.add_marker(pytest.mark.skip(reason=LLAMA31_SKIP_PARALLEL_REASON))
+        if _mm_tool_call_skip_target(item):
+            if model_case and not is_mm_tool_call_capable(model_case):
+                item.add_marker(pytest.mark.skip(reason=MM_TOOL_CALL_SKIP_REASON))
 
 
 # ---------------------------------------------------------------------------
-# Logging helpers – uses shared StreamTee / setup_log_file / make_logged_client
-# from utils.tool_reasoning_definitions.
+# Per-test API request/response logging fixtures.
 # ---------------------------------------------------------------------------
 
 
@@ -91,6 +239,7 @@ class _ToolCallTestBase:
     def _setup_logging(self, request, config, backend, model_case):
         """Create the log directory and compute the log-file path."""
         self._log_file = setup_log_file(config, request.node.name, 'tool_calls')
+        self._config = config
         self._model_case = model_case
         self._client, self._api_model_name = make_logged_client(self._log_file)
         self._model_name = self._api_model_name
@@ -99,6 +248,30 @@ class _ToolCallTestBase:
     def _get_client(self):
         """Return *(client, api_model_name)* with transparent logging."""
         return self._client, self._api_model_name
+
+    def _require_mm_image(self, filename: str) -> str:
+        """Resolve a test image path or skip when ``resource_path`` is
+        unset."""
+        image_url = resolve_mm_image_url(self._config, filename)
+        if image_url is None:
+            pytest.skip(
+                f'Missing multimodal test image {filename!r} under '
+                f'resource_path={self._config["resource_path"]!r}')
+        return image_url
+
+    def _require_mm_resource(self, filename: str) -> str:
+        """Resolve a test media path or skip when missing."""
+        path = resolve_mm_resource_path(self._config, filename)
+        if path is None:
+            pytest.skip(
+                f'Missing multimodal test media {filename!r} under '
+                f'resource_path={self._config["resource_path"]!r}')
+        return path
+
+    def _require_mm_media_source(self, media_type: str):
+        """Resolve local fixture path/object for a MULTIMODAL_TYPES entry."""
+        filename = mm_media_fixture_filename(media_type)
+        return self._require_mm_resource(filename)
 
     def _parser_validation_kwargs(self, tools=None):
         """Kwargs for ``validate_*`` helpers using
@@ -272,6 +445,156 @@ MESSAGES_PARALLEL_WEATHER = [
         'San Francisco, CA?',
     },
 ]
+
+
+MM_SCENE_DALLAS = 'Dallas Zoo photo.'
+MM_SCENE_BEIJING = 'Beijing in photo.'
+MM_SCENE_MIAMI = 'Outdoor workout in Miami (see photo).'
+MM_SCENE_VIDEO = 'Red panda video from Sichuan.'
+MM_SCENE_AUDIO = 'Chinese audio about running.'
+
+MM_USER_BEIJING_WEATHER = 'Weather in Beijing, China (state: Beijing)?'
+MM_USER_MIAMI_WEATHER = "What's the weather like in Miami, FL?"
+MM_USER_SICHUAN_WEATHER = "What's the weather like in Chengdu, Sichuan?"
+MM_USER_TIGER_SEARCH = 'Tiger in photo. Search recent tiger conservation news.'
+MM_USER_AUDIO_SEARCH = (
+    'Listen to the audio and search the web for how running '
+    'benefits physical health as described.')
+
+
+def _mm_user_text(user_prompt: str, *, scene: str | None = None) -> str:
+    if scene:
+        return f'{scene} {user_prompt}'
+    return user_prompt
+
+
+def _mm_scene_for_media_type(media_type: str) -> str:
+    if media_type in ('video_url', 'video'):
+        return MM_SCENE_VIDEO
+    return MM_SCENE_DALLAS
+
+
+def _mm_weather_user_prompt_for_media_type(media_type: str) -> str:
+    if media_type in ('video_url', 'video'):
+        return MM_USER_SICHUAN_WEATHER
+    return MESSAGES_ASKING_FOR_WEATHER[1]['content']
+
+
+def mm_weather_messages_for_media_type(
+        media_type: str,
+        source,
+        *,
+        media_first: bool = False) -> list[dict]:
+    """Weather tool-call messages using any supported MULTIMODAL_TYPES part."""
+    text = _mm_user_text(
+        _mm_weather_user_prompt_for_media_type(media_type),
+        scene=_mm_scene_for_media_type(media_type),
+    )
+    return [
+        MESSAGES_ASKING_FOR_WEATHER[0],
+        build_multimodal_user_message_media(
+            text, media_type, source, media_first=media_first),
+    ]
+
+
+def mm_audio_search_messages_for_media_type(
+        media_type: str,
+        source,
+        *,
+        media_first: bool = False) -> list[dict]:
+    """Search tool-call messages for audio MULTIMODAL_TYPES (zh.wav clip)."""
+    text = _mm_user_text(MM_USER_AUDIO_SEARCH, scene=MM_SCENE_AUDIO)
+    return [
+        MESSAGES_ASKING_FOR_SEARCH[0],
+        build_multimodal_user_message_media(
+            text, media_type, source, media_first=media_first),
+    ]
+
+
+def build_mm_weather_messages(
+        image_url: str,
+        *,
+        user_prompt: str,
+        scene: str | None = None,
+        image_first: bool = False) -> list[dict]:
+    """System + multimodal user turn asking for weather via tool."""
+    text = _mm_user_text(user_prompt, scene=scene)
+    return [
+        MESSAGES_ASKING_FOR_WEATHER[0],
+        build_multimodal_user_message(
+            text, image_url, image_first=image_first),
+    ]
+
+
+def build_mm_dallas_weather_user_message(
+        image_url: str, *, image_first: bool = False) -> dict:
+    text = _mm_user_text(
+        MESSAGES_ASKING_FOR_WEATHER[1]['content'], scene=MM_SCENE_DALLAS)
+    return build_multimodal_user_message(
+        text, image_url, image_first=image_first)
+
+
+def mm_dallas_weather_messages(
+        image_url: str, *, image_first: bool = False) -> list[dict]:
+    return build_mm_weather_messages(
+        image_url,
+        user_prompt=MESSAGES_ASKING_FOR_WEATHER[1]['content'],
+        scene=MM_SCENE_DALLAS,
+        image_first=image_first,
+    )
+
+
+def mm_beijing_weather_messages(image_url: str) -> list[dict]:
+    return build_mm_weather_messages(
+        image_url,
+        user_prompt=MM_USER_BEIJING_WEATHER,
+        scene=MM_SCENE_BEIJING,
+    )
+
+
+def build_mm_miami_weather_user_message(image_url: str) -> dict:
+    text = _mm_user_text(MM_USER_MIAMI_WEATHER, scene=MM_SCENE_MIAMI)
+    return build_multimodal_user_message(text, image_url)
+
+
+def mm_miami_weather_messages(image_url: str) -> list[dict]:
+    return build_mm_weather_messages(
+        image_url,
+        user_prompt=MM_USER_MIAMI_WEATHER,
+        scene=MM_SCENE_MIAMI,
+    )
+
+
+def build_mm_tiger_search_messages(image_url: str) -> list[dict]:
+    return [
+        MESSAGES_ASKING_FOR_SEARCH[0],
+        build_multimodal_user_message(MM_USER_TIGER_SEARCH, image_url),
+    ]
+
+
+def build_mm_parallel_weather_user_message(image_url: str) -> dict:
+    text = _mm_user_text(
+        MESSAGES_PARALLEL_WEATHER[1]['content'], scene=MM_SCENE_DALLAS)
+    return build_multimodal_user_message_multi(text, [image_url])
+
+
+def build_mm_parallel_weather_messages(image_url: str) -> list[dict]:
+    return [
+        MESSAGES_PARALLEL_WEATHER[0],
+        build_mm_parallel_weather_user_message(image_url),
+    ]
+
+
+def build_mm_dual_image_dallas_messages(
+        tiger_url: str, pose_url: str) -> list[dict]:
+    text = _mm_user_text(
+        MESSAGES_ASKING_FOR_WEATHER[1]['content'], scene=MM_SCENE_DALLAS)
+    return [
+        MESSAGES_ASKING_FOR_WEATHER[0],
+        build_multimodal_user_message_multi(
+            text, [tiger_url, pose_url]),
+    ]
+
 
 MULTI_TURN_WEATHER_CITIES = ['Tokyo', 'London', 'Paris', 'New York']
 
