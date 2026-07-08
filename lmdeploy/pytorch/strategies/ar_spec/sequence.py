@@ -32,6 +32,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         super().__post_init__()
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
+        self.prefix_cache.match_recompute_blocks = 1
 
     @property
     def num_valid_ids(self):

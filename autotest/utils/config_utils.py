@@ -1,5 +1,6 @@
 import copy
 import os
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,18 @@ def _entry_engine_config(entry: dict[str, Any]) -> dict[str, Any]:
     """Per-model yaml engine / parallel block (``engine_config``; legacy
     ``parallel``)."""
     return entry.get(ENGINE_CONFIG_KEY) or entry.get('parallel') or {}
+
+
+def _entry_has_prefix_cache_accuracy_tuning(entry: dict[str, Any]) -> bool:
+    """True for yaml slices with explicit prefix-cache tuning knobs
+    (evaluate)."""
+    engine_extra = (_entry_engine_config(entry).get('extra') or {})
+    return (
+        'prefix-cache-decode-state-interval' in engine_extra
+        and 'prefix-cache-state-budget' in engine_extra
+    )
+
+
 PROFILE_TO_MODEL_TYPE_KEY = {
     'chat': 'chat_model',
     'vl': 'vl_model',
@@ -39,30 +52,40 @@ PROFILE_TO_MODEL_TYPE_KEY = {
 # ``all``: disable filtering (tests / debug).
 DEPS_PROFILE_ENV = 'DEPS_PROFILE'
 EMPTY_DEPS_SELECTOR = '__empty__'
+# Autotest-only keys in engine_config.extra (not forwarded to lmdeploy CLI).
+CLI_SKIP_EXTRA_KEYS = frozenset()
 
 
-def resolve_extra_params(extra_params: dict[str, Any], model_base_path: str) -> None:
-    """Resolve relative model paths in extra_params to absolute paths.
+def get_model_path_from_config(config: dict[str, Any], model_id: str) -> str:
+    """Resolve ``model_id`` for lmdeploy / transformers."""
+    if config['model_path_layout'] == 'hf_hub':
+        return model_id
+    return os.path.join(config['model_path'], model_id)
 
-    Centralised helper so that every call-site does not need its own
-    ``if key in extra_params …`` guard – adding a new key here is enough.
-    """
-    # Keys in extra_params whose string values are relative model paths
+
+def get_model_work_path(config: dict[str, Any]) -> str:
+    """Base directory for join-layout artifacts (e.g. quantized model
+    output)."""
+    if config['model_path_layout'] == 'hf_hub':
+        return config['model_work_path']
+    return config['model_path']
+
+
+def resolve_extra_params(extra_params: dict[str, Any], config: dict[str, Any]) -> None:
+    """Resolve relative model paths in extra_params."""
     model_path_keys = ['speculative-draft-model']
 
-    # Flat string-valued keys
     for key in model_path_keys:
         if key in extra_params:
             value = extra_params[key]
             if value and isinstance(value, str) and not os.path.isabs(value):
-                extra_params[key] = os.path.join(model_base_path, value)
+                extra_params[key] = get_model_path_from_config(config, value)
 
-    # Nested speculative_config (pipeline usage)
     spec_cfg = extra_params.get('speculative_config')
     if isinstance(spec_cfg, dict) and 'model' in spec_cfg:
         model = spec_cfg['model']
         if model and isinstance(model, str) and not os.path.isabs(model):
-            spec_cfg['model'] = os.path.join(model_base_path, model)
+            spec_cfg['model'] = get_model_path_from_config(config, model)
 
 
 _paths_doc_cache: dict[str, Any] | None = None
@@ -343,8 +366,13 @@ def _entry_matches_deps_profile(entry: dict[str, Any], env_key: str, selector: D
 def _entry_matches_func(entry: dict[str, Any], func_type: str, extra: dict[str, Any] | None) -> bool:
     funcs = set(entry.get(TEST_COVERAGE_KEY) or [])
     extra = extra or {}
-    if extra.get('enable-prefix-caching') is not None or extra.get('enable_prefix_caching') is not None:
-        return 'prefix_cache' in funcs
+    if extra.get('enable-prefix-caching') is not None:
+        if 'prefix_cache' not in funcs:
+            return False
+        # evaluate/infer accuracy: only dedicated yaml rows with tuned prefix-cache params
+        if func_type == 'evaluate':
+            return _entry_has_prefix_cache_accuracy_tuning(entry)
+        return True
     if func_type == 'benchmark' and funcs == {'prefix_cache'}:
         return False
     if func_type == 'func':
@@ -597,7 +625,10 @@ def get_cli_str(config: dict[str, Any]) -> str:
     cli_str = []
     # Extra params
     for key, value in config.items():
-        key = key.replace('_', '-')
+        norm_key = key.replace('_', '-')
+        if norm_key in CLI_SKIP_EXTRA_KEYS:
+            continue
+        key = norm_key
         if value is None:
             cli_str.append(f'--{key}')
         elif isinstance(value, list):
@@ -686,7 +717,7 @@ def get_model_list(config: dict[str, Any],
     Rows with entry-level ``deps`` are never included (regardless of ``DEPS_PROFILE``).
     """
     parallel_config = parallel_config or {'tp': 1}
-    if extra and (extra.get('enable-prefix-caching') is not None or extra.get('enable_prefix_caching') is not None):
+    if extra and extra.get('enable-prefix-caching') is not None:
         return _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
     if func_type == 'func':
         return _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', extra)
@@ -744,6 +775,14 @@ def get_quantization_model_list(type: str) -> list[str]:
     return list(OrderedDict.fromkeys(quant_model_list))
 
 
+def _apply_hf_hub_env(config: dict[str, Any]) -> None:
+    """Point Hugging Face hub at the H-card cache (offline)."""
+    if config['model_path_layout'] != 'hf_hub':
+        return
+    os.environ['HF_HUB_CACHE'] = config['model_path']
+    os.environ['HF_HUB_OFFLINE'] = '1'
+
+
 def get_config() -> dict[str, Any]:
     """Load global paths from ``autotest/env_paths.yml``; model matrices from
     ``configs/**``."""
@@ -753,6 +792,7 @@ def get_config() -> dict[str, Any]:
         )
     paths_key = _resolve_paths_env_key(os.environ.get('TEST_ENV'))
     config_copy = _load_paths_for_env(paths_key)
+    _apply_hf_hub_env(config_copy)
     _apply_run_id_paths(config_copy)
     return config_copy
 
@@ -943,6 +983,23 @@ def _gen_config_to_opencompass_kwargs(gen: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+_VLMEVALKIT_GEN_KEYS = frozenset({
+    'temperature',
+    'top-k',
+    'top-p',
+    'repetition-penalty',
+})
+
+
+def _gen_config_to_vlmevalkit_kwargs(gen: dict[str, Any]) -> dict[str, Any]:
+    """Map per-model yaml ``gen_config`` to VLMEvalKit ``run.py`` CLI keys."""
+    return {
+        key: value
+        for key, value in gen.items()
+        if key.replace('_', '-') in _VLMEVALKIT_GEN_KEYS
+    }
+
+
 def _eval_table_scalar_params(preset: dict[str, Any]) -> dict[str, Any]:
     return {key: preset[key] for key in _EVAL_OC_SCALAR_KEYS if key in preset}
 
@@ -971,7 +1028,7 @@ def get_eval_preset_config(
     if mllm:
         merged = copy.deepcopy(preset)
         if run_config.get('gen_config'):
-            merged.update(copy.deepcopy(run_config['gen_config']))
+            merged.update(_gen_config_to_vlmevalkit_kwargs(run_config['gen_config']))
         return merged
 
     if run_config.get('gen_config'):
@@ -980,6 +1037,16 @@ def get_eval_preset_config(
         return result
 
     return copy.deepcopy(preset)
+
+
+def _is_prefix_cache_run(extra_params: dict[str, Any]) -> bool:
+    """True when run config enables prefix caching (distinct case / result
+    dir).
+
+    Value may be ``None`` (CLI flag without argument) after
+    :func:`_build_run_config_entry` normalizes ``True`` → ``None``.
+    """
+    return 'enable-prefix-caching' in extra_params
 
 
 def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -> str:
@@ -1003,6 +1070,8 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
     model_format = extra_params.get('model-format')
     if model_format:
         extra_params_case += f'_{model_format}'
+    if _is_prefix_cache_run(extra_params):
+        extra_params_case += '_prefix-cache'
     if not is_simple:
         for k, v in extra_params.items():
             if len(v) > 10:
@@ -1011,6 +1080,15 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
                 extra_params_case += f'_{k}{v}'.replace('_', '-').replace('/', '-').replace('.', '-')
 
     return f'{backend_type}_{pure_model_name}_{communicator}_{parallel_str}_{kv_cache_dtype}{extra_params_case}'
+
+
+def _format_case_variant_label(variant_suffix: str) -> str:
+    """Human-readable variant tags (MTP / fp8 / prefix-cache) from case
+    suffix."""
+    if not variant_suffix:
+        return '-'
+    label = variant_suffix.lstrip('-_').replace('_', ' ').strip()
+    return label or '-'
 
 
 def parse_config_by_case(case_str: str) -> dict[str, Any]:
@@ -1024,14 +1102,22 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
     communicator = case_parts[2]
 
     quant_idx = None
+    kv_cache_dtype = 0
+    variant_suffix = ''
     for i in range(len(case_parts) - 1, 2, -1):
-        if case_parts[i].isdigit():
+        match = re.match(r'^(\d+)(.*)$', case_parts[i])
+        if match:
             quant_idx = i
+            kv_cache_dtype = int(match.group(1))
+            variant_suffix = match.group(2)
             break
     if quant_idx is None:
         raise ValueError(f'No numeric KV cache dtype found in case string: {case_str}')
 
-    kv_cache_dtype = int(case_parts[quant_idx])
+    if quant_idx + 1 < len(case_parts):
+        tail = '_'.join(case_parts[quant_idx + 1:])
+        variant_suffix = f'{variant_suffix}_{tail}' if variant_suffix else tail
+
     parallel_parts = case_parts[3:quant_idx]
 
     # Convert parallel str to dict, e.g: ['tp1','dp2'] -> {'tp':1, 'dp':2}
@@ -1050,4 +1136,5 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
         'communicator': communicator,
         'parallel_config': parallel_config,
         'kv_cache_dtype': kv_cache_dtype,
+        'variant': _format_case_variant_label(variant_suffix),
     }

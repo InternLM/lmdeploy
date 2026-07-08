@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from lmdeploy.serve.parsers import ResponseParser
 
+import shortuuid
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -275,6 +276,8 @@ async def health() -> JSONResponse:
                     message='Engine health monitor is not initialized.')
         return JSONResponse(jsonable_encoder(data), status_code=HTTPStatus.SERVICE_UNAVAILABLE)
     data = monitor.snapshot()
+    if data['status'] == 'unhealthy':
+        data = await monitor.refresh_snapshot()
     status_code = HTTPStatus.OK if data['status'] in ('healthy', 'sleeping') else HTTPStatus.SERVICE_UNAVAILABLE
     return JSONResponse(jsonable_encoder(data), status_code=status_code)
 
@@ -451,7 +454,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
-    request_id = str(session.session_id)
+    request_id = f'chatcmpl-{shortuuid.random()}'
     created_time = int(time.time())
 
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
@@ -1558,11 +1561,10 @@ def serve(model_path: str,
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
         model_name (str): the name of the served model. It can be accessed
             by the RESTful API `/v1/models`. If it is not specified,
@@ -1605,6 +1607,8 @@ def serve(model_path: str,
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     VariableInterface.enable_abort_handling = enable_abort_handling
+    from lmdeploy.serve.parsers import validate_parser_names
+    reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:

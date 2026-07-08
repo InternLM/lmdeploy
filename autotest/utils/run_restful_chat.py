@@ -9,10 +9,12 @@ import psutil
 import requests
 from openai import APIStatusError, BadRequestError, OpenAI
 from pytest_assume.plugin import assume
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
     get_cuda_prefix_by_workerid,
+    get_model_path_from_config,
     get_workerid,
     resolve_extra_params,
 )
@@ -21,6 +23,7 @@ from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.openai.api_client import APIClient
+from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 
@@ -35,7 +38,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = os.path.join(config.get('model_path'), model)
+        model_path = get_model_path_from_config(config, model)
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
@@ -43,7 +46,8 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     if 'extra_params' not in run_config:
         run_config['extra_params'] = {}
 
-    resolve_extra_params(run_config['extra_params'], config.get('model_path'))
+    resolve_extra_params(run_config['extra_params'], config)
+    ensure_ascend_multinode_env(config, run_config)
 
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
@@ -54,7 +58,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
         get_cli_common_param(run_config), f'--model-name {model_name}'
     ]).strip()
 
-    env = os.environ.copy()
+    env = build_ascend_multinode_env(config, run_config)
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
     env.update(run_config.get('env', {}))
 
@@ -311,7 +315,7 @@ def _video_extra_body(num_frames: int) -> dict:
 
 def _assert_vl_species_response(resp) -> None:
     content = resp.choices[0].message.content
-    finish = resp.choices[0]['finish_reason']
+    finish = resp.choices[0].finish_reason
     assert _vl_video_stream_finish_assert(finish, content), resp
 
 
@@ -397,7 +401,7 @@ def _mm_demo_public_answer_text(text: str) -> str:
 
 def _mm_demo_tomb_answer_assert(text: str) -> bool:
     """Tomb/MCQ: visible tail mentions scene, a digit, or an MCQ-style letter
-    (A–D)."""
+    (A-D)."""
     raw = _mm_demo_public_answer_text(text).strip()
     if not raw:
         return False
@@ -683,7 +687,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
         else:
             file.writelines('[video mm_processor non-stream] ' + str(mm_resp).lower() + '\n')
             mm_text = mm_resp.choices[0].message.content
-            mm_fr = mm_resp.choices[0]['finish_reason']
+            mm_fr = mm_resp.choices[0].finish_reason
             with assume:
                 assert _mm_demo_tomb_run_assert(mm_fr, mm_text), (mm_fr, mm_text[:2000])
 
@@ -793,7 +797,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
                 assert ('tiger' in mix_content.lower() or '虎' in mix_content or 'ski' in mix_content.lower()
                         or '滑雪' in mix_content), mix_resp
             with assume:
-                assert _vl_video_stream_finish_assert(mix_resp.choices[0]['finish_reason'], mix_content), mix_resp
+                assert _vl_video_stream_finish_assert(mix_resp.choices[0].finish_reason, mix_content), mix_resp
 
     file.close()
 
@@ -1074,7 +1078,9 @@ def test_qwen_multiple_round_prompt(client, model):
     messages.append(response.choices[0].message)
 
     for tool_call in response.choices[0].message.tool_calls:
-        tool_call_args = json.loads(tool_call.function.arguments)
+        tool_call_args = _parse_tool_call_arguments_dict(tool_call.function.arguments)
+        assert tool_call_args is not None, (
+            f'tool call arguments must be a JSON object string, got {tool_call.function.arguments!r}')
         tool_call_result = get_function_by_name(tool_call.function.name)(**tool_call_args)
         messages.append({
             'role': 'tool',

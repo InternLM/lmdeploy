@@ -70,7 +70,8 @@ class FusedMoEBuilder(ABC):
               ep_size: int = 1,
               ep_group: dist.ProcessGroup = None,
               layer_idx: int = 0,
-              out_dtype: torch.dtype = torch.bfloat16):
+              out_dtype: torch.dtype = torch.bfloat16,
+              num_max_dispatch_tokens_per_rank: int = 128):
         """Build from mlp."""
         raise NotImplementedError
 
@@ -166,6 +167,8 @@ class FusedMoEBlockedF8Builder(ABC):
               ep_size: int = 1,
               ep_group: dist.ProcessGroup = None,
               out_dtype: torch.dtype = torch.float16,
+              fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+              num_max_dispatch_tokens_per_rank: int = 128,
               layer_idx: int = 0,
               custom_gateup_act: bool = False):
         """Build from mlp."""

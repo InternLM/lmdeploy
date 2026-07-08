@@ -2,7 +2,7 @@ import multiprocessing as mp
 
 import pydantic
 import pytest
-from utils.config_utils import set_device_env_variable, unset_device_env_variable
+from utils.config_utils import get_model_path_from_config, set_device_env_variable, unset_device_env_variable
 from utils.pipeline_chat import (
     assert_pipeline_batch_return,
     assert_pipeline_batch_stream_return,
@@ -36,7 +36,7 @@ def run_case_in_spawn(worker_id, target, args):
 
 
 def run_pipeline_testcase_prompt(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     response = pipe('Hi, pls intro yourself')
@@ -46,7 +46,7 @@ def run_pipeline_testcase_prompt(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_prompt_stream(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     response = []
@@ -58,7 +58,7 @@ def run_pipeline_testcase_prompt_stream(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_multi_prompt(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
@@ -68,7 +68,7 @@ def run_pipeline_testcase_multi_prompt(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_multi_prompt_stream(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     response = []
@@ -80,7 +80,7 @@ def run_pipeline_testcase_multi_prompt_stream(config, model, backend, file_name)
 
 
 def run_pipeline_testcase_message(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     prompts = [[{'role': 'user', 'content': 'Hi, pls intro yourself'}]]
@@ -91,7 +91,7 @@ def run_pipeline_testcase_message(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_message_stream(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     prompts = [[{'role': 'user', 'content': 'Hi, pls intro yourself'}]]
@@ -104,7 +104,7 @@ def run_pipeline_testcase_message_stream(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_message_batch(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     prompts = [[{'role': 'user', 'content': 'Hi, pls intro yourself'}], [{'role': 'user', 'content': 'Shanghai is'}]]
@@ -115,7 +115,7 @@ def run_pipeline_testcase_message_batch(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_message_batch_stream(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     prompts = [[{'role': 'user', 'content': 'Hi, pls intro yourself'}], [{'role': 'user', 'content': 'Shanghai is'}]]
@@ -128,7 +128,7 @@ def run_pipeline_testcase_message_batch_stream(config, model, backend, file_name
 
 
 def run_pipeline_testcase_logprobs(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(logprobs=10, max_new_tokens=5, top_k=40, do_sample=True)
@@ -139,7 +139,7 @@ def run_pipeline_testcase_logprobs(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_logprobs_stream(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(logprobs=10, max_new_tokens=5, top_k=40, do_sample=True)
@@ -152,7 +152,7 @@ def run_pipeline_testcase_logprobs_stream(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_session_len(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(session_len=10, tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
@@ -166,7 +166,7 @@ def run_pipeline_testcase_session_len(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_min_new_tokens(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(min_new_tokens=200, ignore_eos=True)
@@ -180,7 +180,7 @@ def run_pipeline_testcase_min_new_tokens(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_stop_words(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(stop_words=[' and', '浦', ' to'])
@@ -195,7 +195,7 @@ def run_pipeline_testcase_stop_words(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_bad_words(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(bad_words=[' and', '浦', ' to'])
@@ -208,7 +208,7 @@ def run_pipeline_testcase_bad_words(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_special_words_false(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' \
@@ -228,7 +228,7 @@ def run_pipeline_testcase_special_words_false(config, model, backend, file_name)
 
 
 def run_pipeline_testcase_special_words_true(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' \
@@ -248,7 +248,7 @@ def run_pipeline_testcase_special_words_true(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_repetition_penalty(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(repetition_penalty=0.01, random_seed=1, min_new_tokens=50, do_sample=True)
@@ -259,7 +259,7 @@ def run_pipeline_testcase_repetition_penalty(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_repetition_penalty_bigger(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(repetition_penalty=1.2, random_seed=1)
@@ -270,7 +270,7 @@ def run_pipeline_testcase_repetition_penalty_bigger(config, model, backend, file
 
 
 def run_pipeline_testcase_min_top_p(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(top_p=0, random_seed=1)
@@ -281,7 +281,7 @@ def run_pipeline_testcase_min_top_p(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_min_top_k(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(top_k=1, max_new_tokens=20, do_sample=True)
@@ -294,7 +294,7 @@ def run_pipeline_testcase_min_top_k(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_diff_random_seed(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     response_list = []
@@ -307,7 +307,7 @@ def run_pipeline_testcase_diff_random_seed(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_same_random_seed(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(random_seed=1, top_k=40, do_sample=True)
@@ -320,7 +320,7 @@ def run_pipeline_testcase_same_random_seed(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_do_sample_batch(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(temperature=1.0, top_k=40, do_sample=True)
@@ -331,7 +331,7 @@ def run_pipeline_testcase_do_sample_batch(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_max_new_tokens(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(max_new_tokens=5)
@@ -345,7 +345,7 @@ def run_pipeline_testcase_max_new_tokens(config, model, backend, file_name):
 
 
 def run_pipeline_testcase_ignore_eos(config, model, backend, file_name):
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     gen_config = GenerationConfig(ignore_eos=True, max_new_tokens=256)
@@ -567,7 +567,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
 def test_backend_config_input_validation(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     with pytest.raises(AssertionError):
@@ -604,7 +604,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     with pytest.raises(pydantic.ValidationError, match='tp must be a positive integer'):
         backend_config = backend(tp=0)
         pipeline(model_path, backend_config=backend_config)
@@ -642,7 +642,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
 def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
-    model_path = '/'.join([config.get('model_path'), model])
+    model_path = get_model_path_from_config(config, model)
     with pytest.raises(AssertionError):
         backend_config = backend(tp=0)
         init_pipeline(model_path, backend_config=backend_config)
@@ -673,7 +673,7 @@ def test_backend_config_tp(config, model, backend, worker_id):
     with pytest.raises(AssertionError):
         if 'gw' in worker_id:
             set_device_env_variable(worker_id, parallel_config=2)
-        model_path = '/'.join([config.get('model_path'), model])
+        model_path = get_model_path_from_config(config, model)
         backend_config = backend(tp=100)
         pipe = init_pipeline(model_path, backend_config=backend_config)
         pipe.close()

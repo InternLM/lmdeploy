@@ -34,11 +34,10 @@ class CLI:
                             ' which is converted by `lmdeploy convert` command or '
                             'download from ii) and iii). - ii) the model_id of a '
                             'lmdeploy-quantized model hosted inside a model repo on '
-                            'huggingface.co, such as "internlm/internlm-chat-20b-4bit",'
-                            ' "lmdeploy/llama2-chat-70b-4bit", etc. - iii) the model_id'
-                            ' of a model hosted inside a model repo on huggingface.co,'
-                            ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
-                            ', "baichuan-inc/baichuan2-7b-chat" and so on')
+                            'huggingface.co, such as "lmdeploy/llama2-chat-70b-4bit",'
+                            ' etc. - iii) the model_id of a model hosted inside a model'
+                            ' repo on huggingface.co, such as "internlm/internlm2_5-7b-chat",'
+                            ' "internlm/Intern-S2-Preview" and so on')
         # common args
         ArgumentHelper.backend(parser)
         # chat template args
@@ -63,6 +62,7 @@ class CLI:
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         kv_cache_dtype = ArgumentHelper.kv_cache_dtype(pt_group)
+        language_model_only = ArgumentHelper.language_model_only(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -73,6 +73,7 @@ class CLI:
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(kv_cache_dtype)
+        tb_group._group_actions.append(language_model_only)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)

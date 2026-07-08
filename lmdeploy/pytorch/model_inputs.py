@@ -453,7 +453,7 @@ class StepContext:
 @dataclass
 class BuildModelContext:
     """Context for building model."""
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
@@ -461,6 +461,14 @@ class BuildModelContext:
     fp32_lm_head: bool = False
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
+    max_batch_size: int = 0
+
+    @property
+    def deep_ep_max_tokens_per_rank(self) -> int:
+        """Infer DeepEP low-latency max dispatch tokens per rank."""
+        if self.max_batch_size <= 0:
+            return 128
+        return self.max_batch_size * (1 + self.num_spec_tokens)
 
 
 class StepContextManager(CtxMgrBase[StepContext]):

@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import time
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
@@ -43,6 +44,14 @@ from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
 
 logger = get_logger('lmdeploy')
+
+_H2D_TRANSFER_KEY = '_h2d_transfer'
+
+
+@dataclass
+class _H2DTransfer:
+    event: torch.cuda.Event
+    refs: dict[str, Any]
 
 
 @dataclass
@@ -265,6 +274,7 @@ class BaseModelAgent:
         self._out_que = None
         self._background_task = None
         self._preprocess_task = None
+        self._pending_h2d_transfers = deque()
         self.tasks = set()
 
         # cuda stream
@@ -332,6 +342,11 @@ class BaseModelAgent:
                                            self.agent_strategy,
                                            misc_config=misc_config,
                                            device=device)
+        if self.spec_agent.is_enabled():
+            from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
+            helper = GuidedSpecHelper(self.guided_decoding_manager)
+            self.spec_agent.guided_helper = helper
+            self.spec_agent.proposer.guided_helper = helper
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
@@ -403,6 +418,7 @@ class BaseModelAgent:
             if dp > 1:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
+                inputs.dp_meta.dp_is_decoding = False
             logger.debug('Warmup prefill start.')
             self._forward_impl(inputs)
             torch.cuda.synchronize()
@@ -423,6 +439,7 @@ class BaseModelAgent:
                 if dp > 1:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)
+                    inputs.dp_meta.dp_is_decoding = True
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
@@ -626,11 +643,11 @@ class BaseModelAgent:
             # for second round chat
             self.step_inputs.reindex(delta)
 
-        if inputs.is_first_chunk or not inputs.is_chunk:
+        if inputs.is_first_chunk:
             self._prev_chunk_output = None
 
         # check long context
-        if self._prev_chunk_output is not None:
+        if inputs.is_chunk and self._prev_chunk_output is not None:
             # update model metas
             model_metas = self._prev_chunk_output.get('model_metas')
             inputs.model_metas = model_metas
@@ -908,12 +925,32 @@ class BaseModelAgent:
 
             while True:
                 forward_inputs = await input_maker.get()
+                h2d_transfer = forward_inputs.pop(_H2D_TRANSFER_KEY, None)
+                if h2d_transfer is not None:
+                    self._keep_h2d_transfer(h2d_transfer)
+                    self.stream.wait_event(h2d_transfer.event)
 
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
                 input_maker.step()
+                self._release_completed_h2d_transfers()
+
+    def _keep_h2d_transfer(self, transfer: _H2DTransfer | None):
+        """Keep H2D source refs alive until their async copies finish."""
+        self._release_completed_h2d_transfers()
+        if transfer is None or transfer.event.query():
+            return
+        self._pending_h2d_transfers.append(transfer)
+
+    def _release_completed_h2d_transfers(self):
+        """Release CPU-side H2D source refs after their async copies finish."""
+        while len(self._pending_h2d_transfers) > 0:
+            transfer = self._pending_h2d_transfers[0]
+            if not transfer.event.query():
+                break
+            self._pending_h2d_transfers.popleft()
 
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
@@ -923,13 +960,16 @@ class BaseModelAgent:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}
             forward_inputs_cuda.update(forward_inputs)
+            h2d_refs = {k: forward_inputs_cuda[k] for k in keys if forward_inputs_cuda.get(k) is not None}
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
                 for k in keys:
                     if k not in forward_inputs_cuda:
                         continue
                     forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
-                self.out_stream.synchronize()
+                h2d_event = torch.cuda.Event()
+                h2d_event.record()
+                forward_inputs_cuda[_H2D_TRANSFER_KEY] = _H2DTransfer(h2d_event, h2d_refs)
             logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs_cuda)
             if forward_event is not None:
@@ -1009,6 +1049,7 @@ class BaseModelAgent:
             await asyncio.gather(*self.tasks, return_exceptions=True)
         except asyncio.CancelledError:
             logger.debug(f'ModelAgent {task.get_name()} task cancelled.')
+        self._release_completed_h2d_transfers()
 
         if self.guided_decoding_manager:
             self.guided_decoding_manager.clear()
@@ -1025,9 +1066,11 @@ class BaseModelAgent:
                 continue
             while not q.empty():
                 try:
-                    q.get_nowait()
+                    item = q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+                if isinstance(item, dict):
+                    self._keep_h2d_transfer(item.pop(_H2D_TRANSFER_KEY, None))
 
     async def get_output_async(self):
         """Async get output."""
@@ -1043,6 +1086,7 @@ class BaseModelAgent:
             event.wait()
             out = out.to_cpu()
             out.new_token_timestamp = time.time()
+        self._release_completed_h2d_transfers()
         return out
 
     def _build_model(self):
@@ -1058,14 +1102,15 @@ class BaseModelAgent:
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
-        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
+        build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
                                             dllm_config=self.misc_config.dllm_config,
                                             strategy_factory=self.strategy_factory,
                                             enable_return_routed_experts=enable_return_routed_experts,
                                             quant_config=self.model_config.quant_config,
                                             fp32_lm_head=self.model_config.fp32_lm_head,
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,
-                                            num_spec_tokens=self.spec_agent.num_spec_tokens)
+                                            num_spec_tokens=self.spec_agent.num_spec_tokens,
+                                            max_batch_size=self.cache_config.max_batches)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
@@ -1379,6 +1424,7 @@ class BaseModelAgent:
 
         self._drain_queues()
         torch.cuda.synchronize()
+        self._release_completed_h2d_transfers()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
         self._update_params_ipc_event = None
