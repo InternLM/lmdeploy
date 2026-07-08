@@ -144,6 +144,48 @@ def test_compact_moe_dispatch_keeps_dense_route_fallback(monkeypatch):
     assert fused_moe_module._should_use_compact_moe(hidden_states, w1, w2, dense_topk_ids, num_experts=64)
 
 
+def test_compact_blocked_fp8_dispatch_prefers_many_local_experts(monkeypatch):
+    """Large local expert counts should select compact scheduling for blocked FP8 MoE."""
+    import importlib
+
+    blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe')
+    monkeypatch.setattr(blocked_fp8_module, '_supports_compact_blocked_fp8_moe', lambda *args: True)
+
+    input_quant = torch.empty(1, 4, dtype=torch.float8_e4m3fn)
+    input_scale = torch.empty(1, 1)
+    w1 = torch.empty(1024, 8, 4, dtype=torch.float8_e4m3fn)
+    w1_scale = torch.empty(1024, 1, 1)
+    w2 = torch.empty(1024, 4, 4, dtype=torch.float8_e4m3fn)
+    w2_scale = torch.empty(1024, 1, 1)
+    topk_ids = torch.zeros(1, 1, dtype=torch.long)
+
+    assert blocked_fp8_module._should_use_compact_blocked_fp8_moe(
+        input_quant, input_scale, w1, w1_scale, w2, w2_scale, topk_ids, num_experts=1024)
+
+
+def test_compact_blocked_fp8_dispatch_keeps_dense_route_fallback(monkeypatch):
+    """Keep the dense-route compact fallback for blocked FP8 MoE."""
+    import importlib
+
+    blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe')
+    monkeypatch.setattr(blocked_fp8_module, '_supports_compact_blocked_fp8_moe', lambda *args: True)
+
+    input_quant = torch.empty(1, 4, dtype=torch.float8_e4m3fn)
+    input_scale = torch.empty(1, 1)
+    w1 = torch.empty(64, 8, 4, dtype=torch.float8_e4m3fn)
+    w1_scale = torch.empty(64, 1, 1)
+    w2 = torch.empty(64, 4, 4, dtype=torch.float8_e4m3fn)
+    w2_scale = torch.empty(64, 1, 1)
+
+    sparse_topk_ids = torch.zeros(128, 1, dtype=torch.long)
+    dense_topk_ids = torch.zeros(2048, 1, dtype=torch.long)
+
+    assert not blocked_fp8_module._should_use_compact_blocked_fp8_moe(
+        input_quant, input_scale, w1, w1_scale, w2, w2_scale, sparse_topk_ids, num_experts=64)
+    assert blocked_fp8_module._should_use_compact_blocked_fp8_moe(
+        input_quant, input_scale, w1, w1_scale, w2, w2_scale, dense_topk_ids, num_experts=64)
+
+
 def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
     flatten_topk_idx = topk_idx.flatten()
     sorted_ids = flatten_topk_idx.argsort()
@@ -411,3 +453,85 @@ class TestFusedMoeW8A8(TestFusedMoe):
                                 out_dtype=torch.float16,
                                 renormalize=renormalize)
         torch.testing.assert_close(output, gt, atol=5e-3, rtol=1e-3)
+
+
+class TestFusedMoeBlockedFP8Compact:
+
+    @pytest.fixture
+    def device(self):
+        if not torch.cuda.is_available():
+            pytest.skip('CUDA is required for blocked FP8 MoE kernels.')
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 9:
+            pytest.skip('Compact blocked FP8 MoE requires sm90+.')
+        yield torch.device('cuda')
+
+    @pytest.fixture
+    def hidden_states(self, device):
+        torch.manual_seed(0)
+        yield torch.randn(32, 128, device=device, dtype=torch.bfloat16) / 8
+
+    @pytest.fixture
+    def quant_states(self, hidden_states):
+        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
+        yield quant_fp8(hidden_states, 128, dtype=torch.float8_e4m3fn)
+
+    def quant_weight(self, weight):
+        from lmdeploy.lite.quantization.weight.quant_utils import quant_blocked_fp8
+        return quant_blocked_fp8(weight, torch.float8_e4m3fn, 128)
+
+    @pytest.fixture
+    def quant_w1(self, device):
+        torch.manual_seed(1)
+        w1 = torch.randn(1024, 256, 128, device=device, dtype=torch.bfloat16) / 8
+        yield self.quant_weight(w1)
+
+    @pytest.fixture
+    def quant_w2(self, device):
+        torch.manual_seed(2)
+        w2 = torch.randn(1024, 128, 128, device=device, dtype=torch.bfloat16) / 8
+        yield self.quant_weight(w2)
+
+    @pytest.fixture
+    def topk_idx(self, device):
+        torch.manual_seed(3)
+        yield torch.randint(0, 1024, (32, 4), device=device)
+
+    @pytest.fixture
+    def topk_weights(self, device):
+        torch.manual_seed(4)
+        weights = torch.rand(32, 4, device=device, dtype=torch.bfloat16)
+        yield weights / weights.sum(dim=-1, keepdim=True)
+
+    @torch.inference_mode()
+    def test_compact_matches_regular(self, monkeypatch, quant_states, quant_w1, quant_w2, topk_weights, topk_idx):
+        from lmdeploy.pytorch.kernels.cuda import blocked_fp8_fused_moe as moe_mod
+        state_fp8, state_scale = quant_states
+        w1_fp8, w1_scale = quant_w1
+        w2_fp8, w2_scale = quant_w2
+
+        monkeypatch.setattr(moe_mod, '_should_use_compact_blocked_fp8_moe', lambda *args: False)
+        regular = moe_mod.fused_moe_blocked_fp8(state_fp8,
+                                                state_scale,
+                                                w1_fp8,
+                                                w1_scale,
+                                                w2_fp8,
+                                                w2_scale,
+                                                topk_weights=topk_weights,
+                                                topk_ids=topk_idx,
+                                                topk=topk_idx.size(1),
+                                                out_dtype=torch.bfloat16)
+
+        monkeypatch.setattr(moe_mod, '_should_use_compact_blocked_fp8_moe', lambda *args: True)
+        compact = moe_mod.fused_moe_blocked_fp8(state_fp8,
+                                                state_scale,
+                                                w1_fp8,
+                                                w1_scale,
+                                                w2_fp8,
+                                                w2_scale,
+                                                topk_weights=topk_weights,
+                                                topk_ids=topk_idx,
+                                                topk=topk_idx.size(1),
+                                                out_dtype=torch.bfloat16)
+
+        torch.testing.assert_close(compact, regular, atol=3e-2, rtol=3e-2)
