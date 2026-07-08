@@ -26,6 +26,8 @@ from .conftest import (
     MM_TEST_IMAGE_POSE,
     MM_TEST_IMAGE_TIGER,
     MM_VIDEO_MEDIA_TYPES,
+    _apply_marks_mm,
+    _ToolCallTestBase,
     build_mm_dallas_weather_user_message,
     build_mm_dual_image_dallas_messages,
     build_mm_miami_weather_user_message,
@@ -33,16 +35,13 @@ from .conftest import (
     build_mm_parallel_weather_user_message,
     build_mm_tiger_search_messages,
     build_multimodal_user_message,
-    mm_beijing_weather_messages,
     mm_audio_search_messages_for_media_type,
+    mm_beijing_weather_messages,
     mm_create_extra_body_for_media_type,
     mm_dallas_weather_messages,
     mm_miami_weather_messages,
     mm_weather_messages_for_media_type,
-    _apply_marks_mm,
-    _ToolCallTestBase,
 )
-
 
 # ===========================================================================
 # Basic multimodal tool call
@@ -239,7 +238,8 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
         assert choice.finish_reason in ('stop', 'length')
 
     def test_tool_choice_auto(self, backend, model_case):
-        """tool_choice='auto' with image: model may call tool or reply in text."""
+        """tool_choice='auto' with image: model may call tool or reply in
+        text."""
         image_url = self._require_mm_image(MM_TEST_IMAGE_TIGER)
         messages = mm_dallas_weather_messages(image_url)
         client, model_name = self._get_client()
@@ -481,7 +481,8 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
         assert has_dallas or has_sf
 
     def test_multi_turn_search_after_weather_with_image(self, backend, model_case):
-        """Image in first turn; after weather tool result, user asks for web search."""
+        """Image in first turn; after weather tool result, user asks for web
+        search."""
         image_url = self._require_mm_image(MM_TEST_IMAGE_TIGER)
         messages = build_messages_with_tool_response()
         messages[1] = build_mm_dallas_weather_user_message(image_url)
@@ -512,7 +513,8 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             assert choice.message.content and len(choice.message.content.strip()) > 0
 
     def test_multi_turn_search_after_weather_with_image_streaming(self, backend, model_case):
-        """Streaming follow-up after image+weather history; parser must not drop output."""
+        """Streaming follow-up after image+weather history; parser must not
+        drop output."""
         image_url = self._require_mm_image(MM_TEST_IMAGE_TIGER)
         messages = build_messages_with_tool_response()
         messages[1] = build_mm_dallas_weather_user_message(image_url)
@@ -546,7 +548,8 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             )
 
     def test_second_turn_user_image_weather_tool(self, backend, model_case):
-        """Second user turn sends a new image and should still trigger weather tool."""
+        """Second user turn sends a new image and should still trigger weather
+        tool."""
         first_image = self._require_mm_image(MM_TEST_IMAGE_TIGER)
         second_image = self._require_mm_image(MM_TEST_IMAGE_POSE)
         messages = mm_dallas_weather_messages(first_image)
@@ -583,7 +586,8 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
         assert 'miami' in parsed['city'].lower()
 
     def test_multimodal_history_text_followup(self, backend, model_case):
-        """Image in first user turn; follow-up after tool result (text reply)."""
+        """Image in first user turn; follow-up after tool result (text
+        reply)."""
         image_url = self._require_mm_image(MM_TEST_IMAGE_TIGER)
         messages = build_messages_with_tool_response()
         messages[1] = build_mm_dallas_weather_user_message(image_url)
@@ -829,7 +833,8 @@ class TestToolCallMultimodalParallel(_ToolCallTestBase):
 
 @_apply_marks_mm
 class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
-    """Smoke tool_call for each MULTIMODAL_TYPES variant with local fixtures."""
+    """Smoke tool_call for each MULTIMODAL_TYPES variant with local
+    fixtures."""
 
     def _weather_tool_call_for_media_type(self, media_type: str) -> dict:
         source = self._require_mm_media_source(media_type)
