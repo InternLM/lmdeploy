@@ -52,6 +52,29 @@ def _qwen35_dense_config_factory():
     return _factory
 
 
+def _intern_s2_preview_config_factory():
+    from transformers import PretrainedConfig
+
+    def _factory():
+        text_config = PretrainedConfig(torch_dtype='float16', tie_word_embeddings=False)
+        text_config.model_type = 'qwen3_5_moe_text'
+        text_config.layer_types = ['full_attention']
+        text_config.linear_key_head_dim = 8
+        text_config.linear_value_head_dim = 8
+        text_config.linear_num_key_heads = 2
+        text_config.linear_num_value_heads = 2
+        text_config.linear_conv_kernel_dim = 4
+        text_config.mtp_num_hidden_layers = 1
+
+        hf_config = PretrainedConfig(torch_dtype='float16', tie_word_embeddings=False)
+        hf_config.model_type = 'intern_s2_preview'
+        hf_config.architectures = ['InternS2PreviewForConditionalGeneration']
+        hf_config.text_config = text_config
+        return hf_config
+
+    return _factory
+
+
 def _plain_config_factory():
     from transformers import PretrainedConfig
 
@@ -65,6 +88,8 @@ def _plain_config_factory():
 
 
 def _patch_config_builder(monkeypatch, config_factory):
+    import lmdeploy.pytorch.config as pytorch_config
+    import lmdeploy.pytorch.configurations.qwen3_5 as qwen3_5_config
     from lmdeploy.pytorch import transformers as pytorch_transformers
     from lmdeploy.pytorch.configurations.default import DefaultModelConfigBuilder
 
@@ -85,6 +110,8 @@ def _patch_config_builder(monkeypatch, config_factory):
 
     monkeypatch.setattr(pytorch_transformers, 'config_from_pretrained', fake_config_from_pretrained)
     monkeypatch.setattr(DefaultModelConfigBuilder, 'build', classmethod(fake_build))
+    monkeypatch.setattr(pytorch_config, 'is_bf16_supported', lambda device_type='auto': True)
+    monkeypatch.setattr(qwen3_5_config, 'is_bf16_supported', lambda device_type='auto': True)
 
 
 def test_fp8_moe_only_scope_enabled_for_synthesized_qwen35_moe(monkeypatch):
@@ -140,6 +167,20 @@ def test_fp8_moe_only_scope_does_not_apply_to_dense_qwen35(monkeypatch):
     assert 'fp8_quant_scope' not in model_config.quant_config.hf_quant_config
 
 
+def test_fp8_moe_only_scope_applies_to_intern_s2_preview(monkeypatch):
+    from lmdeploy.pytorch import envs
+
+    monkeypatch.setattr(envs, 'fp8_moe_only', True)
+    _patch_config_builder(monkeypatch, _intern_s2_preview_config_factory())
+
+    model_config = ModelConfig.from_pretrained('fake-model', model_format='fp8')
+
+    assert model_config.quant_config.quant_method == 'fp8'
+    assert model_config.quant_config.fp8_quant_scope == 'moe_only'
+    assert model_config.quant_config.hf_quant_config['lmdeploy_patched']
+    assert model_config.quant_config.hf_quant_config['fp8_quant_scope'] == 'moe_only'
+
+
 def test_fp8_moe_only_scope_does_not_override_prequantized_config(monkeypatch):
     from lmdeploy.pytorch import envs
 
@@ -170,7 +211,9 @@ def test_quantization_config_fp8_moe_only_module_kinds():
     with pytest.raises(ValueError, match='Unsupported quant module kind'):
         quant_config.get_quant_method(module_kind='gate')
     with pytest.raises(ValueError, match='Unsupported fp8 quant scope'):
-        QuantizationConfig(quant_method='fp8', fp8_quant_scope='all').get_quant_method()
+        QuantizationConfig(quant_method='fp8', fp8_quant_scope='all')
+    with pytest.raises(ValueError, match='fp8_quant_scope is only supported for fp8 quantization'):
+        QuantizationConfig(quant_method='awq', fp8_quant_scope='moe_only')
 
 
 def test_fp8_moe_only_scope_survives_mtp_draft_config(monkeypatch):

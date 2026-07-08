@@ -672,6 +672,13 @@ class QuantizationConfig:
     fp8_quant_scope: str | None = None
     hf_quant_config: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self):
+        """Validate quantization scope."""
+        if self.fp8_quant_scope not in {None, 'moe_only'}:
+            raise ValueError(f'Unsupported fp8 quant scope: {self.fp8_quant_scope}')
+        if self.fp8_quant_scope is not None and self.quant_method != 'fp8':
+            raise ValueError('fp8_quant_scope is only supported for fp8 quantization.')
+
     @classmethod
     def from_config(cls, hf_config: Any):
         quant_config = getattr(hf_config, 'quantization_config', None)
@@ -743,11 +750,9 @@ class QuantizationConfig:
         """Get quant method for module."""
         if module_kind not in {'linear', 'moe', 'norm'}:
             raise ValueError(f'Unsupported quant module kind: {module_kind}')
-        if self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
+        if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
             return quant_method
-        if self.fp8_quant_scope not in {None, 'moe_only'}:
-            raise ValueError(f'Unsupported fp8 quant scope: {self.fp8_quant_scope}')
         if not prefix or not self.ignored_layers:
             quant_method = self.quant_method
             return quant_method
