@@ -598,17 +598,19 @@ void invokeMoeScanKernel(int*         f2n,
 }
 
 void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
-                      int*         f2E,            // [e*n] -> E
+                      int*         f2E,            // [e*n] -> local E
                       int*         en2f,           // [e,n] -> n*e
-                      int*         offsets,        // [E+1]
+                      int*         offsets,        // [local E+1]
                       float*       scales,         // [e,n]
                       void*        masks,          // [E,n]
-                      int*         accum,          // [E]
-                      const float* logits,         // [e,n]
+                      int*         accum,          // [E,tiles]
+                      const float* logits,         // [n,E]
                       int          tokens,         //  n
                       int          tokens_padded,  //  round_up(n, 4)
                       int          experts,        //  E
                       int          experts_per_token,
+                      int          local_expert_offset,
+                      int          local_expert_num,
                       bool         softmax,
                       bool         norm_topk,
                       float        routed_scale,
@@ -697,19 +699,19 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 
     {
         constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;
-        const dim3    blocks(tiles, experts + 1);
+        const dim3    blocks(tiles, local_expert_num + 1);
 
         MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(f2n,  //
                                                               f2E,
                                                               en2f,
                                                               offsets,
-                                                              (int8_t*)masks,
-                                                              accum,
+                                                              (int8_t*)masks + local_expert_offset * tokens_padded,
+                                                              accum + local_expert_offset * tiles,
                                                               log_tile,
                                                               tiles,
                                                               tokens,
                                                               tokens_padded,
-                                                              experts);
+                                                              local_expert_num);
     }
     TM_CUDA_CHECK(cudaGetLastError());
 }
@@ -1079,24 +1081,26 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
         dst += (int64_t)dim * ti;
 
         if (dst_scales) {
-            dst_scale = dst_scales[ti];
-            dst_scale = fdividef(1.f, 1.f + expf(-dst_scale));
+            const float scale = dst_scales[ti];
+            dst_scale *= fdividef(1.f, 1.f + expf(-scale));
         }
 
         // Should be warp uniforms
-        const T* src_[exp_k];
-        const T* bias_[exp_k];
+        const T* src_[exp_k]{};
+        const T* bias_[exp_k]{};
 
-        float scale[exp_k];
+        float scale[exp_k]{};
 
         PRAGMA_UNROLL
         for (int e = 0; e < exp_k; ++e) {
             int fid = __ldg(&en2f[e * tokens + ti]);
-            src_[e] = src + (int64_t)dim * fid;
-            if constexpr (has_bias) {
-                bias_[e] = bias + __ldg(&f2E[fid]) * (int64_t)dim;
+            if (fid >= 0) {
+                src_[e] = src + (int64_t)dim * fid;
+                if constexpr (has_bias) {
+                    bias_[e] = bias + __ldg(&f2E[fid]) * (int64_t)dim;
+                }
+                scale[e] = scales ? __ldg(&scales[e * tokens + ti]) : 1.f;
             }
-            scale[e] = scales ? __ldg(&scales[e * tokens + ti]) : 1.f;
         }
 
         using Vec = Array<T, vec_size>;
@@ -1111,6 +1115,9 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
             }
             PRAGMA_UNROLL
             for (int e = 0; e < exp_k; ++e) {
+                if (src_[e] == nullptr) {
+                    continue;
+                }
                 Vec v;
                 Load(v, src_[e] + i);
                 using namespace ops;

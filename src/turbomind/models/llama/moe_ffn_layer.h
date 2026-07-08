@@ -3,7 +3,6 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/context.h"
@@ -26,11 +25,6 @@ public:
         const MoeWeight* weights;
         float            scale;
         int              layer_id;
-
-        // EP allgather-reducescatter path only.
-        Tensor                     global_hidden_states;
-        const std::vector<size_t>* ep_elem_counts{};
-        Tensor                     shared_output;
     };
 
     void Forward(ForwardParam& p);

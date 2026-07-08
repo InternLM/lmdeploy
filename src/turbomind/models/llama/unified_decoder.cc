@@ -1,8 +1,7 @@
 
-#include <algorithm>
+
 #include <numeric>
 #include <optional>
-#include <utility>
 
 #include <cuda_runtime.h>
 
@@ -25,49 +24,6 @@
 // #include "dbg.h"
 
 namespace turbomind {
-
-struct FfnTokenPartition {
-    int                 first_token{};
-    int                 token_count{};
-    std::vector<size_t> tp_elem_counts;
-    std::vector<size_t> ep_elem_counts;
-
-    static FfnTokenPartition
-    Make(const std::vector<int>& local_token_nums, int dp_rank, int group_rank, int group_size, size_t hidden_units)
-    {
-        auto split_count = [group_size](int local_token_num, int rank) {
-            const int base      = local_token_num / group_size;
-            const int remainder = local_token_num % group_size;
-            return base + (rank < remainder ? 1 : 0);
-        };
-
-        auto first_token = [group_size](int local_token_num, int rank) {
-            const int base      = local_token_num / group_size;
-            const int remainder = local_token_num % group_size;
-            return rank * base + std::min(rank, remainder);
-        };
-
-        const int local_token_num = local_token_nums[dp_rank];
-
-        std::vector<size_t> tp_elem_counts(group_size);
-        for (int rank = 0; rank < group_size; ++rank) {
-            tp_elem_counts[rank] = static_cast<size_t>(split_count(local_token_num, rank)) * hidden_units;
-        }
-
-        std::vector<size_t> ep_elem_counts;
-        ep_elem_counts.reserve(local_token_nums.size() * group_size);
-        for (const int dp_token_num : local_token_nums) {
-            for (int rank = 0; rank < group_size; ++rank) {
-                ep_elem_counts.push_back(static_cast<size_t>(split_count(dp_token_num, rank)) * hidden_units);
-            }
-        }
-
-        return FfnTokenPartition{first_token(local_token_num, group_rank),
-                                 split_count(local_token_num, group_rank),
-                                 std::move(tp_elem_counts),
-                                 std::move(ep_elem_counts)};
-    }
-};
 
 void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
 {
@@ -201,85 +157,6 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
 }
 
-void UnifiedDecoder::ReduceScatterVResidualRMSnorm(Tensor&                  local_hidden_states,
-                                                   Tensor&                  local_residual,
-                                                   const Tensor&            bias,
-                                                   const Tensor&            weight,
-                                                   float                    eps,
-                                                   const FfnTokenPartition& partition)
-{
-    TM_CHECK(ep_size_ > 1);
-    TM_CHECK(d_comm_);
-    TM_CHECK_EQ(local_residual.shape(0), local_hidden_states.shape(0));
-    TM_CHECK_EQ(partition.tp_elem_counts.size(), static_cast<size_t>(d_comm_->n_ranks(attn_tp_group_)));
-    TM_CHECK_EQ(std::accumulate(partition.tp_elem_counts.begin(), partition.tp_elem_counts.end(), size_t{}),
-                static_cast<size_t>(local_hidden_states.size()));
-
-    const auto dtype  = local_hidden_states.dtype();
-    const auto stream = core::Context::stream().handle();
-
-    Tensor hidden_slice   = local_hidden_states.slice({partition.first_token, 0}, {partition.token_count, -1});
-    Tensor residual_slice = local_residual.slice({partition.first_token, 0}, {partition.token_count, -1});
-
-    d_comm_->ReduceScatterV(local_hidden_states.data_or((void*)nullptr),
-                            residual_slice.data_or((void*)nullptr),
-                            partition.tp_elem_counts,
-                            dtype,
-                            attn_tp_group_,
-                            stream);
-    TM_CUDA_CHECK(cudaGetLastError());
-
-    invokeResidualBiasRMSNorm(hidden_slice.data_or((void*)nullptr),
-                              residual_slice.data_or((void*)nullptr),
-                              weight.raw_data(),
-                              bias.data_or((void*)nullptr),
-                              dtype,
-                              hidden_units_,
-                              partition.token_count,
-                              eps,
-                              stream);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
-void UnifiedDecoder::ResidualRMSnormAllGatherV(Tensor&                  local_hidden_states,
-                                               Tensor&                  local_residual,
-                                               const Tensor&            weight,
-                                               float                    eps,
-                                               const FfnTokenPartition& partition)
-{
-    TM_CHECK(ep_size_ > 1);
-    TM_CHECK(d_comm_);
-    TM_CHECK_EQ(local_residual.shape(0), local_hidden_states.shape(0));
-    TM_CHECK_EQ(partition.tp_elem_counts.size(), static_cast<size_t>(d_comm_->n_ranks(attn_tp_group_)));
-    TM_CHECK_EQ(std::accumulate(partition.tp_elem_counts.begin(), partition.tp_elem_counts.end(), size_t{}),
-                static_cast<size_t>(local_hidden_states.size()));
-
-    const auto dtype  = local_hidden_states.dtype();
-    const auto stream = core::Context::stream().handle();
-
-    Tensor hidden_slice   = local_hidden_states.slice({partition.first_token, 0}, {partition.token_count, -1});
-    Tensor residual_slice = local_residual.slice({partition.first_token, 0}, {partition.token_count, -1});
-
-    invokeResidualBiasRMSNorm(hidden_slice.data_or((void*)nullptr),
-                              residual_slice.data_or((void*)nullptr),
-                              weight.raw_data(),
-                              nullptr,
-                              dtype,
-                              hidden_units_,
-                              partition.token_count,
-                              eps,
-                              stream);
-    TM_CUDA_CHECK(cudaGetLastError());
-
-    d_comm_->AllGatherV(hidden_slice.data_or((void*)nullptr),
-                        local_hidden_states.data_or((void*)nullptr),
-                        partition.tp_elem_counts,
-                        dtype,
-                        attn_tp_group_,
-                        stream);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
 void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<WeightType*>& weights)
 {
     TM_FUNCTION_SCOPE();
@@ -334,14 +211,6 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
     }
     else {
         local_hidden_states = global_hidden_states;
-    }
-
-    std::optional<FfnTokenPartition> ffn_partition;
-    if (ep_size_ > 1) {
-        const int group_size = d_comm_->n_ranks(attn_tp_group_);
-        const int group_rank = d_comm_->rank(attn_tp_group_);
-        ffn_partition.emplace(
-            FfnTokenPartition::Make(local_token_nums, attn_dp_rank_, group_rank, group_size, hidden_units_));
     }
 
     TM_LOG_DEBUG("local_token_num=%d, global_token_num=%d", (int)local_token_num, (int)global_token_num);
@@ -401,30 +270,15 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             out_bias = weights.at(layer)->attention->wo->bias;
         }
 
-        Tensor ffn_hidden_states;
-
-        if (ep_size_ > 1) {
-            ReduceScatterVResidualRMSnorm(local_hidden_states,
-                                          local_residual,
-                                          out_bias,
-                                          weights.at(layer)->ffn_norm->weight,
-                                          weights.at(layer)->ffn_norm->norm_eps_,
-                                          *ffn_partition);
-            ffn_hidden_states =
-                local_hidden_states.slice({ffn_partition->first_token, 0}, {ffn_partition->token_count, -1});
-        }
-        else {
-            AllreduceResidualRMSnorm(global_hidden_states,
-                                     local_residual,
-                                     out_bias,
-                                     weights.at(layer)->ffn_norm->weight,
-                                     weights.at(layer)->ffn_norm->norm_eps_,
-                                     local_token_num,
-                                     attn_tp_group_,
-                                     0,
-                                     local_token_nums.data());
-            ffn_hidden_states = global_hidden_states;
-        }
+        AllreduceResidualRMSnorm(global_hidden_states,
+                                 local_residual,
+                                 out_bias,
+                                 weights.at(layer)->ffn_norm->weight,
+                                 weights.at(layer)->ffn_norm->norm_eps_,
+                                 local_token_num,
+                                 attn_tp_group_,
+                                 0,
+                                 local_token_nums.data());
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual0", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm1", layer), 2);
@@ -435,52 +289,38 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         std::optional<MoeFfnLayer::ForwardParam> moe_fwd_param;
 
         if (weights.at(layer)->moe_ffn) {
-            moe_fwd_param = MoeFfnLayer::ForwardParam{ffn_hidden_states,
-                                                      ffn_hidden_states,
+            moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
+                                                      global_hidden_states,
                                                       weights.at(layer)->moe_ffn.get(),
                                                       ffn_layer_ ? 1.f : 0.f,
-                                                      layer,
-                                                      ep_size_ > 1 ? global_hidden_states : Tensor{},
-                                                      ep_size_ > 1 ? &ffn_partition->ep_elem_counts : nullptr};
+                                                      layer};
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
-        if (ffn_layer_ && weights.at(layer)->feed_forward && ffn_hidden_states.shape(0) > 0) {
-            auto ffn_output = ffn_hidden_states;
-            if (ep_size_ > 1) {
-                ffn_output = moe_fwd_param->shared_output = core::empty_like(ffn_hidden_states);
-            }
-            ffn_layer_->forward({ffn_hidden_states, ffn_output, weights.at(layer)->feed_forward.get(), (int)layer});
+        if (ffn_layer_ && weights.at(layer)->feed_forward) {
+            ffn_layer_->forward(
+                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward.get(), (int)layer});
         }
 
         if (moe_fwd_param) {
             moe_ffn_layer_->Combine(*moe_fwd_param);
         }
 
-        TM_DEBUG_TENSOR(ffn_hidden_states, Concat("ffn_block", layer), 2);
+        TM_DEBUG_TENSOR(global_hidden_states, Concat("ffn_block", layer), 2);
 
         const bool last = layer == layer_num_ - 1;
 
         auto& scale_weight = !last ? weights.at(layer + 1)->attention_norm->weight : args.at("output_norm_weight");
 
-        if (ep_size_ > 1) {
-            ResidualRMSnormAllGatherV(local_hidden_states,
-                                      local_residual,
-                                      scale_weight,
-                                      weights.at(layer)->ffn_norm->norm_eps_,
-                                      *ffn_partition);
-        }
-        else {
-            AllreduceResidualRMSnorm(global_hidden_states,
-                                     local_residual,
-                                     {},
-                                     scale_weight,
-                                     weights.at(layer)->ffn_norm->norm_eps_,
-                                     local_token_num,
-                                     0,
-                                     attn_tp_group_,
-                                     local_token_nums.data());
-        }
+        AllreduceResidualRMSnorm(global_hidden_states,
+                                 local_residual,
+                                 {},
+                                 scale_weight,
+                                 weights.at(layer)->ffn_norm->norm_eps_,
+                                 local_token_num,
+                                 0,
+                                 attn_tp_group_,
+                                 local_token_nums.data());
         TM_CUDA_CHECK(cudaGetLastError());
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual1", layer), 2);

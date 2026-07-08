@@ -12,7 +12,6 @@ namespace turbomind {
 
 class ModelWeight;
 class DecoderLayerWeight;
-struct FfnTokenPartition;
 
 class UnifiedDecoder {
 public:
@@ -56,19 +55,6 @@ private:
                                   int           t0,
                                   int           t1,
                                   const int*    local_token_nums);
-
-    void ReduceScatterVResidualRMSnorm(Tensor&                  local_hidden_states,
-                                       Tensor&                  local_residual,
-                                       const Tensor&            bias,
-                                       const Tensor&            weight,
-                                       float                    eps,
-                                       const FfnTokenPartition& partition);
-
-    void ResidualRMSnormAllGatherV(Tensor&                  local_hidden_states,
-                                   Tensor&                  local_residual,
-                                   const Tensor&            weight,
-                                   float                    eps,
-                                   const FfnTokenPartition& partition);
 };
 
 }  // namespace turbomind

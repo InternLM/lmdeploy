@@ -102,7 +102,7 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_dp_size = 1
         cfg.mlp_tp_size = comm_size // cfg.ep if cfg.ep > 1 else overlap * inner_tp_size
     if cfg.ep > 1:
-        assert cfg.communicator == 'nccl', f'{cfg.communicator} communicator does not support ep > 1'
+        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
         assert cfg.mlp_tp_size == 1, 'Only support mlp_tp_size == 1 when ep > 1'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
