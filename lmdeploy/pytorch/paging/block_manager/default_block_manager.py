@@ -25,7 +25,10 @@ class DefaultBlockManager(BaseBlockManager):
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
         """Get num required blocks."""
-        num_tokens = obj.num_all_ids + prealloc_size
+        num_tokens = obj.num_all_ids
+        if obj.kv_token_limit is not None:
+            num_tokens = min(num_tokens, obj.kv_token_limit)
+        num_tokens += prealloc_size
 
         num_all_blocks = _div_up(num_tokens, obj.block_size)
         return max(0, num_all_blocks - len(obj.logical_blocks))

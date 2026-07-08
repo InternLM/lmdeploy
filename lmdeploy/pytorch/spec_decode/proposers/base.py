@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 from typing import Any
 
 import torch
@@ -13,6 +15,7 @@ from ...model_inputs import ModelInputs, step_ctx_manager
 from ...models.patch import build_patched_model, update_custom_module_map
 from ...strategies.base.model_agent import ExtraInputs
 from ...weight_loader.model_weight_loader import load_model_weights
+from ..guided_spec_helper import GuidedSpecHelper
 
 SPEC_PROPOSERS = Registry('spec_proposers')
 
@@ -64,6 +67,8 @@ class BaseSpecProposer:
         self.lm_head = None
         self.num_speculative_tokens = specdecode_config.num_speculative_tokens
         self.target_model = None
+        # Set by SpecModelAgent after construction
+        self.guided_helper = GuidedSpecHelper()
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         if self.specdecode_config is None:
@@ -85,10 +90,11 @@ class BaseSpecProposer:
         self.model = patched_model
         self.target_model = target_model
 
-    def get_outputs(self,
+    async def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
-                    extra_inputs: ExtraInputs = None):
+                    extra_inputs: ExtraInputs = None,
+                    guided_processors: dict | None = None):
         """Get outputs."""
         raise NotImplementedError()
 

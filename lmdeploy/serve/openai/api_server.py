@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from lmdeploy.serve.parsers import ResponseParser
 
+import shortuuid
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -78,6 +79,8 @@ from lmdeploy.serve.openai.protocol import (
     ModelPermission,
     PoolingRequest,
     PoolingResponse,
+    PPLRequest,
+    PPLResponse,
     TopLogprob,
     UpdateParamsRequest,
     UpdateWeightsFromDistributedRequest,
@@ -273,6 +276,8 @@ async def health() -> JSONResponse:
                     message='Engine health monitor is not initialized.')
         return JSONResponse(jsonable_encoder(data), status_code=HTTPStatus.SERVICE_UNAVAILABLE)
     data = monitor.snapshot()
+    if data['status'] == 'unhealthy':
+        data = await monitor.refresh_snapshot()
     status_code = HTTPStatus.OK if data['status'] in ('healthy', 'sleeping') else HTTPStatus.SERVICE_UNAVAILABLE
     return JSONResponse(jsonable_encoder(data), status_code=status_code)
 
@@ -449,7 +454,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
-    request_id = str(session.session_id)
+    request_id = f'chatcmpl-{shortuuid.random()}'
     created_time = int(time.time())
 
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
@@ -1199,6 +1204,38 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     return response.model_dump()
 
 
+@router.post('/get_ppl', dependencies=[Depends(validate_json_request)])
+async def get_ppl(request: PPLRequest, raw_request: Request = None):
+    """Get the perplexity (mean cross-entropy loss) of the input prompt.
+
+    The request should be a JSON object with the following fields:
+
+    - **input** (str | list[int]): the input to score, either raw text or token
+      ids. Text is tokenized with ``tokenizer.encode`` (no chat template is
+      applied).
+    """
+    async_engine = VariableInterface.async_engine
+
+    request_input = request.input
+
+    # pydantic already validated `input` as `str | list[int]`; text ->
+    # tokenizer.encode, otherwise the token ids are used as-is
+    if isinstance(request_input, str):
+        input_ids = async_engine.tokenizer.encode(request_input)
+    else:
+        input_ids = request_input
+    if not input_ids:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must not be empty.')
+
+    try:
+        ppl = await async_engine.async_get_ppl(input_ids)
+    except ValueError as e:
+        return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
+
+    response = PPLResponse(ppl=ppl)
+    return response.model_dump()
+
+
 @router.post('/update_weights', dependencies=[Depends(validate_json_request)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
@@ -1524,11 +1561,10 @@ def serve(model_path: str,
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
         model_name (str): the name of the served model. It can be accessed
             by the RESTful API `/v1/models`. If it is not specified,
@@ -1571,6 +1607,8 @@ def serve(model_path: str,
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     VariableInterface.enable_abort_handling = enable_abort_handling
+    from lmdeploy.serve.parsers import validate_parser_names
+    reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:

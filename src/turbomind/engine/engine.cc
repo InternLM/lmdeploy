@@ -324,10 +324,10 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
                     r->ec = Request::kInconsistency;
                 }
                 else if (r->gen_cfg.output_logits == GenerationConfig::kAll
-                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
+                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll || r->gen_cfg.return_ppl) {
                     // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
                     TM_LOG_ERROR("Skip inconsistent {} request for ID {}. It cannot output logits or "
-                                 "last_hidden_states for all tokens",
+                                 "last_hidden_states for all tokens or ppl",
                                  type,
                                  r->id);
                     r->ec = Request::kInconsistency;

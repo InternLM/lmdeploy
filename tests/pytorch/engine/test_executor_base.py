@@ -112,7 +112,7 @@ def test_sync_spec_cache_block_size_updates_kernel_block_size():
     assert spec_cache_config.kernel_block_size == 16
 
 
-def test_executor_disables_prefix_cache_with_spec_decode():
+def test_executor_keeps_prefix_cache_with_spec_decode():
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                num_cpu_blocks=0,
@@ -128,7 +128,7 @@ def test_executor_disables_prefix_cache_with_spec_decode():
                  misc_config=SimpleNamespace(),
                  specdecode_config=SimpleNamespace())
 
-    assert not cache_config.enable_prefix_caching
+    assert cache_config.enable_prefix_caching
 
 
 def test_executor_disables_prefix_cache_with_pd_role():
@@ -219,7 +219,7 @@ def test_get_state_cache_mem_uses_prefix_cache_state_budget():
 
     mem = executor._get_state_cache_mem()
 
-    expected_num_state_caches = 4 + 1 + 3
+    expected_num_state_caches = 4 + 2 + 3
     expected_mem = StateCacheEngine.get_cache_state_size(state_shapes) * expected_num_state_caches
     assert executor.cache_config.num_state_caches == expected_num_state_caches
     assert mem == expected_mem
@@ -238,7 +238,7 @@ def test_get_state_cache_mem_keeps_ssm_prefix_cache_enabled_without_extra_budget
 
     executor._get_state_cache_mem()
 
-    assert executor.cache_config.num_state_caches == 4 + 1
+    assert executor.cache_config.num_state_caches == 4 + 2
     assert executor.cache_config.enable_prefix_caching
 
 
@@ -255,7 +255,7 @@ def test_get_state_cache_mem_keeps_budgeted_ssm_prefix_cache_enabled():
 
     executor._get_state_cache_mem()
 
-    assert executor.cache_config.num_state_caches == 4 + 1 + 2
+    assert executor.cache_config.num_state_caches == 4 + 2 + 2
     assert executor.cache_config.enable_prefix_caching
 
 
