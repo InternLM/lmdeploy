@@ -348,8 +348,8 @@ ______________________________________________________________________
 
 ## Time Series
 
-> **Note:** Time series understanding is supported for **InternS1-Pro** and **InternS2** models. Time series
-> forecasting is supported for **InternS2** models with a time-series forecaster only.
+> **Note:** Time series understanding is supported for **InternS1-Pro** and **Intern-S2-Preview** models. Time series
+> forecasting is supported for **Intern-S2-Preview** models with a time-series forecaster only.
 
 The `time_series_url` content item requires a URL. Include `sampling_rate` in Hz when it is known.
 
@@ -391,7 +391,7 @@ print(response.choices[0].message.content)
 </details>
 
 <details>
-<summary>InternS2 time series forecast example</summary>
+<summary>Intern-S2-Preview time series forecast example</summary>
 
 ```python
 from openai import OpenAI
@@ -408,7 +408,7 @@ response = client.chat.completions.create(
                 'type': 'time_series_url',
                 'time_series_url': {
                     'url': 'file:///path/to/history.npy',
-                    # Optional when the InternS2 processor can infer a default.
+                    # Optional when the Intern-S2-Preview processor can infer a default.
                     'sampling_rate': 100,
                 },
             },
@@ -421,9 +421,9 @@ response = client.chat.completions.create(
     temperature=0.0,
     max_completion_tokens=32,
     extra_body={
-        # InternS2 forecast checkpoints route supported TS requests to forecast output.
+        # Intern-S2-Preview forecast checkpoints route supported TS requests to forecast output.
         'enable_forecasting': True,
-        # Optional override. If omitted, InternS2 predicts the horizon when supported.
+        # Optional output-length override. Horizon prediction still runs when supported.
         'forecast_horizon': 48,
     },
 )
@@ -437,15 +437,17 @@ print('quantile_forecast:', forecast['quantile_forecast'])
 
 The forecast payload contains:
 
-- `predicted_horizon`: the horizon predicted by InternS2. If `forecast_horizon` is set, the returned arrays use the
-  requested horizon.
+- `predicted_horizon`: the horizon predicted by Intern-S2-Preview. It is computed when the checkpoint has a horizon head,
+  including when `forecast_horizon` is set.
+- `forecast_horizon`: optional request field that overrides the forecast array length only. It does not suppress horizon
+  prediction.
 - `point_forecast`: the point forecast array.
 - `quantile_forecast`: quantile forecasts in `[median, 0.1, 0.2, ..., 0.9]` order.
 
 </details>
 
 <details>
-<summary>InternS2 streaming forecast example</summary>
+<summary>Intern-S2-Preview streaming forecast example</summary>
 
 ```python
 from openai import OpenAI

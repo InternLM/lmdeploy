@@ -348,8 +348,8 @@ ______________________________________________________________________
 
 ## 时序数据
 
-> **注意：** 时序理解目前支持 **InternS1-Pro** 和 **InternS2** 模型。时序预测仅支持带有时序预测器的
-> **InternS2** 模型。
+> **注意：** 时序理解目前支持 **InternS1-Pro** 和 **Intern-S2-Preview** 模型。时序预测仅支持带有时序预测器的
+> **Intern-S2-Preview** 模型。
 
 `time_series_url` 内容项需要提供 URL。已知采样率时，可以通过 `sampling_rate` 字段传入，单位为 Hz。
 
@@ -390,7 +390,7 @@ print(response.choices[0].message.content)
 </details>
 
 <details>
-<summary>InternS2 时序预测示例</summary>
+<summary>Intern-S2-Preview 时序预测示例</summary>
 
 ```python
 from openai import OpenAI
@@ -407,7 +407,7 @@ response = client.chat.completions.create(
                 'type': 'time_series_url',
                 'time_series_url': {
                     'url': 'file:///path/to/history.npy',
-                    # 当 InternS2 processor 可以推断默认值时，该字段可选。
+                    # 当 Intern-S2-Preview processor 可以推断默认值时，该字段可选。
                     'sampling_rate': 100,
                 },
             },
@@ -420,9 +420,9 @@ response = client.chat.completions.create(
     temperature=0.0,
     max_completion_tokens=32,
     extra_body={
-        # InternS2 预测 checkpoint 会将支持的时序请求路由到预测输出。
+        # Intern-S2-Preview 预测 checkpoint 会将支持的时序请求路由到预测输出。
         'enable_forecasting': True,
-        # 可选覆盖项。如果省略，InternS2 会在支持时预测 horizon。
+        # 可选输出长度覆盖项。支持时仍会执行 horizon 预测。
         'forecast_horizon': 48,
     },
 )
@@ -436,15 +436,16 @@ print('quantile_forecast:', forecast['quantile_forecast'])
 
 预测结果包含：
 
-- `predicted_horizon`: InternS2 预测出的 horizon。如果设置了 `forecast_horizon`，返回数组会使用请求中的
-  horizon。
+- `predicted_horizon`: Intern-S2-Preview 预测出的 horizon。当 checkpoint 带有 horizon head 时会计算该字段，
+  即使请求中设置了 `forecast_horizon`。
+- `forecast_horizon`: 可选请求字段，仅用于覆盖预测数组长度。它不会抑制 horizon 预测。
 - `point_forecast`: 点预测数组。
 - `quantile_forecast`: 分位数预测，顺序为 `[median, 0.1, 0.2, ..., 0.9]`。
 
 </details>
 
 <details>
-<summary>InternS2 流式预测示例</summary>
+<summary>Intern-S2-Preview 流式预测示例</summary>
 
 ```python
 from openai import OpenAI

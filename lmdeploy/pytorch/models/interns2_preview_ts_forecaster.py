@@ -1577,8 +1577,9 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
             llm_embedding_mask / ts_encoder_embedding_mask: optional (B, T) bool masks
                 (True = valid). Default: all valid.
             override_horizon: optional forecast horizon. An int applies to every
-                sample; a sequence gives one horizon per sample. When omitted, the
-                horizon head predicts it if enabled, otherwise default_pred_len is used.
+                sample; a sequence gives one horizon per sample. This overrides
+                output length only; the horizon head still predicts and returns
+                ``predicted_horizon`` when enabled.
         Returns:
             :class:`TSForecasterOutput` with per-sample ``point_forecast`` /
             ``quantile_forecast`` lists and the predicted horizon.
