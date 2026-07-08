@@ -212,7 +212,9 @@ def pytest_collection_modifyitems(config, items):
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
             continue
-        model_case = callspec.params['model_case']
+        model_case = callspec.params.get('model_case')
+        if model_case is None:
+            continue
         if _llama31_parallel_skip_target(item):
             if model_case and llama31_single_tool_only(model_case):
                 item.add_marker(pytest.mark.skip(reason=LLAMA31_SKIP_PARALLEL_REASON))
