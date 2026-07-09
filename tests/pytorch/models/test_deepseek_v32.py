@@ -122,16 +122,6 @@ def test_full_indexer_layer_writes_shared_topk_buffer(monkeypatch):
     assert seen['nsa_indices'].data_ptr() == topk_buffer.indices[:2].data_ptr()
 
 
-def test_dsa_topk_buffer_compacts_selected_rows():
-    topk_buffer = DSATopKIndicesBuffer(topk=3)
-    rows = torch.tensor([[0, 1, 2], [10, 11, 12], [20, 21, 22], [30, 31, 32]], dtype=torch.int32)
-    topk_buffer.write(rows)
-
-    topk_buffer.compact(torch.tensor([2, 0]))
-
-    assert torch.equal(topk_buffer.indices[:2], rows[[2, 0]])
-
-
 def test_shared_indexer_layer_reuses_shared_topk_buffer(monkeypatch):
     attn = DeepseekV32Attention.__new__(DeepseekV32Attention)
     nn.Module.__init__(attn)

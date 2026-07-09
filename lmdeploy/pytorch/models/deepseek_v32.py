@@ -67,10 +67,6 @@ class DSATopKIndicesBuffer(nn.Module):
         if ctx_mgr is None:
             return capacity
 
-        build_ctx = getattr(ctx_mgr, 'build_ctx', None)
-        if build_ctx is not None and build_ctx.max_batch_size > 0:
-            capacity = max(capacity, build_ctx.max_batch_size * (1 + build_ctx.num_spec_tokens))
-
         context = ctx_mgr.current_context()
         cache_config = getattr(context, 'cache_config', None)
         max_prefill_token_num = getattr(cache_config, 'max_prefill_token_num', None)
@@ -89,8 +85,6 @@ class DSATopKIndicesBuffer(nn.Module):
     def write(self, topk_indices: torch.Tensor) -> torch.Tensor:
         """Copy freshly computed top-k indices into the shared buffer."""
         buffer = self.ensure(topk_indices.size(0), topk_indices.device)
-        if topk_indices.dtype != torch.int32:
-            topk_indices = topk_indices.to(torch.int32)
         buffer.copy_(topk_indices)
         return buffer
 
@@ -99,16 +93,6 @@ class DSATopKIndicesBuffer(nn.Module):
         if self.indices is None or self.indices.size(0) < num_tokens or self.indices.device != device:
             raise RuntimeError('DSA top-k indices are reused before the shared buffer is populated.')
         return self.indices[:num_tokens]
-
-    def compact(self, row_indices: torch.Tensor):
-        """Move selected top-k rows to the front for the next decode-style
-        reuse step."""
-        if self.indices is None:
-            raise RuntimeError('DSA top-k indices are compacted before the shared buffer is populated.')
-        row_indices = row_indices.to(device=self.indices.device, dtype=torch.long)
-        num_rows = row_indices.numel()
-        self.indices[:num_rows].copy_(self.indices.index_select(0, row_indices))
-
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
@@ -640,7 +624,7 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         """Load attention weights."""
         if '.self_attn.indexer.' in name and name not in params_dict:
             layer_idx = get_layer_idx_from_weight_name(name)
-            # Shared DSA layers reuse previous top-k indices and have no local indexer.
+            # Shared DSA layers reuse cached top-k indices and have no local indexer.
             if get_layer_indexer_type(self.config, layer_idx) == 'shared':
                 return
         return super()._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
