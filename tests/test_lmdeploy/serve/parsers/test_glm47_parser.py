@@ -10,6 +10,7 @@ from lmdeploy.serve.parsers.tool_parser import Glm47ToolParser, ToolParserManage
 from .helpers import first_stream_delta
 
 MODEL_ID = 'zai-org/GLM-4.7'
+GLM52_MODEL_ID = 'zai-org/GLM-5.2-FP8'
 
 
 @pytest.fixture()
@@ -51,6 +52,43 @@ REFERENCE_CHUNKS = [
     ('<arg_value>Beijing</arg_value>', True, None, True, None, '{"location": "Beijing"', None),
     ('</tool_call>', True, None, True, None, '}', None),
 ]
+
+
+def _make_response_parser_with_reasoning(chat_template_kwargs=None):
+    cls = ResponseParserManager.get('default')
+    cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+    cls.tool_parser_cls = ToolParserManager.get('glm47')
+    request = ChatCompletionRequest(
+        model=GLM52_MODEL_ID,
+        messages=[],
+        stream=True,
+        tool_choice='auto',
+        chat_template_kwargs=chat_template_kwargs or {},
+    )
+    return cls(request=request)
+
+
+def _collect_stream(parser, chunks):
+    reasoning_seen = []
+    content_seen = []
+    emitted_name = None
+    emitted_args = ''
+
+    for chunk in chunks:
+        for delta, tool_emitted in parser.stream_chunk(delta_text=chunk, delta_token_ids=[]):
+            if delta is not None:
+                if delta.reasoning_content:
+                    reasoning_seen.append(delta.reasoning_content)
+                if delta.content:
+                    content_seen.append(delta.content)
+            if tool_emitted and delta and delta.tool_calls:
+                for call in delta.tool_calls:
+                    if call.function and call.function.name:
+                        emitted_name = call.function.name
+                    if call.function and call.function.arguments:
+                        emitted_args += call.function.arguments
+
+    return ''.join(reasoning_seen), ''.join(content_seen), emitted_name, emitted_args
 
 
 class TestGlm47ResponseParserStreaming:
@@ -151,6 +189,60 @@ class TestGlm47ResponseParserStreaming:
         assert emitted_name == 'get_weather'
         assert emitted_args == '{"location": "Beijing"}'
 
+    def test_stream_chunk_tool_start_ends_reasoning_without_close_tag(self):
+        parser = _make_response_parser_with_reasoning()
+        chunks = [
+            '<think>',
+            'first reason',
+            '<tool_call>get_weather',
+            '<arg_key>location</arg_key><arg_value>Beijing</arg_value>',
+            '</tool_call>',
+        ]
+
+        reasoning_seen, content_seen, emitted_name, emitted_args = _collect_stream(parser, chunks)
+
+        assert reasoning_seen == 'first reason'
+        assert content_seen == ''
+        assert emitted_name == 'get_weather'
+        assert emitted_args == '{"location": "Beijing"}'
+        assert parser.validate_complete() is True
+
+    def test_stream_chunk_split_tool_start_ends_reasoning_without_close_tag(self):
+        parser = _make_response_parser_with_reasoning()
+        chunks = [
+            '<think>first reason<to',
+            'ol_call>get_weather<arg_key>location</arg_key>',
+            '<arg_value>Beijing</arg_value></tool_call>',
+        ]
+
+        reasoning_seen, content_seen, emitted_name, emitted_args = _collect_stream(parser, chunks)
+
+        assert reasoning_seen == 'first reason'
+        assert content_seen == ''
+        assert emitted_name == 'get_weather'
+        assert emitted_args == '{"location": "Beijing"}'
+        assert parser.validate_complete() is True
+
+    def test_stream_chunk_reasoning_effort_high_starts_in_reasoning_mode(self):
+        parser = _make_response_parser_with_reasoning({'reasoning_effort': 'high'})
+
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk(delta_text='first reason', delta_token_ids=[]))
+
+        assert tool_emitted is False
+        assert delta is not None
+        assert delta.reasoning_content == 'first reason'
+        assert delta.content is None
+
+    def test_stream_chunk_enable_thinking_false_starts_in_plain_mode(self):
+        parser = _make_response_parser_with_reasoning({'enable_thinking': False})
+
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk(delta_text='plain answer', delta_token_ids=[]))
+
+        assert tool_emitted is False
+        assert delta is not None
+        assert delta.content == 'plain answer'
+        assert delta.reasoning_content is None
+
     def test_stream_chunk_keeps_string_without_schema(self, response_parser):
         chunks = [
             '<tool_call>',
@@ -176,6 +268,25 @@ class TestGlm47ResponseParserStreaming:
 
 class TestGlm47ToolParserComplete:
     """Complete-parse tests for glm47 tool payloads."""
+
+    def test_parse_complete_tool_start_ends_reasoning_without_close_tag(self):
+        parser = _make_response_parser_with_reasoning()
+        text = (
+            '<think>first reason'
+            '<tool_call>get_weather'
+            '<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
+            '</tool_call>'
+        )
+
+        content, tool_calls, reasoning = parser.parse_complete(text)
+
+        assert content is None
+        assert reasoning == 'first reason'
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == 'get_weather'
+        assert json.loads(tool_calls[0].function.arguments) == {'location': 'Beijing'}
+        assert parser.validate_complete(text) is True
 
     def test_parse_tool_call_complete_with_arguments(self):
         parser = Glm47ToolParser()

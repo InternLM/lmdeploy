@@ -488,8 +488,8 @@ class BaseResponseParser(ResponseParser):
         - Drops the explicit open tag if model emits it.
         - If no close tag is present, emits only the safe reasoning-text prefix and
           preserves possible partial-tag suffix for the next chunk.
-        - If a close tag is found, emits text before the close tag as reasoning content,
-          consumes the close tag, and switches mode to ``MODE_PLAIN``.
+        - If a close tag or tool-open tag is found, emits text before it as
+          reasoning content and switches to the next protocol mode.
 
         Returns:
             ``(emitted_text, progressed)`` where ``emitted_text`` is the reasoning
@@ -507,19 +507,40 @@ class BaseResponseParser(ResponseParser):
         if not close_tag:
             raise RuntimeError('Invariant violated: MODE_REASONING requires a reasoning_close_tag.')
 
-        idx = self._pending.find(close_tag)
-        # No close tag found, treat the whole pending text as reasoning content.
+        # GLM-style outputs may start a tool call directly from reasoning.
+        tool_tag = self.profile.tool_open_tag if self.tool_parser is not None else None
+        boundary_tags = [tag for tag in (close_tag, tool_tag) if tag]
+
+        idx = -1
+        matched_tag = ''
+        for tag in boundary_tags:
+            tag_idx = self._pending.find(tag)
+            if tag_idx >= 0 and (idx < 0 or tag_idx < idx):
+                idx = tag_idx
+                matched_tag = tag
+
         if idx < 0:
             if not self._pending:
                 return None, False
+            keep = self._longest_open_tag_prefix_suffix(self._pending, boundary_tags)
+            if keep > 0:
+                if keep >= len(self._pending):
+                    return None, False
+                out = self._pending[:-keep]
+                self._pending = self._pending[-keep:]
+                return (out if out else None), bool(out)
             out = self._pending
             self._pending = ''
             return out, True
 
         reasoning_chunk = self._pending[:idx]
-        self._pending = self._pending[idx + len(close_tag):]
-        # reasoning part is done, switch to plain mode
-        self._mode = self.MODE_PLAIN
+        self._pending = self._pending[idx + len(matched_tag):]
+        if matched_tag == close_tag:
+            self._mode = self.MODE_PLAIN
+        else:
+            self._mode = self.MODE_TOOL
+            if self.tool_parser is not None:
+                self.tool_parser.start_tool_call()
         return (reasoning_chunk if reasoning_chunk else None), True
 
     def _consume_tool(self) -> tuple[list[DeltaToolCall], bool]:
@@ -630,21 +651,27 @@ class BaseResponseParser(ResponseParser):
                     pos += len(open_tag)
                     continue
                 close_tag = self.profile.reasoning_close_tag
-                close_idx = text.find(close_tag, pos) if close_tag else -1
-                if close_idx < 0:
+                # Match streaming: tool-open can implicitly end reasoning.
+                tool_tag = self.profile.tool_open_tag if self.tool_parser is not None else None
+                boundary_tags = [tag for tag in (close_tag, tool_tag) if tag]
+                boundary_idx, boundary_tag = self._find_first(text, boundary_tags, pos)
+                if boundary_idx < 0:
                     piece = text[pos:]
                     if self.enable_thinking is False:
                         content_parts.append(piece)
                     else:
                         reasoning_parts.append(piece)
                     break
-                piece = text[pos:close_idx]
+                piece = text[pos:boundary_idx]
                 if piece:
                     if self.enable_thinking is False:
                         content_parts.append(piece)
                     else:
                         reasoning_parts.append(piece)
-                pos = close_idx + len(close_tag)
+                if boundary_tag == close_tag:
+                    pos = boundary_idx + len(close_tag)
+                else:
+                    pos = boundary_idx
                 mode = self.MODE_PLAIN
                 continue
 
@@ -697,7 +724,11 @@ class BaseResponseParser(ResponseParser):
             close_tag = self.profile.reasoning_close_tag
             close_idx = text.find(close_tag) if close_tag else -1
             if close_idx < 0:
-                return False
+                # A valid tool block can also close implicit reasoning.
+                tool_tag = self.profile.tool_open_tag if self.tool_parser is not None else None
+                tool_idx = text.find(tool_tag) if tool_tag else -1
+                if tool_idx < 0:
+                    return False
 
         if self.tool_parser is None or self.request.tool_choice == 'none':
             return True
