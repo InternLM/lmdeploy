@@ -33,17 +33,6 @@ void invokeMoeGate_V2(int*         f2n,
                       float        routed_scale,
                       cudaStream_t st);
 
-void invokeMoeScanKernel(int*         f2n,
-                         int*         f2E,
-                         int*         en2f,
-                         int*         offsets,
-                         int8_t*      masks,
-                         const int*   accum,
-                         int          tokens,
-                         int          tokens_padded,
-                         int          experts,
-                         cudaStream_t st);
-
 // num_worst_tokens is the output capacity / launch upper bound for f2n/out.
 // If num_valid_tokens is set, it points to a device-side count of valid rows and
 // rows >= *num_valid_tokens return before reading f2n.

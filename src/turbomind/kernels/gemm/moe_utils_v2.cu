@@ -571,32 +571,6 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 template<int N>
 inline constexpr std::integral_constant<int, N> _Int{};
 
-void invokeMoeScanKernel(int*         f2n,
-                         int*         f2E,
-                         int*         en2f,
-                         int*         offsets,
-                         int8_t*      masks,
-                         const int*   accum,
-                         int          tokens,
-                         int          tokens_padded,
-                         int          experts,
-                         cudaStream_t st)
-{
-    constexpr int base_log_tile = 9;
-    int           log_tile      = base_log_tile;
-    while (((tokens_padded + (1 << log_tile) - 1) >> log_tile) > kMoeGateMaxTiles) {
-        ++log_tile;
-    }
-    const int tiles = ceil_div(tokens_padded, 1 << log_tile);
-
-    constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;
-    const dim3    blocks(tiles, experts + 1);
-
-    MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(
-        f2n, f2E, en2f, offsets, masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
 void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                       int*         f2E,            // [e*n] -> local E
                       int*         en2f,           // [e,n] -> n*e
