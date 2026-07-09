@@ -282,7 +282,6 @@ class TurbomindEngineConfig:
     dp: int = 1
     cp: int = 1
     ep: int = 1
-    all2all_backend: str = 'allgather_reducescatter'
     device_num: int = None
     attn_tp_size: int = None
     attn_cp_size: int = None

@@ -31,7 +31,6 @@ private:
     const int attn_dp_size_;
     const int attn_dp_rank_;
     const int mlp_tp_size_;
-    const int ep_size_;
 
     const int attn_tp_group_;
 

@@ -44,7 +44,6 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
     attn_dp_rank_(engine.attn_dp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
     attn_tp_group_(ctx.comm.d_tp_group),
-    ep_size_(engine.ep_size),
     d_comm_(ctx.comm.d_comm),
     tune_layer_num_(engine.tune_layer_num),
     is_warm_up_{*ctx.is_warm_up}

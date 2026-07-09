@@ -33,7 +33,6 @@ struct EngineConfig {
     X(int, attn_cp_size)                                                                                               \
     X(int, mlp_tp_size)                                                                                                \
     X(int, ep_size, 1)                                                                                                 \
-    X(std::string, all2all_backend, "allgather_reducescatter")                                                         \
     X(std::vector<int>, devices)                                                                                       \
     X(int, nnodes)                                                                                                     \
     X(int, node_rank)                                                                                                  \

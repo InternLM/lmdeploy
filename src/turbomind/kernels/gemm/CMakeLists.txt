@@ -60,7 +60,6 @@ add_library(gemm2
         ${GEMM2_KERNELS_SM80}
         cublas.cu
         moe_utils_v2.cu
-        moe_ep_utils.cu
         test/test_utils.cu
 )
 

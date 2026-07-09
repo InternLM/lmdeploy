@@ -251,7 +251,6 @@ class TurboMind:
         ec.attn_cp_size = engine_config.attn_cp_size
         ec.mlp_tp_size = engine_config.mlp_tp_size
         ec.ep_size = engine_config.ep
-        ec.all2all_backend = engine_config.all2all_backend
         ec.devices = engine_config.devices
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank

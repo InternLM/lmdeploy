@@ -477,16 +477,6 @@ public:
         NCCLCHECK(ncclBroadcast(sendbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
     }
 
-    void GroupStart() override
-    {
-        NCCLCHECK(ncclGroupStart());
-    }
-
-    void GroupEnd() override
-    {
-        NCCLCHECK(ncclGroupEnd());
-    }
-
 private:
     HostComm h_comm_;
 
