@@ -43,7 +43,8 @@ def _is_power_of_two(value: int) -> bool:
 
 
 def is_sparse_index_topk_supported(k: int) -> bool:
-    """Return whether the TileLang byte-radix path has a compiled specialization."""
+    """Return whether the TileLang byte-radix path has a compiled
+    specialization."""
     return k in _SUPPORTED_TOPK
 
 
