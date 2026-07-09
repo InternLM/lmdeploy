@@ -2,7 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from lmdeploy.pytorch.configurations.deepseek_v32 import normalize_glm_moe_dsa_config
+from lmdeploy.pytorch.configurations.deepseek_v32 import (
+    DeepseekV32ModelConfigBuilder,
+    normalize_glm_moe_dsa_config,
+)
 
 
 def _make_config(**kwargs):
@@ -69,3 +72,35 @@ def test_glm_moe_dsa_fallback_config_keeps_rope_head_dim():
     assert cfg.qk_rope_head_dim == 64
     assert cfg.qk_head_dim == 192
     assert cfg.head_dim == 64
+    assert cfg.index_n_heads == 32
+    assert cfg.rope_interleave is True
+    assert cfg.indexer_rope_interleave is True
+
+
+def test_glm_moe_dsa_builder_normalizes_mla_kv_heads(monkeypatch):
+    from lmdeploy.pytorch.configurations import deepseek_v2
+
+    monkeypatch.setattr(deepseek_v2, 'flash_mla_available', lambda: True)
+    cfg = _make_config(num_hidden_layers=2,
+                       index_head_dim=128,
+                       index_n_heads=32,
+                       index_topk=2048,
+                       index_skip_topk_offset=3,
+                       index_topk_freq=4,
+                       indexer_rope_interleave=True,
+                       rope_interleave=True,
+                       hidden_size=6144,
+                       kv_lora_rank=512,
+                       num_attention_heads=64,
+                       num_key_value_heads=64,
+                       bos_token_id=None,
+                       eos_token_id=[154820, 154827, 154829],
+                       vocab_size=154880,
+                       architectures=['GlmMoeDsaForCausalLM'])
+
+    model_config = DeepseekV32ModelConfigBuilder.build(cfg, tp=1)
+
+    assert cfg.num_key_value_heads == 1
+    assert model_config.num_key_value_heads == 1
+    assert model_config.head_dim == 576
+    assert model_config.use_mla_fp8_cache is True

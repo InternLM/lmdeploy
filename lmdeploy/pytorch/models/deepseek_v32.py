@@ -60,6 +60,27 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     return hadamard_transform(x, scale=hidden_size**-0.5)
 
 
+def rotate_interleaved(x: torch.Tensor) -> torch.Tensor:
+    """Rotate interleaved RoPE pairs."""
+    out = torch.empty_like(x)
+    out[..., ::2] = -x[..., 1::2]
+    out[..., 1::2] = x[..., ::2]
+    return out
+
+
+def apply_interleaved_rotary_pos_emb(query: torch.Tensor, key: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+    """Apply GPT-J style interleaved RoPE to query and key."""
+
+    def _to_interleaved(freqs: torch.Tensor):
+        return freqs[..., :freqs.size(-1) // 2].repeat_interleave(2, dim=-1)
+
+    cos = _to_interleaved(cos).unsqueeze(-2)
+    sin = _to_interleaved(sin).unsqueeze(-2)
+    query = query * cos + rotate_interleaved(query) * sin
+    key = key * cos + rotate_interleaved(key) * sin
+    return query, key
+
+
 class LayerNorm(nn.Module):
     """Layer Normalization."""
 
@@ -92,6 +113,7 @@ class Indexer(nn.Module):
         self.n_local_heads = config.index_n_heads
         self.head_dim: int = config.index_head_dim
         self.rope_head_dim: int = config.qk_rope_head_dim
+        self.rope_interleave: bool = getattr(config, 'indexer_rope_interleave', False)
         self.index_topk: int = config.index_topk
         self.q_lora_rank: int = config.q_lora_rank
         self.wq_b = build_colwise_linear(self.q_lora_rank,
@@ -119,6 +141,21 @@ class Indexer(nn.Module):
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
         self.indexer_topk = IndexerTopKFP8(self.index_topk, self.softmax_scale, block_size=128, fill=-1)
 
+    def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
+                              freqs_cis: tuple[torch.Tensor, torch.Tensor]):
+        """Apply the indexer's RoPE layout."""
+        cos, sin = freqs_cis
+        k_pe = k_pe[..., None, :]
+        if self.rope_interleave:
+            return apply_interleaved_rotary_pos_emb(q_pe, k_pe, cos, sin)
+        return self.apply_rotary_pos_emb(
+            q_pe,
+            k_pe,
+            cos,
+            sin,
+            inplace=False,
+        )
+
     def forward(self,
                 x: torch.Tensor,
                 qr: torch.Tensor,
@@ -133,14 +170,7 @@ class Indexer(nn.Module):
         k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
 
         # apply rotary embedding
-        cos, sin = freqs_cis
-        q_pe, k_pe = self.apply_rotary_pos_emb(
-            q_pe,
-            k_pe[..., None, :],
-            cos,
-            sin,
-            inplace=False,
-        )
+        q_pe, k_pe = self._apply_rotary_pos_emb(q_pe, k_pe, freqs_cis)
         k_pe = k_pe[0, :]
         k_nope = k_nope[0, :, None]
         q = torch.cat([q_pe, q_nope], dim=-1)
