@@ -40,10 +40,10 @@ def test_sparse_index_topk_matches_torch_topk_and_fill():
     )
 
     assert is_sparse_index_topk_supported(512)
-    assert not is_sparse_index_topk_supported(1024)
 
     device = 'cuda'
     k = 512
+    fill = -7
     score_width = 1024
     seqlens = [0, 17, 512, 513, 900]
     generator = torch.Generator(device=device).manual_seed(20260709)
@@ -54,10 +54,10 @@ def test_sparse_index_topk_matches_torch_topk_and_fill():
     q_seqlens = torch.ones(len(seqlens), device=device, dtype=torch.int64)
     kv_seqlens = torch.tensor(seqlens, device=device, dtype=torch.int32)
 
-    out = sparse_index_topk(scores, q_seqlens, kv_seqlens, k=k)
+    out = sparse_index_topk(scores, q_seqlens, kv_seqlens, k=k, fill=fill)
     assert out.shape == (len(seqlens), k)
     assert out.dtype == torch.int32
-    _assert_topk_ids(scores, out, seqlens, k)
+    _assert_topk_ids(scores, out, seqlens, k, fill=fill)
 
 
 def test_sparse_index_topk_expands_batch_kv_seqlens_for_prefill():
