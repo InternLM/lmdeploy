@@ -5,6 +5,10 @@ import torch
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
+from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
+    is_sparse_index_topk_supported,
+    sparse_index_topk,
+)
 
 from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4IndexerOutput
 
@@ -78,9 +82,12 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
         topk_width = self.index_topk
         topk_length = num_index.clamp(max=topk_width)
-        # bitonic_topk requires K to be a power of 2; fall back to torch.topk otherwise
-        topk = bitonic_topk(scores, q_seqlens, num_index,
-                            k=topk_width, fill=-1, descending=True)
+        if is_sparse_index_topk_supported(topk_width) and scores.dtype == torch.float32 and scores.is_contiguous():
+            topk = sparse_index_topk(scores, q_seqlens, num_index,
+                                     k=topk_width, fill=-1, descending=True)
+        else:
+            topk = bitonic_topk(scores, q_seqlens, num_index,
+                                k=topk_width, fill=-1, descending=True)
 
         # Always return [total_q, topk_width] — caller handles decode/prefill dimension adaptation
         return V4IndexerOutput(indices_in_kvcache=topk, topk_length=topk_length)
