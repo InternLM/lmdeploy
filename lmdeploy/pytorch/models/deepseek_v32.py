@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
-from lmdeploy.pytorch.model_inputs import StepContextManager
+from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
@@ -51,6 +51,63 @@ def get_layer_idx_from_weight_name(name: str) -> int | None:
         except ValueError:
             return None
     return None
+
+
+class DSATopKIndicesBuffer(nn.Module):
+    """Persistent DSA top-k buffer shared by full and reuse layers."""
+
+    def __init__(self, topk: int):
+        super().__init__()
+        self.topk = topk
+        self.register_buffer('indices', None, persistent=False)
+
+    def _target_capacity(self, num_tokens: int) -> int:
+        capacity = num_tokens
+        ctx_mgr = get_step_ctx_manager()
+        if ctx_mgr is None:
+            return capacity
+
+        build_ctx = getattr(ctx_mgr, 'build_ctx', None)
+        if build_ctx is not None and build_ctx.max_batch_size > 0:
+            capacity = max(capacity, build_ctx.max_batch_size * (1 + build_ctx.num_spec_tokens))
+
+        context = ctx_mgr.current_context()
+        cache_config = getattr(context, 'cache_config', None)
+        max_prefill_token_num = getattr(cache_config, 'max_prefill_token_num', None)
+        if max_prefill_token_num is not None:
+            capacity = max(capacity, max_prefill_token_num)
+        return capacity
+
+    def ensure(self, num_tokens: int, device: torch.device) -> torch.Tensor:
+        """Return a stable top-k slice with enough capacity for the current
+        forward."""
+        capacity = self._target_capacity(num_tokens)
+        if (self.indices is None or self.indices.size(0) < capacity or self.indices.device != device):
+            self.indices = torch.empty(capacity, self.topk, dtype=torch.int32, device=device)
+        return self.indices[:num_tokens]
+
+    def write(self, topk_indices: torch.Tensor) -> torch.Tensor:
+        """Copy freshly computed top-k indices into the shared buffer."""
+        buffer = self.ensure(topk_indices.size(0), topk_indices.device)
+        if topk_indices.dtype != torch.int32:
+            topk_indices = topk_indices.to(torch.int32)
+        buffer.copy_(topk_indices)
+        return buffer
+
+    def read(self, num_tokens: int, device: torch.device) -> torch.Tensor:
+        """Read top-k indices previously written by a full indexer layer."""
+        if self.indices is None or self.indices.size(0) < num_tokens or self.indices.device != device:
+            raise RuntimeError('DSA top-k indices are reused before the shared buffer is populated.')
+        return self.indices[:num_tokens]
+
+    def compact(self, row_indices: torch.Tensor):
+        """Move selected top-k rows to the front for the next decode-style
+        reuse step."""
+        if self.indices is None:
+            raise RuntimeError('DSA top-k indices are compacted before the shared buffer is populated.')
+        row_indices = row_indices.to(device=self.indices.device, dtype=torch.long)
+        num_rows = row_indices.numel()
+        self.indices[:num_rows].copy_(self.indices.index_select(0, row_indices))
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
@@ -341,7 +398,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Sequence[torch.Tensor] = None,
         attn_metadata: Any = None,
-        prev_topk_indices: torch.Tensor | None = None,
+        topk_indices_buffer: DSATopKIndicesBuffer | None = None,
     ):
         """Rewrite of LlamaAttention.forward."""
         dist_ctx = get_dist_manager().current_context()
@@ -365,15 +422,17 @@ class DeepseekV32Attention(DeepseekV2Attention):
         key_states[..., nope_size:] = k_pe
 
         if self.indexer is None:
-            if prev_topk_indices is None:
+            if topk_indices_buffer is None:
                 raise RuntimeError(f'Layer {self.layer_idx} reuses DSA top-k indices but none were provided.')
-            topk_indices = prev_topk_indices
+            topk_indices = topk_indices_buffer.read(q_len, hidden_states.device)
         else:
             topk_indices = self.indexer(hidden_states,
                                         qr,
                                         rotary_pos_emb,
                                         past_key_value[-2:],
                                         attn_metadata=attn_metadata)
+            if topk_indices_buffer is not None:
+                topk_indices = topk_indices_buffer.write(topk_indices)
 
         attn_output = self.attn_fwd(
             query_states,
@@ -392,7 +451,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         attn_output = attn_bmm_out.flatten(-2, -1)[None]
         attn_output = self.o_proj(attn_output)
 
-        return attn_output, topk_indices
+        return attn_output
 
 
 class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
@@ -435,8 +494,8 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         past_key_value: list[torch.FloatTensor] | None,
         residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
-        prev_topk_indices: torch.Tensor | None = None,
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.Tensor | None]:
+        topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
 
         if residual is None:
             residual = hidden_states
@@ -445,12 +504,12 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         if isinstance(self.self_attn, DeepseekV32Attention):
-            hidden_states, topk_indices = self.self_attn(
+            hidden_states = self.self_attn(
                 hidden_states=hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
                 attn_metadata=attn_metadata,
-                prev_topk_indices=prev_topk_indices,
+                topk_indices_buffer=topk_indices_buffer,
             )
         else:
             hidden_states = self.self_attn(
@@ -459,12 +518,11 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
                 past_key_value=past_key_value,
                 attn_metadata=attn_metadata,
             )
-            topk_indices = None
 
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
-        return hidden_states, residual, topk_indices
+        return hidden_states, residual
 
 
 class DeepseekV32Model(DeepseekV2Model):
@@ -486,6 +544,7 @@ class DeepseekV32Model(DeepseekV2Model):
             DeepseekV32DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
+        self.topk_indices_buffer = DSATopKIndicesBuffer(config.index_topk)
 
         # build norm
         self.norm = RMSNorm(config.hidden_size,
@@ -519,19 +578,18 @@ class DeepseekV32Model(DeepseekV2Model):
 
         hidden_states = inputs_embeds
         residual = None
-        prev_topk_indices = None
         cos, sin = self.rotary_emb(hidden_states, position_ids)
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
         for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
-            hidden_states, residual, prev_topk_indices = decoder_layer(
+            hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
-                prev_topk_indices=prev_topk_indices,
+                topk_indices_buffer=self.topk_indices_buffer,
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -582,6 +640,7 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         """Load attention weights."""
         if '.self_attn.indexer.' in name and name not in params_dict:
             layer_idx = get_layer_idx_from_weight_name(name)
+            # Shared DSA layers reuse previous top-k indices and have no local indexer.
             if get_layer_indexer_type(self.config, layer_idx) == 'shared':
                 return
         return super()._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
