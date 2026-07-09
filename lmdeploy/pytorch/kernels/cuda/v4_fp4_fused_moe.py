@@ -9,6 +9,7 @@ import triton.language as tl
 from .activation import silu_and_mul
 from .blocked_gemm_fp8 import quant_fp8
 from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
+from .v4_swiglu_quant import v4_swiglu_and_quant_fp8
 
 
 @triton.jit
@@ -189,26 +190,39 @@ def fused_moe_v4_fp4_kernel(
     tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
-# Tile configs keyed by per-expert M range: (BM, BN, num_stages, num_warps)
-# BN=128 is critical for HBM read coalescing — BN=64 gives ~3x lower B-bandwidth.
-# 4 warps at small BM hides latency better than 2 warps (+16% at M<=16).
-# BM>=64 triggers WGMMA FP8 path (vs mma.sync FP16), which only wins at large
-# per-expert M (>=4) where CTA count isn't the bottleneck.
-_TILE_CONFIGS = [
+# Tile configs keyed by per-expert M range: (BM, BN, num_stages, num_warps).
+# BN=128 is critical for HBM read coalescing; BN=64 gives much lower
+# B-bandwidth. 4 warps at small BM hides latency better than 2 warps.
+_DOWN_TILE_CONFIGS = [
     (16, 128, 4, 4),   # M <= 16
     (64, 128, 4, 4),   # M <= 64
     (128, 128, 4, 4),  # M > 64
 ]
-_TILE_THRESHOLDS = [16, 64]
+_DOWN_TILE_THRESHOLDS = [16, 64]
+
+# Gate/up writes 2*ffn_dim columns and NCU on SM90 shows the BM128 variant
+# hits the register limit in prefill. BM64 keeps the same BN while avoiding
+# that occupancy cliff; down-projection still benefits from BM128.
+_GATE_UP_TILE_CONFIGS = [
+    (16, 128, 4, 4),  # M <= 16
+    (64, 128, 4, 4),  # M > 16
+]
+_GATE_UP_TILE_THRESHOLDS = [16]
 
 
-def _select_tile_config(num_tokens: int, num_experts: int, top_k: int):
+def _select_tile_config(num_tokens: int, num_experts: int, top_k: int, *, is_gate_up: bool = False):
     """Select BM/BN based on estimated per-expert token count."""
     m_per_exp = num_tokens * top_k / num_experts
-    for i, thresh in enumerate(_TILE_THRESHOLDS):
+    if is_gate_up:
+        configs = _GATE_UP_TILE_CONFIGS
+        thresholds = _GATE_UP_TILE_THRESHOLDS
+    else:
+        configs = _DOWN_TILE_CONFIGS
+        thresholds = _DOWN_TILE_THRESHOLDS
+    for i, thresh in enumerate(thresholds):
         if m_per_exp <= thresh:
-            return _TILE_CONFIGS[i]
-    return _TILE_CONFIGS[-1]
+            return configs[i]
+    return configs[-1]
 
 
 def fused_moe_v4_fp4_kernel_launcher(
@@ -227,6 +241,7 @@ def fused_moe_v4_fp4_kernel_launcher(
     reindex_a: bool = True,
     reindex_c: bool = True,
     routing_topk: int = None,
+    is_gate_up: bool = False,
 ):
     """Launch the V4 FP8xFP4 fused MoE GEMM kernel.
 
@@ -269,7 +284,7 @@ def fused_moe_v4_fp4_kernel_launcher(
     B_i32 = B.view(torch.int32)
 
     tk = routing_topk if routing_topk is not None else top_k
-    BM, BN, num_stages, num_warps = _select_tile_config(num_tokens, E, tk)
+    BM, BN, num_stages, num_warps = _select_tile_config(num_tokens, E, tk, is_gate_up=is_gate_up)
     M_NP2 = max(64, triton.next_power_of_2(num_tokens))
 
     grid = (triton.cdiv(M_NP2, BM) * triton.cdiv(N, BN), E)
@@ -338,7 +353,8 @@ def fused_moe_v4_fp4(input: torch.Tensor,
                      expert_offset: int = 0,
                      num_experts: int = None,
                      renormalize: bool = False,
-                     act_func: Callable = None) -> torch.Tensor:
+                     act_func: Callable = None,
+                     swiglu_limit: float | None = None) -> torch.Tensor:
     """Fused MoE for DeepSeek-V4 checkpoint-native packed FP4 expert
     weights."""
     device = input.device
@@ -368,15 +384,23 @@ def fused_moe_v4_fp4(input: torch.Tensor,
         expert_offset=expert_offset,
         reindex_a=True,
         reindex_c=False,
+        is_gate_up=True,
     )
 
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
-    if act_func is None:
+    if act_func is None and swiglu_limit is not None:
+        gate_cache, gate_scale = v4_swiglu_and_quant_fp8(intermediate_cache1,
+                                                         swiglu_limit=swiglu_limit,
+                                                         group_size=group_size,
+                                                         dtype=input.dtype,
+                                                         scale_fmt='ue8m0')
+    elif act_func is None:
         gate_cache = silu_and_mul(intermediate_cache1)
+        gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype, scale_fmt='ue8m0')
     else:
         gate_cache = act_func(intermediate_cache1)
+        gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype, scale_fmt='ue8m0')
     del intermediate_cache1
-    gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype, scale_fmt='ue8m0')
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]), dtype=out_dtype, device=device, zeros=not full_exp)
     fused_moe_v4_fp4_kernel_launcher(

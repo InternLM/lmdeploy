@@ -4,6 +4,7 @@ import torch
 
 from .blocked_gemm_fp8 import quant_fp8
 from .v4_fp4_fused_moe import fused_moe_v4_fp4_kernel_launcher
+from .v4_swiglu_quant import v4_swiglu_and_quant_fp8
 
 
 def m_grouped_fp8_fp4_gemm_nt_contiguous(
@@ -14,6 +15,7 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(
     *,
     recipe: tuple[int, int, int] = (1, 1, 32),
     disable_ue8m0_cast: bool = True,
+    is_gate_up: bool = False,
 ):
     """Contiguous grouped GEMM: FP8 activations x FP4 weights.
 
@@ -59,6 +61,7 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(
         expert_offset=0,
         reindex_a=False,
         reindex_c=False,
+        is_gate_up=is_gate_up,
     )
 
 
@@ -71,6 +74,7 @@ def m_grouped_fp8_fp4_gemm_nt_masked(
     *,
     recipe: tuple[int, int, int] = (1, 1, 32),
     disable_ue8m0_cast: bool = True,
+    is_gate_up: bool = False,
 ):
     """Masked grouped GEMM: FP8 activations x FP4 weights.
 
@@ -115,46 +119,8 @@ def m_grouped_fp8_fp4_gemm_nt_masked(
         expert_offset=0,
         reindex_a=False,
         reindex_c=False,
+        is_gate_up=is_gate_up,
     )
-
-
-def _v4_swiglu(gate_up: torch.Tensor, swiglu_limit: float = 0.0) -> torch.Tensor:
-    """SiLU+mul for V4 with optional clamping."""
-    hidden = gate_up.size(-1) // 2
-    gate = gate_up[..., :hidden].float()
-    up = gate_up[..., hidden:].float()
-    if swiglu_limit > 0:
-        up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
-        gate = torch.clamp(gate, max=swiglu_limit)
-    return (torch.nn.functional.silu(gate) * up).to(gate_up.dtype)
-
-
-def silu_and_mul_moe_ep_v4(
-    gate_up: torch.Tensor,
-    swiglu_limit: float = 0.0,
-    group_size: int = 128,
-    scale_fmt: str = 'ue8m0',
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """SiLU+mul(+clamp) + FP8 requantization for V4 EP MoE.
-
-    Padding rows (in the [E, max_m, ...] layout) are processed alongside
-    valid rows — the downstream masked GEMM ignores them anyway.
-
-    Args:
-        gate_up: [total_M, 2*N] bf16 (contiguous) or [E, max_m, 2*N] (masked).
-        swiglu_limit: Clamp value for V4 SwiGLU (0 = no clamp).
-        group_size: Quantization group size.
-        scale_fmt: Scale format for quant_fp8.
-
-    Returns:
-        (bf16_act, fp8_quant, scale) where bf16_act is the SiLU output,
-        fp8_quant and scale are the requantized tensors for the next GEMM.
-    """
-    act = _v4_swiglu(gate_up, swiglu_limit)
-    shape = act.shape
-    act_flat = act.reshape(-1, shape[-1])
-    act_flat, act_scale = quant_fp8(act_flat, group_size, dtype=torch.float8_e4m3fn, scale_fmt=scale_fmt)
-    return act, act_flat.reshape(shape), act_scale.reshape(shape[:-1] + act_scale.shape[-1:])
 
 
 def fused_moe_v4_fp4_ep_normal(
@@ -216,14 +182,16 @@ def fused_moe_v4_fp4_ep_normal(
         (w1, w1_scale),
         gateup_output,
         m_indices,
+        is_gate_up=True,
     )
     del input_quant, input_scale
 
     # --- SiLU+mul + requantize ---
-    _, act_quant, act_scale = silu_and_mul_moe_ep_v4(
+    act_quant, act_scale = v4_swiglu_and_quant_fp8(
         gateup_output,
         swiglu_limit=swiglu_limit,
         group_size=group_size,
+        dtype=torch.float8_e4m3fn,
     )
     del gateup_output
 
@@ -284,15 +252,17 @@ def fused_moe_v4_fp4_ep_low_latency(
         gateup_output,
         masked_m,
         expected_m,
+        is_gate_up=True,
     )
     DisposibleTensor.maybe_dispose(A)
     DisposibleTensor.maybe_dispose(A_scale)
 
     # --- SiLU+mul + requantize ---
-    _, act_quant, act_scale = silu_and_mul_moe_ep_v4(
+    act_quant, act_scale = v4_swiglu_and_quant_fp8(
         gateup_output,
         swiglu_limit=swiglu_limit,
         group_size=group_size,
+        dtype=torch.float8_e4m3fn,
     )
     del gateup_output
 

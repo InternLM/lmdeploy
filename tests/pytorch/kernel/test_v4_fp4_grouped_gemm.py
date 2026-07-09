@@ -48,6 +48,42 @@ def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
+class TestV4SwiGLUQuant:
+
+    @pytest.mark.parametrize('shape', [(19, 1024), (2, 11, 1024)])
+    @pytest.mark.parametrize('swiglu_limit', [0.0, 10.0])
+    @torch.inference_mode()
+    def test_matches_reference_quant_path(self, shape, swiglu_limit):
+        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
+        from lmdeploy.pytorch.kernels.cuda.v4_swiglu_quant import v4_swiglu_and_quant_fp8
+
+        gate_up = torch.randn(*shape, dtype=torch.bfloat16, device='cuda') * 3
+        act_quant, act_scale = v4_swiglu_and_quant_fp8(gate_up, swiglu_limit=swiglu_limit, group_size=128)
+
+        hidden = shape[-1] // 2
+        gate = gate_up[..., :hidden].float()
+        up = gate_up[..., hidden:].float()
+        if swiglu_limit > 0:
+            up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
+            gate = torch.clamp(gate, max=swiglu_limit)
+        ref_act = (torch.nn.functional.silu(gate) * up).to(gate_up.dtype)
+        ref_quant, ref_scale = quant_fp8(ref_act.reshape(-1, hidden),
+                                         128,
+                                         dtype=torch.float8_e4m3fn,
+                                         scale_fmt='ue8m0')
+
+        act_quant = act_quant.reshape(-1, hidden)
+        act_scale = act_scale.reshape(-1, hidden // 128)
+        ref_dequant = ref_quant.float() * ref_scale.repeat_interleave(128, dim=-1)
+        act_dequant = act_quant.float() * act_scale.repeat_interleave(128, dim=-1)
+
+        assert act_quant.shape == ref_quant.shape
+        assert act_quant.dtype == torch.float8_e4m3fn
+        assert act_scale.dtype == torch.float32
+        torch.testing.assert_close(act_dequant, ref_dequant, atol=0.35, rtol=0.35)
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestGroupedGemmContiguous:
 
     @pytest.fixture
@@ -498,8 +534,8 @@ class TestEPNormal:
             (input_quant, input_scale), (local_w1_packed, local_w1_scale),
             gateup_output, m_indices)
 
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import silu_and_mul_moe_ep_v4
-        _, act_quant, act_scale = silu_and_mul_moe_ep_v4(gateup_output, group_size=128)
+        from lmdeploy.pytorch.kernels.cuda.v4_swiglu_quant import v4_swiglu_and_quant_fp8
+        act_quant, act_scale = v4_swiglu_and_quant_fp8(gateup_output, group_size=128)
 
         ref = recv_x.new_empty((recv_x.size(0), local_w2_packed.size(1)), dtype=torch.bfloat16)
         m_grouped_fp8_fp4_gemm_nt_contiguous(
@@ -593,8 +629,8 @@ class TestEPLowLatency:
         from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
             fused_moe_v4_fp4_ep_low_latency,
             m_grouped_fp8_fp4_gemm_nt_masked,
-            silu_and_mul_moe_ep_v4,
         )
+        from lmdeploy.pytorch.kernels.cuda.v4_swiglu_quant import v4_swiglu_and_quant_fp8
 
         out = fused_moe_v4_fp4_ep_low_latency(
             (A_quant, A_scale),
@@ -625,7 +661,7 @@ class TestEPLowLatency:
             expected_m=max_m,
         )
 
-        _, act_quant, act_scale = silu_and_mul_moe_ep_v4(
+        act_quant, act_scale = v4_swiglu_and_quant_fp8(
             gateup_output,
             group_size=128,
         )

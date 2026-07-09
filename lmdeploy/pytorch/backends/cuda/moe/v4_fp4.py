@@ -15,45 +15,6 @@ from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
 )
 
 
-class _LazyCompileFallback:
-    """Compile on the first real call and keep the eager function as
-    fallback."""
-
-    def __init__(self, func):
-        self._func = func
-        self._compiled_func = None
-
-    def __call__(self, *args, **kwargs):
-        if self._compiled_func is None:
-            try:
-                compiled_func = torch.compile(self._func, dynamic=True)
-                result = compiled_func(*args, **kwargs)
-            except Exception:
-                self._compiled_func = self._func
-                return self._func(*args, **kwargs)
-            self._compiled_func = compiled_func
-            return result
-        return self._compiled_func(*args, **kwargs)
-
-
-def _try_dynamic_compile(func):
-    return _LazyCompileFallback(func)
-
-
-def _v4_swiglu_impl(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
-    """Match DeepSeek-V4 expert activation in the Triton FP4 fused MoE path."""
-    hidden = intermediate.size(-1) // 2
-    gate = intermediate[..., :hidden].float()
-    up = intermediate[..., hidden:].float()
-    if swiglu_limit > 0:
-        up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
-        gate = torch.clamp(gate, max=swiglu_limit)
-    return (torch.nn.functional.silu(gate) * up).to(intermediate.dtype)
-
-
-_v4_swiglu = _try_dynamic_compile(_v4_swiglu_impl)
-
-
 def _slice_local_topk(topk_ids: torch.LongTensor,
                       topk_weights: torch.Tensor,
                       expert_offset: int,
@@ -95,9 +56,6 @@ class TritonFusedMoEV4FP4TPImpl:
         self.swiglu_limit = swiglu_limit
         self.scale_fmt = scale_fmt
 
-    def _act_func(self, intermediate: torch.Tensor) -> torch.Tensor:
-        return _v4_swiglu(intermediate, self.swiglu_limit)
-
     def update_weights(self,
                        gate_up_weight: torch.Tensor,
                        gate_up_scale: torch.Tensor,
@@ -121,10 +79,6 @@ class TritonFusedMoEV4FP4TPImpl:
                                              128,
                                              dtype=torch.float8_e4m3fn,
                                              scale_fmt=self.scale_fmt)
-        if self.swiglu_limit > 0:
-            act_func = self._act_func
-        else:
-            act_func = None
         out = fused_moe_v4_fp4(input_quant,
                                input_scale,
                                gate_up_weight,
@@ -136,7 +90,7 @@ class TritonFusedMoEV4FP4TPImpl:
                                topk=self.top_k,
                                out_dtype=hidden_states.dtype,
                                renormalize=False,
-                               act_func=act_func)
+                               swiglu_limit=(self.swiglu_limit if self.swiglu_limit > 0 else None))
         return out
 
 
