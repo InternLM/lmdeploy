@@ -385,9 +385,11 @@ class DeepseekV32Attention(DeepseekV2Attention):
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_ctx = get_dist_manager().current_context()
-        tp_world_size = dist_ctx.dist_config.attn_tp
-        num_heads = self.num_heads // tp_world_size
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
+            num_heads = self.num_heads
+        else:
+            num_heads = self.num_heads // dist_config.attn_tp
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
@@ -589,6 +591,8 @@ class DeepseekV32Model(DeepseekV2Model):
         inputs_embeds: torch.FloatTensor | None = None,
     ):
         """forward_microbatch."""
+        # DSA shared top-k indices are model-global; use normal forward until
+        # microbatching has per-microbatch top-k buffers.
         return self.forward(
             input_ids=input_ids,
             position_ids=position_ids,

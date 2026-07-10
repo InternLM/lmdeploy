@@ -358,6 +358,11 @@ class DeepseekV2BMM(nn.Module):
 
     def _update_batch(self, batch: int):
         """Update out features."""
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
+            # MLA Q projections use dp_disable_tp=True, so DP mode keeps
+            # q_nope full-head; absorb BMM weights must use the same layout.
+            return batch
         world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
@@ -368,8 +373,10 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank('attn')
-        weight = weight.chunk(world_size, 0)[rank]
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp == 1:
+            world_size, rank = get_tp_world_rank('attn')
+            weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
     def forward(self, x: torch.Tensor, output: torch.Tensor):

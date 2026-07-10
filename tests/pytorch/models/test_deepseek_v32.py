@@ -4,6 +4,7 @@ import pytest
 import torch
 from torch import nn
 
+from lmdeploy.pytorch.models.deepseek_v2 import DeepseekV2BMM
 from lmdeploy.pytorch.models.deepseek_v32 import (
     DeepseekV32Attention,
     DSATopKIndicesBuffer,
@@ -14,23 +15,26 @@ from lmdeploy.pytorch.models.deepseek_v32 import (
 )
 
 
-def _patch_minimal_attention(attn, monkeypatch):
+def _patch_minimal_attention(attn, monkeypatch, dp=1, attn_tp=1, seen=None):
     """Patch a DSA attention module down to the top-k routing contract."""
 
     def fake_qkv_proj(hidden_states, num_heads):
+        if seen is not None:
+            seen['num_heads'] = num_heads
         q_len = hidden_states.size(1)
         return (
-            torch.zeros(q_len, 1, 2),
+            torch.zeros(q_len, num_heads, 2),
             torch.zeros(q_len, 1, 2),
             torch.zeros(q_len, 1, 1),
-            torch.zeros(q_len, 1, 1),
+            torch.zeros(q_len, num_heads, 1),
             torch.zeros(q_len, 1, 1),
             torch.zeros(q_len, 1, 1),
         )
 
+    dist_config = SimpleNamespace(dp=dp, attn_tp=attn_tp)
     monkeypatch.setattr('lmdeploy.pytorch.models.deepseek_v32.get_dist_manager',
-                        lambda: SimpleNamespace(current_context=lambda: SimpleNamespace(
-                            dist_config=SimpleNamespace(attn_tp=1))))
+                        lambda: SimpleNamespace(current_config=lambda: dist_config,
+                                                current_context=lambda: SimpleNamespace(dist_config=dist_config)))
     attn.num_heads = 1
     attn.kv_lora_rank = 1
     attn.qk_rope_head_dim = 1
@@ -122,6 +126,45 @@ def test_full_indexer_layer_writes_shared_topk_buffer(monkeypatch):
     assert seen['nsa_indices'].data_ptr() == topk_buffer.indices[:2].data_ptr()
 
 
+@pytest.mark.parametrize('dp,attn_tp,expected_num_heads', [(1, 2, 2), (2, 2, 4)])
+def test_attention_uses_dp_aware_num_heads(monkeypatch, dp, attn_tp, expected_num_heads):
+    attn = DeepseekV32Attention.__new__(DeepseekV32Attention)
+    nn.Module.__init__(attn)
+    attn.layer_idx = 0
+    seen = {}
+    _patch_minimal_attention(attn, monkeypatch, dp=dp, attn_tp=attn_tp, seen=seen)
+    attn.num_heads = 4
+    attn.indexer = lambda *args, **kwargs: torch.tensor([[4, 2, 1]], dtype=torch.int32)
+    attn.attn_fwd = lambda *args, **kwargs: torch.zeros(args[0].size(0), args[0].size(1), 1)
+
+    attn(
+        hidden_states=torch.zeros(1, 1, 2),
+        rotary_pos_emb=(torch.zeros(1, 1), torch.zeros(1, 1)),
+        past_key_value=[torch.zeros(1, 1, 2), torch.zeros(1, 1, 1)],
+        topk_indices_buffer=DSATopKIndicesBuffer(topk=3),
+    )
+
+    assert seen['num_heads'] == expected_num_heads
+
+
+@pytest.mark.parametrize('dp,attn_tp,expected_num_heads', [(1, 2, 2), (2, 2, 4)])
+def test_bmm_uses_dp_aware_weight_layout(monkeypatch, dp, attn_tp, expected_num_heads):
+    dist_config = SimpleNamespace(dp=dp, attn_tp=attn_tp)
+    monkeypatch.setattr('lmdeploy.pytorch.models.deepseek_v2.get_dist_manager',
+                        lambda: SimpleNamespace(current_config=lambda: dist_config,
+                                                current_context=lambda: SimpleNamespace(dist_config=dist_config)))
+    monkeypatch.setattr('lmdeploy.pytorch.models.deepseek_v2.get_tp_world_rank',
+                        lambda layer_type=None: (attn_tp, 0))
+
+    bmm = DeepseekV2BMM(batch=4, in_features=2, out_features=3, dtype=torch.float32, device='cpu')
+    weight = torch.arange(24, dtype=torch.float32).view(4, 2, 3)
+    bmm.weight.weight_loader(bmm.weight, weight)
+
+    expected = weight if dp > 1 else weight.chunk(attn_tp, 0)[0]
+    assert bmm.weight.shape == (expected_num_heads, 2, 3)
+    torch.testing.assert_close(bmm.weight, expected)
+
+
 def test_shared_indexer_layer_reuses_shared_topk_buffer(monkeypatch):
     attn = DeepseekV32Attention.__new__(DeepseekV32Attention)
     nn.Module.__init__(attn)
@@ -157,9 +200,10 @@ def test_shared_indexer_layer_requires_shared_topk_buffer(monkeypatch):
     attn.num_heads = 1
     attn.kv_lora_rank = 1
     attn.qk_rope_head_dim = 1
+    dist_config = SimpleNamespace(dp=1, attn_tp=1)
     monkeypatch.setattr('lmdeploy.pytorch.models.deepseek_v32.get_dist_manager',
-                        lambda: SimpleNamespace(current_context=lambda: SimpleNamespace(
-                            dist_config=SimpleNamespace(attn_tp=1))))
+                        lambda: SimpleNamespace(current_config=lambda: dist_config,
+                                                current_context=lambda: SimpleNamespace(dist_config=dist_config)))
     attn._qkv_proj = lambda *args, **kwargs: (
         torch.zeros(1, 1, 2),
         torch.zeros(1, 1, 2),
