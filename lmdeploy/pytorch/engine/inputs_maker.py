@@ -341,10 +341,6 @@ class InputsMakerAsync:
         self.to_evict_seqs.clear()
         self.long_context_chunker.clear()
 
-    def clear_for_sleep(self):
-        """Clear transient scheduling state before engine sleep."""
-        self.long_context_chunker.clear()
-
     def _init_do_prefill(self, config: InputsMakerConfig):
         if config.role == EngineRole.Prefill:
             self.do_prefill = self.do_prefill_pnode
