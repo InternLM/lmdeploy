@@ -6,10 +6,10 @@ import torch
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import (
-    assemble_prefill_sparse_indices,
     build_decode_compressed_sparse_indices,
     build_decode_prefix_compressed_sparse_indices,
     build_decode_window_sparse_indices,
+    build_prefill_sparse_indices,
 )
 
 
@@ -38,7 +38,6 @@ class _V4PrefillWindowMeta:
     """Layer-invariant prefill metadata for local-window attention and
     writes."""
 
-    topk: torch.Tensor = None
     slot: torch.Tensor = None
     ring_pos: torch.Tensor = None
 
@@ -47,8 +46,9 @@ class _V4PrefillWindowMeta:
 class _V4PrefillSharedMeta:
     """Prefill tensors shared by r4/r128 compressed attention paths."""
 
+    token_seq: torch.Tensor = None
+    token_pos: torch.Tensor = None
     uncompressed_kv_lens: torch.Tensor = None
-    compress_offset: torch.Tensor = None
 
 
 @dataclass
@@ -57,11 +57,9 @@ class _V4PrefillRatioMeta:
 
     max_flat_kv_len: int = None
     total_flat_kv_tokens: int = None
-    compress_topk: torch.Tensor = None
-    num_vis_compress: torch.Tensor = None
+    compress_width: int = 0
     flat_kv_lens: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
-    repeat_cu: torch.Tensor = None
 
 
 @dataclass
@@ -143,9 +141,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     @staticmethod
     def _precompute_prefill(meta, window_size, slot):
         from lmdeploy.pytorch.backends.cuda.attention.v4_utils import (
-            build_prefill_compress_topk_indices,
             build_prefill_token_meta,
-            build_prefill_window_topk_indices,
         )
         kv_seqlens = meta.kv_seqlens
         q_seqlens = meta.q_seqlens
@@ -165,45 +161,24 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         max_unkv = min(window_size, max_kv) + max_q
         cu_q_seqlens = meta.cu_q_seqlens
         token_meta = build_prefill_token_meta(q_seqlens, cu_q_seqlens)
-        total_q_tokens = token_meta.total_tokens
-
-        window_topk, _ = build_prefill_window_topk_indices(
-            window_size, start_pos, token_meta)
-        meta.prefill_window = _V4PrefillWindowMeta(topk=window_topk.to(torch.int32))
-
-        compress_topk_by_ratio = {}
-        num_vis_compress_by_ratio = {}
-
-        for ratio in (4, 128):
-            max_width = max_kv // ratio
-            compress_topk, num_vis_r = build_prefill_compress_topk_indices(
-                total_lens, ratio,
-                offset=uncompressed_kv_lens,
-                start_pos=start_pos,
-                token_meta=token_meta,
-                max_width=max_width)
-            compress_topk_by_ratio[ratio] = compress_topk.to(torch.int32)
-            num_vis_compress_by_ratio[ratio] = num_vis_r.to(torch.int32)
 
         # Pre-compute layer-invariant tensors to eliminate per-layer gather/scatter setup.
         meta.prefill_shared = _V4PrefillSharedMeta(
+            token_seq=token_meta.seq_id,
+            token_pos=token_meta.token_pos,
             uncompressed_kv_lens=uncompressed_kv_lens,
-            compress_offset=uncompressed_kv_lens[token_meta.seq_id].unsqueeze(-1).to(torch.int32),
         )
 
-        # Pre-compute flat_kv_lens + cu_seqlens_k + repeat_cu per compress_ratio
+        # Pre-compute flat_kv_lens + cu_seqlens_k per compress_ratio.
         raw_kv_lens_t = q_seqlens.long()
         flat_kv_lens = (prev_window_lens + raw_kv_lens_t).to(torch.int32)
         cu_seqlens_k = torch.zeros(kv_seqlens.numel() + 1, dtype=torch.int32, device=kv_seqlens.device)
         torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
-        repeat_cu = torch.repeat_interleave(
-            cu_seqlens_k[:-1], q_seqlens, output_size=total_q_tokens)
         meta.get_ratio_meta(0).prefill = _V4PrefillRatioMeta(
             max_flat_kv_len=max_unkv,
             total_flat_kv_tokens=sum_kv,
             flat_kv_lens=flat_kv_lens,
             cu_seqlens_k=cu_seqlens_k,
-            repeat_cu=repeat_cu,
         )
 
         for ratio in (4, 128):
@@ -211,16 +186,12 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             flat_kv_lens = (prev_window_lens + raw_kv_lens_t + num_compressed).to(torch.int32)
             cu_seqlens_k = torch.zeros(kv_seqlens.numel() + 1, dtype=torch.int32, device=kv_seqlens.device)
             torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
-            repeat_cu = torch.repeat_interleave(
-                cu_seqlens_k[:-1], q_seqlens, output_size=total_q_tokens)
             meta.get_ratio_meta(ratio).prefill = _V4PrefillRatioMeta(
                 max_flat_kv_len=max_unkv + max_kv // ratio,
                 total_flat_kv_tokens=sum_kv + sum_kv // ratio,
-                compress_topk=compress_topk_by_ratio[ratio],
-                num_vis_compress=num_vis_compress_by_ratio[ratio],
+                compress_width=max_kv // ratio,
                 flat_kv_lens=flat_kv_lens,
                 cu_seqlens_k=cu_seqlens_k,
-                repeat_cu=repeat_cu,
             )
 
         # Pre-compute window write indices (reused across all layers)
@@ -231,7 +202,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         cutoff_pos = (total_lens[token_seq] - window_size).clamp(min=0)
         ring_pos = torch.remainder(token_abs_pos, window_size)
         invalid = token_abs_pos < cutoff_pos
-        meta.prefill_window.slot = token_slot.clamp(min=0)
+        meta.prefill_window = _V4PrefillWindowMeta(slot=token_slot.clamp(min=0))
         meta.prefill_window.ring_pos = torch.where(invalid, -1, ring_pos)
 
 class _V4AttentionExecutorBase:
@@ -413,24 +384,22 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
                               prefill_window.slot, prefill_window.ring_pos)
 
     def _select_compress_topk(self, index_out, attn_metadata: CudaV4AttentionMetadata):
-        """Select compress_topk indices and per-token causal visibility count.
+        """Select indexer topk indices and the fallback compressed width.
 
-        Returns (compress_topk, num_vis_compress, compress_offset):
-          - compress_topk: [total_q_tokens, max_width] or None
-          - num_vis_compress: [total_q_tokens] int32 (raw compress-only count) or None
-          - compress_offset: [total_q_tokens, 1] int32 for indexer output, or None
+        Returns (compress_topk, compress_width):
+          - compress_topk: [total_q_tokens, topk_width] from indexer output,
+            or None for full-prefix fallback.
+          - compress_width: number of compressed columns the fused prefill
+            index builder should emit.
         """
         if not self.compress_ratio:
-            return None, None, None
+            return None, 0
 
         prefill_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).prefill
         if index_out is not None:
-            compress_topk = index_out.indices_in_kvcache
-            # Per-token causal limit from the pre-computed ratio-specific count.
-            # index_out.topk_length is per-sequence and ignores causal masking.
-            return compress_topk, prefill_ratio.num_vis_compress, attn_metadata.prefill_shared.compress_offset
+            return index_out.indices_in_kvcache, index_out.indices_in_kvcache.size(1)
 
-        return prefill_ratio.compress_topk, prefill_ratio.num_vis_compress, None
+        return None, prefill_ratio.compress_width
 
     def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
                 caches, slot, index_out=None):
@@ -439,8 +408,8 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
         q_seqlens = attn_metadata.q_seqlens
         block_offsets = attn_metadata.block_offsets
 
-        # Phase 1: Select compress_topk source + num_vis_compress
-        compress_topk, num_vis_compress, compress_offset = self._select_compress_topk(index_out, attn_metadata)
+        # Phase 1: Select indexer topk source or full-prefix fallback.
+        compress_topk, compress_width = self._select_compress_topk(index_out, attn_metadata)
 
         # Phase 2: Flatten KV (before window write to preserve prev ring buffer)
         prefill_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).prefill
@@ -448,7 +417,6 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
         total_flat_kv_tokens = prefill_ratio.total_flat_kv_tokens
         cu_seqlens_k = prefill_ratio.cu_seqlens_k
         flat_kv_lens = prefill_ratio.flat_kv_lens
-        repeat_cu = prefill_ratio.repeat_cu
 
         fp8_compressed_kv_cache = caches['compressed_kv_fp8'] if self.compress_ratio else None
         raw_kv = kv.squeeze(0)  # [total_q_tokens, head_dim]
@@ -467,21 +435,22 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
         # Phase 3: Write window state + FP8 pack
         self._write_window(kv, caches, attn_metadata)
 
-        # Phase 4: Assemble topk_indices (cat window + compress) + convert to global
-        window_topk = attn_metadata.prefill_window.topk
-        topk_indices = assemble_prefill_sparse_indices(
-            window_topk, compress_topk, repeat_cu, compress_offset)
+        # Phase 4: Build FlashMLA-ready sparse indices directly.
+        prefill_shared = attn_metadata.prefill_shared
+        topk_indices, topk_length = build_prefill_sparse_indices(
+            start_pos=start_pos,
+            total_lens=total_lens,
+            token_seq=prefill_shared.token_seq,
+            token_pos=prefill_shared.token_pos,
+            cu_seqlens_k=cu_seqlens_k,
+            uncompressed_kv_lens=prefill_shared.uncompressed_kv_lens,
+            window_size=self.window_size,
+            compress_ratio=self.compress_ratio,
+            compress_topk=compress_topk,
+            compress_width=compress_width)
 
-        # Phase 5: Compute topk_length + FlashMLA sparse prefill
+        # Phase 5: FlashMLA sparse prefill
         q_flat, attn_sink, num_heads = self._pad_query_heads(query.squeeze(0), attn_sink)
-
-        topk_width = topk_indices.size(-1)
-        if num_vis_compress is not None:
-            topk_length = self.window_size + num_vis_compress
-        else:
-            topk_length = torch.full((q_flat.size(0),), self.window_size,
-                                     dtype=torch.int32, device=query.device)
-        topk_length = topk_length.clamp(max=topk_width)
 
         out = self.flash_mla.flash_mla_sparse_fwd(
             q_flat, flat_kv, topk_indices,

@@ -17,22 +17,6 @@ def _pad_ref(indices: torch.Tensor, block: int):
 
 
 @torch.inference_mode()
-def test_pad_sparse_indices_matches_torch_pad():
-    from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import pad_sparse_indices
-
-    indices = torch.tensor(
-        [[[1, 3, -1, 7, 9]], [[-1, 2, 4, 6, 8]]],
-        dtype=torch.int32,
-        device='cuda')
-
-    out = pad_sparse_indices(indices, block=4)
-    ref = _pad_ref(indices, block=4).to(torch.int32)
-
-    assert out.shape == (2, 1, 8)
-    torch.testing.assert_close(out.cpu(), ref.cpu())
-
-
-@torch.inference_mode()
 def test_build_decode_window_sparse_indices_matches_reference():
     from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import build_decode_window_sparse_indices
 
@@ -139,62 +123,149 @@ def test_build_decode_prefix_compressed_sparse_indices_matches_reference():
     torch.testing.assert_close(out.cpu(), ref.cpu())
 
 
+def _prefill_inputs(window_size: int, compress_ratio: int = 0):
+    start_pos = torch.tensor([0, 5, 12], dtype=torch.int64, device='cuda')
+    q_seqlens = torch.tensor([3, 2, 4], dtype=torch.int64, device='cuda')
+    total_lens = start_pos + q_seqlens
+    prev_window = start_pos.clamp(max=window_size)
+    uncompressed_kv_lens = (prev_window + q_seqlens).to(torch.int64)
+    compressed_lens = (
+        torch.div(total_lens, compress_ratio, rounding_mode='floor')
+        if compress_ratio else torch.zeros_like(total_lens))
+    flat_lens = (uncompressed_kv_lens + compressed_lens).to(torch.int32)
+    cu_seqlens_k = torch.zeros(4, dtype=torch.int32, device='cuda')
+    torch.cumsum(flat_lens, dim=0, out=cu_seqlens_k[1:])
+
+    cu_q = torch.zeros(4, dtype=torch.int64, device='cuda')
+    torch.cumsum(q_seqlens, dim=0, out=cu_q[1:])
+    token_id = torch.arange(int(cu_q[-1].item()), dtype=torch.int64, device='cuda')
+    token_seq = torch.searchsorted(cu_q[1:], token_id, right=True)
+    token_pos = token_id - cu_q[token_seq]
+    return start_pos, total_lens, token_seq, token_pos, cu_seqlens_k, uncompressed_kv_lens
+
+
+def _prefill_ref(
+    start_pos,
+    total_lens,
+    token_seq,
+    token_pos,
+    cu_seqlens_k,
+    uncompressed_kv_lens,
+    window_size,
+    compress_ratio=0,
+    compress_topk=None,
+    compress_width=0,
+    block=4,
+):
+    abs_pos = start_pos[token_seq] + token_pos
+    num_vis = (abs_pos + 1).clamp(max=window_size)
+    window_start_abs = (start_pos - window_size).clamp(min=0)
+    first_vis_abs = (abs_pos - window_size + 1).clamp(min=0)
+    first_flat_pos = first_vis_abs - window_start_abs[token_seq]
+
+    window_col = torch.arange(window_size, dtype=torch.int64, device='cuda').unsqueeze(0)
+    window_vals = torch.where(
+        window_col < num_vis.unsqueeze(1),
+        first_flat_pos.unsqueeze(1) + window_col,
+        torch.full((), -1, dtype=torch.int64, device='cuda'))
+
+    if compress_ratio:
+        comp_col = torch.arange(compress_width, dtype=torch.int64, device='cuda').unsqueeze(0)
+        if compress_topk is not None:
+            comp_vals = torch.where(
+                compress_topk.to(torch.int64) >= 0,
+                compress_topk.to(torch.int64) + uncompressed_kv_lens[token_seq].unsqueeze(1),
+                torch.full((), -1, dtype=torch.int64, device='cuda'))
+        else:
+            num_compressed = torch.div(total_lens, compress_ratio, rounding_mode='floor')
+            comp_vals = torch.where(
+                comp_col < num_compressed[token_seq].unsqueeze(1),
+                comp_col + uncompressed_kv_lens[token_seq].unsqueeze(1),
+                torch.full((), -1, dtype=torch.int64, device='cuda'))
+        vals = torch.cat([window_vals, comp_vals], dim=-1)
+        padded_width = ((vals.size(-1) + block - 1) // block) * block
+        topk_length = (window_size + torch.div(abs_pos + 1, compress_ratio, rounding_mode='floor')).clamp(
+            max=padded_width).to(torch.int32)
+    else:
+        vals = window_vals
+        topk_length = torch.full((token_seq.numel(),), window_size, dtype=torch.int32, device='cuda')
+
+    vals = _pad_ref(vals.unsqueeze(1), block=block).squeeze(1)
+    vals = torch.where(
+        vals >= 0,
+        vals + cu_seqlens_k[token_seq].to(torch.int64).unsqueeze(1),
+        torch.full((), -1, dtype=torch.int64, device='cuda'))
+    return vals.unsqueeze(1).to(torch.int32), topk_length
+
+
 @torch.inference_mode()
-@pytest.mark.parametrize('has_compress_offset', [False, True])
-def test_assemble_prefill_sparse_indices_matches_reference(has_compress_offset):
-    from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import assemble_prefill_sparse_indices
+def test_build_prefill_sparse_indices_without_compress_matches_reference():
+    from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import build_prefill_sparse_indices
 
-    window_topk = torch.tensor(
-        [[0, 1, -1, -1, -1], [1, 2, 3, -1, -1], [0, 1, 2, 3, 4]],
-        dtype=torch.int32,
-        device='cuda')
-    compress_topk = torch.tensor(
-        [[0, 2, -1], [-1, 1, 3], [2, 4, 6]],
-        dtype=torch.int32,
-        device='cuda')
-    repeat_cu = torch.tensor([0, 16, 32], dtype=torch.int32, device='cuda')
-    compress_offset = torch.tensor([[5], [7], [11]], dtype=torch.int32, device='cuda')
+    window_size = 5
+    args = _prefill_inputs(window_size)
+    out, topk_length = build_prefill_sparse_indices(*args, window_size=window_size, block=4)
+    ref, ref_topk_length = _prefill_ref(*args, window_size=window_size, block=4)
 
-    out = assemble_prefill_sparse_indices(
-        window_topk,
-        compress_topk,
-        repeat_cu,
-        compress_offset if has_compress_offset else None,
+    assert out.shape == (9, 1, 8)
+    torch.testing.assert_close(out.cpu(), ref.cpu())
+    torch.testing.assert_close(topk_length.cpu(), ref_topk_length.cpu())
+
+
+@torch.inference_mode()
+def test_build_prefill_sparse_indices_prefix_compress_matches_reference():
+    from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import build_prefill_sparse_indices
+
+    window_size = 5
+    compress_ratio = 4
+    args = _prefill_inputs(window_size, compress_ratio)
+    compress_width = 4
+    out, topk_length = build_prefill_sparse_indices(
+        *args,
+        window_size=window_size,
+        compress_ratio=compress_ratio,
+        compress_width=compress_width,
+        block=4)
+    ref, ref_topk_length = _prefill_ref(
+        *args,
+        window_size=window_size,
+        compress_ratio=compress_ratio,
+        compress_width=compress_width,
         block=4)
 
-    comp_ref = compress_topk
-    if has_compress_offset:
-        comp_ref = torch.where(
-            comp_ref >= 0,
-            comp_ref + compress_offset,
-            torch.full((), -1, dtype=torch.int32, device='cuda'))
-    ref = torch.cat([window_topk, comp_ref], dim=-1)
-    ref = torch.where(
-        ref >= 0,
-        ref + repeat_cu[:, None],
-        torch.full((), -1, dtype=torch.int32, device='cuda'))
-    ref = _pad_ref(ref.unsqueeze(1), block=4).to(torch.int32)
-
-    assert out.shape == (3, 1, 8)
+    assert out.shape == (9, 1, 12)
     torch.testing.assert_close(out.cpu(), ref.cpu())
+    torch.testing.assert_close(topk_length.cpu(), ref_topk_length.cpu())
 
 
 @torch.inference_mode()
-def test_assemble_prefill_sparse_indices_without_compress_matches_reference():
-    from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import assemble_prefill_sparse_indices
+def test_build_prefill_sparse_indices_indexer_compress_matches_reference():
+    from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import build_prefill_sparse_indices
 
-    window_topk = torch.tensor(
-        [[0, -1, -1], [0, 1, 2]],
+    window_size = 5
+    compress_ratio = 4
+    args = _prefill_inputs(window_size, compress_ratio)
+    compress_topk = torch.tensor(
+        [[0, -1, -1], [0, 1, -1], [1, 0, -1],
+         [0, 1, 2], [2, -1, 1], [1, 3, -1],
+         [0, 2, 3], [3, 2, 1], [1, -1, 0]],
         dtype=torch.int32,
         device='cuda')
-    repeat_cu = torch.tensor([0, 8], dtype=torch.int32, device='cuda')
 
-    out = assemble_prefill_sparse_indices(window_topk, None, repeat_cu, block=4)
-    ref = torch.where(
-        window_topk >= 0,
-        window_topk + repeat_cu[:, None],
-        torch.full((), -1, dtype=torch.int32, device='cuda'))
-    ref = _pad_ref(ref.unsqueeze(1), block=4).to(torch.int32)
+    out, topk_length = build_prefill_sparse_indices(
+        *args,
+        window_size=window_size,
+        compress_ratio=compress_ratio,
+        compress_topk=compress_topk,
+        block=4)
+    ref, ref_topk_length = _prefill_ref(
+        *args,
+        window_size=window_size,
+        compress_ratio=compress_ratio,
+        compress_topk=compress_topk,
+        compress_width=compress_topk.size(1),
+        block=4)
 
-    assert out.shape == (2, 1, 4)
+    assert out.shape == (9, 1, 8)
     torch.testing.assert_close(out.cpu(), ref.cpu())
+    torch.testing.assert_close(topk_length.cpu(), ref_topk_length.cpu())

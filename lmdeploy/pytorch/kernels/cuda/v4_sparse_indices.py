@@ -7,58 +7,6 @@ import triton.language as tl
 
 
 @triton.jit
-def _pad_sparse_indices_kernel(
-    indices,
-    out,
-    stride_i_row,
-    stride_i_col,
-    stride_o_row,
-    stride_o_col,
-    TOPK: tl.constexpr,
-    PADDED_TOPK: tl.constexpr,
-    BLOCK: tl.constexpr,
-):
-    row = tl.program_id(0)
-    tile = tl.program_id(1)
-    offs = tile * BLOCK + tl.arange(0, BLOCK)
-    valid = offs < TOPK
-    vals = tl.load(indices + row * stride_i_row + offs * stride_i_col,
-                   mask=valid, other=-1).to(tl.int32)
-    vals = tl.where(valid, vals, -1)
-    tl.store(out + row * stride_o_row + offs * stride_o_col,
-             vals, mask=offs < PADDED_TOPK)
-
-
-def pad_sparse_indices(indices: torch.Tensor | None, block: int = 128):
-    """Pad FlashMLA sparse indices on the last dimension with ``-1``."""
-    if indices is None:
-        return None
-    topk = indices.size(-1)
-    padded_topk = triton.cdiv(topk, block) * block
-    if padded_topk == topk:
-        return indices
-
-    out_shape = tuple(indices.shape[:-1]) + (padded_topk,)
-    out = torch.empty(out_shape, dtype=torch.int32, device=indices.device)
-    rows = indices.numel() // topk
-    indices_2d = indices.reshape(rows, topk)
-    out_2d = out.reshape(rows, padded_topk)
-    grid = (rows, triton.cdiv(padded_topk, block))
-    _pad_sparse_indices_kernel[grid](
-        indices_2d,
-        out_2d,
-        stride_i_row=indices_2d.stride(0),
-        stride_i_col=indices_2d.stride(1),
-        stride_o_row=out_2d.stride(0),
-        stride_o_col=out_2d.stride(1),
-        TOPK=topk,
-        PADDED_TOPK=padded_topk,
-        BLOCK=block,
-    )
-    return out
-
-
-@triton.jit
 def _build_decode_window_sparse_indices_kernel(
     kv_seqlens,
     start_pos,
@@ -69,10 +17,8 @@ def _build_decode_window_sparse_indices_kernel(
     disabled_indices,
     disabled_topk_length,
     stride_i_b,
-    stride_i_h,
     stride_i_k,
     stride_di_b,
-    stride_di_h,
     stride_di_k,
     WINDOW_SIZE: tl.constexpr,
     PADDED_WINDOW_SIZE: tl.constexpr,
@@ -145,10 +91,8 @@ def build_decode_window_sparse_indices(
         disabled_indices,
         disabled_topk_length,
         stride_i_b=indices.stride(0),
-        stride_i_h=indices.stride(1),
         stride_i_k=indices.stride(2),
         stride_di_b=disabled_indices.stride(0),
-        stride_di_h=disabled_indices.stride(1),
         stride_di_k=disabled_indices.stride(2),
         WINDOW_SIZE=window_size,
         PADDED_WINDOW_SIZE=padded_window_size,
@@ -163,12 +107,10 @@ def _build_decode_compressed_sparse_indices_kernel(
     block_offsets,
     out,
     stride_l_b,
-    stride_l_h,
     stride_l_k,
     stride_bo_b,
     stride_bo_i,
     stride_o_b,
-    stride_o_h,
     stride_o_k,
     TOPK: tl.constexpr,
     PADDED_TOPK: tl.constexpr,
@@ -239,12 +181,10 @@ def build_decode_compressed_sparse_indices(
         block_offsets,
         out,
         stride_l_b=logical_topk.stride(0),
-        stride_l_h=logical_topk.stride(1),
         stride_l_k=logical_topk.stride(2),
         stride_bo_b=block_offsets.stride(0),
         stride_bo_i=block_offsets.stride(1),
         stride_o_b=out.stride(0),
-        stride_o_h=out.stride(1),
         stride_o_k=out.stride(2),
         TOPK=topk,
         PADDED_TOPK=padded_topk,
@@ -331,113 +271,148 @@ def build_decode_prefix_compressed_sparse_indices(
 
 
 @triton.jit
-def _assemble_prefill_sparse_indices_kernel(
-    window_topk,
+def _build_prefill_sparse_indices_kernel(
+    start_pos,
+    total_lens,
+    token_seq,
+    token_pos,
+    cu_seqlens_k,
+    uncompressed_kv_lens,
     compress_topk,
-    repeat_cu,
-    compress_offset,
     out,
-    stride_w_t,
-    stride_w_k,
+    topk_length,
     stride_c_t,
     stride_c_k,
-    stride_co_t,
     stride_o_t,
-    stride_o_h,
     stride_o_k,
-    WINDOW_TOPK: tl.constexpr,
-    COMPRESS_TOPK: tl.constexpr,
+    WINDOW_SIZE: tl.constexpr,
+    COMPRESS_RATIO: tl.constexpr,
     TOTAL_TOPK: tl.constexpr,
     PADDED_TOPK: tl.constexpr,
     HAS_COMPRESS: tl.constexpr,
-    HAS_COMPRESS_OFFSET: tl.constexpr,
+    HAS_COMPRESS_TOPK: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
     token = tl.program_id(0)
     tile = tl.program_id(1)
     offs = tile * BLOCK + tl.arange(0, BLOCK)
 
-    in_window = offs < WINDOW_TOPK
-    valid_topk = offs < TOTAL_TOPK
-    window_vals = tl.load(window_topk + token * stride_w_t + offs * stride_w_k,
-                          mask=in_window, other=-1).to(tl.int32)
-    vals = window_vals
+    seq = tl.load(token_seq + token).to(tl.int64)
+    pos = tl.load(token_pos + token).to(tl.int64)
+    seq_start = tl.load(start_pos + seq).to(tl.int64)
+    abs_pos = seq_start + pos
+    cu = tl.load(cu_seqlens_k + seq).to(tl.int32)
+
+    num_vis = tl.minimum(abs_pos + 1, WINDOW_SIZE)
+    window_start_abs = tl.maximum(seq_start - WINDOW_SIZE, 0)
+    first_vis_abs = tl.maximum(abs_pos - WINDOW_SIZE + 1, 0)
+    first_flat_pos = first_vis_abs - window_start_abs
+
+    in_window = offs < WINDOW_SIZE
+    window_valid = offs < num_vis
+    vals = tl.where(window_valid, first_flat_pos + offs, -1).to(tl.int32)
 
     if HAS_COMPRESS:
-        comp_col = tl.maximum(offs - WINDOW_TOPK, 0)
-        in_compress = (offs >= WINDOW_TOPK) & (offs < TOTAL_TOPK)
-        comp_vals = tl.load(compress_topk + token * stride_c_t + comp_col * stride_c_k,
-                            mask=in_compress, other=-1).to(tl.int32)
-        if HAS_COMPRESS_OFFSET:
-            comp_off = tl.load(compress_offset + token * stride_co_t).to(tl.int32)
+        comp_col = tl.maximum(offs - WINDOW_SIZE, 0)
+        in_compress = (offs >= WINDOW_SIZE) & (offs < TOTAL_TOPK)
+        comp_off = tl.load(uncompressed_kv_lens + seq).to(tl.int32)
+        if HAS_COMPRESS_TOPK:
+            comp_vals = tl.load(
+                compress_topk + token * stride_c_t + comp_col * stride_c_k,
+                mask=in_compress,
+                other=-1,
+            ).to(tl.int32)
             comp_vals = tl.where(comp_vals >= 0, comp_vals + comp_off, -1)
-        vals = tl.where(in_window, window_vals, comp_vals)
+        else:
+            row_compressed = tl.load(total_lens + seq).to(tl.int32) // COMPRESS_RATIO
+            comp_vals = tl.where(comp_col < row_compressed, comp_col + comp_off, -1)
+        vals = tl.where(in_window, vals, comp_vals)
 
-    cu = tl.load(repeat_cu + token).to(tl.int32)
-    vals = tl.where((vals >= 0) & valid_topk, vals + cu, -1)
+        if tile == 0:
+            causal_compressed = (abs_pos + 1) // COMPRESS_RATIO
+            row_topk_length = tl.minimum(WINDOW_SIZE + causal_compressed, PADDED_TOPK)
+            tl.store(topk_length + token, row_topk_length.to(tl.int32))
+    elif tile == 0:
+        tl.store(topk_length + token, tl.full((), WINDOW_SIZE, tl.int32))
+
+    vals = tl.where((vals >= 0) & (offs < TOTAL_TOPK), vals + cu, -1)
     tl.store(out + token * stride_o_t + offs * stride_o_k,
              vals, mask=offs < PADDED_TOPK)
 
 
-def assemble_prefill_sparse_indices(
-    window_topk: torch.Tensor,
-    compress_topk: torch.Tensor | None,
-    repeat_cu: torch.Tensor,
-    compress_offset: torch.Tensor | None = None,
+def build_prefill_sparse_indices(
+    start_pos: torch.Tensor,
+    total_lens: torch.Tensor,
+    token_seq: torch.Tensor,
+    token_pos: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    uncompressed_kv_lens: torch.Tensor,
+    window_size: int,
+    compress_ratio: int = 0,
+    compress_topk: torch.Tensor | None = None,
+    compress_width: int = 0,
     block: int = 128,
-) -> torch.Tensor:
-    """Assemble padded prefill sparse indices for ``flash_mla_sparse_fwd``.
+):
+    """Build padded prefill sparse indices and lengths for FlashMLA.
 
-    ``window_topk`` and ``compress_topk`` are per-sequence-local positions.
-    This kernel concatenates them, optionally applies the per-token compressed
-    offset for indexer output, adds the flat-KV ``repeat_cu`` base, unsqueezes
-    the head dimension, and pads the final width with ``-1``.
+    This fuses the previous window-topk construction, compressed-prefix
+    construction, global flat-KV offset application, head-dimension unsqueeze,
+    padding, and topk-length construction into one Triton launch.
     """
-    assert window_topk.dim() == 2
-    assert repeat_cu.dim() == 1
-    num_tokens = window_topk.size(0)
-    window_width = window_topk.size(1)
-    has_compress = compress_topk is not None
-    compress_width = compress_topk.size(1) if has_compress else 0
-    total_topk = window_width + compress_width
-    padded_topk = triton.cdiv(total_topk, block) * block
-    out = torch.empty((num_tokens, 1, padded_topk), dtype=torch.int32, device=window_topk.device)
-    if num_tokens == 0:
-        return out
-
-    dummy = window_topk
-    if compress_topk is None:
-        compress_topk = dummy
-    if compress_offset is None:
-        compress_offset = dummy
-        has_compress_offset = False
+    assert token_seq.dim() == 1
+    assert token_pos.dim() == 1
+    num_tokens = token_seq.numel()
+    has_compress = compress_ratio != 0
+    dummy_compress_topk = token_seq  # Pointer is never loaded when HAS_COMPRESS_TOPK is false.
+    if has_compress:
+        assert compress_ratio > 0
+        if compress_topk is not None:
+            assert compress_topk.dim() == 2
+            compress_width = compress_topk.size(1)
+            stride_c_t = compress_topk.stride(0)
+            stride_c_k = compress_topk.stride(1)
+            has_compress_topk = True
+        else:
+            assert compress_width is not None and compress_width >= 0
+            compress_topk = dummy_compress_topk
+            stride_c_t = 0
+            stride_c_k = 0
+            has_compress_topk = False
     else:
-        has_compress_offset = True
-        if compress_offset.dim() == 2:
-            assert compress_offset.size(1) == 1
-            compress_offset = compress_offset.reshape(-1)
+        compress_width = 0
+        compress_topk = dummy_compress_topk
+        stride_c_t = 0
+        stride_c_k = 0
+        has_compress_topk = False
+
+    total_topk = window_size + compress_width
+    padded_topk = triton.cdiv(max(total_topk, 1), block) * block
+    out = torch.empty((num_tokens, 1, padded_topk), dtype=torch.int32, device=token_seq.device)
+    topk_length = torch.empty((num_tokens, ), dtype=torch.int32, device=token_seq.device)
+    if num_tokens == 0:
+        return out, topk_length
 
     grid = (num_tokens, triton.cdiv(padded_topk, block))
-    _assemble_prefill_sparse_indices_kernel[grid](
-        window_topk,
+    _build_prefill_sparse_indices_kernel[grid](
+        start_pos,
+        total_lens,
+        token_seq,
+        token_pos,
+        cu_seqlens_k,
+        uncompressed_kv_lens,
         compress_topk,
-        repeat_cu,
-        compress_offset,
         out,
-        stride_w_t=window_topk.stride(0),
-        stride_w_k=window_topk.stride(1),
-        stride_c_t=compress_topk.stride(0),
-        stride_c_k=compress_topk.stride(1),
-        stride_co_t=compress_offset.stride(0),
+        topk_length,
+        stride_c_t=stride_c_t,
+        stride_c_k=stride_c_k,
         stride_o_t=out.stride(0),
-        stride_o_h=out.stride(1),
         stride_o_k=out.stride(2),
-        WINDOW_TOPK=window_width,
-        COMPRESS_TOPK=compress_width,
+        WINDOW_SIZE=window_size,
+        COMPRESS_RATIO=compress_ratio,
         TOTAL_TOPK=total_topk,
         PADDED_TOPK=padded_topk,
         HAS_COMPRESS=has_compress,
-        HAS_COMPRESS_OFFSET=has_compress_offset,
+        HAS_COMPRESS_TOPK=has_compress_topk,
         BLOCK=block,
     )
-    return out
+    return out, topk_length
