@@ -350,16 +350,25 @@ class BaseModelAgent:
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
-        # decoding inputs
-        self.step_inputs = self.strategy_factory.build_step_inputs()
+        self._init_runtime_state()
 
-        # long context
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+
+    def _init_runtime_state(self):
+        """Initialize request-local decode and chunk state."""
+        self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output: dict = None
         # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
-        # make dummy meta
-        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+    def reset_runtime_state(self):
+        """Discard request-local decode and chunk state after sleep cancels
+        sessions."""
+        self.step_inputs = self.strategy_factory.build_step_inputs()
+        self._prev_chunk_output = None
+        self._prev_chunk_last_logit = None
+        self.spec_agent.reset_runtime_state()
 
     @contextmanager
     def all_context(self):
@@ -1427,6 +1436,7 @@ class BaseModelAgent:
         self._drain_queues()
         torch.cuda.synchronize()
         self._release_completed_h2d_transfers()
+        self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
         self._update_params_ipc_event = None

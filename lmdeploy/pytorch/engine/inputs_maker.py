@@ -315,23 +315,31 @@ class InputsMakerAsync:
 
         self._init_do_prefill(config)
 
-        # consecutive decode counter for prefill starvation prevention
+        self._short_prefill_turns_per_long_chunk = max(1, _envs.opt_ttft_short_turns)
+        self._init_runtime_state()
+
+    def _init_runtime_state(self):
+        """Initialize request-local scheduling state."""
         self._decode_count = 0
         self._last_forward_kind = None
         self._short_prefill_turns_since_long_chunk = 0
-        self._short_prefill_turns_per_long_chunk = max(1, _envs.opt_ttft_short_turns)
-
-        # record for next forward.
         self.next_is_prefill = True
         self.forward_inputs = None
-
-        # running seqs
-        # mark the seqs that have been sent to executor
         self.running_seqs: list[SchedulerSequence] = []
         self.to_evict_seqs: list[SchedulerSequence] = []
+        self.long_context_chunker = LongContextChunker(self.config.max_prefill_token_num)
 
-        # long context chunker
-        self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
+    def reset_runtime_state(self):
+        """Discard request-local scheduling state after sleep cancels
+        sessions."""
+        self._decode_count = 0
+        self._last_forward_kind = None
+        self._short_prefill_turns_since_long_chunk = 0
+        self.next_is_prefill = True
+        self.forward_inputs = None
+        self.running_seqs = []
+        self.to_evict_seqs.clear()
+        self.long_context_chunker.clear()
 
     def clear_for_sleep(self):
         """Clear transient scheduling state before engine sleep."""

@@ -82,6 +82,50 @@ def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
     assert agent._prev_chunk_output is None
 
 
+def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    old_step_inputs = object()
+    new_step_inputs = object()
+
+    class _StrategyFactory:
+
+        def build_step_inputs(self):
+            events.append('build_step_inputs')
+            return new_step_inputs
+
+    class _SpecAgent:
+
+        def reset_runtime_state(self):
+            events.append('reset_spec')
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.strategy_factory = _StrategyFactory()
+    agent.spec_agent = _SpecAgent()
+    agent.step_inputs = old_step_inputs
+    agent._prev_chunk_output = {'model_metas': [object()]}
+    agent._prev_chunk_last_logit = object()
+
+    agent.reset_runtime_state()
+
+    assert agent.step_inputs is new_step_inputs
+    assert agent._prev_chunk_output is None
+    assert agent._prev_chunk_last_logit is None
+    assert events == ['build_step_inputs', 'reset_spec']
+
+
+def test_spec_agent_reset_runtime_state_discards_chunk_carry():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {'hidden_states': object()}
+
+    agent.reset_runtime_state()
+
+    assert agent._prev_chunk_last == {}
+
+
 class TestDrainQueues:
 
     def test_drain_empty_queues(self):
@@ -375,6 +419,12 @@ class TestModelAgentWakeup:
             def get_model(self):
                 return self.model
 
+        class _StrategyFactory:
+
+            def build_step_inputs(self):
+                events.append('build_step_inputs')
+                return {'fresh': 'step_inputs'}
+
         spec_agent = SpecModelAgent.__new__(SpecModelAgent)
         spec_agent.proposer = type('Proposer', (), {'model': _SpecGraphRunner()})()
         spec_agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
@@ -395,6 +445,8 @@ class TestModelAgentWakeup:
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
         model_agent.spec_agent = spec_agent
+        model_agent.strategy_factory = _StrategyFactory()
+        model_agent.step_inputs = {'stale': 'step_inputs'}
         model_agent._prev_chunk_output = {'model_metas': object()}
         model_agent._prev_chunk_last_logit = torch.ones(1, 2)
         model_agent._pre_in_que = asyncio.Queue()
@@ -421,6 +473,7 @@ class TestModelAgentWakeup:
 
         assert model_agent._prev_chunk_output is None
         assert model_agent._prev_chunk_last_logit is None
+        assert model_agent.step_inputs == {'fresh': 'step_inputs'}
         assert spec_agent._prev_chunk_last == {}
         assert model_agent.cache_engine is None
         assert model_agent.state_cache_engine is None
@@ -432,6 +485,7 @@ class TestModelAgentWakeup:
         assert model_agent._update_params_ipc_event is None
         assert 'main_reset' in events
         assert 'spec_reset' in events
+        assert 'build_step_inputs' in events
 
     def test_dp_kv_cache_wakeup_warms_before_releasing_forward_task(self):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
