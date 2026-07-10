@@ -32,7 +32,7 @@ class V4AttentionMetadata:
     """
 
     is_decoding: bool
-    # [bsz, 1, topk] logical compressed KV indices (converted to physical by V4IndicesUpdater)
+    # [bsz, 1, topk] logical compressed KV indices; CUDA backend converts them to physical paged-cache indices.
     indices_in_kvcache: torch.Tensor = None
     topk_length: torch.Tensor = None              # [bsz] int32
     extra_indices_in_kvcache: torch.Tensor = None  # [bsz, 1, extra_topk] ring-buffer positions

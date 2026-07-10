@@ -1,22 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import functools
 from dataclasses import dataclass, field
 
 import torch
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
-
-
-@torch.compile(dynamic=True)
-def _decode_padded_and_offset(is_padded, extra_topk_length, topk_length,
-                              extra_indices_in_kvcache, batch_offsets):
-    extra_topk_length = torch.where(is_padded, 1, extra_topk_length)
-    topk_length = torch.where(is_padded, 1, topk_length)
-    extra_indices = torch.where(extra_indices_in_kvcache >= 0,
-                                extra_indices_in_kvcache + batch_offsets,
-                                extra_indices_in_kvcache)
-    return extra_topk_length, topk_length, extra_indices
+from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import (
+    assemble_prefill_sparse_indices,
+    build_decode_compressed_sparse_indices,
+    build_decode_prefix_compressed_sparse_indices,
+    build_decode_window_sparse_indices,
+)
 
 
 @dataclass
@@ -24,10 +18,11 @@ class _V4DecodeWindowMeta:
     """Layer-invariant decode metadata for the local FP8 window cache."""
 
     is_padded: torch.Tensor = None
-    batch_offsets: torch.Tensor = None
     window_pos: torch.Tensor = None
     indices: torch.Tensor = None
     topk_length: torch.Tensor = None
+    disabled_indices: torch.Tensor = None
+    disabled_topk_length: torch.Tensor = None
 
 
 @dataclass
@@ -116,34 +111,30 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
 
     @staticmethod
     def _precompute_decode(meta, window_size, is_padded):
-        from lmdeploy.pytorch.backends.cuda.attention.v4_utils import build_prefix_positions, build_window_positions
         kv_seqlens = meta.kv_seqlens
         block_offsets = meta.block_offsets
         block_size = meta.block_size
 
-        # Pre-compute decode window_pos (eliminates per-layer torch.remainder)
-        window_pos = torch.remainder(meta.start_pos, window_size).to(torch.int32)
-
-        window_positions, window_lens, _ = build_window_positions(kv_seqlens, window_size)
-        window_indices = window_positions.unsqueeze(1).to(torch.int32)
-        window_topk_length = window_lens.to(torch.int32)
-
-        bsz = kv_seqlens.numel()
-        batch_offsets = (
-            torch.arange(bsz, device=kv_seqlens.device, dtype=torch.int32).view(-1, 1, 1) * window_size)
+        window_indices, window_topk_length, window_pos, disabled_indices, disabled_topk_length = (
+            build_decode_window_sparse_indices(
+                kv_seqlens, meta.start_pos, is_padded, window_size)
+        )
         meta.decode_window = _V4DecodeWindowMeta(
             is_padded=is_padded,
-            batch_offsets=batch_offsets,
             window_pos=window_pos,
             indices=window_indices,
             topk_length=window_topk_length,
+            disabled_indices=disabled_indices,
+            disabled_topk_length=disabled_topk_length,
         )
 
         for ratio in (4, 128):
             num_compressed = torch.div(kv_seqlens, ratio, rounding_mode='floor').to(torch.int32)
-            max_comp = max(block_offsets.size(1) * block_size // ratio, 1)
-            comp_positions, _ = build_prefix_positions(num_compressed, max_comp)
-            indices = comp_positions.unsqueeze(1).to(torch.int32)
+            indices = None
+            if ratio == 128:
+                max_comp = max(block_offsets.size(1) * block_size // ratio, 1)
+                indices = build_decode_prefix_compressed_sparse_indices(
+                    num_compressed, block_offsets, block_size, ratio, max_topk=max_comp)
             meta.get_ratio_meta(ratio).decode = _V4DecodeCompressMeta(
                 indices=indices,
                 topk_length=num_compressed,
@@ -243,79 +234,6 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         meta.prefill_window.slot = token_slot.clamp(min=0)
         meta.prefill_window.ring_pos = torch.where(invalid, -1, ring_pos)
 
-
-class V4IndicesUpdater:
-    """V4 indices updater.
-
-    Converts logical compressed KV positions to physical paged cache indices for decode, mirroring NSAIndicesUpdater in
-    mla.py. Also converts per-seq-local topk to global flat indices for prefill.
-    """
-
-    def __init__(self):
-        self._update_decode_func = None
-        self._update_prefill_func = None
-
-    def _update_decode_impl(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
-                            block_size: int, compress_ratio: int) -> torch.Tensor:
-        """Convert logical compressed positions to physical KV cache
-        indices."""
-        bsz = logical_topk.size(0)
-        safe_logical_topk = logical_topk.clamp(min=0)
-        token_positions = safe_logical_topk * compress_ratio
-        block_idx = torch.div(token_positions, block_size, rounding_mode='floor')
-        max_block_idx = block_offsets.size(1)
-        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-        block_idx_valid = block_idx < max_block_idx
-        phys_block = block_offsets.gather(1, safe_block_idx.view(bsz, -1)).view_as(logical_topk)
-        entries_per_block = block_size // compress_ratio
-        block_off = torch.remainder(safe_logical_topk, entries_per_block)
-        phys_indices = phys_block * entries_per_block + block_off
-        valid = (logical_topk >= 0) & block_idx_valid
-        return torch.where(valid, phys_indices, phys_indices.new_full((), -1))
-
-    def update_decode(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
-                      block_size: int, compress_ratio: int) -> torch.Tensor:
-        if self._update_decode_func is None:
-            self._update_decode_func = _try_dynamic_compile(
-                self._update_decode_impl, logical_topk, block_offsets, block_size, compress_ratio)
-        return self._update_decode_func(logical_topk, block_offsets, block_size, compress_ratio)
-
-    def _update_prefill_impl(self, topk_indices: torch.Tensor, q_seqlens: torch.Tensor,
-                             cu_seqlens_k: torch.Tensor) -> torch.Tensor:
-        """Convert per-seq-local topk to global flat indices for prefill.
-
-        Mirrors NSAIndicesUpdater.update_prefill: adds cu_seqlens_k offsets and preserves -1 padding.
-        """
-        num_tokens = topk_indices.size(0)
-        repeat_cu = torch.repeat_interleave(cu_seqlens_k[:-1], q_seqlens, output_size=num_tokens)
-        neg_mask = topk_indices < 0
-        topk_indices = topk_indices + repeat_cu[:, None]
-        topk_indices[neg_mask] = -1
-        return topk_indices.unsqueeze(1)  # [total_q, 1, total_topk]
-
-    def update_prefill(self, topk_indices: torch.Tensor, q_seqlens: torch.Tensor,
-                       cu_seqlens_k: torch.Tensor) -> torch.Tensor:
-        if self._update_prefill_func is None:
-            self._update_prefill_func = _try_dynamic_compile(
-                self._update_prefill_impl, topk_indices, q_seqlens, cu_seqlens_k)
-        return self._update_prefill_func(topk_indices, q_seqlens, cu_seqlens_k)
-
-    @staticmethod
-    @functools.cache
-    def build():
-        return V4IndicesUpdater()
-
-
-
-def _try_dynamic_compile(func, *args, **kwargs):
-    try:
-        compiled_func = torch.compile(func, dynamic=True)
-        compiled_func(*args, **kwargs)
-        return compiled_func
-    except Exception:
-        return func
-
-
 class _V4AttentionExecutorBase:
     """Shared state and helpers for V4 FlashMLA execution paths."""
 
@@ -337,10 +255,6 @@ class _V4AttentionExecutorBase:
     @property
     def compress_ratio(self):
         return self.impl.compress_ratio
-
-    @property
-    def v4_updater(self):
-        return self.impl.v4_updater
 
     @property
     def flash_mla(self):
@@ -382,18 +296,6 @@ class _V4AttentionExecutorBase:
         padded_s[:num_heads].copy_(attn_sink)
         return padded_q, padded_s, num_heads
 
-    @staticmethod
-    @torch.compile(dynamic=True)
-    def _pad_sparse_indices(indices: torch.Tensor | None, block: int = 128):
-        if indices is None:
-            return None
-        topk = indices.size(-1)
-        padded_topk = ((topk + block - 1) // block) * block
-        if padded_topk == topk:
-            return indices
-        pad = padded_topk - topk
-        return torch.nn.functional.pad(indices, (0, pad), value=-1)
-
 
 class _V4DecodeExecutor(_V4AttentionExecutorBase):
     """Decode-time sparse FlashMLA path."""
@@ -430,6 +332,7 @@ class _V4DecodeExecutor(_V4AttentionExecutorBase):
         # Phase 3: Compressed indices (indexer / fallback / no-compress)
         indices_in_kvcache = None
         topk_length = None
+        fallback_topk_length = None
         compressed_cache_fp8 = None
 
         if self.compress_ratio:
@@ -441,27 +344,29 @@ class _V4DecodeExecutor(_V4AttentionExecutorBase):
                 decode_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).decode
                 indices_in_kvcache = decode_ratio.indices
                 topk_length = decode_ratio.topk_length
+                fallback_topk_length = decode_ratio.topk_length
         else:
-            # No compression: -1 sentinel + zero topk_length disables compressed path
-            indices_in_kvcache = torch.full((bsz, 1, 1), -1, dtype=torch.int32, device=query.device)
-            topk_length = torch.zeros(bsz, dtype=torch.int32, device=query.device)
+            # No compression: pre-padded -1 sentinel + zero topk_length disables compressed path.
+            indices_in_kvcache = decode_window.disabled_indices
+            topk_length = decode_window.disabled_topk_length
 
         # Phase 4: Apply is_padded correction + convert to physical indices
         # Padded sequences (slot < 0) attend to only 1 KV entry to avoid OOB access.
         extra_k_cache = window_state_fp8.view(bsz, self.window_size, 1, -1)
-        batch_offsets = decode_window.batch_offsets
-        extra_topk_length, topk_length, extra_indices = _decode_padded_and_offset(
-            is_padded, extra_topk_length, topk_length,
-            extra_indices_in_kvcache, batch_offsets)
-        # Compressed indices: gather-based logical→physical (paged layout)
-        # Only indexer output needs conversion; fallback indices are already physical.
+        if self.compress_ratio:
+            topk_length = torch.where(is_padded, 1, topk_length)
+        extra_indices = extra_indices_in_kvcache
+        # Compressed indices: fused logical→physical conversion plus FlashMLA padding.
         if index_out is not None:
-            indices_in_kvcache = self.v4_updater.update_decode(
+            indices_in_kvcache = build_decode_compressed_sparse_indices(
                 indices_in_kvcache, block_offsets, block_size, self.compress_ratio)
+        elif self.compress_ratio and indices_in_kvcache is None:
+            indices_in_kvcache = build_decode_prefix_compressed_sparse_indices(
+                fallback_topk_length, block_offsets, block_size, self.compress_ratio)
 
         # Phase 5: FlashMLA sparse decode
-        padded_indices = self._pad_sparse_indices(indices_in_kvcache)
-        padded_extra_indices = self._pad_sparse_indices(extra_indices)
+        padded_indices = indices_in_kvcache
+        padded_extra_indices = extra_indices
         padded_query, padded_sink, original_heads = self._pad_query_heads(query, attn_sink)
         # When compression is active, primary k_cache = compressed FP8;
         # when no compression, window cache serves as primary.
@@ -510,26 +415,22 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
     def _select_compress_topk(self, index_out, attn_metadata: CudaV4AttentionMetadata):
         """Select compress_topk indices and per-token causal visibility count.
 
-        Returns (compress_topk, num_vis_compress):
+        Returns (compress_topk, num_vis_compress, compress_offset):
           - compress_topk: [total_q_tokens, max_width] or None
           - num_vis_compress: [total_q_tokens] int32 (raw compress-only count) or None
+          - compress_offset: [total_q_tokens, 1] int32 for indexer output, or None
         """
         if not self.compress_ratio:
-            return None, None
+            return None, None, None
 
         prefill_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).prefill
         if index_out is not None:
             compress_topk = index_out.indices_in_kvcache
-            # Offset indexer's logical indices into flat_kv positions
-            # Preserve -1 sentinels from bitonic_topk (invalid positions)
-            neg_mask = compress_topk < 0
-            compress_topk = compress_topk + attn_metadata.prefill_shared.compress_offset
-            compress_topk = compress_topk.masked_fill(neg_mask, -1)
             # Per-token causal limit from the pre-computed ratio-specific count.
             # index_out.topk_length is per-sequence and ignores causal masking.
-            return compress_topk, prefill_ratio.num_vis_compress
+            return compress_topk, prefill_ratio.num_vis_compress, attn_metadata.prefill_shared.compress_offset
 
-        return prefill_ratio.compress_topk, prefill_ratio.num_vis_compress
+        return prefill_ratio.compress_topk, prefill_ratio.num_vis_compress, None
 
     def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
                 caches, slot, index_out=None):
@@ -539,7 +440,7 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
         block_offsets = attn_metadata.block_offsets
 
         # Phase 1: Select compress_topk source + num_vis_compress
-        compress_topk, num_vis_compress = self._select_compress_topk(index_out, attn_metadata)
+        compress_topk, num_vis_compress, compress_offset = self._select_compress_topk(index_out, attn_metadata)
 
         # Phase 2: Flatten KV (before window write to preserve prev ring buffer)
         prefill_ratio = attn_metadata.get_ratio_meta(self.compress_ratio).prefill
@@ -568,17 +469,8 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
 
         # Phase 4: Assemble topk_indices (cat window + compress) + convert to global
         window_topk = attn_metadata.prefill_window.topk
-        if compress_topk is not None:
-            topk_indices = torch.cat([window_topk, compress_topk], dim=-1)
-        else:
-            topk_indices = window_topk
-        if repeat_cu is not None:
-            neg_mask = topk_indices < 0
-            topk_indices = torch.where(neg_mask, -1, topk_indices + repeat_cu[:, None])
-            topk_indices = topk_indices.unsqueeze(1)
-        else:
-            topk_indices = self.v4_updater.update_prefill(topk_indices, q_seqlens, cu_seqlens_k)
-        topk_indices = self._pad_sparse_indices(topk_indices).to(torch.int32)
+        topk_indices = assemble_prefill_sparse_indices(
+            window_topk, compress_topk, repeat_cu, compress_offset)
 
         # Phase 5: Compute topk_length + FlashMLA sparse prefill
         q_flat, attn_sink, num_heads = self._pad_query_heads(query.squeeze(0), attn_sink)
@@ -610,7 +502,6 @@ class TritonV4AttentionImpl:
         self.scale = scale
         self.window_size = window_size
         self.compress_ratio = compress_ratio
-        self.v4_updater = V4IndicesUpdater.build()
         import flash_mla
         self.flash_mla = flash_mla
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
