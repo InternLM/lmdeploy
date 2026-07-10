@@ -320,7 +320,11 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
     if model_format == 'fp8':
         logger.debug('Patch quantization config for fp8.')
         from lmdeploy.pytorch.envs import scale_fmt
-        quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128], scale_fmt=scale_fmt)
+        quantization_config = dict(quant_method='fp8',
+                                   fmt='e4m3',
+                                   weight_block_size=[128, 128],
+                                   scale_fmt=scale_fmt,
+                                   lmdeploy_patched=True)
     else:
         raise RuntimeError(f'Unsupported weight quantization method: {model_format}')
 
@@ -665,7 +669,15 @@ class QuantizationConfig:
     weight_block_size: tuple[int] = None
     activation_scheme: str = None
     ignored_layers: list[str] = field(default_factory=list)
+    fp8_quant_scope: str | None = None
     hf_quant_config: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate quantization scope."""
+        if self.fp8_quant_scope not in {None, 'moe_only'}:
+            raise ValueError(f'Unsupported fp8 quant scope: {self.fp8_quant_scope}')
+        if self.fp8_quant_scope is not None and self.quant_method != 'fp8':
+            raise ValueError('fp8_quant_scope is only supported for fp8 quantization.')
 
     @classmethod
     def from_config(cls, hf_config: Any):
@@ -686,6 +698,7 @@ class QuantizationConfig:
         scale_fmt = quant_config.get('scale_fmt', None)
         weight_block_size = quant_config.get('weight_block_size', None)
         activation_scheme = quant_config.get('activation_scheme', None)
+        fp8_quant_scope = quant_config.get('fp8_quant_scope', None)
 
         bits = None
         group_size = None
@@ -729,13 +742,20 @@ class QuantizationConfig:
             weight_block_size=weight_block_size,
             activation_scheme=activation_scheme,
             ignored_layers=ignored_layers,
+            fp8_quant_scope=fp8_quant_scope,
             hf_quant_config=quant_config,
         )
 
-    def get_quant_method(self, prefix: str = ''):
+    def get_quant_method(self, prefix: str = '', module_kind: str = 'linear'):
         """Get quant method for module."""
+        if module_kind not in {'linear', 'moe', 'norm'}:
+            raise ValueError(f'Unsupported quant module kind: {module_kind}')
+        if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
+            quant_method = None
+            return quant_method
         if not prefix or not self.ignored_layers:
-            return self.quant_method
+            quant_method = self.quant_method
+            return quant_method
 
         is_ignore = any([prefix in layer_name for layer_name in self.ignored_layers])
         quant_method = None if is_ignore else self.quant_method

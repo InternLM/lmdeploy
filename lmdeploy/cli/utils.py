@@ -291,6 +291,18 @@ class ArgumentHelper:
                                    help='Extra arguments to be forwarded to the HuggingFace config.')
 
     @staticmethod
+    def generation_config(parser):
+        """Add argument generation_config to parser."""
+        return parser.add_argument(
+            '--generation-config',
+            type=str,
+            default='auto',
+            help='The folder path to the generation config. Defaults to "auto", the '
+            'generation config will be loaded from model path. If set to "lmdeploy", no '
+            'generation config is loaded, lmdeploy defaults will be used. If set to a folder '
+            'path, the generation config will be loaded from the specified folder path.')
+
+    @staticmethod
     def use_logn_attn(parser):
         """Add argument use_logn_attn to parser."""
 

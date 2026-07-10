@@ -1,8 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from contextlib import contextmanager
+from __future__ import annotations
 
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
+import numpy as np
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
@@ -17,9 +22,24 @@ from ..model_inputs import DPMeta, ModelInputs
 from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
+from .guided_spec_helper import GuidedSpecHelper
 from .proposers.base import build_specdecode_proposer
 
+if TYPE_CHECKING:
+    pass
+
 logger = get_logger('lmdeploy')
+
+# Fields that hold a single scalar value shared across the expanded batch.
+_SCALAR_FIELDS = frozenset({
+    'max_top_k', 'min_top_p', 'max_num_logprobs',
+    'max_repetition_ngram_size',
+})
+# Fields that are global (not per-batch-element) and should not be
+# repeated when expanding sampling inputs.
+_GLOBAL_FIELDS = frozenset({
+    'session_to_cleanup',
+})
 
 
 def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) -> SamplingInputs:
@@ -48,6 +68,12 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
                 # reproducible but distinct random sampling
                 arange = torch.arange(num_tokens, device=v.device)
                 v = v + arange.repeat(sampling_inputs.batch_size)
+        elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
+            pass
+        elif isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == sampling_inputs.batch_size:
+            v = np.repeat(v, num_tokens, axis=0)
+        elif isinstance(v, (list, tuple)) and len(v) == sampling_inputs.batch_size:
+            v = type(v)(_item for elem in v for _item in [elem] * num_tokens)
         out_dict[k] = v
 
     out_dict['batch_size'] = sampling_inputs.batch_size * num_tokens
@@ -90,6 +116,27 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
                 shape = v.shape
                 v = v.view(batch_size, num_tokens, *shape[1:])
                 v = v[:, :-1].reshape(batch_size * (num_tokens - 1), *shape[1:])
+        elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
+            pass
+        elif isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == sampling_inputs.batch_size:
+            if is_last:
+                v = v[num_tokens - 1::num_tokens]
+            else:
+                v = v.reshape(batch_size, num_tokens, *v.shape[1:])[:, :-1].reshape(
+                    batch_size * (num_tokens - 1), *v.shape[1:])
+        elif isinstance(v, (list, tuple)):
+            # Skip if length doesn't match the expanded batch size (e.g.
+            # empty defaults or fields that were not per-batch).
+            if len(v) == sampling_inputs.batch_size:
+                if is_last:
+                    indices = list(range(num_tokens - 1, len(v), num_tokens))
+                    v = type(v)(v[i] for i in indices)
+                else:
+                    indices = []
+                    for b in range(batch_size):
+                        start = b * num_tokens
+                        indices.extend(range(start, start + num_tokens - 1))
+                    v = type(v)(v[i] for i in indices)
         out_dict[k] = v
 
     if is_last:
@@ -122,10 +169,22 @@ class SpecModelAgent(BaseSpecModelAgent):
                          )
 
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
+
+        # Guided decoding — set by ModelAgent after construction
+        self.guided_helper = GuidedSpecHelper()
+
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
-        # for long context carry-over in chunked decoding
+        self._init_runtime_state()
+
+    def _init_runtime_state(self):
+        """Initialize request-local draft carry state."""
         self._prev_chunk_last = {}
+
+    def reset_runtime_state(self):
+        """Discard request-local draft carry state after sleep cancels
+        sessions."""
+        self._prev_chunk_last.clear()
 
     @contextmanager
     def draft_context(self):
@@ -343,7 +402,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             self._prev_chunk_last.pop(key, None)
         return torch.cat([saved, tensor], dim=1)
 
-    async def _rejection_sampling(self, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs,
+    async def _rejection_sampling(self, model_inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                   sampling_inputs: SamplingInputs):
         """Do rejection sampling."""
 
@@ -366,7 +425,6 @@ class SpecModelAgent(BaseSpecModelAgent):
             )
             return output_logprobs
 
-        # Process target_logits via FusedLogitsProcessor for BOTH prefill and decoding
         target_logits = extra_inputs.target_logits
         batch_size = model_inputs.seq_length.size(0)
         num_rejected_tokens = torch.zeros_like(model_inputs.seq_length)
@@ -389,23 +447,38 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         num_expand_sampling = 1 if not model_inputs.is_decoding else self.num_spec_tokens + 1
         expanded_sampling_inputs = _expand_sampling_inputs(sampling_inputs, num_expand_sampling)
-        logits_processor = FusedLogitsProcessor(
-            expanded_sampling_inputs,
-            logprobs_mode=self.misc_config.logprobs_mode,
-        )
+        guided_helper = self.guided_helper
+        guided_helper.cleanup_sessions(sampling_inputs.session_to_cleanup)
+        guided_processors = guided_helper.get_processors(
+            sampling_inputs.session_ctx, sampling_inputs.response_formats)
 
         if model_inputs.is_decoding:
-            # TODO: guided decoding not supported yet for spec decoding
-            processed_logits, raw_logprobs = await logits_processor(target_logits)
-            # Slice bonus (last) position logits for each batch element
+            if guided_processors:
+                # Position-serial grammar mask via forked matchers;
+                # original matchers are NOT modified.
+                processed_logits, raw_logprobs = await self._guided_spec_logits_process(
+                    target_logits, expanded_sampling_inputs, guided_helper,
+                    guided_processors, batch_size, num_expand_sampling,
+                    draft_token_ids=extra_inputs.output_draft_token_ids)
+            else:
+                logits_processor = FusedLogitsProcessor(
+                    expanded_sampling_inputs,
+                    logprobs_mode=self.misc_config.logprobs_mode,
+                )
+                processed_logits, raw_logprobs = await logits_processor(target_logits)
+
+            # Bonus logits already have grammar mask applied in guided path
             bonus_logits = processed_logits[num_expand_sampling - 1::num_expand_sampling]  # [batch_size, vocab]
-            # Create a per-batch processor for bonus token sampling
-            # by slicing the expanded sampling_inputs back to batch_size
+
             bonus_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_expand_sampling)
-            logits_processor.sampling_inputs = bonus_sampling_inputs
-            # Sample next token from bonus position
+
+            logits_processor = FusedLogitsProcessor(
+                bonus_sampling_inputs,
+                logprobs_mode=self.misc_config.logprobs_mode,
+            )
+
             next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
-            # Reshape back to 3D
+
             processed_logits = processed_logits.view(batch_size, num_expand_sampling, -1)
             # Rejection sampling on processed logits (exclude bonus position)
             target_draft_logits = processed_logits[:, :-1].contiguous()  # [batch, num_spec, vocab]
@@ -416,9 +489,28 @@ class SpecModelAgent(BaseSpecModelAgent):
                 next_token_ids,
                 sampling_inputs=draft_sampling_inputs,
             )
-            # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
+
+            # Guided: accept final tokens on original matchers.
+            # Forked matchers were used during processing, so originals are still
+            # at pre-step state.  Accept rejection-sampled output + bonus token
+            # to bring originals to the correct state for the next step.
+            await guided_helper.accept_rejection_sampled_tokens(
+                guided_processors,
+                num_rejected_tokens,
+                output_token_ids,
+                next_token_ids,
+                self.num_spec_tokens,
+            )
         else:
+            # Prefill path — handle guided decoding manually (same pattern as
+            # the decode path) to keep accept_token in asyncio.to_thread and
+            # avoid the double-accept bug that occurs when
+            # FusedLogitsProcessor.sampling() also calls accept_token.
+            logits_processor = FusedLogitsProcessor(
+                expanded_sampling_inputs,
+                logprobs_mode=self.misc_config.logprobs_mode,
+            )
             if model_inputs.is_chunk and not model_inputs.is_last_chunk:
                 # dummy output, no need to sampling or compute logprobs for non-last chunk
                 next_token_ids = num_rejected_tokens
@@ -426,9 +518,20 @@ class SpecModelAgent(BaseSpecModelAgent):
                 raw_logprobs = None
             else:
                 bonus_logits, raw_logprobs = await logits_processor(target_logits)
-                # Sample next token from bonus position
+                # Apply guided bitmask (no fork needed — single position)
+                guided_bitmask = await guided_helper.prepare_bitmask(bonus_logits, guided_processors)
+                guided_helper.apply_bitmask(bonus_logits, guided_bitmask)
                 next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
                 output_token_ids = next_token_ids.unsqueeze(-1)
+                # Accept the sampled token on original grammar matchers
+                await guided_helper.accept_rejection_sampled_tokens(
+                    guided_processors,
+                    torch.zeros(next_token_ids.shape,
+                                dtype=next_token_ids.dtype),
+                    output_token_ids,
+                    next_token_ids,
+                    0,  # num_spec_tokens=0, only bonus accepted
+                )
 
         logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs.max_num_logprobs)
 
@@ -442,13 +545,47 @@ class SpecModelAgent(BaseSpecModelAgent):
         )
         return new_extra_inputs
 
+    async def _guided_spec_logits_process(
+        self,
+        target_logits: torch.Tensor,
+        expanded_sampling_inputs: SamplingInputs,
+        guided_helper: GuidedSpecHelper,
+        guided_processors: dict,
+        batch_size: int,
+        num_expand: int,
+        draft_token_ids: torch.LongTensor,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Apply position-serial grammar mask to target logits for spec decode.
+
+        Uses forked GrammarMatchers so that the original matchers are NOT
+        modified.  The caller is responsible for accepting the final tokens
+        on the original matchers after rejection sampling.
+
+        All ``num_expand`` positions (including the bonus position) are masked.
+        """
+        logits_processor = FusedLogitsProcessor(
+            expanded_sampling_inputs,
+            logprobs_mode=self.misc_config.logprobs_mode,
+        )
+        scores, raw_logprobs = await logits_processor(target_logits)
+
+        if not guided_processors:
+            return scores, raw_logprobs
+
+        scores_3d = scores.view(batch_size, num_expand, -1)
+        await guided_helper.apply_serial_bitmask(
+            scores_3d, guided_processors, draft_token_ids, self.num_spec_tokens)
+
+        scores = scores_3d.view(batch_size * num_expand, -1)
+        return scores, raw_logprobs
+
     def _forward_impl(self, inputs: ModelInputs):
         """Forward impl."""
         with self.draft_context():
             output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
-    async def async_sampling_logits(self, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs,
+    async def async_sampling_logits(self, model_inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                     sampling_inputs: SamplingInputs):
         """Sample target logits and run rejection sampling."""
         with record_function('spec_rejection_sampling'):
@@ -471,6 +608,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
             padding_batch_size = max(dp_meta.dp_batches)
             new_dpmeta = DPMeta.build(inputs.input_ids.numel(), dp_meta.dp_batches)
+            new_dpmeta.dp_is_decoding = dp_meta.dp_is_decoding
             return new_dpmeta, padding_batch_size
 
         def _update_dp_model_inputs(inputs: ModelInputs, dp_meta: DPMeta, padding_batch_size: int | None):
@@ -491,9 +629,20 @@ class SpecModelAgent(BaseSpecModelAgent):
             # remaining speculative forwards.
             output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
         else:
+            # Fork guided processors for draft model.
+            draft_guided_processors = None
+            orig_processors = self.guided_helper.get_processors(
+                sampling_inputs.session_ctx if sampling_inputs else None,
+                sampling_inputs.response_formats if sampling_inputs else None)
+            if orig_processors:
+                draft_guided_processors = {idx: proc.fork()
+                                           for idx, proc in orig_processors.items()
+                                           if not self.guided_helper.manager.is_terminated(proc)}
+
             loop_count = self.num_spec_tokens - 1
-            draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
-                outputs, inputs, extra_inputs)
+            draft_token_ids, model_metas, target_hidden_states = await self.proposer.get_outputs(
+                outputs, inputs, extra_inputs,
+                guided_processors=draft_guided_processors)
             draft_tokens_li = [draft_token_ids]
             if loop_count > 0:
                 inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
@@ -502,11 +651,15 @@ class SpecModelAgent(BaseSpecModelAgent):
                 extra_inputs.last_token_indices = None
                 # for dp > 1, need to update dp_meta and model inputs for next loop
                 dp_meta, padding_batch_size = __build_dp_meta(inputs)
-
+                # pad block_offsets for non-last chunks dummy run when dp>1
+                if dp_meta is not None and inputs.is_chunk and not inputs.is_last_chunk:
+                    inputs.block_offsets = torch.nn.functional.pad(inputs.block_offsets, (0, 1), value=0)
                 for loop_idx in range(loop_count):
                     inputs = _update_dp_model_inputs(inputs, dp_meta, padding_batch_size)
                     outputs = self._forward_impl(inputs)
-                    draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
+                    draft_token_ids, model_metas, target_hidden_states = await self.proposer.get_outputs(
+                        outputs, inputs,
+                        guided_processors=draft_guided_processors)
                     draft_tokens_li.append(draft_token_ids)
                     if loop_idx < loop_count - 1:
                         step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
@@ -547,57 +700,70 @@ class SpecModelAgent(BaseSpecModelAgent):
         draft_dist_config = self.draft_dist_ctx.dist_config
         if draft_dist_config.dp > 1:
             num_tokens = inputs.input_ids.numel()
+            batch_size = inputs.seq_length.numel()
             with self.draft_context():
                 inputs.build_dp_meta([num_tokens] * draft_dist_config.world_size)
+            inputs.dp_meta.dp_batches = [batch_size] * draft_dist_config.world_size
             inputs.dp_meta.dp_is_decoding = inputs.is_decoding
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""
-        target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
-        # warmup prefill
-        inputs = self.inputs_strategy.make_dummy(max_batches,
-                                                 is_decoding=False,
-                                                 device='cuda',
-                                                 vocab_size=self.model_config.vocab_size,
-                                                 target_hidden_size=target_hidden_size,
-                                                 target_dtype=self.model_config.dtype,
-                                                 meta=self.make_dummy_meta)
+        with self.draft_context():
+            dist_config = self.draft_dist_ctx.dist_config
+            if dist_config.dp > 1:
+                dist.barrier(group=self.draft_dist_ctx.cpu_group)
 
-        self._build_warmup_dp_meta(inputs)
-        self._forward_impl(inputs)
+            target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
-        capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
-        capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
-
-        # warmup decode
-        for batch_size in capture_batch_sizes:
-            # decode with num_spec_tokens + 1 per seq
-            inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                    is_decoding=True,
-                                                    device='cuda',
-                                                    vocab_size=self.model_config.vocab_size,
-                                                    max_q_seqlen=self.num_spec_tokens + 1,
-                                                    target_hidden_size=target_hidden_size,
-                                                    target_dtype=self.model_config.dtype,
-                                                    meta=self.make_dummy_meta)
+            # warmup prefill
+            inputs = self.inputs_strategy.make_dummy(max_batches,
+                                                     is_decoding=False,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     target_hidden_size=target_hidden_size,
+                                                     target_dtype=self.model_config.dtype,
+                                                     meta=self.make_dummy_meta)
             self._build_warmup_dp_meta(inputs)
+
+            # warmup prefill
             self._forward_impl(inputs)
-            # decode 1 tokens per sequence
-            inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                    is_decoding=True,
-                                                    device='cuda',
-                                                    vocab_size=self.model_config.vocab_size,
-                                                    max_q_seqlen=1,
-                                                    target_hidden_size=self.model_config.hidden_size,
-                                                    target_dtype=self.model_config.dtype,
-                                                    meta=self.make_dummy_meta)
-            self._build_warmup_dp_meta(inputs)
-            self._forward_impl(inputs)
+            torch.cuda.synchronize()
+
+            capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
+            capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+
+            # warmup decode
+            for batch_size in capture_batch_sizes:
+                # decode with num_spec_tokens + 1 per seq
+                inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                         is_decoding=True,
+                                                         device='cuda',
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         max_q_seqlen=self.num_spec_tokens + 1,
+                                                         target_hidden_size=target_hidden_size,
+                                                         target_dtype=self.model_config.dtype,
+                                                         meta=self.make_dummy_meta)
+                self._build_warmup_dp_meta(inputs)
+                self._forward_impl(inputs)
+                torch.cuda.synchronize()
+                # decode 1 tokens per sequence
+                inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                         is_decoding=True,
+                                                         device='cuda',
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         max_q_seqlen=1,
+                                                         target_hidden_size=self.model_config.hidden_size,
+                                                         target_dtype=self.model_config.dtype,
+                                                         meta=self.make_dummy_meta)
+                self._build_warmup_dp_meta(inputs)
+                self._forward_impl(inputs)
+                torch.cuda.synchronize()
 
     def reset_graph_runner(self):
         """Reset graph runner."""
         with self.draft_context():
+            self._prev_chunk_last.clear()
             if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
                 self.proposer.model.reset()
 
