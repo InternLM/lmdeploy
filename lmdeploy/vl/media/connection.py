@@ -57,6 +57,7 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
 def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M],
                    allowed_media_domains: list[str] | None = None) -> _M:
     url = url_spec.geturl()
+    allowed_media_domains = {domain.lower() for domain in allowed_media_domains} if allowed_media_domains else None
     fetch_timeout = 10
     if isinstance(media_io, ImageMediaIO):
         fetch_timeout = int(os.environ.get('LMDEPLOY_IMAGE_FETCH_TIMEOUT', 10))

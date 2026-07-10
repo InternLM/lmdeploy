@@ -61,6 +61,17 @@ def test_load_http_url_allowed_media_domains_exact_match(mock_safe, mock_get):
 
 @patch('requests.Session.get')
 @patch('lmdeploy.vl.media.connection._is_safe_url', return_value=(True, ''))
+def test_load_http_url_allowed_media_domains_normalizes_case(mock_safe, mock_get):
+    media_io = MagicMock()
+    media_io.load_bytes.return_value = 'loaded'
+    mock_get.return_value = MagicMock(content=b'data', status_code=200, is_redirect=False)
+
+    assert _load_http_url(urlparse('https://example.com/img.jpg'), media_io,
+                          allowed_media_domains=['Example.COM']) == 'loaded'
+
+
+@patch('requests.Session.get')
+@patch('lmdeploy.vl.media.connection._is_safe_url', return_value=(True, ''))
 def test_load_http_url_allowed_media_domains_rejects_subdomain(mock_safe, mock_get):
     media_io = MagicMock()
 
