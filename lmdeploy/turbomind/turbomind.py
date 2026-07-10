@@ -173,7 +173,7 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = _engine_config.session_len
-        self.health_executor = ThreadPoolExecutor(max_workers=1) if engine_config.enable_metrics else None
+        self.health_executor = ThreadPoolExecutor(max_workers=1)
 
     def _process_weights(self):
         """Process weight."""
