@@ -95,7 +95,7 @@ class GraphRunner:
 
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
-        pass
+        self._runner_meta.padding_batch_size = None
 
     def get_meta(self):
         """Get graphrunner meta."""

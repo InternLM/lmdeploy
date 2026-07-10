@@ -101,6 +101,7 @@ class SubCliServe:
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
+        ArgumentHelper.generation_config(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -328,6 +329,7 @@ class SubCliServe:
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,
                 allowed_media_domains=args.allowed_media_domains,
+                generation_config=args.generation_config,
             )
         else:
             from lmdeploy.serve.openai.launch_server import launch_server
@@ -361,6 +363,7 @@ class SubCliServe:
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,
                 allowed_media_domains=args.allowed_media_domains,
+                generation_config=args.generation_config,
             )
 
     @staticmethod

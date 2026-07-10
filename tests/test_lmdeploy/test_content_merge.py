@@ -388,7 +388,8 @@ def test_async_parse_multimodal_item_passes_allowed_media_domains(monkeypatch):
 
 
 def test_format_prompts_passes_allowed_media_domains(monkeypatch):
-    """Tuple prompt URL loading should honor the configured domain allowlist."""
+    """Tuple prompt URL loading should honor the configured domain
+    allowlist."""
     image = Image.new('RGB', (1, 1))
     load_calls = []
 

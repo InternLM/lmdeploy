@@ -174,7 +174,10 @@ def register(router: APIRouter, server_context) -> None:
         result_generator = server_context.async_engine.generate(
             engine_messages,
             session,
-            gen_config=to_generation_config(request),
+            gen_config=to_generation_config(
+                request,
+                default_gen_config=server_context.default_gen_config,
+            ),
             tools=parsed_request.tools,
             stream_response=True,
             sequence_start=True,

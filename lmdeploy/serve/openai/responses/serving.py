@@ -97,7 +97,10 @@ class OpenAIServingResponses:
         except ValueError as err:
             return error_response(HTTPStatus.BAD_REQUEST, str(err), param='input')
         try:
-            gen_config = to_generation_config(request)
+            gen_config = to_generation_config(
+                request,
+                default_gen_config=self.server_context.default_gen_config,
+            )
         except ValueError as err:
             return error_response(HTTPStatus.BAD_REQUEST, str(err), param='text')
         try:

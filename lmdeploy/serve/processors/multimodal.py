@@ -294,7 +294,8 @@ class MultimodalProcessor:
         if all(MultimodalProcessor._is_str_images_pair(prompt) for prompt in prompts):
             # batch of (prompt, image or [images]) or (image or [images], prompt) ->
             # [[openai_gpt4v_message], [openai_gpt4v_message], ...]
-            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt, allowed_media_domains)] for prompt in prompts]
+            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt, allowed_media_domains)]
+                    for prompt in prompts]
         raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
                          'or (prompt, image or [images]) or (image or [images], prompt) pair.')
 

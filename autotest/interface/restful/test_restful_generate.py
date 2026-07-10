@@ -881,9 +881,10 @@ class TestGenerateComprehensive:
     def test_repetition_penalty(self):
         print(f'\n[Model: {self.model_name}] Running repetition penalty test')
         prompt = 'Repeat repeat repeat repeat'
+        base = {'prompt': prompt, 'max_tokens': 10, 'top_k': 0, 'stream': False}
 
-        resp_no_penalty = self._post({'prompt': prompt, 'max_tokens': 10, 'repetition_penalty': 1.0, 'stream': False})
-        resp_penalty = self._post({'prompt': prompt, 'max_tokens': 10, 'repetition_penalty': 1.5, 'stream': False})
+        resp_no_penalty = self._post({**base, 'repetition_penalty': 1.0})
+        resp_penalty = self._post({**base, 'repetition_penalty': 1.5})
 
         text_no_penalty = resp_no_penalty.json()['text']
         text_penalty = resp_penalty.json()['text']
