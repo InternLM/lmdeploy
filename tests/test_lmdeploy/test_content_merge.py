@@ -387,6 +387,26 @@ def test_async_parse_multimodal_item_passes_allowed_media_domains(monkeypatch):
     ]
 
 
+def test_format_prompts_passes_allowed_media_domains(monkeypatch):
+    """Tuple prompt URL loading should honor the configured domain allowlist."""
+    image = Image.new('RGB', (1, 1))
+    load_calls = []
+
+    def fake_load_from_url(data_src, media_io, allowed_media_domains=None):
+        load_calls.append((data_src, type(media_io).__name__, allowed_media_domains))
+        return image
+
+    monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
+
+    prompts = MultimodalProcessor.format_prompts(('describe', 'https://example.com/a.png'),
+                                                 allowed_media_domains=['example.com'])
+
+    assert load_calls == [('https://example.com/a.png', 'ImageMediaIO', ['example.com'])]
+    assert prompts[0][0]['content'][0] == {'type': 'text', 'text': 'describe'}
+    assert prompts[0][0]['content'][1]['type'] == 'image_data'
+    assert prompts[0][0]['content'][1]['image_data']['data'] is image
+
+
 def test_async_parse_multimodal_item_preserves_tool_image_content(monkeypatch):
     """Tool result images should be parsed in place like vLLM."""
     load_calls = []
