@@ -607,6 +607,80 @@ class TestScoreKVLargeHeadDim:
                                num_states, overlap, device, dtype)
 
 
+class TestScoreAndFillStateDecode:
+
+    @pytest.fixture
+    def device(self):
+        yield 'cuda'
+
+    @pytest.fixture
+    def dtype(self):
+        yield torch.bfloat16
+
+    def _run_decode_test(self, kvlens, ratio, head_dim, overlap, device, dtype):
+        B = len(kvlens)
+        coff = 1 + overlap
+        D = coff * head_dim
+        max_write = ratio * coff
+        num_states = B
+
+        ape = torch.randn(ratio, D, dtype=torch.float32, device=device)
+        state_ids = torch.arange(B, dtype=torch.int32, device=device)
+        kv_state = torch.zeros(num_states, max_write, D, dtype=torch.float32, device=device)
+        score_state = torch.full((num_states, max_write, D), float('-inf'),
+                                 dtype=torch.float32, device=device)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compress_state
+        for b, kvlen in enumerate(kvlens):
+            history_len = kvlen - 1
+            if history_len <= 0:
+                continue
+            hist_kv = torch.randn(history_len, D, dtype=dtype, device=device)
+            hist_score = torch.randn(history_len, D, dtype=dtype, device=device)
+            hist_cu_q = torch.tensor([0, history_len], dtype=torch.int32, device=device)
+            hist_kvlen = torch.tensor([history_len], dtype=torch.int32, device=device)
+            hist_sids = torch.tensor([b], dtype=torch.int32, device=device)
+            fill_compress_state(hist_kv, hist_score, ape, kv_state, score_state,
+                                hist_sids, hist_cu_q, hist_kvlen)
+
+        kv = torch.randn(B, D, dtype=dtype, device=device)
+        score = torch.randn(B, D, dtype=dtype, device=device)
+        cu_q_seqlens = torch.arange(B + 1, dtype=torch.int32, device=device)
+        kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)
+
+        ref_kv_state = kv_state.clone()
+        ref_score_state = score_state.clone()
+        ref_compressed = _reference_score_kv(kv.clone(), score.clone(), ape,
+                                             ref_kv_state, ref_score_state,
+                                             state_ids, cu_q_seqlens,
+                                             kv_seqlens, overlap)
+        ref_kv_state, ref_score_state = _reference_fill_compress_state(
+            kv, score, ape, ref_kv_state, ref_score_state, state_ids,
+            cu_q_seqlens, kv_seqlens, overlap)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import score_and_fill_state_decode
+        compressed = torch.zeros(B, head_dim, dtype=dtype, device=device)
+        test_kv_state = kv_state.clone()
+        test_score_state = score_state.clone()
+        score_and_fill_state_decode(kv, score, ape, test_kv_state,
+                                    test_score_state, state_ids, cu_q_seqlens,
+                                    kv_seqlens, compressed, overlap)
+
+        torch.testing.assert_close(compressed.float(), ref_compressed.float(),
+                                   atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(test_kv_state.float(), ref_kv_state.float(),
+                                   atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(test_score_state, ref_score_state,
+                                   atol=1e-2, rtol=1e-2)
+
+    @pytest.mark.parametrize('kvlens, ratio, head_dim, overlap', [
+        ([4, 5, 8], 4, 512, True),
+        ([128, 129, 256], 128, 128, False),
+    ])
+    def test_decode(self, kvlens, ratio, head_dim, overlap, device, dtype):
+        self._run_decode_test(kvlens, ratio, head_dim, overlap, device, dtype)
+
+
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFillCompressedKVFP8:
     """Test FP8 direct write in fill_compressed_kv.

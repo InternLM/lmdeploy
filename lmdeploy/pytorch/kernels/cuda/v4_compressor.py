@@ -405,6 +405,7 @@ def _score_kv_tiled_decode_kernel(
     head_dim: tl.constexpr,
     ratio: tl.constexpr,
     overlap: tl.constexpr,
+    FILL_STATE: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
     """Tiled score_kv for decode. Grid: (n_tiles, B).
@@ -520,6 +521,59 @@ def _score_kv_tiled_decode_kernel(
 
     out_ptrs = ckv_ptr + seq_start * ckv_stride_s + offs_d * ckv_stride_d
     tl.store(out_ptrs, compressed, mask=emit)
+
+    if FILL_STATE:
+        if overlap:
+            state_cap: tl.constexpr = ratio * 2
+            state_row = (start_pos + ratio) % state_cap
+            left_kv = tl.load(
+                kv_ptr + seq_start * kv_stride_s +
+                offs_d * kv_stride_d)
+            left_score = tl.load(
+                score_ptr + seq_start * score_stride_s +
+                offs_d * score_stride_d).to(tl.float32)
+            left_ape = tl.load(
+                ape_ptr + pos_in_ratio * ape_stride_r +
+                offs_d * ape_stride_d).to(tl.float32)
+
+            tl.store(
+                kv_state_ptr + state_id * kvc_stride_n +
+                state_row * kvc_stride_r +
+                offs_d * kvc_stride_d,
+                left_kv,
+            )
+            tl.store(
+                score_state_ptr + state_id * scorec_stride_n +
+                state_row * scorec_stride_r +
+                offs_d * scorec_stride_d,
+                left_score + left_ape,
+            )
+            tl.store(
+                kv_state_ptr + state_id * kvc_stride_n +
+                state_row * kvc_stride_r +
+                (head_dim + offs_d) * kvc_stride_d,
+                cur_kv,
+            )
+            tl.store(
+                score_state_ptr + state_id * scorec_stride_n +
+                state_row * scorec_stride_r +
+                (head_dim + offs_d) * scorec_stride_d,
+                cur_score,
+            )
+        else:
+            state_row = pos_in_ratio
+            tl.store(
+                kv_state_ptr + state_id * kvc_stride_n +
+                state_row * kvc_stride_r +
+                offs_d * kvc_stride_d,
+                cur_kv,
+            )
+            tl.store(
+                score_state_ptr + state_id * scorec_stride_n +
+                state_row * scorec_stride_r +
+                offs_d * scorec_stride_d,
+                cur_score,
+            )
 
 
 @triton.jit
@@ -819,7 +873,7 @@ def score_kv(
                 *score_state.stride(),
                 *compressed_kv.stride(),
                 head_dim=head_dim, ratio=ratio,
-                overlap=overlap, BLOCK_D=BLOCK_D,
+                overlap=overlap, FILL_STATE=False, BLOCK_D=BLOCK_D,
                 num_warps=4,
             )
         else:
@@ -876,6 +930,48 @@ def score_kv(
                 overlap=overlap, is_decoding=False,
                 BLOCK_D=BLOCK_D,
             )
+
+
+def score_and_fill_state_decode(
+    kv: torch.Tensor,
+    score: torch.Tensor,
+    ape: torch.Tensor,
+    kv_state: torch.Tensor,
+    score_state: torch.Tensor,
+    state_ids: torch.Tensor,
+    cu_q_seqlens: torch.Tensor,
+    kv_seqlens: torch.Tensor,
+    compressed_kv: torch.Tensor,
+    overlap: bool,
+):
+    """Decode-only fused score_kv + fill_compress_state.
+
+    The kernel reads the old state to compute ``compressed_kv`` and then
+    writes the current token into the compressor state in the same launch.
+    """
+    assert kv.size(0) == state_ids.size(0)
+    assert score.size(0) == state_ids.size(0)
+    ratio = ape.size(0)
+    D = ape.size(1)
+    head_dim = D // (1 + overlap)
+    B = state_ids.size(0)
+    BLOCK_D = 128
+    assert head_dim % BLOCK_D == 0
+    n_tiles = head_dim // BLOCK_D
+    grid = (n_tiles, B)
+    _score_kv_tiled_decode_kernel[grid](
+        kv, score, ape, kv_state, score_state, state_ids, cu_q_seqlens,
+        kv_seqlens, compressed_kv,
+        *kv.stride(),
+        *score.stride(),
+        *ape.stride(),
+        *kv_state.stride(),
+        *score_state.stride(),
+        *compressed_kv.stride(),
+        head_dim=head_dim, ratio=ratio,
+        overlap=overlap, FILL_STATE=True, BLOCK_D=BLOCK_D,
+        num_warps=4,
+    )
 
 
 @triton.jit
