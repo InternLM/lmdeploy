@@ -55,13 +55,15 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                                          threads: int = _THREADS):
     num_tokens = T.dynamic('num_tokens')
     score_width = T.dynamic('score_width')
+    score_stride = T.dynamic('score_stride')
 
     @T.prim_func
     def sparse_index_topk_byte_radix_kernel_(
-        Scores: T.Tensor[(num_tokens, score_width), T.float32],
+        Scores: T.StridedTensor[(num_tokens, score_width), (score_stride, 1), T.float32],
         Seqlens: T.Tensor[(num_tokens,), T.int32],
         Out: T.Tensor[(num_tokens, top_k), T.int32],
     ):
+        _ = score_stride
         with T.Kernel(num_tokens, threads=threads) as row:
             tidx = T.get_thread_binding(0)
             histogram = T.alloc_shared((_RADIX_SIZE,), T.int32)
@@ -188,7 +190,7 @@ def sparse_index_topk(scores: torch.Tensor,
     assert scores.dtype == torch.float32
     assert q_seqlens.dtype in (torch.int32, torch.int64)
     assert kv_seqlens.dtype == torch.int32
-    assert scores.is_contiguous()
+    assert scores.stride(-1) == 1
 
     num_tokens = scores.size(0)
     if num_tokens != kv_seqlens.size(0):

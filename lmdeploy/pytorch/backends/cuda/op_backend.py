@@ -288,6 +288,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             max_num_tokens=cache_config.max_prefill_token_num,
             max_batch_size=cache_config.max_batches,
             dtype=model_config.dtype,
+            model_config=model_config,
         )
         get_warmup_manager().warmup(warmup_meta)
 

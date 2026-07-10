@@ -77,6 +77,24 @@ class V4AttentionMetadata:
             start_pos=(kv_seqlens.to(torch.long) - q_seqlens.to(torch.long)),
         )
 
+    def build_indexer_metadata(self):
+        """Build backend-aware V4 indexer metadata for this step."""
+        from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
+
+        kv_seqlens = self.kv_seqlens
+        return V4IndexerMetadata(
+            block_offsets=self.block_offsets,
+            is_decoding=self.is_decoding,
+            cu_q_seqlens=self.cu_q_seqlens,
+            kv_seqlens=kv_seqlens,
+            q_seqlens=self.q_seqlens,
+            max_kv_seqlen=self.max_kv_seqlen,
+            max_q_seqlen=self.max_q_seqlen,
+            block_size=self.block_size,
+            num_index_r4=torch.div(kv_seqlens, 4, rounding_mode='floor').to(torch.int32),
+            num_index_r128=torch.div(kv_seqlens, 128, rounding_mode='floor').to(torch.int32),
+        )
+
 
 T = TypeVar('T', bound=AttentionMetadata)
 

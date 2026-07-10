@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import torch
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import (
     build_decode_compressed_sparse_indices,
     build_decode_prefix_compressed_sparse_indices,
@@ -63,12 +64,30 @@ class _V4PrefillRatioMeta:
 
 
 @dataclass
+class _V4IndexScoreMeta:
+    """CUDA backend metadata for paged index-score generation."""
+
+    context_lens: torch.Tensor = None
+    block_offsets: torch.Tensor = None
+    schedule_metadata: object = None
+    max_k_seqlen: int = None
+
+
+@dataclass
 class _V4RatioMeta:
     """Metadata and cached scheduler state keyed by compression ratio."""
 
     decode: _V4DecodeCompressMeta = None
     prefill: _V4PrefillRatioMeta = None
     flash_mla_sched_meta: object = None
+    index_score_meta: _V4IndexScoreMeta = None
+
+
+@dataclass
+class CudaV4IndexerMetadata(V4IndexerMetadata):
+    """CUDA-specific V4 indexer metadata."""
+
+    index_score_meta: _V4IndexScoreMeta = None
 
 
 @dataclass
@@ -91,6 +110,13 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             ratio_meta = _V4RatioMeta()
             self.ratio_meta[ratio] = ratio_meta
         return ratio_meta
+
+    def build_indexer_metadata(self) -> CudaV4IndexerMetadata:
+        base = super().build_indexer_metadata()
+        return CudaV4IndexerMetadata(
+            **base.__dict__,
+            index_score_meta=self.get_ratio_meta(4).index_score_meta,
+        )
 
     @classmethod
     def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'CudaV4AttentionMetadata':
@@ -133,10 +159,14 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
                 max_comp = max(block_offsets.size(1) * block_size // ratio, 1)
                 indices = build_decode_prefix_compressed_sparse_indices(
                     num_compressed, block_offsets, block_size, ratio, max_topk=max_comp)
-            meta.get_ratio_meta(ratio).decode = _V4DecodeCompressMeta(
+            ratio_meta = meta.get_ratio_meta(ratio)
+            ratio_meta.decode = _V4DecodeCompressMeta(
                 indices=indices,
                 topk_length=num_compressed,
             )
+            if ratio == 4:
+                ratio_meta.index_score_meta = CudaV4AttentionMetadata._build_decode_index_score_meta(
+                    meta, ratio, num_compressed)
 
     @staticmethod
     def _precompute_prefill(meta, window_size, slot):
@@ -186,13 +216,17 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             flat_kv_lens = (prev_window_lens + raw_kv_lens_t + num_compressed).to(torch.int32)
             cu_seqlens_k = torch.zeros(kv_seqlens.numel() + 1, dtype=torch.int32, device=kv_seqlens.device)
             torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
-            meta.get_ratio_meta(ratio).prefill = _V4PrefillRatioMeta(
+            ratio_meta = meta.get_ratio_meta(ratio)
+            ratio_meta.prefill = _V4PrefillRatioMeta(
                 max_flat_kv_len=max_unkv + max_kv // ratio,
                 total_flat_kv_tokens=sum_kv + sum_kv // ratio,
                 compress_width=max_kv // ratio,
                 flat_kv_lens=flat_kv_lens,
                 cu_seqlens_k=cu_seqlens_k,
             )
+            if ratio == 4:
+                ratio_meta.index_score_meta = CudaV4AttentionMetadata._build_prefill_index_score_meta(
+                    meta, ratio, num_compressed.to(torch.int32))
 
         # Pre-compute window write indices (reused across all layers)
         token_seq = token_meta.seq_id
@@ -204,6 +238,49 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         invalid = token_abs_pos < cutoff_pos
         meta.prefill_window = _V4PrefillWindowMeta(slot=token_slot.clamp(min=0))
         meta.prefill_window.ring_pos = torch.where(invalid, -1, ring_pos)
+
+    @staticmethod
+    def _get_index_score_max_len(meta, ratio: int) -> int:
+        max_kv_seqlen = meta.max_kv_seqlen
+        if meta.is_decoding or max_kv_seqlen is None:
+            max_kv_seqlen = meta.block_offsets.size(1) * meta.block_size
+        return max(max_kv_seqlen // ratio, 1)
+
+    @staticmethod
+    def _build_index_score_meta(meta, ratio: int, context_lens: torch.Tensor,
+                                page_table: torch.Tensor) -> _V4IndexScoreMeta:
+        import deep_gemm
+
+        if page_table.dtype != torch.int32:
+            page_table = page_table.to(torch.int32)
+        context_lens = context_lens.to(torch.int32).unsqueeze(-1)
+        entries_per_block = meta.block_size // ratio
+        schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
+            context_lens, entries_per_block, deep_gemm.get_num_sms())
+        return _V4IndexScoreMeta(
+            context_lens=context_lens,
+            block_offsets=page_table,
+            schedule_metadata=schedule_metadata,
+            max_k_seqlen=CudaV4AttentionMetadata._get_index_score_max_len(meta, ratio),
+        )
+
+    @staticmethod
+    def _build_decode_index_score_meta(meta, ratio: int, num_compressed: torch.Tensor) -> _V4IndexScoreMeta:
+        return CudaV4AttentionMetadata._build_index_score_meta(
+            meta, ratio, num_compressed, meta.block_offsets)
+
+    @staticmethod
+    def _build_prefill_index_score_meta(meta, ratio: int, num_compressed: torch.Tensor) -> _V4IndexScoreMeta:
+        token_seq = meta.prefill_shared.token_seq.to(torch.long)
+        token_pos = meta.prefill_shared.token_pos.to(meta.kv_seqlens.dtype)
+        raw_q_start = meta.kv_seqlens - meta.q_seqlens
+        visible_raw = raw_q_start.index_select(0, token_seq) + token_pos + 1
+        context_lens = torch.div(visible_raw, ratio, rounding_mode='floor')
+        max_context_lens = num_compressed.index_select(0, token_seq)
+        context_lens = torch.minimum(torch.maximum(context_lens, torch.zeros_like(context_lens)), max_context_lens)
+        page_table = meta.block_offsets.index_select(0, token_seq)
+        return CudaV4AttentionMetadata._build_index_score_meta(meta, ratio, context_lens, page_table)
+
 
 class _V4AttentionExecutorBase:
     """Shared state and helpers for V4 FlashMLA execution paths."""

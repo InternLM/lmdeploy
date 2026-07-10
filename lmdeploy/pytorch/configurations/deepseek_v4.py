@@ -4,7 +4,12 @@ import importlib.util
 import torch
 
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
-from lmdeploy.pytorch.consts import V4_FLASHMLA_D_NOPE, V4_FLASHMLA_D_ROPE, V4_FLASHMLA_NUM_TILES
+from lmdeploy.pytorch.consts import (
+    V4_FLASHMLA_D_NOPE,
+    V4_FLASHMLA_D_ROPE,
+    V4_FLASHMLA_NUM_TILES,
+    v4_packed_index_cache_shape,
+)
 from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
@@ -104,9 +109,8 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
             BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (entries_r4, V4_PACKED_TOKEN_DIM),
                            torch.float8_e4m3fn))
         block_specs.append(
-            BlockCacheSpec('v4_index_kv_r4', ratio4_layers, (entries_r4, index_head_dim), torch.float8_e4m3fn))
-        block_specs.append(
-            BlockCacheSpec('v4_index_kv_r4_scale', ratio4_layers, (entries_r4, 1), torch.float32))
+            BlockCacheSpec('v4_index_kv_r4', ratio4_layers,
+                           v4_packed_index_cache_shape(entries_r4, index_head_dim), torch.uint8))
     if ratio128_layers:
         entries_r128 = block_size // 128
         block_specs.append(

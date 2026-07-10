@@ -101,7 +101,8 @@ def hc_pre_reduce(
     hc_mult: int,
     out_dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
-    """Reduce DeepSeek-V4 HC states from ``[..., hc, dim]`` to ``[..., dim]``."""
+    """Reduce DeepSeek-V4 HC states from ``[..., hc, dim]`` to ``[...,
+    dim]``."""
     if out_dtype is None:
         out_dtype = x.dtype
     dim = x.size(-1)
@@ -138,7 +139,8 @@ def hc_post_expand(
     comb: torch.Tensor,
     hc_mult: int,
 ) -> torch.Tensor:
-    """Expand DeepSeek-V4 HC states from ``[..., dim]`` to ``[..., hc, dim]``."""
+    """Expand DeepSeek-V4 HC states from ``[..., dim]`` to ``[..., hc,
+    dim]``."""
     dim = x.size(-1)
     out_shape = (*x.shape[:-1], hc_mult, dim)
     out = torch.empty(out_shape, device=x.device, dtype=x.dtype)

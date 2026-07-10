@@ -866,3 +866,48 @@ class TestFillCompressedKVFP8:
                                        atol=0.1, rtol=0.1)
             num_written += 1
         assert num_written == B
+
+    def test_packed_index_cache(self, device, dtype):
+        """Write the indexer cache through the CUDA backend packed-page
+        view."""
+        B = 2
+        kvlens = [4, 8]
+        head_dim = 128
+        compressed_kv = torch.randn(B, head_dim, dtype=dtype, device=device)
+        cu_q_seqlens = torch.tensor([0, 1, 2], dtype=torch.int32, device=device)
+        kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)
+        max_blocks = 4
+        entries_per_block = self.BLOCK_SIZE // 4
+        num_blocks = B * max_blocks
+        block_offsets = torch.arange(num_blocks, device=device).reshape(B, max_blocks).long()
+
+        from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
+        from lmdeploy.pytorch.backends.cuda.v4_compressor import (
+            TritonV4CompressorImpl,
+            _get_v4_packed_index_cache_views,
+        )
+        from lmdeploy.pytorch.consts import v4_packed_index_cache_shape
+
+        index_cache = torch.zeros(num_blocks,
+                                  *v4_packed_index_cache_shape(entries_per_block, head_dim),
+                                  dtype=torch.uint8,
+                                  device=device)
+        meta = V4CompressorMetadata(
+            cu_q_seqlens=cu_q_seqlens,
+            kv_seqlens=kv_seqlens,
+            block_offsets=block_offsets,
+            block_size=self.BLOCK_SIZE,
+            max_q_seqlen=1,
+        )
+        impl = TritonV4CompressorImpl(compress_ratio=4, overlap=True, head_dim=head_dim)
+        impl.write_compressed_kv(compressed_kv, index_cache, meta)
+
+        value_cache, scale_cache = _get_v4_packed_index_cache_views(index_cache, head_dim)
+        num_written = 0
+        for write_pos, phys_block, block_off in self._written_entries(
+                cu_q_seqlens, kv_seqlens, block_offsets, 4, self.BLOCK_SIZE):
+            dequant = value_cache[phys_block, block_off].float() * scale_cache[phys_block, block_off]
+            torch.testing.assert_close(dequant, compressed_kv[write_pos].float(),
+                                       atol=0.1, rtol=0.1)
+            num_written += 1
+        assert num_written == B

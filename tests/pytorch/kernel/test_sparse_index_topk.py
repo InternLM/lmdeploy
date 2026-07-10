@@ -60,6 +60,28 @@ def test_sparse_index_topk_matches_torch_topk_and_fill():
     _assert_topk_ids(scores, out, seqlens, k, fill=fill)
 
 
+def test_sparse_index_topk_accepts_padded_score_stride():
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
+
+    device = 'cuda'
+    k = 512
+    score_width = 1024
+    padded_width = 1280
+    seqlens = [600, 777, 1024, 321]
+    generator = torch.Generator(device=device).manual_seed(20260710)
+    storage = torch.randn(len(seqlens), padded_width, device=device,
+                          dtype=torch.float32, generator=generator)
+    scores = storage[:, :score_width]
+    scores += torch.arange(score_width, device=device, dtype=torch.float32) * 1e-6
+    assert not scores.is_contiguous()
+
+    q_seqlens = torch.ones(len(seqlens), device=device, dtype=torch.int64)
+    kv_seqlens = torch.tensor(seqlens, device=device, dtype=torch.int32)
+
+    out = sparse_index_topk(scores, q_seqlens, kv_seqlens, k=k)
+    _assert_topk_ids(scores, out, seqlens, k)
+
+
 def test_sparse_index_topk_expands_batch_kv_seqlens_for_prefill():
     from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
 

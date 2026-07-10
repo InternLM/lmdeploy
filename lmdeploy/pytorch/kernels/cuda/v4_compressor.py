@@ -1189,7 +1189,8 @@ def _prepare_compressed_kv_write_targets(
     has_fp8 = fp8_cache is not None
     has_fp8_simple = kv_cache is not None and kv_cache.dtype == torch.float8_e4m3fn
     if kv_cache is not None and not has_fp8_simple:
-        raise RuntimeError('V4 compressed KV cache must be FP8; BF16 cache writes are unsupported.')
+        raise RuntimeError('V4 compressed KV kernel writes require an FP8 kv_cache. '
+                           'Packed uint8 caches must be unpacked by the CUDA backend.')
     if has_fp8_simple and kv_scale_cache is None:
         raise RuntimeError('V4 simple FP8 compressed KV writes require kv_scale_cache.')
     if not has_fp8 and not has_fp8_simple:
@@ -1246,7 +1247,6 @@ def fill_compressed_kv(
     When kv_scale_cache is provided alongside an FP8 kv_cache (e4m3fn dtype),
     the simple FP8 write path is used: the kernel quantizes BF16 compressed_kv
     to FP8 in-kernel and writes both data and per-group scale to the paged caches.
-    This is used by the Indexer's compressed KV cache (v4_index_kv_r4 + v4_index_kv_r4_scale).
 
     == Addressing scheme ==
     The kv_cache is a paged block table:
@@ -1268,9 +1268,8 @@ def fill_compressed_kv(
     Args:
         compressed_kv: [S, head_dim] flat tensor with compressed results from score_kv.
             For has_fp8_simple path, this must be BF16 — the kernel quantizes to FP8 internally.
-        kv_cache: optional [num_blocks, entries_per_block, head_dim] e4m3fn paged
-            block cache. When provided, triggers the simple FP8 path which
-            quantizes and writes FP8 data + scale.
+        kv_cache: optional e4m3fn split value cache. When provided, triggers
+            the simple FP8 path which quantizes and writes FP8 data + scale.
         cu_q_seqlens: [B + 1] cumulative query sequence lengths.
         kv_seqlens: [B] total kv sequence lengths (history + new).
         block_offsets: [B, max_blocks] logical-to-physical block index mapping.
@@ -1279,7 +1278,7 @@ def fill_compressed_kv(
         max_seqlen_q: max query seq len (used for prefill grid size).
         fp8_cache: optional [num_blocks, entries_per_block, packed_dim] FP8 cache.
         kv_scale_cache: optional [num_blocks, entries_per_block, 1] FP32 scale cache.
-            Required when kv_cache is e4m3fn dtype (simple FP8 path).
+            Required when kv_cache is provided.
     """
     B = kv_seqlens.size(0)
     head_dim = compressed_kv.size(-1)

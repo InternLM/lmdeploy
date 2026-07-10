@@ -13,7 +13,7 @@ class V4CompressorMetadata:
     kv_seqlens: torch.Tensor
     block_offsets: torch.Tensor
     block_size: int
-    max_kv_seqlen: int
+    max_q_seqlen: int
 
 
 class BaseV4Compressor(ABC):

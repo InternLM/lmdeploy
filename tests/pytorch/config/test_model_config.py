@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -116,8 +117,8 @@ def test_deepseek_v4_model_config_normalizes_block_cache_spec_shapes():
     assert model_config.block_size == 256
     block_specs = {spec.name: spec for spec in model_config.block_cache_specs}
     assert block_specs['v4_compressed_kv_r4_fp8'].shape[0] == 64
-    assert block_specs['v4_index_kv_r4'].shape == (64, 128)
-    assert block_specs['v4_index_kv_r4_scale'].shape == (64, 1)
+    assert block_specs['v4_index_kv_r4'].shape == (64, 1, 132)
+    assert block_specs['v4_index_kv_r4'].dtype == torch.uint8
     assert block_specs['v4_compressed_kv_r128_fp8'].shape[0] == 2
 
 
@@ -137,7 +138,6 @@ def test_deepseek_v4_model_config_trims_trailing_zero_compress_ratio():
     block_specs = {spec.name: spec for spec in model_config.block_cache_specs}
     assert block_specs['v4_compressed_kv_r4_fp8'].layer_ids == [1]
     assert block_specs['v4_index_kv_r4'].layer_ids == [1]
-    assert block_specs['v4_index_kv_r4_scale'].layer_ids == [1]
     assert block_specs['v4_compressed_kv_r128_fp8'].layer_ids == [2]
 
 

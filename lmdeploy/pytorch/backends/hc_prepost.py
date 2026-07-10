@@ -16,14 +16,14 @@ class BaseHcPrePost(ABC):
         hc_base: torch.Tensor,
         out_dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run sinkhorn and reduce HC states from ``[..., hc, dim]`` to
-        ``[..., dim]``.
-        """
+        """Run sinkhorn and reduce HC states from ``[..., hc, dim]`` to ``[...,
+        dim]``."""
         raise NotImplementedError
 
     @abstractmethod
     def pre_reduce(self, x: torch.Tensor, pre: torch.Tensor, out_dtype: torch.dtype) -> torch.Tensor:
-        """Reduce HC hidden states from ``[..., hc, dim]`` to ``[..., dim]``."""
+        """Reduce HC hidden states from ``[..., hc, dim]`` to ``[...,
+        dim]``."""
         raise NotImplementedError
 
     @abstractmethod

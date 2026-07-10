@@ -270,7 +270,7 @@ def build_decode_prefix_compressed_sparse_indices(
     return out
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['total_topk', 'padded_topk', 'stride_c_t', 'stride_o_t'])
 def _build_prefill_sparse_indices_kernel(
     start_pos,
     total_lens,
@@ -281,14 +281,14 @@ def _build_prefill_sparse_indices_kernel(
     compress_topk,
     out,
     topk_length,
+    total_topk,
+    padded_topk,
     stride_c_t,
     stride_c_k,
     stride_o_t,
     stride_o_k,
     WINDOW_SIZE: tl.constexpr,
     COMPRESS_RATIO: tl.constexpr,
-    TOTAL_TOPK: tl.constexpr,
-    PADDED_TOPK: tl.constexpr,
     HAS_COMPRESS: tl.constexpr,
     HAS_COMPRESS_TOPK: tl.constexpr,
     BLOCK: tl.constexpr,
@@ -314,7 +314,7 @@ def _build_prefill_sparse_indices_kernel(
 
     if HAS_COMPRESS:
         comp_col = tl.maximum(offs - WINDOW_SIZE, 0)
-        in_compress = (offs >= WINDOW_SIZE) & (offs < TOTAL_TOPK)
+        in_compress = (offs >= WINDOW_SIZE) & (offs < total_topk)
         comp_off = tl.load(uncompressed_kv_lens + seq).to(tl.int32)
         if HAS_COMPRESS_TOPK:
             comp_vals = tl.load(
@@ -330,14 +330,14 @@ def _build_prefill_sparse_indices_kernel(
 
         if tile == 0:
             causal_compressed = (abs_pos + 1) // COMPRESS_RATIO
-            row_topk_length = tl.minimum(WINDOW_SIZE + causal_compressed, PADDED_TOPK)
+            row_topk_length = tl.minimum(WINDOW_SIZE + causal_compressed, padded_topk)
             tl.store(topk_length + token, row_topk_length.to(tl.int32))
     elif tile == 0:
         tl.store(topk_length + token, tl.full((), WINDOW_SIZE, tl.int32))
 
-    vals = tl.where((vals >= 0) & (offs < TOTAL_TOPK), vals + cu, -1)
+    vals = tl.where((vals >= 0) & (offs < total_topk), vals + cu, -1)
     tl.store(out + token * stride_o_t + offs * stride_o_k,
-             vals, mask=offs < PADDED_TOPK)
+             vals, mask=offs < padded_topk)
 
 
 def build_prefill_sparse_indices(
@@ -402,14 +402,14 @@ def build_prefill_sparse_indices(
         compress_topk,
         out,
         topk_length,
+        total_topk,
+        padded_topk,
         stride_c_t=stride_c_t,
         stride_c_k=stride_c_k,
         stride_o_t=out.stride(0),
         stride_o_k=out.stride(2),
         WINDOW_SIZE=window_size,
         COMPRESS_RATIO=compress_ratio,
-        TOTAL_TOPK=total_topk,
-        PADDED_TOPK=padded_topk,
         HAS_COMPRESS=has_compress,
         HAS_COMPRESS_TOPK=has_compress_topk,
         BLOCK=block,

@@ -316,7 +316,7 @@ class Indexer(nn.Module):
                 caches: V4Caches,
                 slot: torch.Tensor,
                 index_kv_cache: torch.Tensor,
-                index_kv_scale_cache: torch.Tensor,
+                index_kv_scale_cache: torch.Tensor | None,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
                 compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
                 v4_indexer_meta: V4IndexerMetadata = None,
@@ -472,7 +472,8 @@ class Attention(nn.Module):
             if self.compress_ratio == 4:
                 compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r4_fp8', self.layer_id)
                 index_kv = caches.block_cache('v4_index_kv_r4', self.layer_id)
-                index_kv_scale = caches.block_cache('v4_index_kv_r4_scale', self.layer_id)
+                if 'v4_index_kv_r4_scale' in caches.block_caches:
+                    index_kv_scale = caches.block_cache('v4_index_kv_r4_scale', self.layer_id)
             else:
                 compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r128_fp8', self.layer_id)
 
@@ -843,26 +844,14 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             attn_metadata, context,
             window_size=self.args.window_size, slot=safe_state_ids)
 
-        # Pre-build indexer/compressor metadata once (not per-layer)
-        kv_seqlens = v4_meta.kv_seqlens
-        v4_indexer_meta = V4IndexerMetadata(
-            block_offsets=v4_meta.block_offsets,
-            is_decoding=v4_meta.is_decoding,
-            cu_q_seqlens=v4_meta.cu_q_seqlens,
-            kv_seqlens=kv_seqlens,
-            q_seqlens=v4_meta.q_seqlens,
-            max_kv_seqlen=v4_meta.max_kv_seqlen,
-            max_q_seqlen=v4_meta.max_q_seqlen,
-            block_size=v4_meta.block_size,
-            num_index_r4=torch.div(kv_seqlens, 4, rounding_mode='floor').to(torch.int32),
-            num_index_r128=torch.div(kv_seqlens, 128, rounding_mode='floor').to(torch.int32),
-        )
+        # Pre-build indexer/compressor metadata once (not per-layer).
+        v4_indexer_meta = v4_meta.build_indexer_metadata()
         v4_compressor_meta = V4CompressorMetadata(
             cu_q_seqlens=v4_meta.cu_q_seqlens,
             kv_seqlens=v4_meta.kv_seqlens,
             block_offsets=v4_meta.block_offsets,
             block_size=v4_meta.block_size,
-            max_kv_seqlen=v4_meta.max_kv_seqlen,
+            max_q_seqlen=v4_meta.max_q_seqlen,
         )
 
         caches = V4Caches(

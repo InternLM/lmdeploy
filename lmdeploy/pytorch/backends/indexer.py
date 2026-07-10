@@ -37,7 +37,7 @@ class BaseV4Indexer(ABC):
                 query: torch.Tensor,
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
-                index_kv_scale_cache: torch.Tensor,
+                index_kv_scale_cache: torch.Tensor | None,
                 meta: V4IndexerMetadata) -> V4IndexerOutput:
         raise NotImplementedError
 
