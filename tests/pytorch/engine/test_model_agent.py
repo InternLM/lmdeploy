@@ -81,6 +81,50 @@ def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
     assert agent._prev_chunk_output is None
 
 
+def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    old_step_inputs = object()
+    new_step_inputs = object()
+
+    class _StrategyFactory:
+
+        def build_step_inputs(self):
+            events.append('build_step_inputs')
+            return new_step_inputs
+
+    class _SpecAgent:
+
+        def reset_runtime_state(self):
+            events.append('reset_spec')
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.strategy_factory = _StrategyFactory()
+    agent.spec_agent = _SpecAgent()
+    agent.step_inputs = old_step_inputs
+    agent._prev_chunk_output = {'model_metas': [object()]}
+    agent._prev_chunk_last_logit = object()
+
+    agent.reset_runtime_state()
+
+    assert agent.step_inputs is new_step_inputs
+    assert agent._prev_chunk_output is None
+    assert agent._prev_chunk_last_logit is None
+    assert events == ['build_step_inputs', 'reset_spec']
+
+
+def test_spec_agent_reset_runtime_state_discards_chunk_carry():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {'hidden_states': object()}
+
+    agent.reset_runtime_state()
+
+    assert agent._prev_chunk_last == {}
+
+
 class TestDrainQueues:
 
     def test_drain_empty_queues(self):
