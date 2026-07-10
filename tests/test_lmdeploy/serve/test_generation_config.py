@@ -2,6 +2,8 @@
 import warnings
 from unittest.mock import patch
 
+from pydantic import BaseModel, ConfigDict
+
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import (
     build_generation_config,
@@ -10,6 +12,7 @@ from lmdeploy.serve.core.generation_config import (
     resolve_default_gen_config,
 )
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, GenerateReqInput
+from lmdeploy.serve.openai.responses import ResponsesRequest
 from lmdeploy.serve.openai.serving_generate import check_request as check_generate_request
 
 _DEFAULTS = GenerationConfig()
@@ -51,6 +54,24 @@ def test_extract_request_gen_config_only_explicit_fields():
     request = ChatCompletionRequest(model='test', messages='hi', temperature=0.3)
     values = extract_request_gen_config(request)
     assert values == {'temperature': 0.3}
+
+
+class _RequestWithExtraAllow(BaseModel):
+    model_config = ConfigDict(extra='allow')
+
+    temperature: float | None = None
+
+
+def test_extract_request_gen_config_ignores_undeclared_fields():
+    request = _RequestWithExtraAllow(temperature=0.3, return_ppl=True)
+    assert extract_request_gen_config(request) == {'temperature': 0.3}
+
+
+def test_responses_request_ignores_unknown_generation_fields():
+    request = ResponsesRequest(model='fake-model', input='hi', return_ppl=True)
+    assert 'return_ppl' not in request.model_dump()
+    gen_config = build_generation_config(request, {})
+    assert gen_config.return_ppl is False
 
 
 def test_build_generation_config_from_merged_values():

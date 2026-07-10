@@ -20,7 +20,7 @@ from openai.types.responses.response import ToolChoice as ResponseToolChoice
 from openai.types.responses.response_create_params import StreamOptions as ResponseStreamOptions
 from openai.types.responses.tool import Tool as ResponseTool
 from openai.types.shared import Metadata, Reasoning
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 ResponseInputOutputItem: TypeAlias = ResponseInputItemParam | ResponseOutputItem
 
@@ -32,8 +32,6 @@ class ResponsesRequest(BaseModel):
     after the official fields.
     Reference: https://developers.openai.com/api/reference/resources/responses/methods/create
     """
-
-    model_config = ConfigDict(extra='allow')
 
     background: bool | None = False
     context_management: list[dict[str, Any]] | None = None

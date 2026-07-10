@@ -73,10 +73,11 @@ def extract_request_gen_config(request: BaseModel) -> dict[str, Any]:
     """Extract explicit non-None GenerationConfig fields from a request."""
     # exclude_unset keeps client-supplied fields plus parser-updated fields,
     # while leaving plain Pydantic defaults available for server defaults.
+    allowed_fields = set(type(request).model_fields)
     return {
         key: value
         for key, value in request.model_dump(exclude_unset=True).items()
-        if key in _GENERATION_CONFIG_FIELDS and value is not None
+        if key in allowed_fields and key in _GENERATION_CONFIG_FIELDS and value is not None
     }
 
 
