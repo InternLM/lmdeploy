@@ -15,7 +15,7 @@ def test_dist_checker_requires_deepep_and_deepgemm(monkeypatch):
     monkeypatch.setattr(dist_check, 'is_deep_ep_installed', lambda: False)
     monkeypatch.setattr(dist_check, 'is_deep_gemm_installed', lambda: True)
 
-    checker = dist_check.DistChecker(tp=1, dp=1, ep=2, distributed_executor_backend='mp', device_type='cuda')
+    checker = dist_check.DistChecker(tp=1, dp=1, ep=2, distributed_executor_backend='ray', device_type='cuda')
     monkeypatch.setattr(checker, 'log_and_exit', lambda **kwargs: failures.append(kwargs))
 
     checker.check()
