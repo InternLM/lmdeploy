@@ -355,9 +355,8 @@ def build_prefill_sparse_indices(
 ):
     """Build padded prefill sparse indices and lengths for FlashMLA.
 
-    This fuses the previous window-topk construction, compressed-prefix
-    construction, global flat-KV offset application, head-dimension unsqueeze,
-    padding, and topk-length construction into one Triton launch.
+    This fuses the previous window-topk construction, compressed-prefix construction, global flat-KV offset application,
+    head-dimension unsqueeze, padding, and topk-length construction into one Triton launch.
     """
     assert token_seq.dim() == 1
     assert token_pos.dim() == 1

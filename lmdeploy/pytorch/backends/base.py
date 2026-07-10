@@ -35,7 +35,7 @@ class OpType(Enum):
     V4Attention = auto()
     V4Indexer = auto()
     V4Compressor = auto()
-    HcSplitSinkhorn = auto()
+    HcPrePost = auto()
     Embedding = auto()
 
     # MoE router

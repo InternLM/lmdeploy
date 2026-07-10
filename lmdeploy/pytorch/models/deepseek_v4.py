@@ -15,7 +15,7 @@ from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcSplitSinkhorn, RMSNorm, SiluAndMul, rms_scale
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcPrePost, RMSNorm, SiluAndMul, rms_scale
 from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
 from lmdeploy.pytorch.nn import V4Compressor as NativeV4Compressor
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
@@ -60,13 +60,6 @@ def _dequantize_wo_a_shard(weight: torch.Tensor, scale: torch.Tensor, world_size
     weight = weight.unflatten(0, (-1, 128)).unflatten(-1, (-1, 128)).float()
     weight = weight * scale[:, None, :, None].float()
     return weight.flatten(2, 3).flatten(0, 1).bfloat16()
-
-
-@torch.compile(dynamic=True)
-def _hc_post_fused(x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
-                   comb: torch.Tensor) -> torch.Tensor:
-    return (post.unsqueeze(-1) * x.unsqueeze(-2)
-            + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)).to(x.dtype)
 
 
 def _map_v4_expert_param_name(name: str) -> tuple[str, str] | None:
@@ -677,7 +670,7 @@ class Block(nn.Module):
         self.hc_mult = args.hc_mult
         self.hc_sinkhorn_iters = args.hc_sinkhorn_iters
         self.hc_eps = args.hc_eps
-        self.hc_split_sinkhorn_impl = HcSplitSinkhorn(self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
+        self.hc_prepost_impl = HcPrePost(self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
         mix_hc = (2 + self.hc_mult) * self.hc_mult
         hc_dim = self.hc_mult * args.dim
         with _set_default_dtype(torch.float32):
@@ -689,15 +682,10 @@ class Block(nn.Module):
             self.hc_ffn_scale = nn.Parameter(torch.empty(3, device=device), requires_grad=False)
 
     def _hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float()
-        mixes = rms_scale(F.linear(x, hc_fn), x, eps=self.norm_eps)
-        pre, post, comb = self.hc_split_sinkhorn_impl(mixes, hc_scale, hc_base)
-        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
-        return y.to(dtype), post, comb
+        return self.hc_prepost_impl.pre(x, hc_fn, hc_scale, hc_base, self.norm_eps)
 
     def _hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
-        return _hc_post_fused(x, residual, post, comb)
+        return self.hc_prepost_impl.post_expand(x, residual, post, comb)
 
     def forward(self, x: torch.Tensor, v4_meta: V4AttentionMetadata,
                 v4_indexer_meta: V4IndexerMetadata, v4_compressor_meta: V4CompressorMetadata,
