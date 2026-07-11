@@ -19,7 +19,7 @@ The following sample code shows the basic usage of VLM pipeline. For detailed in
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('openbmb/MiniCPM-V-2_6')
 
@@ -97,7 +97,7 @@ print(out.text)
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl import encode_image_base64
+from lmdeploy.multimodal import encode_image_base64
 import torch
 from PIL import Image
 from transformers import AutoModel, AutoTokenizer

@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders, load_hf_from_pretrained
-from lmdeploy.vl.model.builder import load_vl_model
+from lmdeploy.multimodal.model.builder import load_vl_model
 
 LAYER_TYPE_MAP = {
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',

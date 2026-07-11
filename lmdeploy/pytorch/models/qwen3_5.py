@@ -10,6 +10,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.nn.gated_delta as gated_delta_util
+from lmdeploy.multimodal.constants import Modality
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -30,7 +31,6 @@ from lmdeploy.pytorch.nn.linear import (
     build_rowwise_linear,
 )
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
-from lmdeploy.vl.constants import Modality
 
 from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding

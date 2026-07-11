@@ -33,7 +33,7 @@ docker pull openmmlab/lmdeploy:latest
 
 ```python
 from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline("llava-hf/llava-interleave-qwen-7b-hf", backend_config=TurbomindEngineConfig(cache_max_entry_count=0.5),
     gen_config=GenerationConfig(max_new_tokens=512))

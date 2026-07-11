@@ -1372,7 +1372,7 @@ def handle_torchrun():
         return 0
 
     if int(os.environ.get('LOCAL_RANK', -1)) > 0:
-        from lmdeploy.vl.model.utils import _set_func
+        from lmdeploy.multimodal.model.utils import _set_func
 
         # the replacement can't be recovered
         _set_func('mmengine.logging.logger._get_device_id', dummy_get_device_id)

@@ -83,7 +83,7 @@ For example, you can utilize the following code snippet to perform the inference
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2-8B')
 
@@ -96,7 +96,7 @@ In VLM pipeline, the default image processing batch size is 1. This can be adjus
 
 ```python
 from lmdeploy import pipeline, VisionConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2-8B',
                 vision_config=VisionConfig(

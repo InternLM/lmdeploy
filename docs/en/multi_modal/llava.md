@@ -33,7 +33,7 @@ The following sample code shows the basic usage of VLM pipeline. For detailed in
 
 ```python
 from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 
 pipe = pipeline("llava-hf/llava-interleave-qwen-7b-hf", backend_config=TurbomindEngineConfig(cache_max_entry_count=0.5),

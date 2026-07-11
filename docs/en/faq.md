@@ -94,7 +94,7 @@ lmdeploy serve api_server internlm/internlm2_5-7b-chat --cache-max-entry-count 0
 ### Api Server Fetch Timeout
 
 The image URL fetch timeout for the API server can be configured via the environment variable `LMDEPLOY_FETCH_TIMEOUT`.
-By default, requests may take up to 10 seconds before timing out. See [lmdeploy/vl/utils.py](https://github.com/InternLM/lmdeploy/blob/7b6876eafcb842633e0efe8baabe5906d7beeeea/lmdeploy/vl/utils.py#L31) for usage.
+By default, requests may take up to 10 seconds before timing out. See [lmdeploy/multimodal/utils.py](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/multimodal/utils.py) for usage.
 
 ## Quantization
 

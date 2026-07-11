@@ -2,12 +2,12 @@ import numpy as np
 import pytest
 import torch
 
+from lmdeploy.multimodal.constants import Modality
 from lmdeploy.pytorch import messages as messages_module
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import SamplingParam, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging import Scheduler
-from lmdeploy.vl.constants import Modality
 
 
 class TestBlockTire:

@@ -398,7 +398,7 @@ In addition to HTTP URLs, lmdeploy accepts:
 - **Local file paths** via `file://` scheme: `file:///absolute/path/to/file.jpg`
 - **Base64-encoded data** via data URLs: `data:<mime>;base64,<encoded_data>`
 
-Use the helpers in `lmdeploy.vl.utils` to encode local files:
+Use the helpers in `lmdeploy.multimodal.utils` to encode local files:
 
 <details>
 <summary>Local file path example</summary>
@@ -434,7 +434,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_image_base64
+from lmdeploy.multimodal.utils import encode_image_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
@@ -465,7 +465,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_video_base64
+from lmdeploy.multimodal.utils import encode_video_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
@@ -497,7 +497,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_audio_base64
+from lmdeploy.multimodal.utils import encode_audio_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
@@ -528,7 +528,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_time_series_base64
+from lmdeploy.multimodal.utils import encode_time_series_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id

@@ -18,7 +18,7 @@ The following sample code shows the basic usage of VLM pipeline. For more exampl
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ The following sample code shows the basic usage of VLM pipeline. For detailed in
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('Qwen/Qwen2-VL-2B-Instruct')
 
