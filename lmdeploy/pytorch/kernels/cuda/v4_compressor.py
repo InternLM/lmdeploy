@@ -1196,9 +1196,10 @@ def _prepare_compressed_kv_write_targets(
     if not has_fp8 and not has_fp8_simple:
         raise RuntimeError('V4 compressed KV writes require fp8_cache or FP8 kv_cache.')
 
-    # Dummy tensor for disabled kernel paths. It must be 3D to provide the
-    # expected stride count, and bf16 views need an even final dimension.
-    dummy = compressed_kv.view(1, 1, -1)[:, :, :16]
+    # Dummy tensor for disabled kernel paths. Keep its constexpr strides
+    # independent of the prefill token count, otherwise Triton sees a new
+    # specialization for every compressed_kv.shape[0].
+    dummy = compressed_kv[:1, :16].unsqueeze(1)
 
     if not has_fp8_simple:
         kv_cache = dummy
