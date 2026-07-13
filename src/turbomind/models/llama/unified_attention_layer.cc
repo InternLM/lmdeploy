@@ -147,7 +147,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
 
     auto get_block_config = [&](const AttentionWeight& w) {
         BlockConfig b{w.head_dim,
-                      w.kv_head_num,
+                      w.kv_head_num / w.tp_size,
                       engine.cache_block_seq_len,
                       dtype_bits == qaunt_bits ? 0 : dtype_bits,
                       qaunt_bits,
