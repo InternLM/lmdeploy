@@ -1,0 +1,18 @@
+# HF model id: codellama/CodeLlama-7b-hf
+
+a100:
+- model_type: base
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+  deps:
+    transformers: 4.57.6

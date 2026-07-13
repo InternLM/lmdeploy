@@ -1,0 +1,25 @@
+# HF model id: Qwen/Qwen3-30B-A3B-FP8
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 1
+    extra:
+      session-len: 65536
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+  gen_config:
+    temperature: 0.6

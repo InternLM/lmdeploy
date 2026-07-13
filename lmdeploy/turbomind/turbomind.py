@@ -163,6 +163,7 @@ class TurboMind:
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
         self.model_comm, model_loader = self._from_hf(model_path=model_path, engine_config=_engine_config,
                                                       trust_remote_code=trust_remote_code)
+        self.source_model = model_loader.model
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         if not _engine_config.empty_init:
@@ -172,7 +173,6 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = _engine_config.session_len
-
 
     def _process_weights(self):
         """Process weight."""
@@ -218,10 +218,10 @@ class TurboMind:
         from .converter import get_tm_config
         from .model_loader import ModelLoader
 
-        text_model, model_path, data_type = get_tm_config(model_path, engine_config,
-                                                           trust_remote_code=trust_remote_code)
+        model, model_path, data_type = get_tm_config(model_path, engine_config,
+                                                     trust_remote_code=trust_remote_code)
 
-        self._vocab_size = text_model._vocab_size
+        self._vocab_size = model._vocab_size
         self.engine_config = engine_config
 
         dtype_map = {
@@ -266,7 +266,7 @@ class TurboMind:
         self._create_weight(model_comm)
 
         model_loader = ModelLoader(
-            model=text_model,
+            model=model,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
             model_path=model_path,
@@ -275,6 +275,20 @@ class TurboMind:
         )
 
         return model_comm, model_loader
+
+    def mm_input_converter(self, multimodal: list[dict[str, Any]] | None):
+        """Convert frontend multimodal data into model-specific TurboMind
+        input."""
+        if not multimodal:
+            return None
+        if self.engine_config.language_model_only:
+            logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
+            return None
+
+        parser = getattr(self.source_model, 'to_turbomind_multimodal', None)
+        if parser is None:
+            raise ValueError(f'{type(self.source_model).__name__} does not support TurboMind multimodal inputs.')
+        return parser(multimodal)
 
     async def sleep(self, level: int = 1):
         """Sleep the model."""
@@ -341,11 +355,10 @@ class TurboMind:
                       ii) and iii)
                     - ii) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
-                      "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - iii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "internlm/internlm-chat-7b",
-                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      on huggingface.co, such as "internlm/internlm2-chat-7b",
+                      "Qwen/Qwen2.5-7B-Instruct"
                       and so on.
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
@@ -383,7 +396,32 @@ class TurboMind:
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
                                active_blocks=tm_metrics.active_blocks,
-                               free_blocks=tm_metrics.free_blocks)
+                               free_blocks=tm_metrics.free_blocks,
+                               scheduler_tick=tm_metrics.scheduler_tick)
+
+    def _get_health_status(self) -> dict:
+        """Get lightweight health status."""
+        if self.model_comm is None:
+            return dict(alive=False,
+                        message='TurboMind model communicator is not available.',
+                        schedule_metrics=None)
+
+        if not self._engine_created:
+            if self.engine_config.empty_init:
+                return dict(alive=True,
+                            message='TurboMind engine is waiting for weights in empty-init mode.',
+                            schedule_metrics=None)
+            return dict(alive=False,
+                        message='TurboMind engine has not been created.',
+                        schedule_metrics=None)
+
+        return dict(alive=True,
+                    message='TurboMind engine is healthy.',
+                    schedule_metrics=self.get_schedule_metrics())
+
+    async def get_health_status(self) -> dict:
+        """Get backend health status without blocking the event loop."""
+        return await asyncio.to_thread(self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):
@@ -391,6 +429,16 @@ def _get_logits(outputs, offset: int):
 
     def _func(out: EngineOutput, step: int, **kwargs):
         out.logits = logits[:step - offset - 1, :]
+
+    return _func
+
+
+def _get_ce_loss(outputs):
+    ce_loss = outputs['ce_loss']
+
+    def _func(out: EngineOutput, step: int, **kwargs):
+        if out.status == ResponseType.FINISH:
+            out.ce_loss = ce_loss[0].item()
 
     return _func
 
@@ -552,6 +600,8 @@ class TurboMindInstance:
         if gen_config.output_logits:
             offset = _get_offset(gen_config.output_logits)
             fs.append(_get_logits(outputs, offset))
+        if gen_config.return_ppl:
+            fs.append(_get_ce_loss(outputs))
         if gen_config.output_last_hidden_state:
             offset = _get_offset(gen_config.output_last_hidden_state)
             fs.append(_get_last_hidden_state(outputs, offset))
@@ -642,6 +692,7 @@ class TurboMindInstance:
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
                                  input_meta: dict[str, Any] = None,
+                                 multimodal: list[dict[str, Any]] = None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
@@ -711,11 +762,12 @@ class TurboMindInstance:
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
         inputs = _np_dict_to_tm_dict(inputs)
+        mm_inputs = self.tm_model.mm_input_converter(multimodal)
 
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
 
-        outputs, shared_state, metrics = self.model_inst.forward(inputs, session, gen_cfg, stream_output,
+        outputs, shared_state, metrics = self.model_inst.forward(inputs, mm_inputs, session, gen_cfg, stream_output,
                                                                  self.tm_model.engine_config.enable_metrics, signal_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
@@ -801,6 +853,7 @@ class TurboMindInstance:
             c.output_last_hidden_state = output_type[cfg.output_last_hidden_state]
         if cfg.output_logits:
             c.output_logits = output_type[cfg.output_logits]
+        c.return_ppl = cfg.return_ppl
         if cfg.logprobs:
             if cfg.logprobs > MAX_LOGPROBS:
                 cfg.logprobs = MAX_LOGPROBS

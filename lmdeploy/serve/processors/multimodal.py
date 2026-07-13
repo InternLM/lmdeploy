@@ -8,12 +8,25 @@ from lmdeploy.model import MODELS, BaseChatTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.media.audio import AudioMediaIO
 from lmdeploy.vl.media.connection import load_from_url
 from lmdeploy.vl.media.image import ImageMediaIO
 from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
 from lmdeploy.vl.media.video import VideoMediaIO
 
 logger = get_logger('lmdeploy')
+
+MULTIMODAL_TYPES = (
+    'image_url',
+    'image_data',
+    'image',
+    'video_url',
+    'video',
+    'audio_url',
+    'audio',
+    'time_series_url',
+    'time_series',
+)
 
 
 class MultimodalProcessor:
@@ -96,12 +109,13 @@ class MultimodalProcessor:
         role = in_messages[i]['role']
         content = in_messages[i]['content']
 
-        if role != 'user' or isinstance(content, str):
+        if role not in ('user', 'tool') or isinstance(content, str):
             out_messages[i] = in_messages[i]
             return
 
         assert isinstance(content, list)
-        out_message = dict(role=role, content=[])
+        out_message = dict(in_messages[i])
+        out_message['content'] = []
 
         for item in content:
             item_type = item.get('type')
@@ -148,6 +162,9 @@ class MultimodalProcessor:
                 data, metadata = load_from_url(
                     _require_data_src(), VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})))
                 item_params['video_metadata'] = metadata
+            elif item_type in ('audio_url', 'audio'):
+                modality = Modality.AUDIO
+                data = load_from_url(_require_data_src(), AudioMediaIO(**media_io_kwargs.get('audio', {})))
             elif item_type in ('time_series_url', 'time_series'):
                 modality = Modality.TIME_SERIES
                 data = load_from_url(_require_data_src(), TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
@@ -327,11 +344,15 @@ class MultimodalProcessor:
 
     def _has_multimodal_input(self, messages: list[dict]) -> bool:
         """Check if messages contain multimodal input such as images, videos,
-        or time series."""
-        multimodal_types = ['image_url', 'image_data', 'image', 'video_url', 'video', 'time_series_url', 'time_series']
-        return any(
-            isinstance(message.get('content'), list) and any(
-                item.get('type') in multimodal_types for item in message['content']) for message in messages)
+        audios, or time series."""
+        for message in messages:
+            content = message.get('content')
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES:
+                    return True
+        return False
 
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],
@@ -382,23 +403,35 @@ class MultimodalProcessor:
         messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
 
         if self.backend == 'turbomind':
-            results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
-            results = await self.vl_encoder.async_infer(results)
-            results = await self.vl_encoder.wrap_for_turbomind(messages=results,
-                                                               chat_template=chat_template,
-                                                               tokenizer=self.tokenizer,
-                                                               sequence_start=sequence_start,
-                                                               tools=tools,
-                                                               chat_template_kwargs=chat_template_kwargs)
+            if self.vl_encoder._uses_new_preprocess:
+                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                      chat_template=chat_template,
+                                                                      sequence_start=sequence_start,
+                                                                      chat_template_kwargs=chat_template_kwargs)
+                results = await self.vl_encoder.preprocess(messages,
+                                                           input_prompt=input_prompt,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
+            else:
+                results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs=mm_processor_kwargs)
+                results = await self.vl_encoder.async_infer(results)
+                results = await self.vl_encoder.wrap_for_turbomind(messages=results,
+                                                                chat_template=chat_template,
+                                                                tokenizer=self.tokenizer,
+                                                                sequence_start=sequence_start,
+                                                                tools=tools,
+                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             if self.vl_encoder._uses_new_preprocess:
                 input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
                                                                       chat_template=chat_template,
                                                                       sequence_start=sequence_start,
                                                                       chat_template_kwargs=chat_template_kwargs)
-                results = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
+                results = await self.vl_encoder.preprocess(messages,
+                                                           input_prompt=input_prompt,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
             else:
-                results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
+                results = await self.vl_encoder.preprocess(messages,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
                 results = await self.vl_encoder.wrap_for_pytorch(messages=results,
                                                                  chat_template=chat_template,
                                                                  tokenizer=self.tokenizer,

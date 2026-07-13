@@ -73,13 +73,12 @@ from lmdeploy.serve.openai.reasoning_parser import (
 
 @ReasoningParserManager.register_module(["example"])
 class ExampleParser(ReasoningParser):
-    def __init__(self, tokenizer: object, **kwargs):
-        super().__init__(tokenizer, **kwargs)
-
-    def get_reasoning_open_tag(self) -> str | None:
+    @classmethod
+    def get_reasoning_open_tag(cls) -> str:
         return "<think>"
 
-    def get_reasoning_close_tag(self) -> str | None:
+    @classmethod
+    def get_reasoning_close_tag(cls) -> str:
         return "</think>"
 
     def starts_in_reasoning_mode(self) -> bool:

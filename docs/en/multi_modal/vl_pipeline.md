@@ -10,7 +10,7 @@ Moreover, we will provide practical inference examples tailored to scenarios wit
 
 Using the pipeline interface to infer other VLM models is similar, with the main difference being the configuration and installation dependencies of the models. You can read [here](https://lmdeploy.readthedocs.io/en/latest/multi_modal/index.html) for environment installation and configuration methods for different models.
 
-> **See also:** [Multi-Modal Inputs](multimodal_inputs.md) — message format reference for all modalities (image, video, time series) with OpenAI-style examples.
+> **See also:** [Multi-Modal Inputs](multimodal_inputs.md) — message format reference for all modalities (image, video, audio, time series) with OpenAI-style examples.
 
 ## A 'Hello, world' example
 
@@ -237,3 +237,27 @@ import gc
 torch.cuda.empty_cache()
 gc.collect()
 ```
+
+## Language-model-only mode
+
+For hybrid vision-language checkpoints (e.g. Qwen3-VL, Qwen3.5, InternVL), you can run text-only inference without loading vision/multimodal encoder modules. This frees GPU memory for the KV cache.
+
+**CLI (serve):**
+
+```bash
+lmdeploy serve api_server Qwen/Qwen3-VL-8B-Instruct --backend pytorch --language-model-only
+```
+
+**Python API:**
+
+```python
+from lmdeploy import pipeline
+from lmdeploy.messages import PytorchEngineConfig
+
+pipe = pipeline(
+    'Qwen/Qwen3-VL-8B-Instruct',
+    backend_config=PytorchEngineConfig(language_model_only=True),
+)
+```
+
+When this mode is enabled, multimodal inputs are ignored with a warning.

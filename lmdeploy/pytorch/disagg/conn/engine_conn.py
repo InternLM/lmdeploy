@@ -80,7 +80,7 @@ class EngineP2PConnection:
             if isinstance(req, DistServeCacheFreeRequest):
                 session_id = req.remote_session_id
                 if session_id in self.engine.scheduler.sessions:
-                    self.engine.scheduler.end_session(session_id=session_id)
+                    self.engine.end_session(session_id=session_id)
                 else:
                     logger.error(f'invalid free, {remote_engine_id}, {session_id}')
             else:

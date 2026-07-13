@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.11 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
+cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 cmake_policy(SET CMP0074 NEW)
+cmake_policy(SET CMP0104 OLD)
 project(TurboMind LANGUAGES CXX CUDA)
 
 if (MSVC)

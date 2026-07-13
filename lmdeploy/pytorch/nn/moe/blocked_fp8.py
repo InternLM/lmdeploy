@@ -5,6 +5,7 @@ import torch
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from ..quant_utils import quant_blocked_fp8
 from ..utils import div_up
@@ -173,6 +174,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
         dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
+        deep_ep_max_tokens_per_rank = get_build_model_context().deep_ep_max_tokens_per_rank
         self.impl = impl_builder.build(top_k,
                                        num_experts,
                                        hidden_dim,
@@ -181,6 +183,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
                                        ep_size=self.ep_size,
                                        ep_group=dist_ctx.ep_gpu_group,
                                        out_dtype=dtype,
+                                       fp8_dtype=fp8_dtype,
+                                       num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank,
                                        layer_idx=layer_idx,
                                        custom_gateup_act=act_func is not None)
         self.impl.set_scale_fmt(scale_fmt)
@@ -247,7 +251,9 @@ class FusedMoEBlockedF8(FusedMoEBase):
             fusedmoe = self.fusedmoe_build(low_latency_mode=False)
             state['fusedmoe'] = fusedmoe
             if hasattr(fusedmoe, 'per_token_group_quant_fp8'):
-                state['hidden_states'] = fusedmoe.per_token_group_quant_fp8(state['hidden_states'])
+                state['hidden_states'] = fusedmoe.per_token_group_quant_fp8(state['hidden_states'],
+                                                                            dtype=self.gate_up.weight.dtype,
+                                                                            scale_fmt=self.scale_fmt)
             previous_event = fusedmoe.capture()
             state['previous_event'] = previous_event
         return state

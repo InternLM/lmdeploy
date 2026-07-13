@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
@@ -143,9 +142,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         # chunk_ba
         mixed_ba = mixed_ba.unflatten(-1, (-1, 2 * self.kv_ratio))
         b, a = mixed_ba.chunk(2, -1)
-        # do sigmoid and float here to prevent contiguous kernel
-        b = b.sigmoid().flatten(-2, -1)
-        a = a.float().flatten(-2, -1)
         return mixed_qkv, z, b, a
 
     def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
@@ -184,21 +180,17 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        beta = b
-        # If the model is loaded in fp16, without the .float() here, A might be -inf
-        g = self.get_A_log_exp() * F.softplus(a + self.dt_bias)
-        if self.kv_ratio > 1:
-            query = query.repeat_interleave(self.kv_ratio, dim=-2)
-            key = key.repeat_interleave(self.kv_ratio, dim=-2)
-
         core_attn_out, recurrent_state = self.gated_delta(
             query,
             key,
             value,
-            g=g,
-            beta=beta,
+            b=b,
+            a=a,
+            dt_bias=self.dt_bias,
+            a_log_exp=self.get_A_log_exp(),
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
+            kv_ratio=self.kv_ratio,
         )
 
         z_shape_og = z.shape

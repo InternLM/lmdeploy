@@ -22,7 +22,7 @@ on:
         required: true
         description: 'Set testcase module filter: llm, mllm. Default contains all models'
         type: string
-        default: "['llm','mllm']"
+        default: "['llm']"
       function:
         required: true
         description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
@@ -84,7 +84,7 @@ jobs:
           large-packages: true
           swap-storage: false
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
@@ -121,7 +121,7 @@ jobs:
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
@@ -157,7 +157,8 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
-      TEST_ENV: 3090_legacy
+      TEST_ENV: 3090
+      DEPS_PROFILE: ''
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -183,7 +184,6 @@ jobs:
       - name: Check env
         run: |
           python3 -m pip list
-          pip install transformers==4.57.6
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
@@ -193,7 +193,7 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
@@ -221,8 +221,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        transformers: ["3090", "3090_legacy"]
-        model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
+        model: ${{ fromJSON(inputs.model || '["llm"]')}}
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
@@ -235,7 +234,8 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
-      TEST_ENV: ${{matrix.transformers}}
+      TEST_ENV: 3090
+      DEPS_PROFILE: ''
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -257,10 +257,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == '3090_legacy'}}
-        run: |
-          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
@@ -306,15 +302,8 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        transformers: ["3090", "3090_legacy"]
-        model_path: ['internlm/internlm3-8b-instruct', 'Qwen/Qwen3-8B']
+        model_path: ['Qwen/Qwen3-8B']
         include:
-          - tp: 1
-            model: internlm3-8b-instruct
-            model_path: internlm/internlm3-8b-instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
           - tp: 1
             model: Qwen3-8B
             model_path: Qwen/Qwen3-8B
@@ -329,7 +318,10 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     env:
-      TEST_ENV: ${{matrix.transformers}}
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: 3090
     steps:
       - name: Copy repository and Artifacts
         run: |
@@ -343,10 +335,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == '3090_legacy'}}
-        run: |
-          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list

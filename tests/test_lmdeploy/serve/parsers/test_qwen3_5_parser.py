@@ -1,24 +1,17 @@
 import json
 
-import pytest
-from transformers import AutoTokenizer
-
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
+from .helpers import first_stream_delta
+
 MODEL_ID = 'Qwen/Qwen3.5-35B-A3B'
 
 
-@pytest.fixture(scope='module')
-def tokenizer():
-    return AutoTokenizer.from_pretrained(MODEL_ID)
-
-
-@pytest.fixture()
-def response_parser(tokenizer):
+def _build_response_parser():
     cls = ResponseParserManager.get('default')
     cls.reasoning_parser_cls = ReasoningParserManager.get('default')
     cls.tool_parser_cls = ToolParserManager.get('qwen3coder')
@@ -30,7 +23,7 @@ def response_parser(tokenizer):
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
-    return cls(request=request, tokenizer=tokenizer)
+    return cls(request=request)
 
 
 REFERENCE_CHUNKS = [
@@ -88,25 +81,21 @@ class TestQwen3_5ResponseParserStreaming:
     """Integration test for ResponseParser.stream_chunk with Qwen3.5 Coder
     parsers."""
 
-    @staticmethod
-    def _encode_ids(tokenizer, text: str) -> list[int]:
-        return tokenizer.encode(text, add_bos=False, add_special_tokens=False)
-
-    def test_stream_chunk_matches_reference(self, tokenizer, response_parser):
+    def test_stream_chunk_matches_reference(self):
         """Feed the real streaming sequence into ResponseParser.stream_chunk
         and verify each parsed chunk.
 
         Expectations for tool_calls will be refined once the Qwen3.5 ground-truth stream is finalized.
         """
 
+        response_parser = _build_response_parser()
         for (delta_text, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted,
              exp_function_name, exp_function_arguments,
              exp_type) in REFERENCE_CHUNKS:
-            delta_ids = self._encode_ids(tokenizer, delta_text)
-            delta_msg, tool_emitted = response_parser.stream_chunk(
+            delta_msg, tool_emitted = first_stream_delta(response_parser.stream_chunk(
                 delta_text=delta_text,
-                delta_token_ids=delta_ids,
-            )
+                delta_token_ids=[],
+            ))
             if exp_delta_msg is False:
                 assert delta_msg is None
                 continue
@@ -138,10 +127,39 @@ class TestQwen3_5ResponseParserStreaming:
                 assert call.function.name == exp_function_name
                 assert call.function.arguments == exp_function_arguments
 
-    def test_parse_tool_call_complete_treats_params_as_strings(self):
-        parser = Qwen3CoderToolParser(tokenizer=None)
-        payload = """
+    def test_parse_complete_parallel_tool_calls_keep_distinct_arguments(self):
+        """Regression: parallel tool calls must not reuse the first call's args."""
+        response_parser = _build_response_parser()
+        text = """
+</think>
+
 <tool_call>
+<function=get_current_weather>
+<parameter=location>
+Boston, MA
+</parameter>
+</function>
+</tool_call>
+<tool_call>
+<function=get_current_weather>
+<parameter=location>
+San Francisco, CA
+</parameter>
+</function>
+</tool_call>
+""".strip()
+
+        content, tool_calls, _ = response_parser.parse_complete(text)
+
+        assert (content or '').strip() == ''
+        assert tool_calls is not None
+        assert len(tool_calls) == 2
+        assert json.loads(tool_calls[0].function.arguments) == {'location': 'Boston, MA'}
+        assert json.loads(tool_calls[1].function.arguments) == {'location': 'San Francisco, CA'}
+
+    def test_parse_tool_call_complete_treats_params_as_strings(self):
+        parser = Qwen3CoderToolParser()
+        payload = """
 <function=find_user_id_by_name_zip>
 <parameter=first_name>
 Chen
@@ -153,7 +171,6 @@ Johnson
 77004
 </parameter>
 </function>
-</tool_call>
 """.strip()
 
         tool_call = parser.parse_tool_call_complete(payload)
@@ -167,7 +184,7 @@ Johnson
         }
 
     def test_parse_tool_call_complete_coerces_types_by_schema(self):
-        parser = Qwen3CoderToolParser(tokenizer=None)
+        parser = Qwen3CoderToolParser()
         request = ChatCompletionRequest(
             model=MODEL_ID,
             messages=[],
@@ -208,7 +225,6 @@ Johnson
         parser.adjust_request(request)
 
         payload = """
-<tool_call>
 <function=typed_tool>
 <parameter=name>
 Chen
@@ -232,7 +248,6 @@ true
 null
 </parameter>
 </function>
-</tool_call>
 """.strip()
 
         tool_call = parser.parse_tool_call_complete(payload)

@@ -79,14 +79,15 @@ struct Engine::Impl {
     using Requests = vector<shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    Impl(EngineParam        param,
-         LanguageModel      model,
-         const ModelWeight& weights,
-         Context&           ctx,
-         Gateway&           gateway,
-         int                device_id,
-         int                queue_id,
-         int                phases);
+    Impl(EngineParam                  param,
+         LanguageModel                model,
+         std::unique_ptr<VisionModel> vision_model,
+         const ModelWeight&           weights,
+         Context&                     ctx,
+         Gateway&                     gateway,
+         int                          device_id,
+         int                          queue_id,
+         int                          phases);
 
     void CreateSequenceManager();
 
@@ -115,6 +116,9 @@ struct Engine::Impl {
 
     void Run(BatchOp op, int phase, Ref<TensorMap> env)
     {
+        if (vision_model_) {
+            vision_model_->Run(op, phase, env);
+        }
         model_.Run(op, phase, env);
     }
 
@@ -153,15 +157,18 @@ struct Engine::Impl {
     Queue<unique_ptr<BatchData>> inbound_;
     Queue<unique_ptr<BatchData>> outbound_;
 
-    LanguageModel      model_;
-    const ModelWeight& weights_;
-    ModelExecutor      executor_;
+    LanguageModel                model_;
+    std::unique_ptr<VisionModel> vision_model_;  // null for text-only models
+    const ModelWeight&           weights_;
+    ModelExecutor                executor_;
 
     std::thread internal_thread_;
 
     int session_len_trunc_;
 
     shared_ptr<ScheduleMetrics> metrics_;
+
+    std::atomic<int64_t> scheduler_tick_{};
 
     struct State {
         vector<shared_ptr<RequestCache>> rc;
@@ -200,14 +207,15 @@ Engine::Impl::~Impl()
     executor_ = {};
 }
 
-Engine::Impl::Impl(EngineParam        param,
-                   LanguageModel      model,
-                   const ModelWeight& weights,
-                   Context&           ctx,
-                   Gateway&           gateway,
-                   int                device_id,
-                   int                queue_id,
-                   int                phases):
+Engine::Impl::Impl(EngineParam                  param,
+                   LanguageModel                model,
+                   std::unique_ptr<VisionModel> vision_model,
+                   const ModelWeight&           weights,
+                   Context&                     ctx,
+                   Gateway&                     gateway,
+                   int                          device_id,
+                   int                          queue_id,
+                   int                          phases):
     param_{param},
     schedule_policy_{parse_schedule_policy(param.schedule_policy)},
     gateway_{gateway},
@@ -221,6 +229,7 @@ Engine::Impl::Impl(EngineParam        param,
     async_{phases > 1},
     is_warm_up_{*ctx.is_warm_up},
     model_{std::move(model)},
+    vision_model_{std::move(vision_model)},
     weights_{weights}
 {
     states_.emplace_back();
@@ -229,7 +238,7 @@ Engine::Impl::Impl(EngineParam        param,
         data_.emplace_back();
     }
 
-    executor_ = ModelExecutor{model_, ctx, device_id_, outbound_, inbound_};
+    executor_ = ModelExecutor{model_, vision_model_.get(), ctx, device_id_, outbound_, inbound_};
 
     CreateSequenceManager();  // initializes `session_len_trunc_`
 
@@ -297,6 +306,7 @@ void Engine::Impl::CreateSequenceManager()
     if (session_len_trunc_ != param_.session_len) {
         TM_LOG_WARN("`session_len` truncated to {} due to limited KV cache memory", session_len_trunc_);
     }
+    UpdateScheduleMetrics();
 }
 
 void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
@@ -338,10 +348,10 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
                     r->ec = Request::kInconsistency;
                 }
                 else if (r->gen_cfg.output_logits == GenerationConfig::kAll
-                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
+                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll || r->gen_cfg.return_ppl) {
                     // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
                     TM_LOG_ERROR("Skip inconsistent {} request for ID {}. It cannot output logits or "
-                                 "last_hidden_states for all tokens",
+                                 "last_hidden_states for all tokens or ppl",
                                  type,
                                  r->id);
                     r->ec = Request::kInconsistency;
@@ -945,15 +955,17 @@ Engine::Engine()                  = default;
 Engine::Engine(Engine&&) noexcept = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
-Engine::Engine(EngineParam        param,
-               LanguageModel      model,
-               const ModelWeight& weights,
-               Context&           ctx,
-               Gateway&           gateway,
-               int                device_id,
-               int                dp_rank,
-               int                phases):
-    impl_{std::make_unique<Impl>(param, std::move(model), weights, ctx, gateway, device_id, dp_rank, phases)}
+Engine::Engine(EngineParam                  param,
+               LanguageModel                model,
+               std::unique_ptr<VisionModel> vision_model,
+               const ModelWeight&           weights,
+               Context&                     ctx,
+               Gateway&                     gateway,
+               int                          device_id,
+               int                          dp_rank,
+               int                          phases):
+    impl_{std::make_unique<Impl>(
+        param, std::move(model), std::move(vision_model), weights, ctx, gateway, device_id, dp_rank, phases)}
 {
 }
 
@@ -964,30 +976,28 @@ void Engine::Start()
 
 void Engine::Impl::UpdateScheduleMetrics()
 {
-    if (param_.enable_metrics) {
-        const auto& [total, active, cached] = seq_mgr_->seq_stats();
+    const auto scheduler_tick = scheduler_tick_.fetch_add(1, std::memory_order_relaxed) + 1;
 
-        auto m = std::make_shared<ScheduleMetrics>();
+    const auto [total, active, cached] = seq_mgr_->seq_stats();
 
-        m->total_seqs   = total;
-        m->active_seqs  = active;
-        m->waiting_seqs = total - active;
+    auto m = std::make_shared<ScheduleMetrics>();
 
-        m->total_blocks  = seq_mgr_->total_count();
-        m->active_blocks = seq_mgr_->active_count();
-        m->cached_blocks = seq_mgr_->cached_count();
-        m->free_blocks   = seq_mgr_->free_count();
+    m->total_seqs     = total;
+    m->active_seqs    = active;
+    m->waiting_seqs   = total - active;
+    m->scheduler_tick = scheduler_tick;
 
-        std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
-    }
+    m->total_blocks  = seq_mgr_->total_count();
+    m->active_blocks = seq_mgr_->active_count();
+    m->cached_blocks = seq_mgr_->cached_count();
+    m->free_blocks   = seq_mgr_->free_count();
+
+    std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
 }
 
 shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 {
-    if (impl_->param_.enable_metrics) {
-        return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
-    }
-    return {};
+    return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
 }
 
 }  // namespace turbomind

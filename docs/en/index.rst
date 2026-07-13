@@ -61,8 +61,16 @@ Documentation
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_anthropic.md
+   llm/api_server_responses.md
    llm/api_server_lora.md
    llm/proxy_server.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Integrations
+
+   integration/claude_code.md
+   integration/codex.md
 
 .. _vlm_deployment:
 .. toctree::
@@ -71,6 +79,7 @@ Documentation
 
    multi_modal/vl_pipeline.md
    multi_modal/api_server_vl.md
+   multi_modal/multimodal_inputs.md
    multi_modal/index.rst
 
 .. _quantization:

@@ -1,0 +1,17 @@
+# HF model id: google/gemma-2-27b-it
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 2
+    extra:
+      session-len: 65536
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 0.6

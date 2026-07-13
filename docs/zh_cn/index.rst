@@ -61,6 +61,7 @@ LMDeploy 工具箱提供以下核心功能：
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_anthropic.md
+   llm/api_server_responses.md
    llm/api_server_lora.md
    llm/proxy_server.md
 
@@ -71,6 +72,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    multi_modal/vl_pipeline.md
    multi_modal/api_server_vl.md
+   multi_modal/multimodal_inputs.md
    multi_modal/index.rst
 
 

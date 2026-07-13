@@ -4,13 +4,20 @@
 Tests focus on _update_token_ids_decode, especially for the speculative-decoding path where multiple tokens can be
 accepted in one step, and the stop_pos parameter which truncates acceptance inline.
 """
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
+import torch
 
 from lmdeploy.pytorch.messages import (
     SamplingParam,
     SequenceMeta,
+)
+from lmdeploy.pytorch.strategies.ar.sampling import ARSamplingStrategy
+from lmdeploy.pytorch.strategies.ar_spec.model_agent import (
+    ARSpecExtraInputs,
+    ARSpecStoppingCriteria,
 )
 from lmdeploy.pytorch.strategies.ar_spec.sequence import (
     ARSpecSequenceStrategy,
@@ -38,6 +45,19 @@ def _make_seq(prefill_tokens=None):
     return seq
 
 
+def _make_sampling_seq(stop_words, seq_id=0):
+    """Create the minimal sequence shape used by ARSamplingStrategy."""
+    return SimpleNamespace(
+        sampling_param=SamplingParam(stop_words=stop_words),
+        num_valid_ids=0,
+        num_new_tokens=0,
+        valid_ids=np.array([], dtype=np.int64),
+        generated_ids=np.array([], dtype=np.int64),
+        session=SimpleNamespace(session_id=seq_id),
+        seq_id=seq_id,
+    )
+
+
 def _cache_contents(seq):
     """Return the visible contents of history_cache as a list."""
     return seq.history_cache.get_real().tolist()
@@ -51,6 +71,184 @@ def _state(seq):
         num_token_ids=seq._num_token_ids,
         cache_len=len(seq.history_cache),
     )
+
+
+class TestStoppingCriteria:
+    """Speculative stopping criteria should be per-row and ignore padding."""
+
+    def test_sampling_strategy_produces_batched_stop_words(self):
+        sampling = ARSamplingStrategy(pad_token_id=0)
+
+        single = sampling.make_sampling_inputs([_make_sampling_seq([369])])
+        assert single.stop_words.ndim == 2
+        assert single.stop_words.tolist() == [[369]]
+
+        mixed = sampling.make_sampling_inputs([
+            _make_sampling_seq([369, 151645], seq_id=0),
+            _make_sampling_seq([151645], seq_id=1),
+        ])
+        assert mixed.stop_words.ndim == 2
+        assert mixed.stop_words.tolist() == [[369, 151645], [151645, -1]]
+        assert mixed.stop_mask.tolist() == [[True, True], [True, False]]
+
+        mixed_empty = sampling.make_sampling_inputs([
+            _make_sampling_seq([369], seq_id=0),
+            _make_sampling_seq([], seq_id=1),
+        ])
+        assert mixed_empty.stop_words.ndim == 2
+        assert mixed_empty.stop_words.tolist() == [[369], [-1]]
+        assert mixed_empty.stop_mask.tolist() == [[True], [False]]
+
+    def test_num_appendable_ids_stops_on_length(self):
+        stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([3, 5]))
+        extra_inputs = ARSpecExtraInputs(
+            output_token_ids=torch.tensor([
+                [100, 101, 102, -1],
+                [200, 201, -1, -1],
+            ]))
+
+        stopped, stop_pos, new_stopping = stopping.step(
+            next_token_ids=torch.tensor([102, 201]),
+            stop_words=None,
+            extra_inputs=extra_inputs,
+        )
+
+        assert stopped.tolist() == [True, False]
+        assert stop_pos.tolist() == [2, -1]
+        assert new_stopping.num_appendable_ids.tolist() == [0, 3]
+
+    def test_one_dimensional_output_token_ids_are_supported(self):
+        stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([5, 5]))
+        extra_inputs = ARSpecExtraInputs(output_token_ids=torch.tensor([369, 200]))
+        stop_words = torch.tensor([
+            [369, -1],
+            [777, -1],
+        ])
+
+        stopped, stop_pos, new_stopping = stopping.step(
+            next_token_ids=torch.tensor([369, 200]),
+            stop_words=stop_words,
+            extra_inputs=extra_inputs,
+        )
+
+        assert stopped.tolist() == [True, False]
+        assert stop_pos.tolist() == [0, -1]
+        assert new_stopping.num_appendable_ids.tolist() == [0, 4]
+
+    def test_rejected_tokens_do_not_trigger_length_or_padding_stop(self):
+        stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([2, 3, 3]))
+        extra_inputs = ARSpecExtraInputs(
+            output_token_ids=torch.tensor([
+                [100, -1, -1],
+                [200, 777, -1],
+                [300, -1, -1],
+            ]))
+        stop_words = torch.tensor([
+            [777, -1],
+            [777, -1],
+            [-1, -1],
+        ])
+
+        stopped, stop_pos, new_stopping = stopping.step(
+            next_token_ids=torch.tensor([100, 777, 300]),
+            stop_words=stop_words,
+            extra_inputs=extra_inputs,
+        )
+
+        assert stopped.tolist() == [False, True, False]
+        assert stop_pos.tolist() == [-1, 1, -1]
+        assert new_stopping.num_appendable_ids.tolist() == [1, 0, 2]
+
+    def test_stop_pos_handles_first_position_and_no_stop(self):
+        stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([5, 5]))
+        extra_inputs = ARSpecExtraInputs(
+            output_token_ids=torch.tensor([
+                [369, 101, 102],
+                [200, 201, 202],
+            ]))
+        stop_words = torch.tensor([
+            [369, -1],
+            [777, -1],
+        ])
+
+        stopped, stop_pos, new_stopping = stopping.step(
+            next_token_ids=torch.tensor([102, 202]),
+            stop_words=stop_words,
+            extra_inputs=extra_inputs,
+        )
+
+        assert stopped.tolist() == [True, False]
+        assert stop_pos.tolist() == [0, -1]
+        assert new_stopping.num_appendable_ids.tolist() == [0, 2]
+
+    def test_stop_words_and_num_appendable_ids_can_stop_together(self):
+        stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([3, 3, 4, 3]))
+        extra_inputs = ARSpecExtraInputs(
+            output_token_ids=torch.tensor([
+                [100, 101, 369, -1],
+                [200, 201, 202, -1],
+                [300, 151645, 302, 303],
+                [400, 401, 402, 777],
+            ]))
+        stop_words = torch.tensor([
+            [555, 369],
+            [777, 888],
+            [123, 151645],
+            [555, 777],
+        ])
+
+        stopped, stop_pos, new_stopping = stopping.step(
+            next_token_ids=torch.tensor([369, 202, 303, 777]),
+            stop_words=stop_words,
+            extra_inputs=extra_inputs,
+        )
+
+        assert stopped.tolist() == [True, True, True, True]
+        assert stop_pos.tolist() == [2, 2, 1, 2]
+        assert new_stopping.num_appendable_ids.tolist() == [0, 0, 0, -1]
+
+    def test_ignores_padded_stop_words_when_draft_tokens_are_rejected(self):
+        stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([512, 5]))
+        extra_inputs = ARSpecExtraInputs(
+            output_token_ids=torch.tensor([
+                [100, 101, -1, -1, -1],
+                [200, 201, 202, 203, 204],
+            ]))
+        stop_words = torch.tensor([
+            [369, 151645],
+            [151645, -1],
+        ])
+
+        stopped, stop_pos, new_stopping = stopping.step(
+            next_token_ids=torch.tensor([101, 204]),
+            stop_words=stop_words,
+            extra_inputs=extra_inputs,
+        )
+
+        assert stopped.tolist() == [False, True]
+        assert stop_pos.tolist() == [-1, 4]
+        assert new_stopping.num_appendable_ids.tolist() == [510, 0]
+
+    def test_stop_words_do_not_leak_across_batch_rows(self):
+        stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([512, 512]))
+        extra_inputs = ARSpecExtraInputs(
+            output_token_ids=torch.tensor([
+                [100, 369, -1],
+                [369, 200, -1],
+            ]))
+        stop_words = torch.tensor([
+            [369, -1],
+            [151645, -1],
+        ])
+
+        stopped, stop_pos, _ = stopping.step(
+            next_token_ids=torch.tensor([369, 200]),
+            stop_words=stop_words,
+            extra_inputs=extra_inputs,
+        )
+
+        assert stopped.tolist() == [True, False]
+        assert stop_pos.tolist() == [1, -1]
 
 
 # ---------------------------------------------------------------------------

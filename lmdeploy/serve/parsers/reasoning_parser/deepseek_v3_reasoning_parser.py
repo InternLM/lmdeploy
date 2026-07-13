@@ -11,8 +11,8 @@ class DeepSeekV3ReasoningParser(ReasoningParser):
     - ``enable_thinking=None``: model typically emits no reasoning part
     """
 
-    def __init__(self, tokenizer: object, **kwargs):
-        super().__init__(tokenizer, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.enable_thinking = kwargs.get('enable_thinking', None)
 
     def starts_in_reasoning_mode(self) -> bool:

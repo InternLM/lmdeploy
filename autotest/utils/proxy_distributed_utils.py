@@ -6,8 +6,19 @@ import time
 from typing import Any
 
 import requests
-from utils.config_utils import get_case_str_by_config, get_cli_common_param, resolve_extra_params
-from utils.ray_distributed_utils import verify_service_functionality
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_model_path_from_config,
+    resolve_extra_params,
+)
+from utils.ray_distributed_utils import (
+    RAY_PORT,
+    RayLMDeployManager,
+    ascend_multinode_enabled,
+    verify_service_functionality,
+)
 
 time_time = time.time
 
@@ -52,8 +63,8 @@ def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_ins
         if should_print:
             basename = os.path.basename(model_name)
             print(f'📊 Check {check_count}: Model registration progress: '
-                  f'{ready_instances}/{expected_instances} instances ready '
-                  f'(Total reported: {total_instances})')
+                  f'{ready_instances}/{expected_instances} nodes with model, '
+                  f'{total_instances}/{expected_instances} nodes seen by proxy')
             for node_url, node_info in nodes_data.items():
                 models = node_info.get('models', [])
                 if model_name in models:
@@ -61,14 +72,21 @@ def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_ins
                 else:
                     print(f'   ⏳ Instance {node_url} has not registered target model')
 
-        if ready_instances >= expected_instances:
+        if total_instances != expected_instances:
             if should_print:
-                print(f'🎯 All {expected_instances} API server instances have registered the target model')
-            return True, ready_instances
-        else:
-            if should_print:
-                print(f'⏳ Waiting for more instances to register... ({ready_instances}/{expected_instances})')
+                print(f'⏳ Waiting for proxy to see exactly {expected_instances} nodes '
+                      f'(dp-sized cluster); currently {total_instances}')
             return False, ready_instances
+
+        if ready_instances == expected_instances:
+            if should_print:
+                print(f'🎯 All {expected_instances} nodes registered the target model '
+                      f'(matches /nodes/status count)')
+            return True, ready_instances
+
+        if should_print:
+            print(f'⏳ Waiting for all nodes to register model... ({ready_instances}/{expected_instances})')
+        return False, ready_instances
 
     except Exception as e:
         if current_time - last_progress_print >= progress_print_interval:
@@ -185,12 +203,25 @@ class ProxyDistributedManager:
     def __init__(self):
         self.master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
         self.node_rank = int(os.getenv('NODE_RANK', '0'))
+        self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proxy_port = int(os.getenv('PROXY_PORT', str(DEFAULT_PROXY_PORT)))
+        self.ray_port = int(os.getenv('RAY_PORT', str(RAY_PORT)))
 
         self.is_master = (self.node_rank == 0)
         self.proxy_process = None
+        self._ray_manager = None
+        if ascend_multinode_enabled():
+            self._ray_manager = RayLMDeployManager(
+                master_addr=self.master_addr,
+                ray_port=self.ray_port,
+                api_port=self.proxy_port,
+                health_check=False,
+            )
 
     def start(self):
+        if self._ray_manager is not None:
+            self._ray_manager.start_ray_cluster()
+
         if not self.is_master:
             return
 
@@ -212,6 +243,9 @@ class ProxyDistributedManager:
             except subprocess.TimeoutExpired:
                 self.proxy_process.kill()
 
+        if self._ray_manager is not None:
+            self._ray_manager.cleanup(force=True)
+
 
 class ApiServerPerTest:
 
@@ -221,7 +255,7 @@ class ApiServerPerTest:
         self.run_config = run_config
 
         model_name = run_config['model']
-        self.model_path = os.path.join(config['model_path'], model_name)
+        self.model_path = get_model_path_from_config(config, model_name)
 
         self.master_addr = proxy_manager.master_addr
         self.proxy_port = proxy_manager.proxy_port
@@ -229,7 +263,9 @@ class ApiServerPerTest:
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proc_per_node = int(os.getenv('PROC_PER_NODE', '1'))
 
-        self.expected_instances = self.node_count * self.proc_per_node
+        _pc = run_config.get('parallel_config') or {}
+        _dp = int(_pc.get('dp', 0) or 0)
+        self.expected_instances = _dp if _dp > 1 else 1
         self.is_master = (self.node_rank == 0)
         self.api_process = None
 
@@ -237,7 +273,8 @@ class ApiServerPerTest:
         proxy_url = f'http://{self.master_addr}:{self.proxy_port}'
 
         extra_params = self.run_config.get('extra_params', {})
-        resolve_extra_params(extra_params, self.config['model_path'])
+        resolve_extra_params(extra_params, self.config)
+        ensure_ascend_multinode_env(self.config, self.run_config)
 
         # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
         case_name = get_case_str_by_config(self.run_config)
@@ -263,7 +300,12 @@ class ApiServerPerTest:
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, f'log_{case_name}_{timestamp}.log')
         self._log_file = open(log_path, 'w')
-        self.api_process = subprocess.Popen(cmd, stdout=self._log_file, stderr=self._log_file)
+        env = build_ascend_multinode_env(self.config, self.run_config)
+        env['MASTER_PORT'] = os.getenv('MASTER_PORT', '29500')
+        self.api_process = subprocess.Popen(cmd,
+                                            stdout=self._log_file,
+                                            stderr=self._log_file,
+                                            env=env)
         print(f'📝 API Server log: {log_path}')
 
     def wait_until_ready(self):

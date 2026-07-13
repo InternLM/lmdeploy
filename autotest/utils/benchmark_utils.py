@@ -5,7 +5,13 @@ import time
 import allure
 import utils.constant as constant
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_cuda_prefix_by_workerid,
+    get_model_path_from_config,
+    get_workerid,
+)
 from utils.run_restful_chat import health_check, start_openai_service, terminate_restful_api
 
 SERVE_ONLY_PARAMS = {  # yapf: disable
@@ -16,7 +22,7 @@ SERVE_ONLY_PARAMS = {  # yapf: disable
 
 def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config.get('model')
-    model_path = os.path.join(config.get('model_path'), model)
+    model_path = get_model_path_from_config(config, model)
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
@@ -66,7 +72,7 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
 
 def longtext_throughput_test(config, run_config, worker_id: str = ''):
     model = run_config.get('model')
-    model_path = os.path.join(config.get('model_path'), model)
+    model_path = get_model_path_from_config(config, model)
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
@@ -147,7 +153,7 @@ BASE_HTTP_URL = f'http://{constant.DEFAULT_SERVER}'
 
 
 def restful_profile(config, run_config, port, is_smoke: bool = False):
-    model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+    model_path = get_model_path_from_config(config, run_config.get('model'))
     case_name = get_case_str_by_config(run_config)
     dataset_path = config.get('dataset_path')
     benchmark_path = os.path.join(config.get('benchmark_path'), 'restful')
@@ -162,7 +168,7 @@ def restful_profile(config, run_config, port, is_smoke: bool = False):
 
     csv_path = f'{work_dir}/restful.csv'
 
-    command = f'python benchmark/profile_restful_api.py --backend lmdeploy --dataset-name sharegpt --dataset-path {dataset_path} --tokenizer {model_path} --base-url {http_url} --output-file {csv_path}'  # noqa
+    command = f'python benchmark/profile_restful_api.py --backend lmdeploy --dataset-name sharegpt --dataset-path {dataset_path} --tokenizer {model_path} --trust-remote-code --base-url {http_url} --output-file {csv_path}'  # noqa
     if is_smoke:
         command += ' --num-prompts 100'
     else:
@@ -179,7 +185,7 @@ def restful_profile(config, run_config, port, is_smoke: bool = False):
 
 
 def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
-    model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+    model_path = get_model_path_from_config(config, run_config.get('model'))
     case_name = get_case_str_by_config(run_config)
     benchmark_path = os.path.join(config.get('benchmark_path'), 'mllm_restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
@@ -193,7 +199,7 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
 
     csv_path = f'{work_dir}/mllm_restful.csv'
 
-    command = f'python benchmark/profile_restful_api.py --backend lmdeploy-chat --dataset-name image --tokenizer {model_path} --model {case_name} --model-path {model_path} --random-input-len 100 --random-output-len 100 --random-range-ratio 1 --image-format jpeg --image-count 1 --image-content random --image-resolution 1024x1024 --base-url {http_url} --output-file {csv_path}'  # noqa
+    command = f'python benchmark/profile_restful_api.py --backend lmdeploy-chat --dataset-name image --tokenizer {model_path} --model {case_name} --model-path {model_path} --random-input-len 100 --random-output-len 100 --random-range-ratio 1 --image-format jpeg --image-count 1 --image-content random --image-resolution 1024x1024 --trust-remote-code --base-url {http_url} --output-file {csv_path}'  # noqa
     if is_smoke:
         command += ' --num-prompts 100'
     else:
@@ -211,7 +217,7 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
 
 def prefixcache_throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config.get('model')
-    model_path = os.path.join(config.get('model_path'), model)
+    model_path = get_model_path_from_config(config, model)
     dataset_path = config.get('prefix_dataset_path')
 
     case_name = get_case_str_by_config(run_config)
@@ -242,32 +248,32 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = '', is_smok
     else:
         test_configs = [(4096, 256, 100, '4k', None)]
 
-    for enable_prefix_caching in [False, True]:
-        suffix = 'cache' if enable_prefix_caching else 'no_cache'
 
-        for input_len, out_len, num_prompts, session_info, concurrency in test_configs:
-            timestamp = time.strftime('%Y%m%d_%H%M%S')
-            benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}_{suffix}_{timestamp}.log')
-            csv_path = os.path.join(work_dir, f'{session_info}_{suffix}.csv')
+    suffix = 'cache' if 'enable-prefix-caching' in run_config.get('extra_params', {}) else 'no_cache'
 
-            command = ' '.join([
-                command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
-                '--random-range-ratio 1.0', f'--num-prompts {num_prompts}', '--stream-output', f'--csv {csv_path}'
-            ]).strip()
+    for input_len, out_len, num_prompts, session_info, concurrency in test_configs:
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}_{suffix}_{timestamp}.log')
+        csv_path = os.path.join(work_dir, f'{session_info}_{suffix}.csv')
 
-            if enable_prefix_caching:
-                command += ' --enable-prefix-caching'
+        command = ' '.join([
+            command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
+            '--random-range-ratio 1.0', f'--num-prompts {num_prompts}', '--stream-output', f'--csv {csv_path}'
+        ]).strip()
 
-            if concurrency:
-                command += f' --concurrency {concurrency}'
+        if suffix == 'cache':
+            command += ' --enable-prefix-caching'
 
-            result, stderr = execute_command_with_logging(command, benchmark_log, env=env)
-            allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
+        if concurrency:
+            command += f' --concurrency {concurrency}'
 
-            if result and not os.path.isfile(csv_path):
-                return False, 'result is empty'
-            if not result:
-                return False, stderr
+        result, stderr = execute_command_with_logging(command, benchmark_log, env=env)
+        allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
+
+        if result and not os.path.isfile(csv_path):
+            return False, 'result is empty'
+        if not result:
+            return False, stderr
     return True, 'success'
 
 

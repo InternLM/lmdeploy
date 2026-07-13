@@ -3,18 +3,11 @@
 
 .. toctree::
    :maxdepth: 2
-   :caption: 指南
-
-   multimodal_inputs.md
-
-.. toctree::
-   :maxdepth: 2
    :caption: 示例
 
    deepseek_vl2.md
    llava.md
    internvl.md
-   xcomposer2d5.md
    cogvlm.md
    minicpmv.md
    phi3.md

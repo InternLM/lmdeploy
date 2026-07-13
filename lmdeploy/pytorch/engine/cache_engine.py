@@ -2,7 +2,9 @@
 # modify from: https://github.com/vllm-project/vllm
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
+from operator import index as as_index
 
 import torch
 
@@ -51,6 +53,38 @@ def _get_kv_cache_dtype(model_config: ModelConfig):
     return kv_cache_dtype
 
 
+_FP8_CACHE_DTYPES = {
+    QuantPolicy.FP8: torch.float8_e4m3fn,
+    QuantPolicy.FP8_E5M2: torch.float8_e5m2,
+}
+
+_KV_CACHE_QUANT_POLICY_DESCS = {
+    QuantPolicy.FP8: 'fp8_e4m3 KV cache',
+    QuantPolicy.FP8_E5M2: 'fp8_e5m2 KV cache',
+    QuantPolicy.INT4: 'int4 KV cache',
+    QuantPolicy.INT8: 'int8 KV cache',
+    QuantPolicy.TURBO_QUANT: 'TurboQuant KV cache',
+}
+
+
+def _is_fp8_quant_policy(quant_policy: QuantPolicy):
+    """Return whether quant policy stores KV payload as torch FP8."""
+    return quant_policy in _FP8_CACHE_DTYPES
+
+
+def _get_fp8_cache_dtype(quant_policy: QuantPolicy):
+    """Get the cache tensor dtype for an FP8 KV-cache quant policy."""
+    try:
+        return _FP8_CACHE_DTYPES[quant_policy]
+    except KeyError as e:
+        raise ValueError(f'Not an FP8 quant policy: {quant_policy}') from e
+
+
+def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy):
+    """Describe the active KV-cache quantization policy for logs."""
+    return _KV_CACHE_QUANT_POLICY_DESCS.get(quant_policy)
+
+
 # 512*1 + 4*4 + 64*2 = 656
 MLA_FP8_HEAD_DIM = 656
 
@@ -90,13 +124,21 @@ class CacheEngine:
         if self.model_config.use_mla_fp8_cache:
             cache_config.quant_policy = 0
 
-        if cache_config.quant_policy > 0:
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            self.kv_cache_dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+            assert self.cache_config.device_type in ['cuda'], \
+                f'FP8 quantization is only supported on CUDA device, but got {self.cache_config.device_type}.'
+        elif cache_config.quant_policy > 0:
             if self.cache_config.device_type in ['cuda']:
                 self.kv_cache_dtype = torch.uint8
             elif self.cache_config.device_type in ['ascend', 'npu']:
                 self.kv_cache_dtype = torch.int8
             else:
                 raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
+
+        quant_desc = _describe_kv_cache_quant_policy(cache_config.quant_policy)
+        if quant_desc is not None:
+            logger.info('Using %s.', quant_desc)
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -211,7 +253,9 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -230,7 +274,9 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -239,6 +285,10 @@ class CacheEngine:
                               cache_config: CacheConfig):
         """Get quant cache descs."""
         if cache_config.quant_policy == QuantPolicy.NONE:
+            return []
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            # Regular FP8 KV cache uses fixed scalar scales from Attention, not
+            # per-token scale/zero cache tensors.
             return []
 
         dtype = model_config.dtype
@@ -518,22 +568,78 @@ class StateCacheEngine:
         """State caches."""
         return self._state_caches
 
-    def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
-        """Initialize state caches.
+    @staticmethod
+    def _index_list(idx: int | Sequence[int]):
+        """Normalize host-side cache indices."""
+        if isinstance(idx, torch.Tensor):
+            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
+        if isinstance(idx, (str, bytes)):
+            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
+        try:
+            return [as_index(idx)]
+        except TypeError:
+            pass
+        if not isinstance(idx, Sequence):
+            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
+        if any(isinstance(item, torch.Tensor) for item in idx):
+            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
+        return [as_index(item) for item in idx]
 
-        idx: indices of caches to be initialized.
-        mask: mask to indicate which idx to be initialized.
-        """
-        if idx is None:
+    @staticmethod
+    def _validate_index_bounds(indices: Sequence[int], num_caches: int):
+        """Check normalized cache indices are valid state slots."""
+        for idx in indices:
+            if idx < 0 or idx >= num_caches:
+                raise ValueError(f'State cache index {idx} is out of range [0, {num_caches}).')
+
+    @staticmethod
+    def _copy_ranges(src_list: list[int], dst_list: list[int]):
+        """Yield contiguous copy ranges as (src_start, dst_start, length)."""
+        pairs = sorted(zip(src_list, dst_list))
+        if len(pairs) == 0:
             return
+        start_src = prev_src = pairs[0][0]
+        start_dst = prev_dst = pairs[0][1]
+        length = 1
+        for src, dst in pairs[1:]:
+            if src == prev_src + 1 and dst == prev_dst + 1:
+                prev_src = src
+                prev_dst = dst
+                length += 1
+                continue
+            yield start_src, start_dst, length
+            start_src = prev_src = src
+            start_dst = prev_dst = dst
+            length = 1
+        yield start_src, start_dst, length
 
+    def copy_caches(self, src_idx: int | Sequence[int], dst_idx: int | Sequence[int]):
+        """Copy state cache slots.
+
+        This is the low-level primitive needed by SSM prefix caching: a frozen
+        state checkpoint can be copied into a newly allocated runtime slot
+        before the next forward.
+        """
         if len(self._state_caches) <= 0:
             return
 
-        num_caches = self.cache_config.num_state_caches
+        src_list = self._index_list(src_idx)
+        dst_list = self._index_list(dst_idx)
+        if len(src_list) != len(dst_list):
+            raise ValueError('src_idx and dst_idx must have the same number of elements.')
+        if len(src_list) == 0:
+            return
+        num_caches = self.mem_pool.size(0)
+        self._validate_index_bounds(src_list, num_caches)
+        self._validate_index_bounds(dst_list, num_caches)
+        dst_set = set(dst_list)
+        if len(dst_set) != len(dst_list):
+            raise ValueError('dst_idx must not contain duplicate entries.')
+        if not set(src_list).isdisjoint(dst_set):
+            raise ValueError('src_idx and dst_idx must not overlap for stream-ordered state copies.')
 
-        # get mask of all caches so we can perform inplace mask fill
-        cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
-        cache_masks.index_copy_(0, idx, mask)
-        reshaped_mask = cache_masks.view((-1, ) + (1, ) * (self.mem_pool.dim() - 1))
-        self.mem_pool.masked_fill_(reshaped_mask, 0)
+        for src, dst, length in self._copy_ranges(src_list, dst_list):
+            if length == 1:
+                self.mem_pool[dst].copy_(self.mem_pool[src], non_blocking=True)
+            else:
+                self.mem_pool[dst:dst + length].copy_(self.mem_pool[src:src + length], non_blocking=True)

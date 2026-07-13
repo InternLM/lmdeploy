@@ -31,6 +31,7 @@ class Session:
         self._active: asyncio.Event | None = None
         self._handle = None  # inference instance
         self._session_mgr: SessionManager = weakref.ref(session_mgr)
+        self._remove_on_request_exit = False
         self.update(**kwargs)
 
     def update(self, **kwargs):
@@ -71,6 +72,7 @@ class Session:
         self._active = None
         self._handle = None
         self._session_mgr = None
+        self._remove_on_request_exit = False
         logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
@@ -102,6 +104,11 @@ class Session:
             # MUST set the signal after releasing the instance to avoid race condition
             # refer to async_end method
             self._active.set()
+            if self._remove_on_request_exit and self._session_mgr is not None:
+                self._remove_on_request_exit = False
+                session_mgr = self._session_mgr()
+                if session_mgr is not None:
+                    session_mgr.remove(self)
 
     async def async_abort(self):
         """Abort the session."""
@@ -183,6 +190,13 @@ class RequestHandlePool:
         if handle is not None and self.pool is not None:
             self.pool.put_nowait(handle)
 
+    @property
+    def num_dispatched(self) -> int:
+        """Number of handles currently checked out from the pool."""
+        if self.pool is None:
+            return 0
+        return self.size - self.pool.qsize()
+
     def clear(self):
         """Clear all handles."""
         self.handles = []
@@ -253,9 +267,23 @@ class SessionManager:
     def has(self, session_id):
         return session_id in self.sessions
 
-    def remove(self, session: Session):
-        self.sessions.pop(session.session_id, None)
-        user_session_id = self.session_id_map.pop(session.session_id, None)
+    def remove(self, session: Session | int | None):
+        """Remove a session and its user mapping.
+
+        This method is intentionally idempotent because cancellation cleanup can run from both the engine generator and
+        the API streaming wrapper.
+        """
+        if session is None:
+            return
+        if isinstance(session, int):
+            session_id = session
+        else:
+            session_id = session.session_id
+            current = self.sessions.get(session_id, None)
+            if current is not None and current is not session:
+                return
+        self.sessions.pop(session_id, None)
+        user_session_id = self.session_id_map.pop(session_id, None)
         if user_session_id is not None:
             self.user_session_id_map.pop(user_session_id, None)
 

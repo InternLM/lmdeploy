@@ -9,6 +9,7 @@ LMDeploy 使用 OpenAI 消息格式处理所有模态。消息中的每个内容
 | 文本     | `text`            | —                     |
 | 图像     | `image_url`       | `image_url.url`       |
 | 视频     | `video_url`       | `video_url.url`       |
+| 音频     | `audio_url`       | `audio_url.url`       |
 | 时序数据 | `time_series_url` | `time_series_url.url` |
 
 以下示例均面向 lmdeploy 兼容 OpenAI 的 API 服务。启动服务：
@@ -133,7 +134,7 @@ ______________________________________________________________________
 
 ## 单个视频
 
-> **注意：** 原生视频输入目前仅支持 **Qwen3-VL**、**Qwen3.5** 和 **InternS1-Pro** 模型。
+> **注意：** 原生视频输入目前仅支持 **Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
 
 <details>
 <summary>完整示例</summary>
@@ -176,7 +177,7 @@ ______________________________________________________________________
 
 ## 多个视频
 
-> **注意：** 原生视频输入目前仅支持 **Qwen3-VL**、**Qwen3.5** 和 **InternS1-Pro** 模型。
+> **注意：** 原生视频输入目前仅支持 **Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
 
 <details>
 <summary>完整示例</summary>
@@ -222,7 +223,7 @@ ______________________________________________________________________
 
 ## 图像与视频混合
 
-> **注意：** 原生视频输入目前仅支持 **Qwen3-VL**、**Qwen3.5** 和 **InternS1-Pro** 模型。
+> **注意：** 原生图像/视频混合输入目前仅支持 **Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
 
 <details>
 <summary>完整示例</summary>
@@ -258,6 +259,85 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     max_completion_tokens=256,
+)
+print(response.choices[0].message.content)
+```
+
+</details>
+
+______________________________________________________________________
+
+## 单个音频
+
+> **注意：** 音频输入目前仅支持 **Qwen3-Omni** 模型。
+
+<details>
+<summary>完整示例</summary>
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {
+                'type': 'audio_url',
+                'audio_url': {
+                    'url': 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav',
+                },
+            },
+            {
+                'type': 'text',
+                'text': '描述这段音频。',
+            },
+        ],
+    }],
+    temperature=0.8,
+    top_p=0.8,
+)
+print(response.choices[0].message.content)
+```
+
+</details>
+
+______________________________________________________________________
+
+## 多个音频
+
+> **注意：** 音频输入目前仅支持 **Qwen3-Omni** 模型。
+
+<details>
+<summary>完整示例</summary>
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+audio_url_1 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
+audio_url_2 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {'type': 'audio_url', 'audio_url': {'url': audio_url_1}},
+            {'type': 'audio_url', 'audio_url': {'url': audio_url_2}},
+            {
+                'type': 'text',
+                'text': '比较这两段音频，有哪些相似点和不同点？',
+            },
+        ],
+    }],
+    temperature=0.8,
+    top_p=0.8,
 )
 print(response.choices[0].message.content)
 ```
@@ -412,6 +492,37 @@ print(response.choices[0].message.content)
 </details>
 
 <details>
+<summary>Base64 编码示例（音频）</summary>
+
+```python
+from openai import OpenAI
+from lmdeploy.vl.utils import encode_audio_base64
+
+client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
+model_name = client.models.list().data[0].id
+
+b64 = encode_audio_base64('/path/to/your/audio.wav')
+audio_url = f'data:audio/wav;base64,{b64}'
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role': 'user',
+        'content': [
+            {
+                'type': 'audio_url',
+                'audio_url': {'url': audio_url},
+            },
+            {'type': 'text', 'text': '描述这段音频。'},
+        ],
+    }],
+)
+print(response.choices[0].message.content)
+```
+
+</details>
+
+<details>
 <summary>Base64 编码示例（时序数据）</summary>
 
 ```python
@@ -452,7 +563,7 @@ ______________________________________________________________________
 两个可选参数用于控制媒体处理行为：
 
 - **`mm_processor_kwargs`**：控制视觉 token 的分辨率（每张图片或视频帧的最小/最大像素数）
-- **`media_io_kwargs`**：控制媒体加载方式（如视频帧采样率和帧数）
+- **`media_io_kwargs`**：控制媒体加载方式（如视频帧采样率/帧数和音频采样率）
 
 两者均通过 `extra_body` 作为请求体中的额外字段传入 API，或在使用 pipeline API 时直接传给 `pipe()`。
 

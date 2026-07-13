@@ -18,6 +18,8 @@ struct ScheduleMetrics {
     int active_blocks;  // the number of active kv blocks
     int cached_blocks;  // the number of cached kv blocks
     int free_blocks;    // the number of free kv blocks
+
+    int64_t scheduler_tick;  // monotonic scheduler progress counter
 };
 
 struct RequestMetrics {
@@ -40,6 +42,7 @@ inline std::ostream& operator<<(std::ostream& os, const ScheduleMetrics& m)
     os << "total_seqs=" << m.total_seqs;
     os << ", active_seqs=" << m.active_seqs;
     os << ", waiting_seqs=" << m.waiting_seqs;
+    os << ", scheduler_tick=" << m.scheduler_tick;
     os << ", total_blocks=" << m.total_blocks;
     os << ", cached_blocks=" << m.cached_blocks;
     os << ", free_blocks=" << m.free_blocks;

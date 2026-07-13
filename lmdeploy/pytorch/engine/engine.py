@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import ctypes
 import gc
 import os
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ import numpy as np
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, RequestMetrics, ResponseType, SpeculativeConfig
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.conn.protocol import (
@@ -20,7 +22,8 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
-from ..messages import SchedulerSequence, UpdateTokenMode
+from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
+from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
 from ..strategies import build_strategy_factory
 from .base import EngineBase
@@ -57,6 +60,9 @@ class InferOutput:
 
     # expert ids
     routed_experts: torch.Tensor = None
+
+    # summed, unnormalized cross-entropy (NLL) of the input prompt
+    ce_loss: float = None
 
 
 def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
@@ -134,8 +140,13 @@ class Engine(EngineBase):
         dist_config = ConfigBuilder.build_dist_config(engine_config)
         misc_config = ConfigBuilder.build_misc_config(engine_config)
         # spec decode
-        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path, speculative_config, engine_config,
-                                                                       cache_config, trust_remote_code)
+        self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path,
+                                                                       speculative_config,
+                                                                       engine_config,
+                                                                       cache_config,
+                                                                       dist_config,
+                                                                       trust_remote_code=trust_remote_code,
+                                                                       )
 
         # build model agent
         self.executor = build_executor(
@@ -188,6 +199,9 @@ class Engine(EngineBase):
         # infer sleeping from empty_init: empty_init still builds runtime
         # resources and has its own weight-update workflow.
         self._sleeping_tags = set()
+        self._weights_update_lock: asyncio.Lock | None = None
+        self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
+        self._multimodal_session_end_count = 0
 
         # create main thread
         self.req_manager.set_main_loop_func(self.async_loop)
@@ -216,11 +230,10 @@ class Engine(EngineBase):
                 It could be one of the following options:
                     - i) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
-                      "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - ii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "InternLM/internlm-chat-7b",
-                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      on huggingface.co, such as "internlm/internlm2-chat-7b",
+                      "Qwen/Qwen2.5-7B-Instruct"
                       and so on.
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
@@ -308,15 +321,53 @@ class Engine(EngineBase):
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                self.scheduler.stop_session(session_id)
                 session = self.scheduler.sessions[session_id]
+                stopped_resp_ids = set()
                 for seq in session.sequences.values():
+                    if seq.status not in (MessageStatus.STOPPED, MessageStatus.TO_BE_MIGRATED):
+                        continue
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
+                        stopped_resp_ids.add(id(_resp))
+                self.scheduler.stop_session(session_id)
+                for seq in session.sequences.values():
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None and id(_resp) not in stopped_resp_ids:
                         self.req_manager.reject_request(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
+
+    @staticmethod
+    def _try_mem_trim():
+        """Try to trim memory."""
+        try:
+            gc.collect()
+            ctypes.CDLL('libc.so.6').malloc_trim(0)
+        except Exception as e:
+            logger.debug(f'Memory trim failed: {e}')
+
+    @staticmethod
+    def _has_multimodal_session(session) -> bool:
+        """Check whether session has multimodal history."""
+        for seq in session.sequences.values():
+            history_multimodals = getattr(seq, 'history_multimodals', None)
+            if history_multimodals is not None and not history_multimodals.empty():
+                return True
+        return False
+
+    def _maybe_trim_multimodal_session(self, has_multimodal: bool):
+        """Trim host memory after enough multimodal sessions have ended."""
+        trim_count = getattr(self, '_multimodal_session_trim_count', max(0, _envs.multimodal_session_trim_count))
+        if not has_multimodal or trim_count <= 0:
+            return
+
+        self._multimodal_session_end_count = getattr(self, '_multimodal_session_end_count', 0) + 1
+        if self._multimodal_session_end_count < trim_count:
+            return
+
+        self._multimodal_session_end_count = 0
+        self._try_mem_trim()
 
     def _on_end_session(self, reqs: list[Request], **kwargs):
         """On end session callback."""
@@ -355,16 +406,18 @@ class Engine(EngineBase):
                 req_data['input_multimodals'] = None
                 continue
 
-            if self.engine_config.disable_vision_encoder:
+            if self.engine_config.language_model_only:
                 # ignore multimodal inputs
                 req_data['input_multimodals'] = None
-                logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+                logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
                 continue
 
             result = self.input_processor.preprocess_input(input_ids, input_multimodals)
 
             input_ids = result.input_ids
             input_multimodals = result.input_multimodals
+            if self.cache_config.enable_prefix_caching:
+                input_multimodals = ensure_multimodal_content_hashes(input_multimodals)
 
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals
@@ -449,6 +502,29 @@ class Engine(EngineBase):
         """Update params."""
         self.executor.update_params(request)
 
+    def _get_weights_update_lock(self):
+        """Get the disaggregated weights-update lock."""
+        if self._weights_update_lock is None:
+            self._weights_update_lock = asyncio.Lock()
+        return self._weights_update_lock
+
+    async def _run_weights_update(self, func, request: Any):
+        """Run one serialized disaggregated weights-update operation."""
+        async with self._get_weights_update_lock():
+            return await asyncio.to_thread(func, request)
+
+    async def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return await self._run_weights_update(self.executor.init_weights_update_group, request)
+
+    async def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return await self._run_weights_update(self.executor.update_weights_from_distributed, request)
+
+    async def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return await self._run_weights_update(self.executor.destroy_weights_update_group, request)
+
     def _block_new_inputs(self):
         """Block new inference work from engine instances."""
         logger.info('PyTorch engine is blocking new inference requests.')
@@ -491,6 +567,8 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
+        if self._engine_loop is not None:
+            self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
 
     def wakeup(self, tags: list[str] | None = None):
@@ -598,7 +676,9 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
+            has_multimodal = self._has_multimodal_session(self.scheduler.sessions[session_id])
             self.scheduler.end_session(session_id)
+            self._maybe_trim_multimodal_session(has_multimodal)
             return True
         return False
 
@@ -607,3 +687,39 @@ class Engine(EngineBase):
 
     def get_schedule_metrics(self):
         return self.scheduler.schedule_metrics
+
+    @staticmethod
+    def _health_check_tasks(tasks):
+        done_tasks = []
+        for task in list(tasks):
+            if task.done():
+                done_tasks.append(task.get_name())
+        return len(done_tasks) == 0, done_tasks
+
+    async def get_health_status(self) -> dict:
+        """Get lightweight health status.
+
+        Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
+        before returning metrics.
+        """
+        if not self.req_manager.is_loop_alive():
+            return dict(alive=False,
+                        message='PyTorch engine request loop is not alive.',
+                        schedule_metrics=None)
+
+        if self._loop_main is not None:
+            if self._loop_main.done():
+                return dict(alive=False,
+                            message='PyTorch engine main loop has stopped.',
+                            schedule_metrics=None)
+
+        if self._engine_loop is not None:
+            engine_loop_ok, done_tasks = self._health_check_tasks(self._engine_loop.tasks)
+            if not engine_loop_ok:
+                return dict(alive=False,
+                            message=f'PyTorch engine loop task has stopped: {done_tasks}.',
+                            schedule_metrics=None)
+
+        return dict(alive=True,
+                    message='PyTorch engine is healthy.',
+                    schedule_metrics=self.get_schedule_metrics())

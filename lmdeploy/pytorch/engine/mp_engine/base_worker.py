@@ -84,6 +84,10 @@ class EngineWorkerBase:
         """Get schedule metrics."""
         return self.engine.get_schedule_metrics()
 
+    async def get_health_status(self):
+        """Get engine health status."""
+        return await self.engine.get_health_status()
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self.engine.p2p_initialize(conn_request)
@@ -111,6 +115,18 @@ class EngineWorkerBase:
     def update_params(self, request: Any):
         """Update params."""
         return self.engine.update_params(request)
+
+    async def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return await self.engine.init_weights_update_group(request)
+
+    async def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return await self.engine.update_weights_from_distributed(request)
+
+    async def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return await self.engine.destroy_weights_update_group(request)
 
     def close(self) -> None:
         """Close engine worker."""
@@ -157,3 +173,7 @@ class EngineOutputGather:
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
         return result
+
+    def discard(self, stream_id):
+        """Discard gathered output for a stream."""
+        self._output.pop(stream_id, None)

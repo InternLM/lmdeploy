@@ -329,6 +329,10 @@ def _get_and_verify_max_len(
     for key in llm_keys:
         hf_config = getattr(hf_config, key, hf_config)
 
+    # for qwen3-omni thinker
+    if hasattr(hf_config, 'thinker_config'):
+        hf_config = hf_config.thinker_config.text_config
+
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
     possible_keys = [
@@ -502,13 +506,20 @@ def serialize_state_dict(state_dict: dict) -> str:
     return pybase64.b64encode(buf.read()).decode('utf-8')
 
 
-def is_dlblas_installed():
-    is_dlblas_installed = True
+def is_deep_ep_installed():
     try:
-        import dlblas  # noqa: F401
+        import deep_ep  # noqa: F401
     except Exception:
-        is_dlblas_installed = False
-    return is_dlblas_installed
+        return False
+    return True
+
+
+def is_deep_gemm_installed():
+    try:
+        import deep_gemm  # noqa: F401
+    except Exception:
+        return False
+    return True
 
 
 # from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/weight_sync/tensor_bucket.py
@@ -619,3 +630,59 @@ class FlattenedTensorBucket:
             reconstructed[i] = (meta.name, tensor)
 
         return reconstructed
+
+
+# Copied from Xtuner to allow creating a NCCL process group that is
+# NOT a subgroup of the current default world.
+# https://github.com/InternLM/xtuner/blob/main/xtuner/v1/rl/trainer/update_weighter.py#L491
+def init_custom_process_group(backend=None,
+                              init_method=None,
+                              timeout=None,
+                              world_size: int = -1,
+                              rank: int = -1,
+                              store=None,
+                              group_name: str | None = None,
+                              pg_options=None):
+    from packaging.version import parse as parse_version
+    from torch.distributed.distributed_c10d import (
+        Backend,
+        PrefixStore,
+        _new_process_group_helper,
+        _world,
+        default_pg_timeout,
+        rendezvous,
+    )
+
+    assert (store is None) or (init_method is None), 'Cannot specify both init_method and store.'
+    if store is not None:
+        assert world_size > 0, 'world_size must be positive if using store'
+        assert rank >= 0, 'rank must be non-negative if using store'
+    elif init_method is None:
+        init_method = 'env://'
+
+    backend = Backend(backend) if backend else Backend('undefined')
+    if timeout is None:
+        timeout = default_pg_timeout
+
+    if store is None:
+        rendezvous_iterator = rendezvous(init_method, rank, world_size, timeout=timeout)
+        store, rank, world_size = next(rendezvous_iterator)
+        store.set_timeout(timeout)
+        if group_name is not None:
+            store = PrefixStore(group_name, store)
+
+    # PyTorch >= 2.6 renamed pg_options -> backend_options.
+    pg_options_param_name = 'backend_options' if parse_version(torch.__version__) >= parse_version('2.6') else \
+        'pg_options'
+    pg, _ = _new_process_group_helper(
+        world_size,
+        rank,
+        [],
+        backend,
+        store,
+        group_name=group_name,
+        **{pg_options_param_name: pg_options},
+        timeout=timeout,
+    )
+    _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
+    return pg

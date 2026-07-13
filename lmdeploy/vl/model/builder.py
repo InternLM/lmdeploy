@@ -17,21 +17,17 @@ from .glm4_v import GLM4VisionModel  # noqa F401
 from .interns1_pro import InternS1ProVisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl3_hf import InternVL3VisionModel  # noqa F401
-from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
 from .llama4 import LLama4VisionModel  # noqa F401
 from .llava import LlavaVisionModel  # noqa F401
 from .llava_hf import LlavaHfVisionModel  # noqa F401
 from .llava_next import LlavaNextVisionModel  # noqa F401
 from .minicpmv import MiniCPMVModel  # noqa F401
-from .mllama import MllamaVLModel  # noqa F401
 from .molmo import MolmoVisionModel  # noqa F401
 from .phi3_vision import Phi3VisionModel  # noqa F401
-from .qwen import QwenVisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
 from .qwen3 import Qwen3VLModel  # noqa F401
 from .qwen3_5 import Qwen3_5Model  # noqa F401
-from .xcomposer2 import Xcomposer2VisionModel  # noqa F401
-from .yi import YiVisionModel  # noqa F401
+from .qwen3_omni import Qwen3OmniModel  # noqa F401
 
 logger = get_logger('lmdeploy')
 
@@ -74,9 +70,11 @@ def load_vl_model(model_path: str,
                 logger.info(f'matching vision model: {name}')
                 model = module(**kwargs)
                 model.build_preprocessor(trust_remote_code=trust_remote_code)
-                # build the vision part of a VLM model when backend is
-                # turbomind, or load the whole VLM model when `with_llm==True`
-                if backend == 'turbomind' or with_llm:
+                # build the Python vision part for legacy TurboMind models,
+                # or load the whole VLM model when `with_llm==True`. Native
+                # TurboMind vision models run the visual encoder in C++.
+                native_tm_vision = backend == 'turbomind' and model._turbomind_native_vision
+                if (backend == 'turbomind' and not native_tm_vision) or with_llm:
                     model.build_model(trust_remote_code=trust_remote_code)
                 return model
         except Exception as e:

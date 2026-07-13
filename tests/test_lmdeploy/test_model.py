@@ -23,11 +23,9 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'OpenGVLab/InternVL2-4B',
     'OpenGVLab/InternVL2-8B',
     'OpenGVLab/InternVL2_5-2B',
-    'OpenGVLab/InternVL2_5-4B',
     'OpenGVLab/InternVL2_5-8B',
     'OpenGVLab/InternVL3-2B',
     'OpenGVLab/InternVL3-8B',
-    'OpenGVLab/InternVL3-9B',
     'OpenGVLab/InternVL3_5-1B',
     'OpenGVLab/InternVL3_5-4B',
     'OpenGVLab/InternVL3_5-8B',
@@ -83,7 +81,7 @@ def test_HFChatTemplate_message2prompt_sequence_start_True(model_path):
 
 
 def test_base_model():
-    model = MODELS.get('internlm')(capability='completion')
+    model = MODELS.get('base')(capability='completion')
     assert model.capability == 'completion'
     assert model.get_prompt('hi') == 'hi'
     assert model.messages2prompt('test') == 'test'
@@ -112,38 +110,6 @@ def test_prefix_response():
     messages = [dict(role='assistant', content='prefix test')]
     prompt = model.messages2prompt(messages)
     assert prompt[-len('prefix test'):] == 'prefix test'
-
-
-def test_internlm_chat():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('internlm')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-    assert model.stop_words is not None
-    assert model.system == '<|System|>:'
-
-    model = MODELS.get('internlm')(capability='chat', system='Provide answers in Python')
-    assert model.get_prompt(prompt, sequence_start=True) != prompt
-    assert model.get_prompt(prompt, sequence_start=False) != prompt
-    assert model.system == 'Provide answers in Python'
-
-    model = MODELS.get('internlm')(capability='voice')
-    _prompt = None
-    with pytest.raises(AssertionError):
-        _prompt = model.get_prompt(prompt, sequence_start=True)
-        assert _prompt is None
-
-
-def test_baichuan():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('baichuan2')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-    assert model.stop_words is None
-
-    model = MODELS.get('baichuan2')(capability='chat')
-    _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt == '<reserved_106>' + prompt + '<reserved_107>'
 
 
 def test_llama2():

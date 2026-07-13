@@ -50,11 +50,28 @@ class ModelList(BaseModel):
     data: list[ModelCard] = []
 
 
+class PromptTokensDetails(BaseModel):
+    """Prompt token usage details."""
+
+    cached_tokens: int = 0
+
+
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: int | None = 0
+    prompt_tokens_details: PromptTokensDetails | None = None
+
+    @classmethod
+    def build(cls, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> 'UsageInfo':
+        """Build OpenAI-compatible usage with prefix-cache details."""
+        return cls(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+        )
 
 
 class Function(BaseModel):
@@ -127,11 +144,12 @@ class ChatCompletionRequest(BaseModel):
     model: str
 
     messages: str | list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
-    temperature: float | None = 0.7
-    top_p: float | None = 1.0
+    temperature: float | None = None
+    top_p: float | None = None
     tools: list[Tool] | None = Field(default=None, examples=[None])
     tool_choice: ToolChoice | AllowedToolChoice | Literal[
         'auto', 'required', 'none'] = Field(default='auto', examples=['none'])
+    parallel_tool_calls: bool | None = True
     logprobs: bool | None = False
     top_logprobs: int | None = None
     n: int | None = 1
@@ -158,20 +176,21 @@ class ChatCompletionRequest(BaseModel):
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
     do_preprocess: bool | None = True
-    repetition_penalty: float | None = 1.0
+    repetition_penalty: float | None = None
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
-    top_k: int | None = 40
+    top_k: int | None = None
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
-    min_p: float = 0.0
+    min_p: float | None = None
     priority: StrictInt | None = Field(default=0, ge=0, le=255)
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False
+    return_logprob: bool | None = False
     include_stop_str_in_output: bool | None = False
     # kwargs for chat template renderer
     chat_template_kwargs: dict[str, Any] | None = Field(
@@ -271,7 +290,8 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     logprobs: ChoiceLogprobs | None = None
-    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     output_ids: list[int] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
 
@@ -312,8 +332,9 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: ChoiceLogprobs | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
     output_ids: list[int] | None = None
-    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
 
 
@@ -332,7 +353,7 @@ class CompletionRequest(BaseModel):
     model: str
     prompt: str | list[Any]
     suffix: str | None = None
-    temperature: float | None = 0.7
+    temperature: float | None = None
     n: int | None = 1
     logprobs: int | None = None
     max_completion_tokens: int | None = Field(
@@ -342,29 +363,29 @@ class CompletionRequest(BaseModel):
                      'including visible output tokens and reasoning tokens'),
     )
     max_tokens: int | None = Field(
-        default=16,
-        examples=[16],
+        default=None,
+        examples=[None],
         deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
     )
     stop: str | list[str] | None = Field(default=None, examples=[None])
     stream: bool | None = False
     stream_options: StreamOptions | None = Field(default=None, examples=[None])
-    top_p: float | None = 1.0
+    top_p: float | None = None
     echo: bool | None = False
     presence_penalty: float | None = 0.0
     frequency_penalty: float | None = 0.0
     user: str | None = None
     # additional argument of lmdeploy
-    repetition_penalty: float | None = 1.0
+    repetition_penalty: float | None = None
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
-    top_k: int | None = 40  # for opencompass
+    top_k: int | None = None  # for opencompass
     seed: int | None = None
-    min_p: float = 0.0
+    min_p: float | None = None
     priority: StrictInt | None = Field(default=0, ge=0, le=255)
 
 
@@ -446,6 +467,23 @@ class PoolingResponse(BaseModel):
     usage: UsageInfo
 
 
+class PPLRequest(BaseModel):
+    """Get perplexity request.
+
+    The input may be raw text or token ids. Text is tokenized with
+    ``tokenizer.encode`` (no chat template applied).
+    """
+    input: str | list[int]
+
+
+class PPLResponse(BaseModel):
+    """Get perplexity response.
+
+    ``ppl`` is the perplexity (mean cross-entropy loss) of the input.
+    """
+    ppl: float
+
+
 class EncodeRequest(BaseModel):
     """Encode request."""
     input: str | list[str]
@@ -475,6 +513,32 @@ class UpdateParamsRequest(BaseModel):
     finished: bool = False
 
 
+class InitWeightsUpdateGroupRequest(BaseModel):
+    """Initialize a torch.distributed process group used to broadcast weights
+    from an external trainer into the rollout engine."""
+    master_address: str
+    master_port: int
+    rank_offset: int
+    world_size: int
+    group_name: str
+    backend: str = 'nccl'
+
+
+class UpdateWeightsFromDistributedRequest(BaseModel):
+    """Receive weights through a previously initialized distributed group and
+    load them into the running model."""
+    names: list[str]
+    dtypes: list[str]
+    shapes: list[list[int]]
+    group_name: str
+    load_format: str | None = None  # 'flattened_bucket' or None
+    finished: bool = False  # trigger mod.update_weights() finalization when True
+
+
+class DestroyWeightsUpdateGroupRequest(BaseModel):
+    """Tear down a previously initialized weights-update process group."""
+    group_name: str
+
 
 # /generate input
 class GenerateReqInput(BaseModel):
@@ -487,12 +551,12 @@ class GenerateReqInput(BaseModel):
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
     stream: bool | None = False
-    temperature: float = 1.0
-    repetition_penalty: float | None = 1.0
+    temperature: float | None = None
+    repetition_penalty: float | None = None
     ignore_eos: bool | None = False
-    top_p: float = 1.0
-    top_k: int = 0
-    min_p: float = 0.0
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False

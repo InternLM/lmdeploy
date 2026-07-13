@@ -7,7 +7,9 @@ namespace turbomind {
 enum class ActivationType
 {
     kSilu,
-    kSiluGptOss
+    kSiluGptOss,
+    kGeluPytorchTanh,
+    kGelu
 };
 
 void Activation(Ref<Tensor> gate, const Tensor& up, ActivationType type, cudaStream_t stream);

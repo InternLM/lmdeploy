@@ -1,9 +1,12 @@
+import copy
 import csv
 import glob
 import json
 import os
 import subprocess
 import time
+import traceback
+from contextlib import contextmanager
 
 import allure
 import pandas as pd
@@ -11,6 +14,60 @@ from mmengine.config import Config
 from utils.common_utils import execute_command_with_logging
 from utils.config_utils import get_case_str_by_config, get_cli_str, parse_config_by_case
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, EVAL_RUN_CONFIG
+
+
+def build_eval_judge_run_config(config: dict, proxy_url: str) -> dict:
+    """Build judge ``api_server`` run_config for the eval scoring stage."""
+    eval_run_config = copy.deepcopy(EVAL_RUN_CONFIG)
+    extra_params = eval_run_config.setdefault('extra_params', {})
+    extra_params['proxy-url'] = proxy_url
+    if config.get('device') == 'ascend':
+        extra_params['device'] = 'ascend'
+    return eval_run_config
+
+
+@contextmanager
+def _mmengine_lazy_allow_lazyattr_call():
+    try:
+        from mmengine.config import lazy as mm_lazy
+    except ImportError:
+        yield
+        return
+    cls = mm_lazy.LazyAttr
+    orig = cls.__call__
+
+    def _call(self, *args, **kwargs):
+        fn = self.build()
+        if not callable(fn):
+            raise RuntimeError()
+        return fn(*args, **kwargs)
+
+    cls.__call__ = _call
+    try:
+        yield
+    finally:
+        cls.__call__ = orig
+
+
+def _sync_ruler_tokenizer_model(cfg, model_path):
+    tokenizer = os.environ.get('TOKENIZER_MODEL', model_path)
+    if not getattr(cfg, 'datasets', None):
+        return
+    for dataset in cfg.datasets:
+        if isinstance(dataset, dict) and 'tokenizer_model' in dataset:
+            dataset['tokenizer_model'] = tokenizer
+
+
+def _is_fp8_case(case_name: str) -> bool:
+    return case_name.endswith('_fp8')
+
+
+def _should_skip_num_workers_override(eval_config_name: str, case_name: str) -> bool:
+    if eval_config_name in ('longtext-256k', 'longtext-512k'):
+        return True
+    if _is_fp8_case(case_name):
+        return True
+    return False
 
 
 def write_to_summary(case_name, result, msg, metrics, result_dir):
@@ -23,6 +80,7 @@ def write_to_summary(case_name, result, msg, metrics, result_dir):
     communicator = config['communicator']
     parallel_config_str = config['parallel_config']
     quant_policy = config['quant_policy']
+    variant = config.get('variant', '-')
 
     dataset_name = []
     dataset_metrics = []
@@ -35,32 +93,36 @@ def write_to_summary(case_name, result, msg, metrics, result_dir):
 
     summary_file = os.environ.get('GITHUB_STEP_SUMMARY', '')
     md_summary_file = f'{result_dir}/summary_{case_name}.md'
-    summary_line = f'| {model} | {quant_policy} | {backend} | {communicator} | {parallel_config_str} | {status} | {summary_dataset_metrics} |\n'  # noqa: E501
+    summary_line = (
+        f'| {model} | {quant_policy} | {backend} | {communicator} | '
+        f'{parallel_config_str} | {variant} | {status} | {summary_dataset_metrics} |\n'
+    )
 
     write_header = not os.path.exists(md_summary_file) or os.path.getsize(md_summary_file) == 0
     with open(md_summary_file, 'a') as f:
         if write_header:
-            dash_line = '-----|' * (len(metrics.keys()))
+            dash_line = '-----|' * (len(metrics.keys()) + 1)
             f.write('## Model Evaluation Results\n')
             f.write(
-                f'| Model | QuantPolicy | Backend | Communicator | Parallel config | Status | {summary_dataset_name} |\n'  # noqa
+                f'| Model | QuantPolicy | Backend | Communicator | Parallel config | Variant | Status | {summary_dataset_name} |\n'  # noqa
             )
-            f.write(f'|-------|-------------|---------|--------------|----|--------|{dash_line}\n')
+            f.write(f'|-------|-------------|---------|--------------|-----------------|---------|--------|{dash_line}\n')
         f.write(summary_line)
     if summary_file:
         write_header = not os.path.exists(summary_file) or os.path.getsize(summary_file) == 0
         with open(summary_file, 'a') as f:
             if write_header:
-                dash_line = '-----|' * (len(metrics.keys()))
+                dash_line = '-----|' * (len(metrics.keys()) + 1)
                 f.write('## Model Evaluation Results\n')
                 f.write(
-                    f'| Model | QuantPolicy | Backend | Communicator | Parallel config | Status | {summary_dataset_name} |\n'  # noqa
+                    f'| Model | QuantPolicy | Backend | Communicator | Parallel config | Variant | Status | {summary_dataset_name} |\n'  # noqa
                 )
-                f.write(f'|-------|-------------|---------|--------------|----|--------|{dash_line}\n')
+                f.write(f'|-------|-------------|---------|--------------|-----------------|---------|--------|{dash_line}\n')
             f.write(summary_line)
     else:
         print(
-            f'Summary: {model} | {backend} | {communicator} | {parallel_config_str} | {status} | {summary_dataset_metrics}'  # noqa: E501
+            f'Summary: {model} | {backend} | {communicator} | {parallel_config_str} | '
+            f'{variant} | {status} | {summary_dataset_metrics}'  # noqa: E501
         )
 
 
@@ -186,7 +248,8 @@ def eval_test(model_path,
                 if not os.path.exists(config_file):
                     return False, f'Config file {config_file} not found'
 
-                cfg = Config.fromfile(config_file)
+                with _mmengine_lazy_allow_lazyattr_call():
+                    cfg = Config.fromfile(config_file)
 
                 cfg.MODEL_NAME = case_name
                 cfg.MODEL_PATH = model_path
@@ -202,8 +265,12 @@ def eval_test(model_path,
                     for key, value in kwargs.items():
                         model_cfg[key] = value
 
-                cfg.NUM_WORKERS = extra_config.get('max-num-workers', 8)
-                cfg.infer['partitioner']['num_worker'] = extra_config.get('max-num-workers', 8)
+                _sync_ruler_tokenizer_model(cfg, model_path)
+
+                if not _should_skip_num_workers_override(eval_config_name, case_name):
+                    cfg.NUM_WORKERS = extra_config.get('max-num-workers', 8)
+                    cfg.infer['partitioner']['num_worker'] = extra_config.get(
+                        'max-num-workers', 8)
 
                 cfg.dump(temp_config_path)
                 print(f'Modified config saved to: {temp_config_path}')
@@ -213,7 +280,8 @@ def eval_test(model_path,
                     llm_summary(case_name, False, error_msg, work_dir, eval_path)
                     return False, error_msg
 
-                cfg = Config.fromfile(temp_config_path)
+                with _mmengine_lazy_allow_lazyattr_call():
+                    cfg = Config.fromfile(temp_config_path)
                 print(f'Using existing temp config file: {temp_config_path}')
                 eval_run_config = EVAL_RUN_CONFIG
                 eval_case_name = get_case_str_by_config(eval_run_config)
@@ -244,6 +312,8 @@ def eval_test(model_path,
                                 evaluator['llm_evaluator']['judge_cfg']['openai_api_base'] = cfg.JUDGE_API_BASE
                                 evaluator['llm_evaluator']['judge_cfg']['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
 
+                _sync_ruler_tokenizer_model(cfg, model_path)
+
                 cfg.dump(temp_config_path)
                 print(f'Modified config for eval stage saved to: {temp_config_path}')
 
@@ -262,7 +332,8 @@ def eval_test(model_path,
             return result, stderr
         except Exception as e:
             print(f'Error occurred: {e}')
-            return False, f'Error occurred: {e}'
+            print(traceback.format_exc())
+            return False, f'Error occurred: {e}\n{traceback.format_exc()}'
         finally:
             os.chdir(original_cwd)
             print(f'Returned to directory: {original_cwd}')
@@ -295,11 +366,11 @@ def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_typ
     extra_config_str = get_cli_str(extra_config)
 
     if test_type == 'infer':
-        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://{DEFAULT_SERVER}:{port}/v1 --reuse --work-dir {work_dir} --mode infer {extra_config_str}'  # noqa
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://{DEFAULT_SERVER}:{port}/v1 --reuse --work-dir {work_dir} --timeout 7200 --mode infer {extra_config_str}'  # noqa
     elif test_type == 'eval':
         cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://{DEFAULT_SERVER}:empty/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge turbomind_Qwen2.5-32B-Instruct_nccl_tp2_0 --judge-base-url http://{DEFAULT_SERVER}:{port}/v1'  # noqa
 
-    result, msg = execute_command_with_logging(cmd, eval_log)
+    result, msg = execute_command_with_logging(cmd, eval_log, timeout=7200)
 
     allure.attach.file(eval_log, name=eval_log, attachment_type=allure.attachment_type.TEXT)
 
