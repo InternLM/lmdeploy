@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
+
 from torch import Tensor
 
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
@@ -7,6 +9,17 @@ from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 
 from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta
+
+
+@functools.lru_cache
+def _get_sparse_index_topk(topk: int):
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
+        is_sparse_index_topk_supported,
+        sparse_index_topk,
+    )
+    if is_sparse_index_topk_supported(topk):
+        return sparse_index_topk
+    return None
 
 
 class TritonNSAIndexFP8(BaseNSAIndexFP8):
@@ -62,6 +75,15 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                            max_q_seqlen=max_q_seqlen,
                            max_k_seqlen=max_kv_seqlen,
                            causal=True)
+        sparse_index_topk = _get_sparse_index_topk(self.topk)
+        if sparse_index_topk is not None:
+            return sparse_index_topk(scores,
+                                     q_seqlens,
+                                     k_seqlens,
+                                     self.topk,
+                                     fill=self.fill,
+                                     descending=True,
+                                     sorted=False)
         return bitonic_topk(scores, q_seqlens, k_seqlens, self.topk, fill=self.fill, descending=True)
 
 
