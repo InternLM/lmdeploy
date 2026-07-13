@@ -168,7 +168,7 @@ class Qwen3_5TextModel(TextModel):
 
     def linear_attn(self, pfx):
         cfg = self._dn_cfg.clone()
-        builder = DeltaNetBuilder(cfg, self._ctx, tp=self._attn_tp)
+        builder = DeltaNetBuilder(cfg, self._ctx, tp=self._model_tp)
 
         builder.add_input_projections(
             in_proj_qkv=self._linear(pfx + 'in_proj_qkv'),
