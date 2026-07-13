@@ -1426,7 +1426,7 @@ namespace {
 
 using turbomind::core::Logger;
 
-constexpr auto kCacheLogLevel = Logger::Level::kWarning;
+constexpr auto kCacheLogLevel = Logger::Level::kInfo;
 
 void LogAccept(const Sequence& s, int bs)
 {

@@ -543,7 +543,7 @@ void Engine::Impl::Schedule()
 
     s.bs0 = std::exchange(s.active, active.size());
     if (cache_log_interval_ && schedule_counter_ % cache_log_interval_ == 0) {
-        TM_LOG_WARN("dp{} total: {}, eligible: {}, active: {}", dp_rank_, s.size(), eligible.size(), s.bs0);
+        TM_LOG_INFO("dp{} total: {}, eligible: {}, active: {}", dp_rank_, s.size(), eligible.size(), s.bs0);
     }
     s.swapout = swap_out.size();
     s.finish  = 0;
