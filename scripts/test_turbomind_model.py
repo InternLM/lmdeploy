@@ -9,6 +9,7 @@ Stdout is plain text in short sections, for example:
   --- setup ---
   model: <path>
   tp: <tp>
+  cp: <cp>
   gpus: <gpus>
   max_new_tokens: 256
   async: 1
@@ -47,6 +48,7 @@ Usage (from repo root):
       --model-id ID \\
       --cache-dir PATH \\
       --tp N \\
+      --cp N \\
       --gpus DEVICES \\
       [--prompt TEXT ...] \\
       [--prompt-file PATH] \\
@@ -72,20 +74,20 @@ Example --prompt-ids (0-based; repeats run the same prompt again):
   # prompts.json: ["First prompt.", "Second prompt."]
   # Run second, then first twice (three responses total)
   python scripts/test_turbomind_model.py \\
-      --model-id ID --cache-dir PATH --tp 1 --gpus 0 \\
+      --model-id ID --cache-dir PATH --tp 1 --cp 1 --gpus 0 \\
       --prompt-file prompts.json \\
       --prompt-ids 1 0 0
 
   # Same with CLI prompts: run "B", then "A" twice
   python scripts/test_turbomind_model.py \\
-      --model-id ID --cache-dir PATH --tp 1 --gpus 0 \\
+      --model-id ID --cache-dir PATH --tp 1 --cp 1 --gpus 0 \\
       --prompt "A" --prompt "B" \\
       --prompt-ids 1 0 0
 
 Example with prefix caching and repeated prompts:
 
   python scripts/test_turbomind_model.py \\
-      --model-id ID --cache-dir PATH --tp 2 --gpus 0,1 \\
+      --model-id ID --cache-dir PATH --tp 2 --cp 2 --gpus 0,1 \\
       --enable-prefix-caching \\
       --prompt "A" --prompt "B" \\
       --prompt-ids 0 0 1
@@ -107,6 +109,7 @@ Python (repo root on PYTHONPATH):
       model_id="/path/to/model",
       cache_dir="/nvme2/huggingface_hub/hub",
       tp=2,
+      cp=2,
       gpus="0,1",
       prompts=["Hello", "World"],
       prompt_ids=[0, 1, 0],
@@ -298,6 +301,7 @@ Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit
     parser.add_argument('--model-id', required=True, help='HuggingFace model id or local path')
     parser.add_argument('--cache-dir', required=True, help='HF hub cache directory (HF_HUB_CACHE)')
     parser.add_argument('--tp', required=True, type=int, help='Tensor parallel size')
+    parser.add_argument('--cp', required=True, type=int, help='Context parallel size')
     parser.add_argument('--gpus', required=True, help='CUDA_VISIBLE_DEVICES value, e.g. "0" or "0,1"')
     parser.add_argument(
         '--max-new-tokens',
@@ -405,6 +409,7 @@ def run_smoke_infer(
     gpus: str,
     resolved: ResolvedPrompts,
     *,
+    cp: int,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     async_: int = DEFAULT_ASYNC,
     session_len: int = DEFAULT_SESSION_LEN,
@@ -439,6 +444,7 @@ def run_smoke_infer(
         cache_max_entry_count=0.5,
         max_prefill_token_num=max_prefill_token_num,
         tp=tp,
+        cp=cp,
         dp=1,
         enable_metrics=False,
         communicator='nccl',
@@ -486,6 +492,7 @@ def print_report(
     resolved: ResolvedPrompts,
     result: SmokeResult,
     *,
+    cp: int,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     async_: int = DEFAULT_ASYNC,
     session_len: int = DEFAULT_SESSION_LEN,
@@ -501,6 +508,7 @@ def print_report(
     print('--- setup ---')
     print(f'model: {model_id}')
     print(f'tp: {tp}')
+    print(f'cp: {cp}')
     print(f'gpus: {gpus}')
     print(f'max_new_tokens: {max_new_tokens}')
     print(f'async: {async_}')
@@ -543,6 +551,7 @@ def run_smoke_test(
     model_id: str,
     cache_dir: str,
     tp: int,
+    cp: int,
     gpus: str,
     prompts: list[str] | None = None,
     prompt_file: str | None = None,
@@ -571,6 +580,7 @@ def run_smoke_test(
         tp,
         gpus,
         resolved,
+        cp=cp,
         max_new_tokens=max_new_tokens,
         async_=async_,
         session_len=session_len,
@@ -590,6 +600,7 @@ def run_smoke_test(
             gpus,
             resolved,
             result,
+            cp=cp,
             max_new_tokens=max_new_tokens,
             async_=async_,
             session_len=session_len,
@@ -611,6 +622,7 @@ def main() -> None:
         model_id=args.model_id,
         cache_dir=args.cache_dir,
         tp=args.tp,
+        cp=args.cp,
         gpus=args.gpus,
         prompts=args.prompt,
         prompt_file=args.prompt_file,

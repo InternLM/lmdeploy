@@ -88,7 +88,7 @@ class Scheduler {
 public:
     Scheduler(ObjectAllocator&   alloc,
               CacheRegistry      registry,
-              int                cache_block_seq_len,
+              int                logical_block_size,
               bool               enable_prefix_caching,
               const std::string& cache_prompt,
               int                cache_prompt_boundary_skip,

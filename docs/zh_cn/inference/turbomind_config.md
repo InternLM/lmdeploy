@@ -85,6 +85,8 @@ TurboMind 2.x 实现了 Paged Attention，按块管理 k/v cache。
 cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_data_type)
 ```
 
+启用序列并行后，该公式仍表示每个 rank 上 block 的实际显存大小。由于 token 交错存储在各个 CP rank 上，调度器中对应的逻辑块覆盖 `cache_block_seq_len * cp` 个全局 token。
+
 对于 llama2-7b 模型来说，以 half 类型存放 k/v 时，一块 k/v block 的内存为：`128 * 32 * 32 * 128 * 2 * sizeof(half) = 64MB`
 
 `cache_max_entry_count` 根据取值不同，表示不同的含义：
@@ -105,7 +107,7 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 前缀缓存功能主要适用于多个请求具有相同的prompt前缀（比如system prompt）的场景，该相同前缀部分的 k/v block 会被缓存起来，被多个请求重复利用，从而节省了重复计算的开销，提高推理性能。相同prompt前缀长度越长，性能提升越大。
 
-由于前缀缓存对 k/v 重复利用的最小粒度是block，如果相同prompt前缀不足一个block（前缀长度\<`cache_block_seq_len`），则推理性能不会有提升。
+对于前缀缓存的整块复用，一个完整 k/v block 是最小粒度；不开启序列并行时其前缀长度阈值为 `cache_block_seq_len`，开启后为 `cache_block_seq_len * cp`。
 
 ### 非整块边界复用
 

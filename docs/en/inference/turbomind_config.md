@@ -83,6 +83,8 @@ TurboMind 2.x has implemented Paged Attention, managing the k/v cache in blocks.
 cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_data_type)
 ```
 
+With context parallelism, this formula remains the physical per-rank block size. The matching scheduler block spans `cache_block_seq_len * cp` global tokens because those tokens are interleaved across the CP ranks.
+
 For the llama2-7b model, when storing k/v as the `half` type, the memory of a k/v block is: `128 * 32 * 32 * 128 * 2 * sizeof(half) = 64MB`
 
 The meaning of `cache_max_entry_count` varies depending on its value:
@@ -103,7 +105,7 @@ Prefix caching feature can be controlled by setting the `enable_prefix_caching` 
 
 Prefix caching feature is mainly applicable to scenarios where multiple requests have the same prompt prefix (such as system prompt). The k/v blocks of this identical prefix part will be cached and reused by multiple requests, thereby saving the overhead of redundant computations and improving inference performance. The longer the identical prompt prefix, the greater the performance improvement.
 
-Since k/v block is the smallest granularity for reuse in prefix caching, if the identical prompt prefix is less than one block (prefix length \< cache_block_seq_len), there will be no improvement in inference performance.
+Since a full k/v block is the smallest granularity for full-block reuse in prefix caching, its prefix length threshold is `cache_block_seq_len` without context parallelism and `cache_block_seq_len * cp` with context parallelism.
 
 ### Partial-block boundary reuse
 

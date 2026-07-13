@@ -284,7 +284,7 @@ TokenSpan Scheduler::TokenSegment(const Sequence& s, int offset, int size) const
 
 Scheduler::Scheduler(ObjectAllocator&   alloc,
                      CacheRegistry      registry,
-                     int                cache_block_seq_len,
+                     int                logical_block_size,
                      bool               enable_prefix_caching,
                      const std::string& cache_prompt,
                      int                cache_prompt_boundary_skip,
@@ -297,8 +297,8 @@ Scheduler::Scheduler(ObjectAllocator&   alloc,
     is_warm_up_{is_warm_up},
     alloc_{alloc},
     registry_{std::move(registry)},
-    logical_{cache_block_seq_len},
-    trie_{cache_block_seq_len},
+    logical_{logical_block_size},
+    trie_{logical_block_size},
     accum_{make_perf_counter()},
     interv_{make_perf_counter()}
 {

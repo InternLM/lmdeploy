@@ -261,10 +261,10 @@ struct AttentionUniversal {
             const int ti = history_len;
 
             // Read-only prefix: skip the KV store when this position falls inside a
-            // leading read-only block whose KV is already valid (single multiply).
-            const int readonly_len = params.readonly_block_num ?
-                                         params.readonly_block_num[batch_idx] * params.block_iter_params.block_len :
-                                         0;
+            // leading read-only logical block whose KV is already valid.
+            const int logical_block_size = params.block_iter_params.block_len * (int)params.cp_size;
+            const int readonly_len =
+                params.readonly_block_num ? params.readonly_block_num[batch_idx] * logical_block_size : 0;
 
             int local_ti, local_ti_rank;
             local_ti = params.cp_size.divmod(local_ti_rank, ti);

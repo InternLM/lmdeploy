@@ -51,6 +51,10 @@ Scheduler transaction is one scheduling pass over eligible `Sequence` objects. F
 
 Logical block is scheduler-owned metadata for a fixed token interval. It records offset, capacity, current size, cache-object slots, prefix-index identity, an intrusive strong refcount (request and fork references held through `LogicalBlockPtr`s; the cache-allocation reference held as the slot's `LogicalBlockPtr pin`), and node-level producer ownership.
 
+### cache-geometry
+
+`cache_block_seq_len` is the physical number of rank-local tokens stored in one KV cache object. With context-parallel size `attn_cp_size`, the corresponding scheduler `logical_block_size` is `cache_block_seq_len * attn_cp_size` global token positions. Logical-block offsets, capacities, prefix-trie segmentation, block counts, and read-only boundaries use this global capacity; `UnifiedAttentionLayer` object sizing and block iteration continue to use the physical rank-local length. Each CP rank stores the positions assigned to it from the same global logical interval, so one logical block still maps to one cache object on each rank.
+
 ### cache-object
 
 Cache object is an object-typed allocation handle tracked by `CacheBlockPool` and backed by `ObjectAllocator`. The scheduler owns cache object lifetime, allocation metadata, validity, and release; modules own the meaning and contents of their registered byte ranges within the object. A cache object may be composite: one handle whose bytes are several independent sub-allocations (parts), resolved to multiple `(address, bytes)` segments.
@@ -179,7 +183,7 @@ Callbacks are owned outside the engine scheduling path. The engine creates signa
 
 ### readonly-block-num
 
-`readonly_block_num` is the per-pass count of leading `Sequence::block_ids` reused read-only: fully-valid whole blocks (rounded down to a whole block) whose KV the forward reads for context but must not re-write. `Scheduler::PlanResume()` counts them; `PlanContinue()` sets it to 0 (decode writes only the new token). It gates only the KV cache *stores* — they are skipped for positions `< readonly_block_num * block_size`; reads, the set of processed tokens, recurrent recomputation, and producer marking are unaffected.
+`readonly_block_num` is the per-pass count of leading `Sequence::block_ids` reused read-only: fully-valid whole blocks (rounded down to a whole logical block) whose KV the forward reads for context but must not re-write. `Scheduler::PlanResume()` counts them; `PlanContinue()` sets it to 0 (decode writes only the new token). It gates only the KV cache *stores* — they are skipped for positions `< readonly_block_num * logical_block_size`, where `logical_block_size = cache_block_seq_len * attn_cp_size`; reads, the set of processed tokens, recurrent recomputation, and producer marking are unaffected (`concepts.cache-geometry`).
 
 ### history-len
 
@@ -329,7 +333,7 @@ Resolving an `ObjectAllocator` allocation handle to an address is metadata prepa
 
 ### batchop-forward
 
-`BatchOp::kForward` runs on the model executor thread. It executes model computation for the submitted batch, mutates module device state for the active requests, writes sampled output ids when generation is active, and updates device-side finished and sequence-length state. KV cache writes are bounded below by `readonly_block_num * block_size`; positions in read-only leading blocks are read but not re-written.
+`BatchOp::kForward` runs on the model executor thread. It executes model computation for the submitted batch, mutates module device state for the active requests, writes sampled output ids when generation is active, and updates device-side finished and sequence-length state. KV cache writes are bounded below by `readonly_block_num * logical_block_size`; positions in read-only leading blocks are read but not re-written (`concepts.cache-geometry`).
 
 ### batchop-unprep
 
@@ -365,7 +369,7 @@ A valid cache allocation is sufficient to keep an indexed prefix node alive, but
 
 ### resume-selection
 
-`resume_len` is selected by `Scheduler::PlanResume()`. Without checkpoint bytes it is the contiguous prefix-valid token end, capped by the async executable upper bound. With checkpoint bytes it is the latest position among the request frontier, published block checkpoints, and fork sources that is covered by valid prefix content; restore intent is expressed as copy plans into the frontier. Generic cache validity alone never raises `resume_len` past content that was not proven produced (`is_valid` for indexed nodes, `filled_len` for private blocks). `resume_len` (what every stateful module skips) is distinct from `readonly_block_num` (the KV-store boundary): full validity of leading whole blocks marks them read-only for KV stores even when checkpoint coarseness keeps `resume_len` lower, so the re-processed window `[resume_len, readonly_block_num * block_size)` rebuilds recurrent state without re-writing already-valid KV. When a matched indexed block carries a `partial` sibling whose end `ye` lies within the contiguous valid prefix (`ye <= prefix_end`), `PlanResume()` may select that sibling's published checkpoint as `resume_len` (`source=fork`, checkpoint restore only, no KV copy); every sibling-sourced resume reports `source=fork`, and `source=checkpoint` is exclusively a block's own checkpoint. Fork-extension at `B` - when the sibling extends past `prefix_end` or KV must be repopulated - is the highest-precedence resume source: a feasible extension always ends past the valid prefix, so it dominates every frontier and checkpoint candidate. When a published prompt-boundary node exists (`prompt_boundary_node`), a duplicate (or history-extending) prompt may resume at the producer's prompt-boundary node end `B` (the producer's `prompt_boundary_pos = prompt_len - cache_prompt_boundary_skip` on the source node) by restoring the node's KV, plus its recurrent-state checkpoint when the model is recurrent; full-block prompt checkpoints (block end `<= prompt_len`) remain always-on regardless of the knobs, but generation-region full-block checkpoints (block end `> prompt_len`) are suppressed when `cache_generation=none` (generated blocks are never indexed under `none`, so such a checkpoint would only serve the same request's own resume).
+`resume_len` is selected by `Scheduler::PlanResume()`. Without checkpoint bytes it is the contiguous prefix-valid token end, capped by the async executable upper bound. With checkpoint bytes it is the latest position among the request frontier, published block checkpoints, and fork sources that is covered by valid prefix content; restore intent is expressed as copy plans into the frontier. Generic cache validity alone never raises `resume_len` past content that was not proven produced (`is_valid` for indexed nodes, `filled_len` for private blocks). `resume_len` (what every stateful module skips) is distinct from `readonly_block_num` (the KV-store boundary): full validity of leading whole blocks marks them read-only for KV stores even when checkpoint coarseness keeps `resume_len` lower, so the re-processed window `[resume_len, readonly_block_num * logical_block_size)` rebuilds recurrent state without re-writing already-valid KV (`concepts.cache-geometry`). When a matched indexed block carries a `partial` sibling whose end `ye` lies within the contiguous valid prefix (`ye <= prefix_end`), `PlanResume()` may select that sibling's published checkpoint as `resume_len` (`source=fork`, checkpoint restore only, no KV copy); every sibling-sourced resume reports `source=fork`, and `source=checkpoint` is exclusively a block's own checkpoint. Fork-extension at `B` - when the sibling extends past `prefix_end` or KV must be repopulated - is the highest-precedence resume source: a feasible extension always ends past the valid prefix, so it dominates every frontier and checkpoint candidate. When a published prompt-boundary node exists (`prompt_boundary_node`), a duplicate (or history-extending) prompt may resume at the producer's prompt-boundary node end `B` (the producer's `prompt_boundary_pos = prompt_len - cache_prompt_boundary_skip` on the source node) by restoring the node's KV, plus its recurrent-state checkpoint when the model is recurrent; full-block prompt checkpoints (block end `<= prompt_len`) remain always-on regardless of the knobs, but generation-region full-block checkpoints (block end `> prompt_len`) are suppressed when `cache_generation=none` (generated blocks are never indexed under `none`, so such a checkpoint would only serve the same request's own resume).
 
 ### category-registration
 
@@ -373,7 +377,7 @@ Modules register anonymous byte requirements with the prefix or checkpoint categ
 
 ### unified-attention
 
-`UnifiedAttentionLayer` registers its KV byte requirement with the prefix category during construction and stores the returned byte offset. During setup it resolves committed prefix cache blocks from logical blocks and prepares KV pointer metadata. Reserving logical-block cache slots and validating contiguous prefix coverage is scheduler planning, not module work. It skips KV cache stores for positions in read-only leading blocks (`< readonly_block_num * block_size`) and supplies those positions from the already-valid blocks during reads.
+`UnifiedAttentionLayer` registers its KV byte requirement with the prefix category during construction and stores the returned byte offset. During setup it resolves committed prefix cache blocks from logical blocks and prepares KV pointer metadata. Reserving logical-block cache slots and validating contiguous prefix coverage is scheduler planning, not module work. Physical KV layout and iteration use `cache_block_seq_len`, while pointer counts and read-only store boundaries use `logical_block_size`. It skips KV cache stores for positions in read-only leading blocks (`< readonly_block_num * logical_block_size`) and supplies those positions from the already-valid blocks during reads (`concepts.cache-geometry`).
 
 ### gated-deltanet
 
@@ -433,7 +437,7 @@ Is generic cache validity used only for lifetime, not to raise `resume_len`?
 
 ### cache-memory
 
-Are cache object backing-memory reads and writes limited to executor-thread `BatchOp` handlers and executor-run, scheduler-planned whole-object copies, with KV writes further limited to `[readonly_block_num * block_size, end)` (read-only leading blocks are reads only)? For composite objects, are whole-object copies issued as one device copy per part?
+Are cache object backing-memory reads and writes limited to executor-thread `BatchOp` handlers and executor-run, scheduler-planned whole-object copies, with KV writes further limited to `[readonly_block_num * logical_block_size, end)` (read-only leading blocks are reads only), while physical KV object sizing and iteration remain based on `cache_block_seq_len` (`concepts.cache-geometry`)? For composite objects, are whole-object copies issued as one device copy per part?
 
 ### delayed-release
 
