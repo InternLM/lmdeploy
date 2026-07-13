@@ -175,7 +175,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
     // Read-only prefix: leading whole logical blocks whose KV is already valid are
     // read for context but not re-written. Precompute the boundary in global tokens.
     const int logical_block_size = block_seq_len * (int)cp_size;
-    const int readonly_len = readonly_block_num ? readonly_block_num[batch_idx] * logical_block_size : 0;
+    const int readonly_len       = readonly_block_num ? readonly_block_num[batch_idx] * logical_block_size : 0;
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {

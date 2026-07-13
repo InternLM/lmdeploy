@@ -32,9 +32,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                                        const EngineParam&           engine,
                                        const Context&               context,
                                        int                          phases):
-    tp_size_{engine.attn_tp_size * engine.attn_cp_size},
-    state_dtype_{engine.data_type},
-    linear_{*context.linear}
+    tp_size_{engine.attn_tp_size * engine.attn_cp_size}, state_dtype_{engine.data_type}, linear_{*context.linear}
 {
     TM_CHECK(!weights.empty());
     layer_num_ = static_cast<int>(weights.size());
