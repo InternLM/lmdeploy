@@ -7,16 +7,14 @@ GPU_ARCH_VERSION=${GPU_ARCH_VERSION}
 WITH_PUSH=${WITH_PUSH:-}
 
 TARGET=cuda_final
-DOCKER_TAG=cuda${GPU_ARCH_VERSION}
+DOCKER_TAG=manylinux_${MANY_LINUX_VERSION}-cuda${GPU_ARCH_VERSION}
 
 DOCKER_IMAGE=openmmlab/lmdeploy-builder:${DOCKER_TAG}
-DOCKERFILE_SUFFIX=$([[ -n ${MANY_LINUX_VERSION} ]] && echo "_${MANY_LINUX_VERSION}" || echo "")
 
 # List of all build arguments (format: KEY=VALUE)
 # Empty values will be automatically filtered out later
 BUILD_ARGS=(
     "BASE_CUDA_VERSION=${GPU_ARCH_VERSION}"
-    "DEVTOOLSET_VERSION=9"
     "HTTPS_PROXY=${HTTPS_PROXY:-}"
     "HTTP_PROXY=${HTTP_PROXY:-}"
     # Add more parameters here if needed
@@ -26,7 +24,7 @@ BUILD_ARGS=(
 docker_build_args=(
     -t "${DOCKER_IMAGE}"
     --target "${TARGET}"
-    -f "${TOPDIR}/manywheel/Dockerfile${DOCKERFILE_SUFFIX}"
+    -f "${TOPDIR}/manywheel/Dockerfile_${MANY_LINUX_VERSION}"
 )
 
 # Process build arguments: filter empty values and format as --build-arg
