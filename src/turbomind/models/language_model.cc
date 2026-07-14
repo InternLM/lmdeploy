@@ -382,6 +382,9 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     env.produce("finished", finished_.front());
     env.produce("sequence_length", sequence_length_.front());
     env.produce("k_offsets", k_offsets);
+    if (symm_buf_) {
+        env.produce("symm_buf", symm_buf_);
+    }
 
     unified_decoder_->Run(BatchOp::kPrepare, phase, env);
     generation_->Run(BatchOp::kPrepare, phase, env);
@@ -412,10 +415,6 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 
         env.produce("input_embeds", std::move(input_embeds));
         // dbg(env);
-    }
-
-    if (symm_buf_) {
-        env.produce("symm_buf", symm_buf_);
     }
 
     env.produce("output_norm_weight", weights_.norm->weight);

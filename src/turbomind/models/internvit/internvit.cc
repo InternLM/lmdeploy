@@ -396,7 +396,7 @@ struct InternVit::Impl {
         ApplyBias(qkv, attn->w_qkv->bias, stream);
 
         if (attn->q_norm && attn->k_norm) {
-            Tensor sums{{2, d.token_num}, kFloat, kDEVICE};
+            Tensor sums{output.buffer().view(kFloat), {2, d.token_num}};
             invokeInternVitPreRMSNorm(sums, qkv, local_dim, stream);
             if (attn->tp_size > 1) {
                 AllReduceSum(sums, stream);
@@ -442,7 +442,7 @@ struct InternVit::Impl {
         AllReduceSum(output, stream);
     }
 
-    Tensor Projector(Tensor& hidden, Data& d)
+    Tensor Projector(Tensor& hidden, Data& d, Buffer symm_buf)
     {
         const auto& cfg    = config_;
         auto        stream = core::Context::stream().handle();
@@ -470,11 +470,19 @@ struct InternVit::Impl {
         invokeAddBiasActivation(inter, weights_.projector_fc1->bias, ActivationType::kGelu, stream);
 
         Tensor output;
+        if (tp_size_ > 1) {
+            output = {symm_buf.view(config_.data_type), {inter.shape(0), weights_.projector_fc2->output_dim}};
+        }
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.projector_fc2, output));
         TM_CUDA_CHECK(cudaGetLastError());
         AllReduceSum(output, stream);
         ApplyBias(output, weights_.projector_fc2->bias, stream);
         TM_CUDA_CHECK(cudaGetLastError());
+        if (tp_size_ > 1) {
+            Tensor tmp = empty_like(output);
+            Copy(output, tmp);
+            output = tmp;
+        }
         return output;
     }
 
@@ -489,9 +497,10 @@ struct InternVit::Impl {
         auto stream   = core::Context::stream().handle();
         auto residual = PatchEmbedding(d);
 
+        Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
+
         Tensor hidden_states = [&]() {
-            Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
-            if (symm_buf && d.token_num * cfg.hidden_dim <= symm_buf.size() / turbomind::byte_size(cfg.data_type)) {
+            if (symm_buf) {
                 return Tensor{symm_buf.view(cfg.data_type), {d.token_num, cfg.hidden_dim}};
             }
             else {
@@ -529,7 +538,7 @@ struct InternVit::Impl {
                               is_last_layer ? NormType::kNone : config_.norm_type);
         }
 
-        Tensor image_embeds = Projector(residual, d);
+        Tensor image_embeds = Projector(residual, d, symm_buf);
         EnsureFloatDtype(image_embeds, engine_data_type_);
 
         args.produce("multimodal",

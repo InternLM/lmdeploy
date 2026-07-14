@@ -776,9 +776,10 @@ struct QwenVit::Impl {
             residual = std::move(reordered);
         }
 
+        Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
+
         Tensor hidden_states = [&]() {
-            Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
-            if (symm_buf && d.batch_size * cfg.hidden_dim <= symm_buf.size() / turbomind::byte_size(cfg.data_type)) {
+            if (symm_buf) {
                 return Tensor{symm_buf.view(cfg.data_type), {d.batch_size, cfg.hidden_dim}};
             }
             else {
@@ -814,7 +815,7 @@ struct QwenVit::Impl {
             ResidualBiasNorm(hidden_states, residual, block->mlp_fc2->bias, *next_norm, cfg.norm_type);
         }
 
-        Tensor image_embeds = Merger(hidden_states);
+        Tensor image_embeds = Merger(hidden_states, symm_buf);
         if (cfg.use_window_attention) {
             Tensor reordered{{d.merge_unit_count, cfg.out_hidden_dim}, image_embeds.dtype(), kDEVICE};
             invokeQwenVitReverseWindow(reordered, image_embeds, d.window_idx.data(), d.merge_unit_count, stream);
@@ -969,7 +970,7 @@ struct QwenVit::Impl {
         TM_CUDA_CHECK(cudaGetLastError());
     }
 
-    Tensor Merger(Tensor& input)
+    Tensor Merger(Tensor& input, Buffer symm_buf)
     {
         auto& cfg    = config_;
         auto  stream = core::Context::stream().handle();
@@ -985,13 +986,19 @@ struct QwenVit::Impl {
         TM_CUDA_CHECK(cudaGetLastError());
 
         Tensor output;
+        if (d_comm_) {
+            output = {symm_buf.view(config_.data_type), {inter.shape(0), weights_.merger_fc2->output_dim}};
+        }
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.merger_fc2, output));
         TM_CUDA_CHECK(cudaGetLastError());
-
         AllReduceSum(output, stream);
-
         ApplyBias(output, weights_.merger_fc2->bias, stream);
         TM_CUDA_CHECK(cudaGetLastError());
+        if (d_comm_) {
+            Tensor tmp = empty_like(output);
+            Copy(output, tmp);
+            output = tmp;
+        }
 
         return output;
     }
