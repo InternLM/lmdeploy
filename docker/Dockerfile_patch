@@ -1,0 +1,35 @@
+# Patch image: reuse all Python/CUDA deps from an existing LMDeploy image, only
+# overlay this repo and reinstall the lmdeploy package in editable mode.
+#
+# Build (from repository root); default BACKEND=pytorch (no TurboMind compile):
+#   docker build -f docker/Dockerfile_patch \
+#     --build-arg BASE_IMAGE=openmmlab/lmdeploy:v0.10.0-cu12 \
+#     --build-arg BACKEND=pytorch \
+#     --build-arg http_proxy=$http_proxy \
+#     --build-arg https_proxy=$https_proxy \
+#     --build-arg no_proxy=$no_proxy \
+#     -t lmdeploy:test .
+#
+# TurboMind extension:
+#   --build-arg BACKEND=turbomind
+#
+# BACKEND=pytorch: skip TurboMind C++ build (PyTorch engine only).
+# Any other value (e.g. turbomind): build with TurboMind extension.
+#
+ARG BASE_IMAGE=openmmlab/lmdeploy:latest
+
+FROM ${BASE_IMAGE}
+
+ARG BACKEND=pytorch
+
+WORKDIR /opt/lmdeploy
+
+COPY . .
+
+# --no-deps: do not pull install_requires (torch, transformers, ...).
+# --no-build-isolation: use cmake_build_extension etc. already present in the base image.
+RUN if [ "$BACKEND" = "pytorch" ]; then \
+        DISABLE_TURBOMIND=1 pip install --no-cache-dir --no-build-isolation -e . --no-deps; \
+    else \
+        pip install --no-cache-dir --no-build-isolation -e . --no-deps; \
+    fi

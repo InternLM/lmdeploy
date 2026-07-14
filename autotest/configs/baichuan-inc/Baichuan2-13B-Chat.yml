@@ -1,0 +1,14 @@
+# HF model id: baichuan-inc/Baichuan2-13B-Chat
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  deps:
+    transformers: 4.57.6

@@ -1,0 +1,43 @@
+# HF model id: mistralai/Mixtral-8x7B-Instruct-v0.1
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  deps:
+    transformers: 4.57.6
+h:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq

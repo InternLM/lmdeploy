@@ -1,0 +1,50 @@
+num_promts: &num_prompts 10000
+dataset_path: &dataset_path "/nvme1/shared/ShareGPT_V3_unfiltered_cleaned_split.json"
+dataset_name: &dataset_name "sharegpt"
+model_path: &model_path "Qwen/Qwen3-30B-A3B-FP8"
+server:
+  server_port: 23333
+# Inference engine configuration
+engine:
+  - model_path: *model_path
+    max_batch_size: 1280
+    cache_max_entry_count: 0.9
+    tp: 1
+  - model_path: *model_path
+    max_batch_size: 1280
+    cache_max_entry_count: 0.9
+    max_prefill_token_num: 4096
+    tp: 1
+  - model_path: "Qwen/Qwen3-235B-A22B-FP8"
+    max_batch_size: 64
+    cache_max_entry_count: 0.7
+    max_prefill_token_num: 4096
+    dp: 8
+    ep: 8
+    proxy_url: "http://localhost:8000"
+# Benchmark test configuration for profile_restful_api.py
+# Defines multiple test cases with different output lengths to evaluate API performance
+data:
+  - dataset_name: *dataset_name
+    dataset_path: *dataset_path
+    num_prompts: *num_prompts
+  - dataset_name: *dataset_name
+    dataset_path: *dataset_path
+    sharegpt_output_len: 2048
+    num_prompts: *num_prompts
+  - dataset_name: *dataset_name
+    dataset_path: *dataset_path
+    sharegpt_output_len: 4096
+    num_prompts: *num_prompts
+  - dataset_name: *dataset_name
+    dataset_path: *dataset_path
+    sharegpt_output_len: 8192
+    num_prompts: *num_prompts
+  - dataset_name: *dataset_name
+    dataset_path: *dataset_path
+    sharegpt_output_len: 16384
+    num_prompts: *num_prompts
+  - dataset_name: *dataset_name
+    dataset_path: *dataset_path
+    sharegpt_output_len: 32768
+    num_prompts: *num_prompts

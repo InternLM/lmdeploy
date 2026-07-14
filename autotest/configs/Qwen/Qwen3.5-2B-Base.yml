@@ -1,0 +1,20 @@
+# HF model id: Qwen/Qwen3.5-2B-Base
+
+a100:
+- model_type: base
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8

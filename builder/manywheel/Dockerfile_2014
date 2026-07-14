@@ -1,0 +1,44 @@
+# WARNING: CentOS 7 is out of date since 6/30/2024, we should use the following one in the future
+# FROM quay.io/pypa/manylinux_2_28_x86_64 as base
+FROM quay.io/pypa/manylinux2014_x86_64 as base
+ARG BASE_CUDA_VERSION=11.8
+
+ENV LC_ALL en_US.UTF-8
+ENV LANG en_US.UTF-8
+ENV LANGUAGE en_US.UTF-8
+
+RUN sed -i 's|^mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-*.repo && \
+    sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=https://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo && \
+    yum install -y \
+    wget \
+    rapidjson-devel \
+    glog-devel && \
+    yum clean all
+
+ENV LD_LIBRARY_PATH=/opt/rh/devtoolset-10/root/usr/lib64:/opt/rh/devtoolset-10/root/usr/lib:$LD_LIBRARY_PATH
+
+FROM base as cuda
+COPY manywheel/scripts/install_cuda.sh /tmp/install_cuda.sh
+RUN bash /tmp/install_cuda.sh ${BASE_CUDA_VERSION} && rm /tmp/install_cuda.sh
+
+FROM base as conda
+COPY manywheel/scripts/install_conda.sh /tmp/install_conda.sh
+RUN bash /tmp/install_conda.sh && rm /tmp/install_conda.sh
+
+# Accept Anaconda's Terms of Service to avoid `CondaToSNonInteractiveError`
+RUN /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
+RUN PY_VERSIONS=(3.10 3.11 3.12 3.13) && \
+    for pyver in "${PY_VERSIONS[@]}"; do \
+        /opt/conda/bin/conda create -n py${pyver//./} python=${pyver} -yq && \
+        /opt/conda/envs/py${pyver//./}/bin/pip install -i 'https://mirrors.aliyun.com/pypi/simple/' --no-cache-dir pybind11; \
+    done && \
+    /opt/conda/bin/conda clean -ya
+
+FROM base as cuda_final
+COPY --from=cuda /usr/local/cuda-${BASE_CUDA_VERSION} /usr/local/cuda-${BASE_CUDA_VERSION}
+RUN ln -sf /usr/local/cuda-${BASE_CUDA_VERSION} /usr/local/cuda
+ENV PATH=/usr/local/cuda/bin:$PATH
+COPY --from=conda /opt/conda /opt/conda
+RUN /opt/conda/bin/conda init bash

@@ -1,0 +1,14 @@
+ARG CUDA_VERSION=cu12
+
+FROM openmmlab/lmdeploy:latest-cu12 AS cu12
+ENV CUDA_VERSION_SHORT=cu123
+
+FROM openmmlab/lmdeploy:latest-cu11 AS cu11
+ENV CUDA_VERSION_SHORT=cu118
+
+FROM ${CUDA_VERSION} AS final
+
+# we use transformers to load vision part of qwen2_vl and it needs transformers > v4.44.2
+RUN python3 -m pip install git+https://github.com/huggingface/transformers.git
+
+RUN python3 -m pip install qwen_vl_utils

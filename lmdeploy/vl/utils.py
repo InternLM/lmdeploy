@@ -1,0 +1,70 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+from typing import Any
+
+import numpy.typing as npt
+from PIL import Image
+
+from .media.audio import AudioMediaIO
+from .media.connection import load_from_url
+from .media.image import ImageMediaIO
+from .media.time_series import TimeSeriesMediaIO
+from .media.video import VideoMediaIO
+
+
+def load_image(image_url: str, **kwargs) -> Image.Image:
+    """Fetch and decode an image from a URL, path, or base64 string."""
+    image_io = ImageMediaIO(**kwargs)
+    return load_from_url(image_url, image_io)
+
+
+def load_video(video_url: str, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
+    """Fetch and decode video frames from a URL, path, or base64 string."""
+    image_io = ImageMediaIO()
+    video_io = VideoMediaIO(image_io=image_io, **kwargs)
+    return load_from_url(video_url, video_io)
+
+
+def load_audio(audio_url: str, **kwargs) -> tuple[npt.NDArray, int]:
+    """Fetch and decode audio from a URL, path, or base64 string."""
+    audio_io = AudioMediaIO(**kwargs)
+    return load_from_url(audio_url, audio_io)
+
+
+def load_time_series(ts_url: str, **kwargs) -> npt.NDArray:
+    """Fetch and decode time-series from a URL or path or base64 string.."""
+    ts_io = TimeSeriesMediaIO(**kwargs)
+    return load_from_url(ts_url, ts_io)
+
+
+def encode_image_base64(image: str | Image.Image, format: str = 'PNG', **kwargs) -> str:
+    """Encode image (path or PIL image) to a base64 string."""
+    if isinstance(image, str):
+        image = load_image(image, **kwargs)
+    image_io = ImageMediaIO(**kwargs)
+    return image_io.encode_base64(image, image_format=format)
+
+
+def encode_video_base64(video: str | npt.NDArray, format: str = 'JPEG', **kwargs) -> str:
+    """Encode video (path or frames) to a base64 string."""
+    if isinstance(video, str):
+        video, _ = load_video(video, **kwargs)
+    image_io = ImageMediaIO()
+    video_io = VideoMediaIO(image_io=image_io, **kwargs)
+    return video_io.encode_base64(video, video_format=format)
+
+
+def encode_audio_base64(audio: str | tuple[npt.NDArray, int], format: str = 'WAV', **kwargs) -> str:
+    """Encode audio (path or audio array with sample rate) to a base64
+    string."""
+    if isinstance(audio, str):
+        audio = load_audio(audio, **kwargs)
+    audio_io = AudioMediaIO(**kwargs)
+    return audio_io.encode_base64(audio, audio_format=format)
+
+
+def encode_time_series_base64(data: str | npt.NDArray, **kwargs) -> str:
+    """Encode time-series (path or numpy array) to a base64 string."""
+    if isinstance(data, str):
+        data = load_time_series(data, **kwargs)
+    ts_io = TimeSeriesMediaIO(**kwargs)
+    return ts_io.encode_base64(data)

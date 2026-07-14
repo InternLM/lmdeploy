@@ -1,0 +1,112 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Callable
+
+import torch
+
+from lmdeploy.pytorch.kernels.dlinfer import (
+    DlinferMoECommType,  # noqa: F401
+    DlinferMoeMetadata,  # noqa: F401
+    fused_moe,
+    moe_gating_topk_softmax,
+)
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+
+from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
+
+
+class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
+    """Dlinfer softmax topk implementation."""
+
+    def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
+        self.top_k = top_k
+        self.dim = dim
+        self.n_groups = n_groups
+
+    def forward(self, x: torch.Tensor):
+        step_context = get_step_ctx_manager().current_context()
+        moe_metadata = getattr(step_context, 'moe_metadata', None)
+        if moe_metadata is not None:
+            moe_metadata.router_n_groups = self.n_groups
+        routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, moe_metadata)
+        return routing_weights, selected_experts
+
+
+class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
+    """Dlinfer softmax topk implementation builder."""
+
+    @staticmethod
+    def build(top_k: int, dim: int = -1, n_groups: int = -1):
+        """build."""
+        return DlinferSoftmaxTopKImpl(top_k, dim, n_groups)
+
+
+class DlinferFusedMoEImpl(FusedMoEImpl):
+    """Dlinfer fused moe implementation."""
+
+    def __init__(self,
+                 top_k: int,
+                 num_experts: int,
+                 renormalize: bool = False,
+                 ep_size: int = 1,
+                 ep_group: torch.distributed.ProcessGroup = None):
+        self.top_k = top_k
+        self.num_experts = num_experts
+        self.renormalize = renormalize
+        self.ep_size = ep_size
+        self.ep_group = ep_group
+        self.expert_ids_per_ep_rank = None
+        if self.ep_size > 1:
+            self.expert_ids_per_ep_rank = torch.tensor(
+                [i % (self.num_experts // self.ep_size) for i in range(num_experts)],
+                dtype=torch.int32,
+                device=torch.cuda.current_device(),
+            )
+
+    def ep_expert_list(self, world_size: int, rank: int):
+        """Experts list of current rank."""
+        num_experts = self.num_experts
+        expert_per_rank = (num_experts + world_size - 1) // world_size
+        first_expert = rank * expert_per_rank
+        last_expert = min(first_expert + expert_per_rank, num_experts)
+        return list(range(first_expert, last_expert))
+
+    def forward(self,
+                hidden_states: torch.Tensor,
+                topk_weights: torch.Tensor,
+                topk_ids: torch.LongTensor,
+                gate_up_weights: torch.Tensor,
+                down_weights: torch.Tensor,
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: list[int] = None,
+                act_func: Callable = None):
+        """forward."""
+        assert gate_up_bias is None
+        assert down_bias is None
+
+        step_context = get_step_ctx_manager().current_context()
+        moe_metadata = getattr(step_context, 'moe_metadata', None)
+        if moe_metadata is not None:
+            moe_metadata.expert_ids_per_ep_rank = self.expert_ids_per_ep_rank
+        return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
+                         self.renormalize, moe_metadata)
+
+
+class DlinferFusedMoEBuilder(FusedMoEBuilder):
+    """Dlinfer fused moe builder."""
+
+    @staticmethod
+    def build(top_k: int,
+              num_experts: int,
+              renormalize: bool = False,
+              hidden_dim: int = 1,
+              ep_size: int = 1,
+              ep_group: torch.distributed.ProcessGroup = None,
+              layer_idx: int = 0,
+              out_dtype: torch.dtype = torch.bfloat16):
+        """Build from mlp."""
+        return DlinferFusedMoEImpl(top_k=top_k,
+                                   num_experts=num_experts,
+                                   renormalize=renormalize,
+                                   ep_size=ep_size,
+                                   ep_group=ep_group)

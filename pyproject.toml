@@ -1,0 +1,156 @@
+[build-system]
+requires = [
+    "cmake_build_extension",
+    "setuptools>=61.0",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmdeploy"
+description = "A toolset for compressing, deploying and serving LLM"
+requires-python = ">=3.10"
+keywords = ["llm", "inference", "deployment", "quantization", "serving"]
+authors = [
+    { name = "OpenMMLab", email = "openmmlab@gmail.com" }
+]
+maintainers = [
+    { name = "OpenMMLab", email = "openmmlab@gmail.com" }
+]
+license = { file = "LICENSE" }
+readme = { file = "README.md", content-type = "text/markdown" }
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+urls = {
+    "Documentation" = "https://lmdeploy.readthedocs.io",
+    "Source" = "https://github.com/ghshhf/lmdeploy",
+    "Tracker" = "https://github.com/ghshhf/lmdeploy/issues",
+}
+
+[project.scripts]
+lmdeploy = "lmdeploy.cli:run"
+
+[project.optional-dependencies]
+lite = []
+serve = []
+docs = []
+dev = []
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+  "third_party",
+  "src/turbomind",
+]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "I", "W",
+  "UP",
+  "B",
+  "C",
+  "T",
+]
+ignore = [
+  "E231",
+  "E741",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-width = 4
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = [
+    "tests",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests that require GPU",
+    "multi_gpu: marks tests that require multiple GPUs",
+    "vlm: marks tests for vision-language models",
+    "quantization: marks tests for quantization",
+]
+
+[tool.coverage.run]
+source = ["lmdeploy"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/third_party/*",
+    "*/src/turbomind/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "coverage_html_report"
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = ["lmdeploy"]
+strict = true
+warn_unused_configs = true
+follow_imports = "normal"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_calls = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+ignore_errors = false
+show_traceback = true
+pretty = true
+
+[tool.pre-commit-hooks]
+ruff = {
+    id = "ruff",
+    name = "Ruff",
+    entry = "ruff",
+    language = "python",
+    language_version = "python3",
+    types = ["python"],
+    args = ["--fix"],
+}
+ruff-format = {
+    id = "ruff-format",
+    name = "Ruff Format",
+    entry = "ruff",
+    language = "python",
+    language_version = "python3",
+    types = ["python"],
+    args = ["format"],
+}

@@ -1,0 +1,4 @@
+-r common.txt
+
+accelerate>=0.29.3
+peft<=0.14.0

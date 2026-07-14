@@ -1,0 +1,4 @@
+aiohttp
+prometheus_client
+protobuf
+timm!=1.0.23

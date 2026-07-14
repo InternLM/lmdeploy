@@ -1,0 +1,52 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.4
+    hooks:
+      - id: ruff-check
+        args: ["--fix", "--exit-non-zero-on-fix"]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: requirements-txt-fixer
+      - id: double-quote-string-fixer
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.9
+    hooks:
+      - id: mdformat
+        args: ["--number"]
+        additional_dependencies:
+          - mdformat-openmmlab
+          - mdformat_frontmatter
+          - linkify-it-py
+
+  - repo: https://github.com/myint/docformatter
+    rev: v1.7.7
+    hooks:
+      - id: docformatter
+        language_version: python3.10
+        args: ["--in-place", "--wrap-descriptions", "120"]
+
+  - repo: https://github.com/open-mmlab/pre-commit-hooks
+    rev: v0.2.0
+    hooks:
+    -   id: check-copyright
+        args: ["lmdeploy"]
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v11.1.0
+    hooks:
+      - id: clang-format
+        files: ^src/
+        types_or: [c, c++, cuda]
+
+exclude: |
+  (?x)(
+    ^cmake/.*\.patch$
+  )

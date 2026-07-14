@@ -1,0 +1,11 @@
+markdown>=3.4.0
+myst-parser
+openai
+sphinx==8.0.2
+sphinx-argparse-cli
+sphinx-autodoc-typehints
+sphinx-book-theme
+sphinx-copybutton
+sphinx-tabs
+sphinxcontrib-mermaid
+sphinxcontrib-openapi

@@ -1,0 +1,35 @@
+# Base images
+FROM nvcr.io/nvidia/l4t-base:r36.2.0
+ENV CUDA_VER=12.6 \
+    PYTHON_VERSION=3.10 \
+    PATH=/opt/py3/bin:/root/.local/bin:/usr/local/cuda/bin:${PATH}
+
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=cache,target=/tmp/download \
+    export CUDA_SUFFIX=$(echo $CUDA_VER | sed 's/\./-/g') && \
+    cd /tmp/download && \
+    mkdir -p /opt/nvidia/l4t-packages/ && \
+    touch /opt/nvidia/l4t-packages/.nv-l4t-disable-boot-fw-update-in-preinstall && \
+    wget -q "https://repo.download.nvidia.com/jetson/t234/pool/main/n/nvidia-l4t-core/nvidia-l4t-core_36.2.0-20231218214829_arm64.deb" && \
+    wget -q "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/arm64/cuda-keyring_1.1-1_all.deb" && \
+    yes | dpkg -i nvidia-l4t-core_*.deb cuda-keyring_*.deb && \
+    rm -rf *.deb *.deb.* && \
+    apt update -y && \
+    apt-get install -y --no-install-recommends \
+        cuda-toolkit-${CUDA_SUFFIX} cuda-compat-${CUDA_SUFFIX} libcudnn9-cuda-12 libcusparselt0 cudss \
+        git libopenblas-dev python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    python${PYTHON_VERSION} -m venv /opt/py3 && \
+    mkdir -p /wheels
+
+# Should be in the lmdeploy root directory when building docker image
+COPY . /opt/lmdeploy
+WORKDIR /opt/lmdeploy
+
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=cache,target=/opt/pytorch \
+    pip install build change-wheel-version && \
+    python -m build -w -o /wheels -v . && \
+    change_wheel_version --local-version cu126 --delete-old-wheel /wheels/lmdeploy*.whl && \
+    pip install -v /wheels/lmdeploy*.whl --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/+simple/

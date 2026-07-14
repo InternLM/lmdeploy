@@ -1,0 +1,23 @@
+cloudpickle
+einops
+fastapi
+fire
+mmengine-lite
+numpy
+openai
+openai_harmony
+partial_json_parser
+pillow
+protobuf
+pybase64
+pydantic>2.0.0
+pyzmq
+ray
+rdkit
+safetensors
+sentencepiece
+shortuuid
+tiktoken
+transformers >= 4.56.0, != 5.0.*, != 5.1.*, != 5.2.*, != 5.3.*, != 5.4.*, != 5.5.0, !=5.7.*, !=5.8.*, !=5.9.*
+uvicorn
+xgrammar

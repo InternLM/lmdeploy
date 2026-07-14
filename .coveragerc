@@ -1,0 +1,35 @@
+# Coverage configuration file for LMDeploy
+# This file provides backward-compatible coverage settings
+
+[run]
+source = lmdeploy
+omit =
+    */tests/*
+    */test_*
+    */__pycache__/*
+    */third_party/*
+    */src/turbomind/*
+    setup.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if 0:
+    if __name__ == .__main__.:
+    class .*\\bProtocol\\):
+    @(abc\\.)?abstractmethod
+
+show_missing = True
+precision = 2
+fail_under = 40
+
+[html]
+directory = coverage_html_report
+
+[xml]
+output = coverage.xml

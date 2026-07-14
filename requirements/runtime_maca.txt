@@ -1,0 +1,10 @@
+-r common.txt
+
+accelerate==0.32.1
+aiohttp
+dlinfer-maca
+peft<=0.11.1
+prometheus_client
+torch<=2.6.0,>=2.0.0
+torchvision<=0.21.0,>=0.15.0
+triton>=2.1.0; sys_platform == "linux"
