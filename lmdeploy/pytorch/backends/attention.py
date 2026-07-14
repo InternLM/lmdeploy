@@ -6,7 +6,7 @@ from typing import Generic, TypeVar
 
 import torch
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 
 
 @dataclass
@@ -20,7 +20,7 @@ class AttentionMetadata:
     fill_seqlens: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
-    quant_policy: QuantPolicy = QuantPolicy.NONE
+    kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO
 
 
 T = TypeVar('T', bound=AttentionMetadata)

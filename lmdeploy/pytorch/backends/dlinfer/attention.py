@@ -87,7 +87,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         is_prefill_no_cache = attn_metadata.is_prefill_no_cache
         max_q_seq_len = attn_metadata.max_q_seq_len
         max_kv_seq_len = attn_metadata.max_kv_seq_len
-        quant_bits = attn_metadata.quant_policy
+        quant_bits = attn_metadata.kv_cache_dtype
         cu_seq_lens_kv = attn_metadata.cu_seq_lens_kv
 
         if attn_metadata.quant_meta is not None:

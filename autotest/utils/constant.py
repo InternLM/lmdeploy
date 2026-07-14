@@ -264,7 +264,7 @@ EVAL_RUN_CONFIG = {
     'model': 'Qwen/Qwen2.5-32B-Instruct',
     'backend': 'turbomind',
     'communicator': 'nccl',
-    'quant_policy': 0,
+    'kv_cache_dtype': 0,
     'parallel_config': {
         'tp': 2
     },

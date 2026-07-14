@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
@@ -395,7 +396,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                                                                                    max_kv_seq_len)
         q_seqlens_cpu = update_q_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_cpu)
 
-        if not cls.enable_graph and step_context.kv_quant_policy == 8:
+        if not cls.enable_graph and step_context.kv_cache_dtype == KVCacheDType.INT8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
             assert record_file, 'please specify valid ASCEND_QUANT_RECORD_FILE'
             path = Path(record_file)
@@ -473,7 +474,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             is_prefill_no_cache=is_prefill_no_cache,
             max_q_seq_len=max_q_seq_len,
             max_kv_seq_len=max_kv_seq_len,
-            quant_policy=step_context.kv_quant_policy,
+            kv_cache_dtype=step_context.kv_cache_dtype,
             quant_meta=AscendKVQuantMeta.quant_meta,
             has_initial_state=has_initial_state,
             is_multi_token_decoding=is_multi_token_decoding,

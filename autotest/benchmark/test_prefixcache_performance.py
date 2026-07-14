@@ -96,7 +96,7 @@ def test_pytorch_prefix_tp16(config, run_config, worker_id):
     'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
-    'quant_policy': 0,
+    'kv_cache_dtype': 0,
     'parallel_config': {
         'tp': 2
     },
@@ -105,7 +105,7 @@ def test_pytorch_prefix_tp16(config, run_config, worker_id):
     'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
     'backend': 'pytorch',
     'communicator': 'nccl',
-    'quant_policy': 8,
+    'kv_cache_dtype': 8,
     'parallel_config': {
         'tp': 2
     },
@@ -114,7 +114,7 @@ def test_pytorch_prefix_tp16(config, run_config, worker_id):
     'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
-    'quant_policy': 0,
+    'kv_cache_dtype': 0,
     'parallel_config': {
         'tp': 2
     },
@@ -123,7 +123,7 @@ def test_pytorch_prefix_tp16(config, run_config, worker_id):
     'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
     'backend': 'pytorch',
     'communicator': 'nccl',
-    'quant_policy': 8,
+    'kv_cache_dtype': 8,
     'parallel_config': {
         'tp': 2
     },

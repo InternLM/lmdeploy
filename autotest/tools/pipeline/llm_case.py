@@ -13,14 +13,14 @@ gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool = False):
     backend = run_config.get('backend')
     communicator = run_config.get('communicator')
-    quant_policy = run_config.get('quant_policy')
+    kv_cache_dtype = run_config.get('kv_cache_dtype')
     extra_params = run_config.get('extra_params', {})
     parallel_config = run_config.get('parallel_config', {})
 
     if backend == 'pytorch':
-        backend_config = PytorchEngineConfig(quant_policy=quant_policy)
+        backend_config = PytorchEngineConfig(kv_cache_dtype=kv_cache_dtype)
     else:
-        backend_config = TurbomindEngineConfig(communicator=communicator, quant_policy=quant_policy)
+        backend_config = TurbomindEngineConfig(communicator=communicator, kv_cache_dtype=kv_cache_dtype)
 
     # quant format
     model_lower = model_path.lower()

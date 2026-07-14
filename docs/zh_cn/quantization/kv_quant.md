@@ -57,15 +57,15 @@ TurboQuant 通过两个关键步骤实现高效压缩：
 
 在 H200 上使用 Qwen3-30B-A3B-Base 模型、ShareGPT 数据集进行测试：
 
-| 指标           | Baseline (quant_policy=0) | TurboQuant (quant_policy=42) | 变化  |
-| -------------- | ------------------------- | ---------------------------- | ----- |
-| 输入吞吐       | 2368.8 tok/s              | 2195.8 tok/s                 | -7.3% |
-| 输出吞吐       | 2186.7 tok/s              | 2027.0 tok/s                 | -7.3% |
-| 请求吞吐       | 10.74 req/s               | 9.96 req/s                   | -7.3% |
-| 平均端到端延迟 | 5.888s                    | 6.348s                       | +7.8% |
-| 平均 TTFT      | 1.139s                    | 1.235s                       | +8.4% |
-| 平均 TPOT      | 0.024s                    | 0.026s                       | +8.3% |
-| 平均 ITL       | 0.059s                    | 0.059s                       | 持平  |
+| 指标           | Baseline (kv_cache_dtype=0) | TurboQuant (kv_cache_dtype=42) | 变化  |
+| -------------- | --------------------------- | ------------------------------ | ----- |
+| 输入吞吐       | 2368.8 tok/s                | 2195.8 tok/s                   | -7.3% |
+| 输出吞吐       | 2186.7 tok/s                | 2027.0 tok/s                   | -7.3% |
+| 请求吞吐       | 10.74 req/s                 | 9.96 req/s                     | -7.3% |
+| 平均端到端延迟 | 5.888s                      | 6.348s                         | +7.8% |
+| 平均 TTFT      | 1.139s                      | 1.235s                         | +8.4% |
+| 平均 TPOT      | 0.024s                      | 0.026s                         | +8.3% |
+| 平均 ITL       | 0.059s                      | 0.059s                         | 持平  |
 
 **测试配置**：GPU: H200, 模型: Qwen3-30B-A3B-Base, 数据集: ShareGPT, 并发: 64, 请求数: 5000
 
@@ -97,15 +97,15 @@ pip install lmdeploy
 
 ## 应用示例
 
-通过 LMDeploy 应用 kv 量化非常简单，只需要设定 `quant_policy` 参数。
+通过 LMDeploy 应用 kv 量化非常简单，只需要设定 `kv_cache_dtype` 参数。
 
-**LMDeploy 规定 `quant_policy=4` 表示 kv int4 量化，`quant_policy=8` 表示 kv int8 量化，`quant_policy=42` 表示 TurboQuant 量化。**
+**LMDeploy 规定 `kv_cache_dtype='int4'` 表示 kv int4 量化，`kv_cache_dtype='int8'` 表示 kv int8 量化，`kv_cache_dtype='turbo_quant'` 表示 TurboQuant 量化。也可以继续使用数值 `4`、`8` 和 `42`。**
 
 ### 离线推理
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
-engine_config = TurbomindEngineConfig(quant_policy=8)
+engine_config = TurbomindEngineConfig(kv_cache_dtype='int8')
 pipe = pipeline("internlm/internlm2_5-7b-chat", backend_config=engine_config)
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
@@ -114,19 +114,19 @@ print(response)
 ### 推理服务
 
 ```shell
-lmdeploy serve api_server internlm/internlm2_5-7b-chat --quant-policy 8
+lmdeploy serve api_server internlm/internlm2_5-7b-chat --kv-cache-dtype int8
 ```
 
 ### TurboQuant 量化
 
-TurboQuant 量化使用 `quant_policy=42`，**仅支持 PytorchEngine**：
+TurboQuant 量化使用 `kv_cache_dtype='turbo_quant'`，**仅支持 PytorchEngine**：
 
 ```python
 from lmdeploy import pipeline, PytorchEngineConfig
 engine_config = PytorchEngineConfig(
     tp=1,
     cache_max_entry_count=0.8,
-    quant_policy=42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
+    kv_cache_dtype='turbo_quant'  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 )
 pipe = pipeline("Qwen/Qwen3-8B", backend_config=engine_config)
 response = pipe.infer("Hello, how are you?", max_new_tokens=30)
@@ -147,7 +147,7 @@ print(response.text)
 | race-middle | 9a54b6  | accuracy      | 41.57          | 41.78   | 41.23   | 88.93             | 88.93   | 88.93   | 92.76               | 92.83   | 92.55   | 87.33           | 87.26   | 86.28   |
 | race-high   | 9a54b6  | accuracy      | 39.65          | 39.77   | 40.77   | 85.33             | 85.31   | 84.62   | 90.51               | 90.42   | 90.42   | 82.53           | 82.59   | 82.02   |
 
-具体的评测方式可以参考[这份指南](../benchmark/evaluate_with_opencompass.md)。评测时，请在config文件中，为推理引擎添加 `quant_policy` 参数。
+具体的评测方式可以参考[这份指南](../benchmark/evaluate_with_opencompass.md)。评测时，请在config文件中，为推理引擎添加 `kv_cache_dtype` 参数。
 
 ## 推理效率
 

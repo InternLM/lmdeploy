@@ -34,7 +34,7 @@ cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
 enable_prefix_caching = false
-quant_policy = 0
+kv_cache_dtype = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
 use_logn_attn = 0
@@ -107,8 +107,8 @@ Since k/v block is the smallest granularity for reuse in prefix caching, if the 
 
 ### kv quantization and inference switch
 
-- `quant_policy=4` means 4bit k/v quantization and inference
-- `quant_policy=8` indicates 8bit k/v quantization and inference
+- `kv_cache_dtype='int4'` means 4bit k/v quantization and inference
+- `kv_cache_dtype='int8'` indicates 8bit k/v quantization and inference
 
 Please refer to [kv quant](../quantization/kv_quant.md) for detailed guide.
 
@@ -152,7 +152,7 @@ step_length = 1
 cache_max_entry_count = 48
 cache_chunk_size = 1
 use_context_fmha = 1
-quant_policy = 0
+kv_cache_dtype = 0
 max_position_embeddings = 2048
 use_dynamic_ntk = 0
 use_logn_attn = 0
@@ -198,7 +198,7 @@ TurboMind allocates k/v cache memory based on `session_len`, `cache_chunk_size`,
 
 ### kv int8 switch
 
-When initiating 8bit k/v inference, change `quant_policy = 4` and `use_context_fmha = 0`. Please refer to [kv int8](../quantization/kv_quant.md) for a guide.
+When initiating 8bit k/v inference, change `kv_cache_dtype = 'int8'` and `use_context_fmha = 0`. Please refer to [kv int8](../quantization/kv_quant.md) for a guide.
 
 ### long context switch
 

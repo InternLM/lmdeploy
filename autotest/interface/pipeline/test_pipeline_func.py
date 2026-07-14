@@ -618,7 +618,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(pydantic.ValidationError):
-        backend_config = backend(quant_policy=1)
+        backend_config = backend(kv_cache_dtype=1)
         pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(pydantic.ValidationError):

@@ -9,7 +9,7 @@ import triton.language as tl
 from packaging import version
 from torch import Tensor
 
-from lmdeploy.messages import QuantPolicy
+from lmdeploy.messages import KVCacheDType
 from lmdeploy.utils import get_logger
 
 from .turbo_quant import hadamard_rotate
@@ -17,14 +17,14 @@ from .utils import get_device_props
 
 logger = get_logger('lmdeploy')
 
-# Triton-compatible quantization policy constants
+# Triton-compatible KV cache dtype constants
 # Python Enum cannot be used in Triton kernels, so we define these as module-level
 # constants which Triton will inline at compile time.
-Q_POLICY_NONE = tl.constexpr(0)
-Q_POLICY_INT4 = tl.constexpr(4)
-Q_POLICY_INT8 = tl.constexpr(8)
-Q_POLICY_FP8 = tl.constexpr(16)
-Q_POLICY_TURBO = tl.constexpr(42)
+KV_CACHE_DTYPE_NONE = tl.constexpr(0)
+KV_CACHE_DTYPE_INT4 = tl.constexpr(4)
+KV_CACHE_DTYPE_INT8 = tl.constexpr(8)
+KV_CACHE_DTYPE_FP8 = tl.constexpr(16)
+KV_CACHE_DTYPE_TURBO = tl.constexpr(42)
 
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
@@ -300,7 +300,7 @@ def _fwd_grouped_split_quant_kernel(
     stride_vszbs: tl.constexpr,
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
-    quant_policy: tl.constexpr,
+    kv_cache_dtype: tl.constexpr,
     stride_ok: tl.constexpr,
     stride_obs: tl.constexpr,
     stride_oh: tl.constexpr,
@@ -384,7 +384,7 @@ def _fwd_grouped_split_quant_kernel(
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_H], dtype=tl.float32)
-    if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
+    if kv_cache_dtype == KV_CACHE_DTYPE_INT4 or kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         packed_k_dim: tl.constexpr = head_size // 2
 
         # K: raw dim -> packed dim (two halves packed into one byte)
@@ -403,7 +403,7 @@ def _fwd_grouped_split_quant_kernel(
                     + packed_offs_dk1[:, None] * stride_kd
                     + offs_n[None, :] * stride_kbs)
 
-        if quant_policy == Q_POLICY_TURBO:
+        if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
             # V: packed dim = head_size_v, raw dim = head_size_v * 4
             raw_offs_dv = tl.arange(0, BLOCK_DV * 4)
             packed_offs_dv = raw_offs_dv % head_size_v
@@ -415,7 +415,7 @@ def _fwd_grouped_split_quant_kernel(
             offs_dv = raw_offs_dv
             acc = tl.zeros([BLOCK_H, BLOCK_DV * 4], dtype=tl.float32)
         else:
-            # quant_policy == Q_POLICY_INT4, V is 4-bit, packed dim = head_size_v, raw dim = head_size_v * 2
+            # kv_cache_dtype == KV_CACHE_DTYPE_INT4, V is 4-bit, packed dim = head_size_v, raw dim = head_size_v * 2
             raw_offs_dv = tl.arange(0, BLOCK_DV * 2)
             packed_offs_dv = raw_offs_dv % head_size_v
             shift_vd = (raw_offs_dv // head_size_v) * 4
@@ -449,10 +449,10 @@ def _fwd_grouped_split_quant_kernel(
         # -- compute qk ----
         # k = tl.load(k_ptrs + b_offset * stride_kp)
         k = tl.load(k_ptr + off_k + b_offset * stride_kp)
-        if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
+        if kv_cache_dtype == KV_CACHE_DTYPE_INT4 or kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
             k = (k >> shift_kd) & 0x0F
 
-        if quant_policy == Q_POLICY_TURBO:
+        if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
             kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
             kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
 
@@ -460,7 +460,7 @@ def _fwd_grouped_split_quant_kernel(
             k_cent = _k4v2_k_centroid((k & 0x7), head_size)
             k_sign = ((k >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
             k = (kmse_norm * (k_cent + kqjl_norm * k_sign)).to(q.dtype)
-        elif quant_policy == Q_POLICY_FP8:
+        elif kv_cache_dtype == KV_CACHE_DTYPE_FP8:
             ks = tl.load(KScalesZeros).to(tl.float32)
             k = k.to(q.dtype)
         else:
@@ -470,36 +470,36 @@ def _fwd_grouped_split_quant_kernel(
 
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(k_ptr + off_k1 + b_offset * stride_kp)
-            if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
+            if kv_cache_dtype == KV_CACHE_DTYPE_INT4 or kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
                 k1 = (k1 >> shift_k1d) & 0x0F
 
-            if quant_policy == Q_POLICY_TURBO:
+            if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
                 kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
                 kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
 
                 k1_cent = _k4v2_k_centroid((k1 & 0x7), head_size)
                 k1_sign = ((k1 >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
                 k1 = (kmse_norm * (k1_cent + kqjl_norm * k1_sign)).to(q.dtype)
-            elif quant_policy == Q_POLICY_FP8:
+            elif kv_cache_dtype == KV_CACHE_DTYPE_FP8:
                 k1 = k1.to(q.dtype)
             else:
                 k1 = ((k1 - kz) * ks).to(q.dtype)
 
         # -- load / dequant v ----
-        if quant_policy == Q_POLICY_TURBO:
+        if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
             v = (v >> shift_vd[None, :]) & 0x03
-        elif quant_policy == Q_POLICY_INT4:
+        elif kv_cache_dtype == KV_CACHE_DTYPE_INT4:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
             v = (v >> shift_vd[None, :]) & 0x0F
         else:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
 
-        if quant_policy == Q_POLICY_TURBO:
+        if kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             v = _k4v2_v_centroid(v, head_size_v)
             v = (v * vs).to(q.dtype)
-        elif quant_policy == Q_POLICY_FP8:
+        elif kv_cache_dtype == KV_CACHE_DTYPE_FP8:
             vs = tl.load(VScalesZeros).to(tl.float32)
             v = v.to(q.dtype)
         else:
@@ -512,7 +512,7 @@ def _fwd_grouped_split_quant_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        if quant_policy == Q_POLICY_FP8:
+        if kv_cache_dtype == KV_CACHE_DTYPE_FP8:
             qk *= ks
         qk *= sm_scale
         if logit_softcapping > 0.0:
@@ -547,7 +547,7 @@ def _fwd_grouped_split_quant_kernel(
         acc = acc * alpha[:, None]
 
         # update acc
-        if quant_policy == Q_POLICY_FP8:
+        if kv_cache_dtype == KV_CACHE_DTYPE_FP8:
             p = p * vs
         p, v = _convert_pv(p, v)
         acc += tl.dot(p, v)
@@ -561,9 +561,9 @@ def _fwd_grouped_split_quant_kernel(
                    offs_dv[None, :] * stride_od)
         tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
-    if quant_policy == Q_POLICY_INT4:
+    if kv_cache_dtype == KV_CACHE_DTYPE_INT4:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 2)
-    elif quant_policy == Q_POLICY_TURBO:
+    elif kv_cache_dtype == KV_CACHE_DTYPE_TURBO:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 4)
     else:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
@@ -770,7 +770,7 @@ def flash_attn_with_kvcache(
     alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
-    quant_policy: QuantPolicy = QuantPolicy.NONE,
+    kv_cache_dtype: KVCacheDType = KVCacheDType.AUTO,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
@@ -807,8 +807,8 @@ def flash_attn_with_kvcache(
     shared_kv = k_cache.data_ptr() == v_cache.data_ptr()
 
     # quant42 K/V have different semantics and meta shape, should not share buffer
-    if quant_policy == QuantPolicy.TURBO_QUANT:
-        assert not shared_kv, 'quant_policy==42 does not support shared_kv'
+    if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
+        assert not shared_kv, 'kv_cache_dtype==42 does not support shared_kv'
 
     def _get_block_d(Lk):
         """Get block d."""
@@ -823,11 +823,11 @@ def flash_attn_with_kvcache(
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
-    if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
+    if kv_cache_dtype == KVCacheDType.INT4 or kv_cache_dtype == KVCacheDType.TURBO_QUANT:
         # K uses 4-bit: Lq == Lk * 2
-        # For quant_policy==QuantPolicy.TURBO_QUANT, V uses 2-bit: raw V dim == Lv * 4
+        # For kv_cache_dtype==KVCacheDType.TURBO_QUANT, V uses 2-bit: raw V dim == Lv * 4
         assert Lq == Lk * 2
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
             o = q.new_empty(q.shape[:-1] + (Lv * 4, ))
         else:
             o = q.new_empty(q.shape[:-1] + (Lv * 2, ))
@@ -835,7 +835,7 @@ def flash_attn_with_kvcache(
         assert Lq == Lk
         o = q.new_empty(q.shape[:-1] + (Lv, ))
 
-    # quant_policy == QuantPolicy.TURBO_QUANT: interpret as
+    # kv_cache_dtype == KVCacheDType.TURBO_QUANT: interpret as
     #   - K: QJL4 = 3bit MSE centroid + 1bit QJL sign
     #   - V: TurboQuant MSE int2
     # Implementation:
@@ -843,7 +843,7 @@ def flash_attn_with_kvcache(
     #   - K dequant as mse_norm * (centroid[idx3] + qjl_norm * sign)
     #   - V dequant as norm * centroid[idx2]
     #   - output inverse-rotated because V is still rotated before caching
-    if quant_policy == QuantPolicy.TURBO_QUANT:
+    if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
         real_k_dim = Lq
         real_v_dim = Lv * 4
         if real_k_dim & (real_k_dim - 1) != 0:
@@ -891,10 +891,10 @@ def flash_attn_with_kvcache(
     else:
         num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
 
-    is_fp8_scalar = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
+    is_fp8_scalar = kv_cache_dtype in (KVCacheDType.FP8, KVCacheDType.FP8_E5M2)
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
 
-    if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
+    if kv_cache_dtype == KVCacheDType.INT4 or kv_cache_dtype == KVCacheDType.TURBO_QUANT:
         acc = q.new_empty(num_tokens, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
     else:
         acc = q.new_empty(num_tokens, head, SPLIT_K, Lv + 2, dtype=torch.float32)
@@ -905,7 +905,7 @@ def flash_attn_with_kvcache(
         batch,
     )
 
-    if quant_policy != QuantPolicy.NONE:
+    if kv_cache_dtype != KVCacheDType.AUTO:
         if is_fp8_scalar:
             assert k_scales_zeros is not None, 'FP8 KV cache requires k scale.'
             assert v_scales_zeros is not None, 'FP8 KV cache requires v scale.'
@@ -913,7 +913,7 @@ def flash_attn_with_kvcache(
             v_scales_arg = v_scales_zeros
             stride_kszp = stride_kszbs = stride_kszh = stride_kszd = 0
             stride_vszp = stride_vszbs = stride_vszh = stride_vszd = 0
-            triton_quant_policy = QuantPolicy.FP8
+            triton_kv_cache_dtype = KVCacheDType.FP8
         else:
             k_scales_arg = k_scales_zeros
             v_scales_arg = v_scales_zeros
@@ -925,7 +925,7 @@ def flash_attn_with_kvcache(
             stride_vszbs = v_scales_zeros.stride(s_dim)
             stride_vszh = v_scales_zeros.stride(h_dim)
             stride_vszd = v_scales_zeros.stride(d_dim)
-            triton_quant_policy = quant_policy
+            triton_kv_cache_dtype = kv_cache_dtype
         _fwd_grouped_split_quant_kernel[grid](q,
                                               k_cache,
                                               v_cache,
@@ -955,7 +955,7 @@ def flash_attn_with_kvcache(
                                               stride_vszbs=stride_vszbs,
                                               stride_vszh=stride_vszh,
                                               stride_vszd=stride_vszd,
-                                              quant_policy=triton_quant_policy,
+                                              kv_cache_dtype=triton_kv_cache_dtype,
                                               stride_ok=acc.stride(-2),
                                               stride_obs=acc.stride(-4),
                                               stride_oh=acc.stride(-3),
@@ -1020,14 +1020,14 @@ def flash_attn_with_kvcache(
 
     num_warps = 2
     grid = (head, num_tokens)
-    if quant_policy == QuantPolicy.INT4:
+    if kv_cache_dtype == KVCacheDType.INT4:
         Lv *= 2
         BLOCK_DV *= 2
-    elif quant_policy == QuantPolicy.TURBO_QUANT:
+    elif kv_cache_dtype == KVCacheDType.TURBO_QUANT:
         Lv *= 4
         BLOCK_DV *= 4
 
-    if quant_policy == QuantPolicy.TURBO_QUANT:
+    if kv_cache_dtype == KVCacheDType.TURBO_QUANT:
         LOG2_DV = int(math.log2(BLOCK_DV))
         _fused_reduce_hadamard_kernel[grid](acc,
                                             o,

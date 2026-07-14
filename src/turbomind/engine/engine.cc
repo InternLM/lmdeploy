@@ -257,7 +257,7 @@ void Engine::Impl::CreateSequenceManager()
                                                  weights_.kv_head_num / param_.attn_tp_size,
                                                  weights_.num_layer,
                                                  weights_.layer_types,
-                                                 param_.quant_policy,
+                                                 param_.kv_cache_dtype,
                                                  weights_.data_type,
                                                  weights_.data_type,  // runtime_dtype = data_type
                                                  linear_key_head_dim,

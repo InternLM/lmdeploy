@@ -326,7 +326,7 @@ def parse_args():
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-    quant_policy_act = ArgumentHelper.quant_policy(pt_group, default=0)
+    kv_cache_dtype_act = ArgumentHelper.kv_cache_dtype(pt_group, default=0)
     dtype_act = ArgumentHelper.dtype(pt_group)
 
     # turbomind engine args
@@ -335,7 +335,7 @@ def parse_args():
     tb_group._group_actions.append(cache_count_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
-    tb_group._group_actions.append(quant_policy_act)
+    tb_group._group_actions.append(kv_cache_dtype_act)
     tb_group._group_actions.append(dtype_act)
 
     ArgumentHelper.dp(tb_group)
@@ -362,7 +362,7 @@ def main():
             cache_max_entry_count=args.cache_max_entry_count,
             cache_block_seq_len=args.cache_block_seq_len,
             model_format=args.model_format,
-            quant_policy=args.quant_policy,
+            kv_cache_dtype=args.kv_cache_dtype,
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
             async_=args.async_,
@@ -379,7 +379,7 @@ def main():
             device_type=args.device,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
-            quant_policy=args.quant_policy,
+            kv_cache_dtype=args.kv_cache_dtype,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,
             dllm_block_length=args.dllm_block_length,

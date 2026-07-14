@@ -75,7 +75,7 @@ struct AttentionParams {
     bool use_logn_attn;
     int  max_position_embeddings;
 
-    int quant_policy;
+    int kv_cache_dtype;
 
     int    max_split_k;
     int*   split_cnt;

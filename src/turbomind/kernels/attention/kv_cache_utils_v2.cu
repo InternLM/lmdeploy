@@ -223,7 +223,7 @@ void invokeProcessKV_v2(char**                 blocks,
                         int                    head_num,
                         int                    head_dim,
                         int                    batch_size,
-                        int                    quant_policy,
+                        int                    kv_cache_dtype,
                         cudaStream_t           stream)
 {
 
@@ -282,10 +282,10 @@ void invokeProcessKV_v2(char**                 blocks,
         TM_UNREACHABLE;
     };
 
-    if (quant_policy & QuantPolicy::kCacheKVInt8) {
+    if (kv_cache_dtype & KVCacheDType::kCacheKVInt8) {
         dispatch(uint8_t{});
     }
-    else if (quant_policy & QuantPolicy::kCacheKVInt4) {
+    else if (kv_cache_dtype & KVCacheDType::kCacheKVInt4) {
         dispatch(uint4_t{});
     }
     else {
@@ -317,7 +317,7 @@ void invokeProcessKV_v2(char**                 blocks,
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \
                                      int                    batch_size,                                                \
-                                     int                    quant_policy,                                              \
+                                     int                    kv_cache_dtype,                                            \
                                      cudaStream_t           stream);
 
 INSTANTIATE_invokeProcessKV_v2(half);
@@ -474,7 +474,7 @@ void invokeFlattenKV_v2(T*                     k,
                         int                    head_num,
                         int                    head_dim,
                         int                    batch_size,
-                        int                    quant_policy,
+                        int                    kv_cache_dtype,
                         cudaStream_t           stream)
 {
 
@@ -530,10 +530,10 @@ void invokeFlattenKV_v2(T*                     k,
         TM_UNREACHABLE;
     };
 
-    if (quant_policy & QuantPolicy::kCacheKVInt8) {
+    if (kv_cache_dtype & KVCacheDType::kCacheKVInt8) {
         dispatch(uint8_t{});
     }
-    else if (quant_policy & QuantPolicy::kCacheKVInt4) {
+    else if (kv_cache_dtype & KVCacheDType::kCacheKVInt4) {
         dispatch(uint4_t{});
     }
     else {
@@ -562,7 +562,7 @@ void invokeFlattenKV_v2(T*                     k,
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \
                                      int                    batch_size,                                                \
-                                     int                    quant_policy,                                              \
+                                     int                    kv_cache_dtype,                                            \
                                      cudaStream_t           stream);
 
 INSTANTIATE_invokeFlattenKV_v2(half);
