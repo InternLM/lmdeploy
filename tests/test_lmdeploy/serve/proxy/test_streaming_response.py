@@ -3,6 +3,8 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from lmdeploy.serve.proxy.streaming_response import ProxyStreamingResponse
 from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 
@@ -67,6 +69,29 @@ def test_streaming_closes_upstream_before_first_chunk_on_disconnect():
 
     assert completed['value'] is True
     assert not sent
+
+
+def test_streaming_closes_upstream_on_send_failure():
+    closed = {'value': False}
+
+    async def upstream():
+        try:
+            yield b'chunk-1'
+        finally:
+            closed['value'] = True
+
+    async def send(message: dict) -> None:
+        if message['type'] == 'http.response.body':
+            raise OSError
+
+    async def run() -> None:
+        response = ProxyStreamingResponse(upstream(), media_type='text/event-stream')
+        with pytest.raises(OSError):
+            await response.stream_response(send)
+
+    asyncio.run(run())
+
+    assert closed['value'] is True
 
 
 def test_streaming_runs_complete_on_upstream_error():

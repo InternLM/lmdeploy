@@ -16,7 +16,7 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 _DEFAULT_AIOHTTP_LIMIT = 1024
-_DEFAULT_AIOHTTP_LIMIT_PER_HOST = 128
+_DEFAULT_AIOHTTP_LIMIT_PER_HOST = 0
 
 
 def _read_env_int(name: str, default: int) -> int:

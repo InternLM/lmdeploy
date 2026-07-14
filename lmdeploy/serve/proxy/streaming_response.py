@@ -109,8 +109,12 @@ class ProxyStreamingResponse(StreamingResponse):
                 'body': b'',
                 'more_body': False,
             })
+        except OSError:
+            logger.info('[OSError] client disconnected while sending proxy response; closing upstream')
+            await self._close_upstream(iterator)
+            raise
         except asyncio.CancelledError:
-            logger.info('proxy streaming cancelled; closing upstream')
+            logger.info('[CancelError] proxy streaming cancelled; closing upstream')
             await self._close_upstream(iterator)
             raise
         finally:
