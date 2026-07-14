@@ -89,6 +89,56 @@ class _DummyProposer:
         )
 
 
+def test_guided_serial_bitmask_updates_inference_tensor():
+    """Serial guided masking can update logits produced under inference
+    mode."""
+
+    class _Processor:
+
+        def fork(self):
+            return _Processor()
+
+    class _GuidedManager:
+
+        def __init__(self):
+            self.accepted = []
+
+        def allocate_batched_bitmap(self, batch_size):
+            return torch.zeros(batch_size, 1, dtype=torch.int32)
+
+        def fill_bitmap(self, processor, guided_bitmask, index):
+            return None
+
+        def apply_batched_bitmap(self, logits, guided_bitmask):
+            logits[:, 0] = -123.0
+
+        def is_terminated(self, processor):
+            return False
+
+        def accept_token(self, processor, token):
+            self.accepted.append(token)
+
+    manager = _GuidedManager()
+    helper = GuidedSpecHelper(manager)
+    batch_size = 2
+    num_spec_tokens = 2
+    num_expand = num_spec_tokens + 1
+    vocab_size = 4
+    with torch.inference_mode():
+        scores_3d = torch.zeros(batch_size, num_expand, vocab_size)
+
+    asyncio.run(
+        helper.apply_serial_bitmask(
+            scores_3d,
+            processors={0: _Processor(), 1: _Processor()},
+            draft_token_ids=torch.tensor([[10, 11], [20, 21]], dtype=torch.long),
+            num_spec_tokens=num_spec_tokens,
+        ))
+
+    torch.testing.assert_close(scores_3d[:, :, 0], torch.full((batch_size, num_expand), -123.0))
+    assert manager.accepted == [10, 20, 11, 21]
+
+
 def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indices():
     """DP non-last first chunks run draft forwards, so indices must match
     shifted draft inputs."""
