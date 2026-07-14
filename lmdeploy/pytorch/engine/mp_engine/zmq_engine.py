@@ -191,13 +191,14 @@ class ZMQMPEngine(MPEngine):
     async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event,  *args, **kwargs):
         """Collective rpc call."""
         startup_notify_kwarg = 'notify_add_msg_func' if func == 'instance_async_stream_infer' else None
-        async for out in self.rpc_client.async_stream_call(
-                func,
-                sess_event,
-                *args,
-                streaming_startup_notify_kwarg=startup_notify_kwarg,
-                **kwargs,
-        ):
+        generator = self.rpc_client.async_stream_call(func,
+                                                      sess_event,
+                                                      *args,
+                                                      streaming_startup_notify_kwarg=startup_notify_kwarg,
+                                                      **kwargs)
+        # async_stream_call captured kwargs in its task; this frame no longer needs multimodal data.
+        kwargs.pop('multimodal', None)
+        async for out in generator:
             yield out
 
     async def get_health_status(self):

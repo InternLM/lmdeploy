@@ -187,7 +187,7 @@ curl http://{server_ip}:{server_port}/v1/models
 curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```

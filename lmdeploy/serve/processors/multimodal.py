@@ -16,6 +16,18 @@ from lmdeploy.vl.media.video import VideoMediaIO
 
 logger = get_logger('lmdeploy')
 
+MULTIMODAL_TYPES = (
+    'image_url',
+    'image_data',
+    'image',
+    'video_url',
+    'video',
+    'audio_url',
+    'audio',
+    'time_series_url',
+    'time_series',
+)
+
 
 class MultimodalProcessor:
     """Processor for handling prompt preprocessing, message content merging,
@@ -97,12 +109,13 @@ class MultimodalProcessor:
         role = in_messages[i]['role']
         content = in_messages[i]['content']
 
-        if role != 'user' or isinstance(content, str):
+        if role not in ('user', 'tool') or isinstance(content, str):
             out_messages[i] = in_messages[i]
             return
 
         assert isinstance(content, list)
-        out_message = dict(role=role, content=[])
+        out_message = dict(in_messages[i])
+        out_message['content'] = []
 
         for item in content:
             item_type = item.get('type')
@@ -332,13 +345,14 @@ class MultimodalProcessor:
     def _has_multimodal_input(self, messages: list[dict]) -> bool:
         """Check if messages contain multimodal input such as images, videos,
         audios, or time series."""
-        multimodal_types = [
-            'image_url', 'image_data', 'image', 'video_url', 'video', 'audio_url', 'audio', 'time_series_url',
-            'time_series'
-        ]
-        return any(
-            isinstance(message.get('content'), list) and any(
-                item.get('type') in multimodal_types for item in message['content']) for message in messages)
+        for message in messages:
+            content = message.get('content')
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES:
+                    return True
+        return False
 
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],

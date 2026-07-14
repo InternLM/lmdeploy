@@ -1,19 +1,27 @@
-import json
-
 import pytest
+from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     ALL_OPTIONAL_TOOL,
     CALCULATOR_TOOL,
     NESTED_PARAM_TOOL,
     SEARCH_TOOL,
     WEATHER_TOOL,
-    WEATHER_TOOL_CN,
+    RoutedExpertsNotSupported,
     assert_arguments_parseable,
+    assert_no_parser_drop,
+    assert_parallel_mixed_tools_isolated,
+    assert_parallel_weather_cities_isolated,
+    assert_tool_call_dict_fields,
     assert_tool_call_fields,
     build_messages_with_parallel_tool_responses,
     build_messages_with_tool_response,
     collect_stream_parallel_tool_calls,
     collect_stream_tool_call,
+    validate_output_ids_match_usage,
+    validate_output_ids_present,
+    validate_routed_experts_length,
+    validate_stream_tool_call_result,
+    validate_stream_tool_call_with_tokens,
 )
 
 from .conftest import (
@@ -23,6 +31,7 @@ from .conftest import (
     MESSAGES_NO_TOOL_NEEDED,
     MESSAGES_PARALLEL_MIXED,
     MESSAGES_PARALLEL_WEATHER,
+    MULTI_TURN_WEATHER_CITIES,
     _apply_marks,
     _ToolCallTestBase,
 )
@@ -43,7 +52,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL, CALCULATOR_TOOL],
             logprobs=False,
         )
@@ -67,7 +76,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_CALCULATION,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL, CALCULATOR_TOOL],
             logprobs=False,
         )
@@ -94,7 +103,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_NO_TOOL_NEEDED,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='auto',
             logprobs=False,
@@ -137,7 +146,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=tools,
             logprobs=False,
         )
@@ -173,7 +182,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_PARALLEL_WEATHER,
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -184,11 +193,14 @@ class TestToolCallParallel(_ToolCallTestBase):
         assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls for two cities, '
                                                                  f'got {len(tool_calls) if tool_calls else 0}')
 
+        parsed_list = []
         for tc in tool_calls:
             assert_tool_call_fields(tc)
             assert tc.function.name == 'get_current_weather'
             parsed = assert_arguments_parseable(tc.function.arguments)
             assert 'city' in parsed and 'state' in parsed
+            parsed_list.append(parsed)
+        assert_parallel_weather_cities_isolated(parsed_list)
 
         ids = [tc.id for tc in tool_calls]
         assert len(set(ids)) == len(ids), (f'IDs should be unique, got {ids}')
@@ -202,7 +214,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_PARALLEL_WEATHER,
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             stream=True,
@@ -215,11 +227,16 @@ class TestToolCallParallel(_ToolCallTestBase):
         assert len(tc_data) >= 2, (f'Expected ≥2 parallel streaming tool calls, '
                                    f'got {len(tc_data)} indices: {list(tc_data.keys())}')
 
+        parsed_list = []
         for idx, data in tc_data.items():
-            assert data['name'] is not None, (f'Index {idx}: missing function name')
+            assert data['name'], (f'Index {idx}: missing function name')
+            assert data['name'] == 'get_current_weather', (
+                f'Index {idx}: expected get_current_weather, got {data["name"]!r}')
             assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
-            parsed = json.loads(data['args_str'])
-            assert isinstance(parsed, dict)
+            parsed = assert_arguments_parseable(data['args_str'])
+            assert 'city' in parsed and 'state' in parsed
+            parsed_list.append(parsed)
+        assert_parallel_weather_cities_isolated(parsed_list)
 
     def test_parallel_mixed_tools(self, backend, model_case):
         """Weather + calculator in one request."""
@@ -229,7 +246,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_PARALLEL_MIXED,
             temperature=0,
-            max_completion_tokens=400,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, CALCULATOR_TOOL],
             logprobs=False,
         )
@@ -240,14 +257,56 @@ class TestToolCallParallel(_ToolCallTestBase):
         assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls (weather+calc), '
                                                                  f'got {len(tool_calls) if tool_calls else 0}')
 
+        named_args = []
         for tc in tool_calls:
             assert_tool_call_fields(tc)
-            assert_arguments_parseable(tc.function.arguments)
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            named_args.append((tc.function.name, parsed))
+        assert_parallel_mixed_tools_isolated(named_args)
 
         ids = [tc.id for tc in tool_calls]
         assert len(set(ids)) == len(ids), (f'Tool call IDs should be unique, got {ids}')
 
         names = {tc.function.name for tc in tool_calls}
+        assert len(names) >= 2, (f'Expected ≥2 distinct tool names, got {names}')
+        assert 'get_current_weather' in names, (f'Expected get_current_weather in tool calls, got {names}')
+        assert 'calculate' in names, (f'Expected calculate in tool calls, got {names}')
+
+    def test_parallel_mixed_tools_streaming(self, backend, model_case):
+        """Streaming: weather + calculator parallel tool calls indexed correctly."""
+        client, model_name = self._get_client()
+
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_PARALLEL_MIXED,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, CALCULATOR_TOOL],
+            logprobs=False,
+            stream=True,
+        )
+
+        tc_data, fr_count = collect_stream_parallel_tool_calls(stream)
+        assert fr_count == 1
+
+        assert len(tc_data) >= 2, (f'Expected ≥2 parallel streaming tool calls (weather+calc), '
+                                   f'got {len(tc_data)} indices: {list(tc_data.keys())}')
+
+        ids = []
+        names = set()
+        named_args = []
+        for idx, data in tc_data.items():
+            assert data['name'], (f'Index {idx}: missing function name')
+            assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
+            assert_tool_call_dict_fields(data)
+            parsed = assert_arguments_parseable(data['args_str'])
+            named_args.append((data['name'], parsed))
+            ids.append(data['id'])
+            names.add(data['name'])
+
+        assert_parallel_mixed_tools_isolated(named_args)
+
+        assert len(set(ids)) == len(ids), (f'Tool call IDs should be unique, got {ids}')
         assert len(names) >= 2, (f'Expected ≥2 distinct tool names, got {names}')
         assert 'get_current_weather' in names, (f'Expected get_current_weather in tool calls, got {names}')
         assert 'calculate' in names, (f'Expected calculate in tool calls, got {names}')
@@ -270,7 +329,7 @@ class TestToolCallWithResults(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -291,7 +350,7 @@ class TestToolCallWithResults(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -308,7 +367,7 @@ class TestToolCallWithResults(_ToolCallTestBase):
 
 
 # ===========================================================================
-# Multilingual tool calls
+# Multilingual tool calls (WEATHER_TOOL only; no WEATHER_TOOL_CN)
 # ===========================================================================
 
 
@@ -322,8 +381,8 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
-            max_completion_tokens=200,
-            tools=[WEATHER_TOOL_CN],
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
             logprobs=False,
         )
 
@@ -349,31 +408,32 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
-            max_completion_tokens=1024,
-            tools=[WEATHER_TOOL_CN],
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
             logprobs=False,
             stream=True,
         )
 
         r = collect_stream_tool_call(stream)
-        assert r['finish_reason'] == 'tool_calls', (
-            f'Expected streaming finish_reason tool_calls; got {r["finish_reason"]!r}')
-        assert r['function_name'] is not None, 'Expected streamed function name for CN weather tool call'
-        assert r['function_name'] == 'get_current_weather'
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name='get_current_weather',
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
         parsed = assert_arguments_parseable(r['args_str'])
         assert 'city' in parsed
         assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
 
     def test_mixed_language_tools(self, backend, model_case):
-        """Pass Chinese + English tool definitions together."""
+        """Chinese user prompt with English tool definitions."""
         client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
-            max_completion_tokens=200,
-            tools=[WEATHER_TOOL_CN, SEARCH_TOOL],
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
 
@@ -411,7 +471,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[SEARCH_TOOL],
             logprobs=False,
         )
@@ -419,7 +479,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
         choice = response.choices[0]
         tool_calls = choice.message.tool_calls
         assert choice.finish_reason == 'tool_calls', (
-            f'Expected tool_calls for CN search prompt; got finish_reason={choice.finish_reason!r}, '
+            f'Expected tool_calls for search prompt; got finish_reason={choice.finish_reason!r}, '
             f'content={choice.message.content!r}')
         assert tool_calls is not None and len(tool_calls) >= 1, (
             f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
@@ -463,7 +523,7 @@ class TestToolCallComplexParams(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=400,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[NESTED_PARAM_TOOL],
             logprobs=False,
         )
@@ -474,7 +534,7 @@ class TestToolCallComplexParams(_ToolCallTestBase):
             assert_tool_call_fields(tc)
             assert tc.function.name == 'create_event'
 
-            parsed = json.loads(tc.function.arguments)
+            parsed = assert_arguments_parseable(tc.function.arguments)
             assert 'title' in parsed
 
             if 'location' in parsed:
@@ -504,7 +564,7 @@ class TestToolCallComplexParams(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[ALL_OPTIONAL_TOOL],
             logprobs=False,
         )
@@ -539,7 +599,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
@@ -568,7 +628,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -595,7 +655,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -613,7 +673,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             n=1,
@@ -621,6 +681,138 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
 
         assert len(response.choices) >= 1
         assert response.choices[0].index == 0
+
+
+# ===========================================================================
+# return_token_ids + routed_experts
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
+    """Streaming tool calls with return_token_ids and routed_experts
+    validation."""
+
+    def test_streaming_return_token_ids(self, backend, model_case):
+        """return_token_ids=True must yield one output_ids entry per completion
+        token."""
+        r = self._stream_tool_call_with_tokens(
+            MESSAGES_ASKING_FOR_WEATHER,
+            tools=[WEATHER_TOOL],
+        )
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
+        assert r['stream_complete'], 'stream ended before data: [DONE]'
+        validate_output_ids_present(r)
+        validate_output_ids_match_usage(r)
+
+    def test_streaming_routed_experts_length(self, backend, model_case):
+        """routed_experts length must equal prompt_tokens + len(output_ids) - 1."""
+        r = self._stream_tool_call_with_tokens(
+            MESSAGES_ASKING_FOR_WEATHER,
+            tools=[WEATHER_TOOL],
+        )
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
+        assert r['stream_complete']
+        validate_output_ids_present(r)
+        validate_output_ids_match_usage(r)
+        try:
+            validate_routed_experts_length(r)
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
+    def test_streaming_tool_call_with_tokens_full_validation(self, backend, model_case):
+        """Single-turn: tool call + output_ids + routed_experts + parser checks."""
+        r = self._stream_tool_call_with_tokens(
+            MESSAGES_ASKING_FOR_WEATHER,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+        )
+        try:
+            validate_stream_tool_call_with_tokens(
+                r,
+                expected_function_name=WEATHER_TOOL['function']['name'],
+                **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            )
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
+
+# ===========================================================================
+# Multi-turn streaming
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
+    """Multi-turn user → tool_call → tool_result loop over streaming API."""
+
+    def test_multi_turn_streaming_tool_loop(self, backend, model_case):
+        """Three turns: each user question must yield a valid streamed tool call."""
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant that can use tools. '
+                'When asked about weather, use the get_current_weather tool.',
+            },
+        ]
+        num_turns = 3
+
+        for turn in range(num_turns):
+            city = MULTI_TURN_WEATHER_CITIES[turn % len(MULTI_TURN_WEATHER_CITIES)]
+            messages.append({
+                'role': 'user',
+                'content': f'What is the weather in {city}?',
+            })
+            r = self._stream_tool_call(messages, tools=[WEATHER_TOOL])
+            validate_stream_tool_call_result(
+                r,
+                expected_function_name=WEATHER_TOOL['function']['name'],
+                **self._parser_validation_kwargs([WEATHER_TOOL]),
+            )
+            parsed = assert_arguments_parseable(r['args_str'])
+            assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
+            self._append_assistant_and_tool_messages(messages, r)
+
+        assert len(messages) == 1 + num_turns * 3, (
+            f'Expected system + {num_turns}×(user+assistant+tool) messages')
+
+    def test_multi_turn_streaming_with_token_ids_and_experts(self, backend, model_case):
+        """Multi-turn loop with per-turn output_ids and routed_experts
+        checks."""
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant that can use tools. '
+                'When asked about weather, use the get_current_weather tool.',
+            },
+        ]
+        num_turns = 3
+
+        for turn in range(num_turns):
+            city = MULTI_TURN_WEATHER_CITIES[turn % len(MULTI_TURN_WEATHER_CITIES)]
+            messages.append({
+                'role': 'user',
+                'content': f'What is the weather in {city}?',
+            })
+            try:
+                r = self._stream_tool_call_with_tokens(messages, tools=[WEATHER_TOOL])
+                prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
+                validate_stream_tool_call_with_tokens(
+                    r,
+                    prompt_tokens=prompt_tokens,
+                    expected_function_name=WEATHER_TOOL['function']['name'],
+                    **self._parser_validation_kwargs([WEATHER_TOOL]),
+                )
+            except RoutedExpertsNotSupported as exc:
+                pytest.skip(f'turn {turn + 1}: {exc}')
+            self._append_assistant_and_tool_messages(messages, r)
 
 
 # ===========================================================================
@@ -642,7 +834,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
                 model=model_name,
                 messages=MESSAGES_NO_TOOL_NEEDED,
                 temperature=0,
-                max_completion_tokens=100,
+                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
                 tools=[],
                 logprobs=False,
             )
@@ -687,7 +879,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -718,7 +910,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -729,10 +921,43 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             tc = choice.message.tool_calls[0]
             assert_tool_call_fields(tc)
             if tc.function.name == 'web_search':
-                parsed = json.loads(tc.function.arguments)
+                parsed = assert_arguments_parseable(tc.function.arguments)
                 assert 'query' in parsed
         else:
             assert choice.message.content and len(choice.message.content) > 0
+
+    def test_multi_turn_conversation_streaming(self, backend, model_case):
+        """Streaming follow-up after tool result must not drop parser
+        output."""
+        messages = build_messages_with_tool_response()
+        messages.append({
+            'role': 'user',
+            'content': 'Now search the web for how to stay cool in hot weather.',
+        })
+
+        r = self._stream_tool_call(
+            messages,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+        )
+        assert r['finish_reason'] in ('stop', 'length', 'tool_calls')
+        if r['finish_reason'] == 'tool_calls':
+            validate_stream_tool_call_result(
+                r,
+                expected_function_name=None,
+                **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            )
+            if r['function_name'] == 'web_search':
+                parsed = assert_arguments_parseable(r['args_str'])
+                assert 'query' in parsed
+        else:
+            assert len(r['content'].strip()) > 0
+            assert_no_parser_drop(
+                r['raw_text'],
+                r['tool_calls'],
+                r['decoded_str'],
+                **self._parser_validation_kwargs([SEARCH_TOOL]),
+            )
 
     def test_special_characters_in_query(self, backend, model_case):
         """Quotes, angle brackets, Unicode → JSON args still parseable."""
@@ -757,7 +982,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=200,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
             tools=[SEARCH_TOOL],
             logprobs=False,
         )
