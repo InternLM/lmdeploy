@@ -8,10 +8,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import ErrorResponse
-from lmdeploy.serve.proxy.core.replica import SelectedReplica
+from lmdeploy.serve.proxy.core.config import ProxyConfig, RoutingStrategy
+from lmdeploy.serve.proxy.core.replica import ReplicaLoad, SelectedReplica
 from lmdeploy.serve.proxy.dispatch.base import response_from_api_exception, safe_json_load
+from lmdeploy.serve.proxy.dispatch.distserve import DistServeDispatcher
 from lmdeploy.serve.proxy.dispatch.hybrid import HybridDispatcher
+from lmdeploy.serve.proxy.metrics.load_tracker import InflightTracker
+from lmdeploy.serve.proxy.registry.pool import ReplicaPool
+from lmdeploy.serve.proxy.routing.selector import ReplicaSelector
 from lmdeploy.serve.proxy.upstream.exceptions import APIServerException
 
 
@@ -35,6 +41,38 @@ def test_hybrid_dispatch_upstream_error():
     assert resp.status_code == 502
     assert json.loads(resp.body)['message'] == 'bad gateway'
     tracker.finish.assert_called_once_with(selected)
+
+
+def test_distserve_setup_failure_releases_decode_reservation():
+    pd_connection_pool = MagicMock()
+    pd_connection_pool.is_connected.return_value = False
+    pd_connection_pool.connect = AsyncMock(side_effect=TimeoutError)
+    pool = ReplicaPool(pd_connection_pool)
+    pool.add('http://prefill', ReplicaLoad(role=EngineRole.Prefill, models=['llama']))
+    pool.add('http://decode', ReplicaLoad(role=EngineRole.Decode, models=['llama']))
+    selector = ReplicaSelector(pool, RoutingStrategy.MIN_EXPECTED_LATENCY)
+    forwarder = MagicMock()
+    forwarder.forward_json_buffer = AsyncMock(
+        return_value='{"id": 1, "cache_block_ids": [2], "remote_token_ids": [3]}')
+    dispatcher = DistServeDispatcher(
+        config=ProxyConfig(),
+        pool=pool,
+        selector=selector,
+        forwarder=forwarder,
+        tracker=InflightTracker(pool),
+    )
+    ctx = MagicMock(
+        model='llama',
+        stream=False,
+        raw_request=MagicMock(),
+        endpoint='/v1/chat/completions',
+        request_dict={},
+    )
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(dispatcher.dispatch(ctx))
+
+    assert pool.snapshot()['http://decode'].unfinished == 0
 
 
 def test_response_from_api_exception_openai_body():

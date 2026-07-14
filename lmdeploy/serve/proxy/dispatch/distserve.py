@@ -80,35 +80,38 @@ class DistServeDispatcher:
         decode = self._selector.acquire(ctx.model, EngineRole.Decode)
         if decode is None:
             return model_not_found_response(ctx.model)
-        d_url = decode.url
-        logger.info(f'A Decode request is dispatched to {d_url}')
-
-        if not self._config.dummy_prefill:
-            if not self._pool.pd_connection_pool.is_connected(p_url, d_url):
-                await self._pool.pd_connection_pool.connect(
-                    PDConnectionMessage(
-                        p_url=p_url,
-                        d_url=d_url,
-                        protocol=self._config.migration_protocol,
-                        rdma_config=self._config.rdma_config,
-                    ))
-
-        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
-        remote_block_ids = prefill_info.get('cache_block_ids') or []
-        remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
-        request_dict['migration_request'] = MigrationRequest(
-            protocol=self._config.migration_protocol,
-            remote_engine_id=p_url,
-            remote_session_id=remote_session_id,
-            remote_block_ids=remote_block_ids,
-            remote_token_id=remote_token_id,
-            is_dummy_prefill=self._config.dummy_prefill,
-        ).model_dump(mode='json')
-
-        if not self._config.dummy_prefill:
-            self._pool.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info.get('id'))
-
+        stream_handed_off = False
+        session_shelved = False
         try:
+            d_url = decode.url
+            logger.info(f'A Decode request is dispatched to {d_url}')
+
+            if not self._config.dummy_prefill:
+                if not self._pool.pd_connection_pool.is_connected(p_url, d_url):
+                    await self._pool.pd_connection_pool.connect(
+                        PDConnectionMessage(
+                            p_url=p_url,
+                            d_url=d_url,
+                            protocol=self._config.migration_protocol,
+                            rdma_config=self._config.rdma_config,
+                        ))
+
+            remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
+            remote_block_ids = prefill_info.get('cache_block_ids') or []
+            remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
+            request_dict['migration_request'] = MigrationRequest(
+                protocol=self._config.migration_protocol,
+                remote_engine_id=p_url,
+                remote_session_id=remote_session_id,
+                remote_block_ids=remote_block_ids,
+                remote_token_id=remote_token_id,
+                is_dummy_prefill=self._config.dummy_prefill,
+            ).model_dump(mode='json')
+
+            if not self._config.dummy_prefill:
+                self._pool.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info.get('id'))
+                session_shelved = True
+
             if ctx.stream:
                 response = self._forwarder.forward_json_stream(request_dict, d_url, ctx.endpoint)
                 resp = ProxyStreamingResponse(
@@ -117,6 +120,7 @@ class DistServeDispatcher:
                     on_complete=lambda: self._tracker.finish(decode),
                     media_type='text/event-stream',
                 )
+                stream_handed_off = True
             else:
                 response = await self._forwarder.forward_json_buffer(
                     request_dict,
@@ -125,19 +129,14 @@ class DistServeDispatcher:
                     raw_request=ctx.raw_request,
                 )
                 if response is None:
-                    self._tracker.finish(decode)
-                    if not self._config.dummy_prefill:
-                        self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
                     logger.info('client disconnected during decode; upstream cancelled')
                     return
                 resp = JSONResponse(safe_json_load(d_url, response))
-                self._tracker.finish(decode)
         except APIServerException as e:
-            self._tracker.finish(decode)
-            if not self._config.dummy_prefill:
-                self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
             return response_from_api_exception(e)
-
-        if not self._config.dummy_prefill:
-            self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
+        finally:
+            if not stream_handed_off:
+                self._tracker.finish(decode)
+            if session_shelved:
+                self._pool.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
         return resp
