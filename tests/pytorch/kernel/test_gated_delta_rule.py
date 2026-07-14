@@ -314,7 +314,10 @@ class TestRecurrentGatedDeltaRule:
             ref_out[:, t] = torch.einsum('bhd,bhdm->bhm', b_q, h)
 
             # scatter write state into circular buffer
-            expected_state[torch.arange(batch, device='cuda'), write_slots] = h
+            state_snapshot = h.to(circular_state.dtype).float()
+            expected_state[torch.arange(batch, device='cuda'), write_slots] = state_snapshot
+            if t < seqlen - 1:
+                h = state_snapshot
 
         ref_out = ref_out.to(q.dtype)
 
@@ -364,7 +367,10 @@ class TestRecurrentGatedDeltaRule:
             delta_v = (b_v - hk) * b_beta.unsqueeze(-1)
             h = h + b_k.unsqueeze(-1) * delta_v.unsqueeze(-2)
             ref_out[:, t] = torch.einsum('bhd,bhdm->bhm', b_q, h)
-            expected_state[state_indices, write_slots] = h
+            state_snapshot = h.to(transposed_state.dtype).float()
+            expected_state[state_indices, write_slots] = state_snapshot
+            if t < seqlen - 1:
+                h = state_snapshot
 
         ref_out = ref_out.to(q.dtype)
         state_copy = transposed_state.clone()
@@ -388,3 +394,69 @@ class TestRecurrentGatedDeltaRule:
                                        expected_state[state_indices, write_slots].to(out_state.dtype).float(),
                                        atol=1e-2,
                                        rtol=1e-3)
+
+    def test_circular_buffer_roundtrips_cache_dtype_between_tokens(self):
+        """MTP packet decode must match sequential cache-dtype state reuse."""
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
+
+        torch.manual_seed(10)
+        batch, seqlen, num_heads, head_dim, value_dim = 2, 4, 1, 32, 16
+        num_cache_states = 5
+        num_slots = seqlen + 2
+
+        q = torch.randn(batch, seqlen, num_heads, head_dim) * 4
+        k = torch.randn(batch, seqlen, num_heads, head_dim)
+        v = torch.randn(batch, seqlen, num_heads, value_dim) * 5
+        g = -0.01 * torch.rand(batch, seqlen, num_heads)
+        beta = torch.rand(batch, seqlen, num_heads) * 0.9 + 0.1
+        transposed_state = torch.randn(num_cache_states, num_slots, num_heads, value_dim, head_dim) * 20
+        state_indices = torch.tensor([1, 3], dtype=torch.int64)
+        cache_seqlens = torch.tensor([0, 2], dtype=torch.int32)
+
+        scale = 1 / (head_dim**0.5)
+        rq = q.float() * scale
+        rk = k.float()
+        rv = v.float()
+        rg = g.float()
+        rb = beta.float()
+        read_slots = (cache_seqlens % num_slots).long()
+        write_base = read_slots + 1
+        state_for_ref = transposed_state.transpose(-1, -2).contiguous().float()
+        expected_state = state_for_ref.clone()
+        h = state_for_ref[state_indices, read_slots]
+        ref_out = torch.zeros(batch, seqlen, num_heads, value_dim, device='cuda', dtype=torch.float32)
+
+        for t in range(seqlen):
+            h = h * rg[:, t].exp().unsqueeze(-1).unsqueeze(-1)
+            hk = (h * rk[:, t].unsqueeze(-1)).sum(-2)
+            delta_v = (rv[:, t] - hk) * rb[:, t].unsqueeze(-1)
+            h = h + rk[:, t].unsqueeze(-1) * delta_v.unsqueeze(-2)
+            ref_out[:, t] = (rq[:, t].unsqueeze(-1) * h).sum(-2)
+
+            write_slots = (write_base + t) % num_slots
+            state_snapshot = h.to(transposed_state.dtype).float()
+            expected_state[state_indices, write_slots] = state_snapshot
+            if t < seqlen - 1:
+                h = state_snapshot
+
+        state_copy = transposed_state.clone()
+        out, out_state = fused_recurrent_gated_delta_rule(
+            q=q,
+            k=k,
+            v=v,
+            g=g,
+            beta=beta,
+            initial_state=state_copy,
+            output_final_state=True,
+            state_indices=state_indices,
+            cache_seqlens=cache_seqlens,
+            transpose_state_layout=True,
+        )
+
+        torch.testing.assert_close(out.float(), ref_out.to(out.dtype).float(), atol=1.0, rtol=5e-3)
+        for t in range(seqlen):
+            write_slots = (write_base + t) % num_slots
+            torch.testing.assert_close(out_state[state_indices, write_slots].transpose(-1, -2).float(),
+                                       expected_state[state_indices, write_slots].to(out_state.dtype).float(),
+                                       atol=1.0,
+                                       rtol=5e-3)

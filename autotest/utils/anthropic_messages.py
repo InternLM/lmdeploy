@@ -142,7 +142,8 @@ def build_anthropic_messages_history_tool_result(
         *,
         tool_use_id: str = 'toolu_hist_01',
 ) -> list[dict]:
-    """Replay ``tool_use`` / ``tool_result`` history (Dallas ``city``/``state``)."""
+    """Replay ``tool_use`` / ``tool_result`` history (Dallas
+    ``city``/``state``)."""
 
     return [
         {'role': 'user', 'content': USER_ASK_WEATHER_DALLAS},
@@ -277,7 +278,8 @@ def assert_stream_stop_sequence_lifecycle(
         *,
         allowed_stop_sequences: tuple[str, ...],
 ) -> None:
-    """Stream SSE with ``stop_sequences`` hit: ``message_delta`` stop metadata."""
+    """Stream SSE with ``stop_sequences`` hit: ``message_delta`` stop
+    metadata."""
 
     assert_stream_text_lifecycle(events)
     delta_evt = next(obj for _, obj in events if obj['type'] == 'message_delta')
@@ -287,7 +289,8 @@ def assert_stream_stop_sequence_lifecycle(
 
 
 def assert_weather_tool_city_state(inp: dict, *, ctx: str = '') -> None:
-    """``get_current_weather`` args after parser mapping (``city`` / ``state``)."""
+    """``get_current_weather`` args after parser mapping (``city`` /
+    ``state``)."""
 
     assert inp['city'], (ctx, inp)
     assert inp['state'], (ctx, inp)
@@ -299,7 +302,8 @@ def assert_parallel_weather_tool_inputs(
         *,
         ctx: str = '',
 ) -> None:
-    """Parallel weather ``tool_use`` inputs: distinct args, each matching a prompt city."""
+    """Parallel weather ``tool_use`` inputs: distinct args, each matching a
+    prompt city."""
 
     def _city_state(inp: dict | object) -> tuple[str, str]:
         if hasattr(inp, 'model_dump'):
@@ -360,7 +364,8 @@ def assert_parallel_weather_tool_inputs(
 
 
 def get_async_anthropic_client_and_model(base_url: str | None = None):
-    """Return ``(AsyncAnthropic, model_name)`` for LMDeploy Anthropic routes."""
+    """Return ``(AsyncAnthropic, model_name)`` for LMDeploy Anthropic
+    routes."""
 
     import anthropic
 

@@ -5,9 +5,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from lmdeploy.serve.anthropic.protocol import MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
@@ -141,6 +142,7 @@ class _FakeServerContext:
             logprobs_mode=logprobs_mode,
             enable_return_routed_experts=enable_return_routed_experts,
         )
+        self.default_gen_config = {}
         self.response_parser_cls = response_parser_cls
 
     def create_session(self, _session_id: int | None = None):
@@ -151,6 +153,79 @@ class _FakeServerContext:
 
     def get_engine_config(self):
         return self.async_engine.backend_config
+
+
+class _FakeRawRequest:
+
+    def __init__(self, headers):
+        self.headers = headers
+
+    async def is_disconnected(self):
+        return False
+
+
+class _TestResponse:
+
+    def __init__(self, status_code: int, payload=None, body: str = ''):
+        self.status_code = status_code
+        self._payload = jsonable_encoder(payload)
+        self._body = body
+
+    def json(self):
+        return self._payload
+
+    def iter_lines(self):
+        return self._body.splitlines()
+
+
+class _StreamContext:
+
+    def __init__(self, response: _TestResponse):
+        self.response = response
+
+    def __enter__(self):
+        return self.response
+
+    def __exit__(self, *args):
+        return False
+
+
+class _AnthropicTestClient:
+
+    def __init__(self, server_context):
+        router = create_anthropic_router(server_context)
+        self._routes = {route.path: route.endpoint for route in router.routes}
+
+    def post(self, path: str, *, headers, json):
+        return asyncio.run(self._post(path, headers=headers, json=json))
+
+    def stream(self, method: str, path: str, *, headers, json):
+        assert method == 'POST'
+        return _StreamContext(self.post(path, headers=headers, json=json))
+
+    def get(self, path: str):
+        return asyncio.run(self._get(path))
+
+    async def _post(self, path: str, *, headers, json):
+        endpoint = self._routes[path.split('?', 1)[0]]
+        result = await endpoint(MessagesRequest(**json), _FakeRawRequest(headers))
+        return await self._response_from_result(result)
+
+    async def _get(self, path: str):
+        endpoint = self._routes[path.split('?', 1)[0]]
+        return await self._response_from_result(await endpoint())
+
+    async def _response_from_result(self, result):
+        if isinstance(result, JSONResponse):
+            return _TestResponse(result.status_code, json.loads(result.body))
+        if isinstance(result, StreamingResponse):
+            chunks = []
+            async for chunk in result.body_iterator:
+                if isinstance(chunk, bytes):
+                    chunk = chunk.decode()
+                chunks.append(chunk)
+            return _TestResponse(result.status_code, body=''.join(chunks))
+        return _TestResponse(200, result)
 
 
 class _ToolAndReasoningParser:
@@ -217,11 +292,9 @@ def _make_client(response_parser_cls=_BasicParser,
                  server_context=None,
                  logprobs_mode='raw_logprobs',
                  return_context=False):
-    app = FastAPI()
     context = server_context or _FakeServerContext(response_parser_cls=response_parser_cls,
                                                   logprobs_mode=logprobs_mode)
-    app.include_router(create_anthropic_router(context))
-    client = TestClient(app)
+    client = _AnthropicTestClient(context)
     if return_context:
         return client, context
     return client
@@ -252,11 +325,11 @@ def test_messages_non_stream():
     assert len(context.session_mgr.removed) == 1
 
 
-def _post_messages(client: TestClient, **overrides):
+def _post_messages(client: _AnthropicTestClient, **overrides):
     return client.post('/v1/messages', headers=ANTHROPIC_HEADERS, json=_messages_payload(**overrides))
 
 
-def _stream_messages_body(client: TestClient, **overrides):
+def _stream_messages_body(client: _AnthropicTestClient, **overrides):
     payload = _messages_payload(**overrides)
     payload['stream'] = True
     with client.stream('POST', '/v1/messages', headers=ANTHROPIC_HEADERS, json=payload) as response:

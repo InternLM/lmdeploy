@@ -46,9 +46,6 @@ class ExecutorBase:
             # do not support sliding window prefix caching
             logger.warning('Sliding window prefix caching is not supported.')
             cache_config.enable_prefix_caching = False
-        if specdecode_config is not None and cache_config.enable_prefix_caching:
-            logger.warning('Speculative decoding prefix caching is not supported.')
-            cache_config.enable_prefix_caching = False
         if cache_config.role != EngineRole.Hybrid and cache_config.enable_prefix_caching:
             logger.warning('PD prefix caching is not supported.')
             cache_config.enable_prefix_caching = False
@@ -238,6 +235,18 @@ class ExecutorBase:
         if self.model_config.use_flash_mla is True:
             if self.cache_config.block_size != 64:
                 raise ValueError('Please set block_size to 64 for flash_mla.')
+            return
+        # head_dim=256 requires block_size=128 on ascend.
+        # Other models keep the user-provided block size.
+        if (self.cache_config.device_type == 'ascend' and self.model_config.k_head_dim == 256 and
+                (self.cache_config.block_size != 128 or self.cache_config.kernel_block_size != 128)):
+            logger.warning(
+                'Force `block_size=128` and `kernel_block_size=128` '
+                f'(was block_size={self.cache_config.block_size}, '
+                f'kernel_block_size={self.cache_config.kernel_block_size}) '
+                'for head_dim=256 on ascend.')
+            self.cache_config.block_size = 128
+            self.cache_config.kernel_block_size = 128
             return
         # TODO: support kernel with both large head dim and large block size.
         if self.model_config.k_head_dim >= 512 and self.cache_config.block_size > 32:

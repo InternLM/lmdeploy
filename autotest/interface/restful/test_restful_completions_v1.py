@@ -1,4 +1,5 @@
 import pytest
+from utils.config_utils import get_model_path_from_config
 from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_BASE_MODEL_LIST
 from utils.restful_return_check import assert_completions_batch_return, assert_completions_stream_return
 
@@ -17,7 +18,7 @@ class TestRestfulInterfaceBase:
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         print(f'[test_get_model] available_models={api_client.available_models!r} resolved={model_name!r}')
-        assert model_name == '/'.join([config.get('model_path'), MODEL]), api_client.available_models
+        assert model_name == get_model_path_from_config(config, MODEL), api_client.available_models
 
     @pytest.mark.internlm2_5
     def test_encode(self, backend, model_case):
