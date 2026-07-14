@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.backends.default.apply_rotary_emb import DefaultApplyRotaryEmbImpl, rotate_interleaved
-from lmdeploy.pytorch.models.deepseek_v2 import DeepseekV2BMM, DeepseekV2MoE, MoEGate
+from lmdeploy.pytorch.models.deepseek_v2 import DeepseekV2BMM, DeepseekV2ForCausalLM, DeepseekV2MoE, MoEGate
 from lmdeploy.pytorch.models.deepseek_v32 import (
     DeepseekV32Attention,
     DeepseekV32ForCausalLM,
@@ -43,6 +43,72 @@ def _patch_minimal_attention(attn, monkeypatch, dp=1, attn_tp=1, seen=None):
     attn.vc = lambda attn_output, out: out.copy_(attn_output)
     attn.v_head_dim = 1
     attn.o_proj = nn.Identity()
+
+
+def _make_kv_b_loader_model(fp8_quant_scope=None, input_dim=3):
+    model = DeepseekV2ForCausalLM.__new__(DeepseekV2ForCausalLM)
+    nn.Module.__init__(model)
+    model.config = SimpleNamespace(qk_nope_head_dim=2, v_head_dim=2)
+    model.quantization_config = {'quant_method': 'fp8'}
+    if fp8_quant_scope is not None:
+        model.quantization_config['fp8_quant_scope'] = fp8_quant_scope
+    model._load_buffers = {}
+    prefix = 'model.layers.0.self_attn'
+    params = {
+        f'{prefix}.kc.weight': nn.Parameter(torch.empty(1, 2, input_dim, dtype=torch.bfloat16)),
+        f'{prefix}.vc.weight': nn.Parameter(torch.empty(1, input_dim, 2, dtype=torch.bfloat16)),
+    }
+    return model, prefix, params
+
+
+def _split_kv_b_weight(weight):
+    weight = weight.unflatten(0, (-1, 4))
+    weight_kc, weight_vc = weight.split([2, 2], dim=1)
+    return weight_kc, weight_vc.transpose(1, 2).contiguous()
+
+
+def test_glm_moe_only_loads_kv_b_proj_as_bf16():
+    model, prefix, params = _make_kv_b_loader_model(fp8_quant_scope='moe_only')
+    loaded_weight = torch.arange(12, dtype=torch.bfloat16).reshape(4, 3)
+
+    model._load_weight_attention(
+        name=f'{prefix}.kv_b_proj.weight',
+        loaded_weight=loaded_weight,
+        params_dict=params,
+        update_pe_mapping=[],
+    )
+
+    expected_kc, expected_vc = _split_kv_b_weight(loaded_weight)
+    assert torch.equal(params[f'{prefix}.kc.weight'], expected_kc)
+    assert torch.equal(params[f'{prefix}.vc.weight'], expected_vc)
+    assert model._load_buffers == {}
+
+
+def test_global_fp8_loads_kv_b_proj_after_weight_scale():
+    model, prefix, params = _make_kv_b_loader_model(input_dim=4)
+    loaded_weight = torch.arange(16, dtype=torch.float32).reshape(4, 4).to(torch.float8_e4m3fn)
+    loaded_scale = torch.full((1, 1), 0.5, dtype=torch.float32)
+
+    model._load_weight_attention(
+        name=f'{prefix}.kv_b_proj.weight',
+        loaded_weight=loaded_weight,
+        params_dict=params,
+        update_pe_mapping=[],
+    )
+    assert f'{prefix}.kv_b_proj.weight' in model._load_buffers
+
+    model._load_weight_attention(
+        name=f'{prefix}.kv_b_proj.weight_scale_inv',
+        loaded_weight=loaded_scale,
+        params_dict=params,
+        update_pe_mapping=[],
+    )
+
+    dequantized_weight = (loaded_weight.float() * loaded_scale).to(torch.bfloat16)
+    expected_kc, expected_vc = _split_kv_b_weight(dequantized_weight)
+    assert torch.equal(params[f'{prefix}.kc.weight'], expected_kc)
+    assert torch.equal(params[f'{prefix}.vc.weight'], expected_vc)
+    assert model._load_buffers == {}
 
 
 def test_default_interleaved_rotary_uses_pairwise_layout_with_half_split_freqs():

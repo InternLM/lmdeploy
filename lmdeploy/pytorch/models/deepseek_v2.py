@@ -1292,11 +1292,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if '.kv_b_proj' in name:
                 quantization_config = self.quantization_config
                 quant_method = None
+                fp8_quant_scope = None
                 if quantization_config is not None:
                     quant_method = quantization_config.get('quant_method')
+                    fp8_quant_scope = quantization_config.get('fp8_quant_scope')
 
                 loaded_weight = loaded_weight.to(device)
-                if quant_method == 'fp8':
+                if quant_method == 'fp8' and fp8_quant_scope != 'moe_only':
                     # update blocked fp8 weight
                     __load_kcvc_blocked_fp8(name, loaded_weight)
                 else:

@@ -1,7 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.pytorch import envs as _envs
+from lmdeploy.utils import get_logger
+
 from .deepseek_v2 import DeepseekV2ModelConfigBuilder
+
+logger = get_logger('lmdeploy')
 
 
 def normalize_glm_moe_dsa_config(hf_config):
@@ -78,6 +83,15 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
+        quantization_config = getattr(hf_config, 'quantization_config', None)
+        is_lmdeploy_patched_fp8 = (quantization_config is not None
+                                   and quantization_config.get('quant_method') == 'fp8'
+                                   and quantization_config.get('lmdeploy_patched', False))
+        if hf_config.model_type == 'glm_moe_dsa' and _envs.fp8_moe_only and is_lmdeploy_patched_fp8:
+            quantization_config['fp8_quant_scope'] = 'moe_only'
+            logger.info('Enable fp8_quant_scope=moe_only for glm_moe_dsa because LMDEPLOY_FP8_MOE_ONLY=1 '
+                        'and the FP8 quantization config is LMDeploy-synthesized.')
+
         normalize_glm_moe_dsa_config(hf_config)
         config = DeepseekV2ModelConfigBuilder.build(hf_config, model_path=model_path, **kwargs)
 
