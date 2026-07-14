@@ -2,7 +2,8 @@
 
 This script focuses on eval-style JSONL dumps where each row contains OpenAI
 chat ``messages``, or a string/list ``prompt`` (e.g. dapo-math-17k). List-type
-``prompt`` values are treated as message lists. It records streaming latency traces,
+``prompt`` values are treated as message lists. Optional per-row ``tools`` and
+``tool_choice`` fields are forwarded to ``/v1/chat/completions``. It records streaming latency traces,
 aggregates TTFT/ITL/TPOT metrics, and writes table plus report artifacts for concurrency/RPS sweeps.
 
 Generation options include ``--output-tokens`` (``max_completion_tokens``),
@@ -42,6 +43,8 @@ class BenchmarkRequest:
     messages: list[dict[str, Any]] = field(default_factory=list)
     input_ids: list[int] | None = None
     image_data: Any = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any | None = None
 
 
 @dataclass
@@ -73,6 +76,7 @@ class RequestTrace:
     chunk_times: list[float] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_tokens: int = 0
     usage_available: bool = False
     generated_text: str = ''
     reasoning_text: str = ''
@@ -205,6 +209,21 @@ def _extract_messages(row: dict[str, Any]) -> list[dict[str, Any]]:
     raise ValueError('row must contain messages or prompt')
 
 
+def _extract_tools(row: dict[str, Any]) -> list[dict[str, Any]] | None:
+    tools = row.get('tools')
+    if not tools:
+        return None
+    if not isinstance(tools, list):
+        raise ValueError('tools must be a list when present')
+    return tools
+
+
+def _extract_tool_choice(row: dict[str, Any]) -> Any | None:
+    if 'tool_choice' not in row:
+        return None
+    return row['tool_choice']
+
+
 def _normalize_row(
     row: dict[str, Any],
     dataset: str,
@@ -213,23 +232,35 @@ def _normalize_row(
 ) -> BenchmarkRequest:
     request_id = str(row.get('id', f'{dataset}-{row_index}'))
     messages = _extract_messages(row)
+    tools = _extract_tools(row)
+    tool_choice = _extract_tool_choice(row)
 
     if tokenizer is not None:
-        prompt_str = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        template_kwargs: dict[str, Any] = {
+            'tokenize': False,
+            'add_generation_prompt': True,
+        }
+        if tools is not None:
+            template_kwargs['tools'] = tools
+        prompt_str = tokenizer.apply_chat_template(messages, **template_kwargs)
         return BenchmarkRequest(
             dataset=dataset,
             id=request_id,
             input_ids=tokenizer.encode(prompt_str, add_special_tokens=False),
             image_data=row.get('image_data'),
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
     if not messages:
         raise ValueError(f'row {row_index} in {dataset} has invalid messages')
-    return BenchmarkRequest(dataset=dataset, id=request_id, messages=messages)
+    return BenchmarkRequest(
+        dataset=dataset,
+        id=request_id,
+        messages=messages,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
 
 
 def _read_raw_rows(
@@ -326,6 +357,13 @@ def parse_sse_line(line: bytes | str) -> SSEEvent:
     )
 
 
+def _cached_tokens_from_usage(usage: dict[str, Any] | None) -> int:
+    if not usage:
+        return 0
+    details = usage.get('prompt_tokens_details') or {}
+    return int(details.get('cached_tokens', 0) or 0)
+
+
 def build_payload(
     request: BenchmarkRequest,
     model: str,
@@ -372,6 +410,10 @@ def build_payload(
         payload['logprobs'] = True
         if top_logprobs is not None:
             payload['top_logprobs'] = top_logprobs
+    if request.tools:
+        payload['tools'] = request.tools
+    if request.tool_choice is not None:
+        payload['tool_choice'] = request.tool_choice
     if extra_body:
         payload.update(extra_body)
     return payload
@@ -482,6 +524,7 @@ async def request_chat_completion(
                         trace.completion_tokens = int(
                             event.usage.get('completion_tokens', trace.completion_tokens) or 0
                         )
+                        trace.cached_tokens = _cached_tokens_from_usage(event.usage)
                     if event.routed_experts and shared_store is not None:
                         try:
                             await fetch_routed_experts(shared_store, event.routed_experts)
@@ -632,6 +675,7 @@ def aggregate_traces(traces: Sequence[RequestTrace]) -> list[dict[str, Any]]:
         duration = max(end - start, 0.0)
         total_input = sum(trace.prompt_tokens for trace in completed)
         total_output = sum(trace.completion_tokens for trace in completed)
+        total_cached = sum(trace.cached_tokens for trace in completed)
         itls = [itl for trace in completed for itl in trace.itls_s]
 
         summary: dict[str, Any] = {
@@ -646,6 +690,8 @@ def aggregate_traces(traces: Sequence[RequestTrace]) -> list[dict[str, Any]]:
             'duration_s': duration,
             'total_input_tokens': total_input,
             'total_output_tokens': total_output,
+            'total_cached_tokens': total_cached,
+            'cache_hit_rate': total_cached / total_input if total_input > 0 else 0.0,
             'request_throughput_req_s': len(completed) / duration if duration > 0 else 0.0,
             'input_throughput_tok_s': total_input / duration if duration > 0 else 0.0,
             'output_throughput_tok_s': total_output / duration if duration > 0 else 0.0,
@@ -691,6 +737,7 @@ def _write_requests_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         'e2e_latency_s',
         'prompt_tokens',
         'completion_tokens',
+        'cached_tokens',
         'usage_available',
         'finish_reason',
         'error',

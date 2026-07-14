@@ -7,7 +7,6 @@ from tools.common_case_config import (
     PYTORCH_LORA_TEST_LLM_GPU2,
     PYTORCH_PR_TEST_LLM_GPU1,
     PYTORCH_PR_TEST_LLM_GPU2,
-    SPECULATIVE_DECODING_RESTFUL_TEST_LLM,
 )
 from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid
 from utils.constant import PROXY_PORT
@@ -16,6 +15,7 @@ from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import run_all_step, run_llm_test
 
 BACKEND = 'pytorch'
+_PREFIX_CACHE_EXTRA = {'enable-prefix-caching': None}
 
 
 def _run_ray_distributed_test(
@@ -137,11 +137,48 @@ def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, run_confi
 
 
 @pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api_pytorch
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_distributed_dpep32
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'dp': 32, 'ep': 32}))
+def test_restful_chat_distributed_dpep32(shared_proxy_manager, config, run_config, common_case_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                common_case_config=common_case_config,
+                                manager=shared_proxy_manager)
+
+
+@pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
-@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra={'enable-prefix-caching': None}))
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra=_PREFIX_CACHE_EXTRA))
 def test_restful_chat_pytorch_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
     run_llm_test(config, run_config, common_case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.gpu_num_1
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 1}, extra=_PREFIX_CACHE_EXTRA))
+def test_restful_chat_pytorch_prefix_cache_tp1(config, run_config, common_case_config, worker_id):
+    run_llm_test(config, run_config, common_case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api_pytorch
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(BACKEND, {'dp': 4, 'ep': 8}, extra=_PREFIX_CACHE_EXTRA),
+)
+def test_restful_chat_pytorch_prefix_cache_dp4ep8(
+        shared_proxy_manager, config, run_config, common_case_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                common_case_config=common_case_config,
+                                manager=shared_proxy_manager)
 
 
 @pytest.mark.usefixtures('common_case_config')
@@ -182,36 +219,3 @@ def test_pytorch_chat_with_lora_tp1(config, run_config, common_case_config, work
 @pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU2)
 def test_pytorch_chat_with_lora_tp2(config, run_config, common_case_config, worker_id):
     run_llm_test(config, run_config, common_case_config, worker_id)
-
-
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_1
-@pytest.mark.parametrize(
-    'run_config', [item for item in SPECULATIVE_DECODING_RESTFUL_TEST_LLM if item['parallel_config'].get('tp') == 1])
-def test_restful_chat_speculative_decoding_tp1(config, run_config, common_case_config, worker_id):
-    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    run_llm_test(config, run_config, case_config, worker_id)
-
-
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'run_config', [item for item in SPECULATIVE_DECODING_RESTFUL_TEST_LLM if item['parallel_config'].get('tp') == 2])
-def test_restful_chat_speculative_decoding_tp2(config, run_config, common_case_config, worker_id):
-    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    run_llm_test(config, run_config, case_config, worker_id)
-
-
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_distributed_tp16
-@pytest.mark.parametrize(
-    'run_config', [item for item in SPECULATIVE_DECODING_RESTFUL_TEST_LLM if item['parallel_config'].get('tp') == 16])
-def test_restful_chat_speculative_decoding_tp16(shared_ray_manager, config, run_config, common_case_config, worker_id):
-    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    _run_ray_distributed_test(config=config,
-                              run_config=run_config,
-                              common_case_config=case_config,
-                              manager=shared_ray_manager)

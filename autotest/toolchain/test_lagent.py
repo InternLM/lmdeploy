@@ -1,4 +1,5 @@
 import pytest
+from utils.config_utils import get_model_path_from_config
 
 
 @pytest.mark.order(10)
@@ -9,7 +10,7 @@ def test_repeat(config, model):
     from lagent.llms import INTERNLM2_META, LMDeployPipeline
 
     model = LMDeployPipeline(
-        path='/'.join([config.get('model_path'), model]),
+        path=get_model_path_from_config(config, model),
         meta_template=INTERNLM2_META,
         tp=1,
         top_k=40,

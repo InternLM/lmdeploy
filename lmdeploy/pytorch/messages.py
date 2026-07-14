@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import numpy as np
 import torch
@@ -10,7 +10,7 @@ from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
+from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs, make_multimodal_content_hash
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 
@@ -43,6 +43,84 @@ class InputEmbeddings:
         return self
 
 
+@dataclass(frozen=True)
+class PrefixCacheMeta:
+    """Multimodal span identity used by prefix-cache block keys.
+
+    Placeholder token ids alone are not enough for VLM prefix caching: two
+    requests can contain the same image placeholder tokens backed by different
+    image/video content.  The trie key therefore includes every overlapping
+    span's modality and stable content hash.
+    """
+
+    start: int
+    end: int
+    modality: str
+    content_hash: str
+
+
+PrefixCacheExtraHash: TypeAlias = tuple[int, int, str, str]
+PrefixCacheExtraHashes: TypeAlias = tuple[PrefixCacheExtraHash, ...]
+PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
+
+
+@dataclass
+class PrefixCacheState:
+    """Per-sequence prefix-cache bookkeeping.
+
+    ``metas`` and ``block_extra_hashes`` are persistent request metadata used
+    when constructing multimodal-aware trie keys.  The restore/save fields are
+    transient scheduler state for SSM checkpoints: a matched frozen state is
+    pinned before forward, and pending save slots are published only after the
+    model has copied runtime state into them.  ``last_shared_node`` is the
+    deepest trie node already shared by this sequence; ``BlockTrie.match()``
+    writes it and ``BlockTrie.allocate()`` continues inserting new full blocks
+    from it.  ``match_start_step`` remembers the sequence step before a
+    tentative prefix-cache match so long-context chunking can distinguish
+    current-turn cached multimodal spans from older session history.
+    ``match_recompute_blocks`` keeps a small full-block overlap out of prefix
+    reuse for strategies that need target hidden-state bridge data.
+    ``private_recompute_*_step`` marks trie-known blocks that were deliberately
+    dropped from a match and therefore must stay writable/private during the
+    next allocation instead of being deduplicated back to shared trie blocks.
+    ``suppress_match_stats`` is set while replaying work after recompute
+    eviction; cache reuse may still happen, but it should not affect the public
+    prefix-cache hit-rate metric.
+    """
+
+    # Persistent request metadata used to build multimodal-aware trie keys.
+    metas: list[PrefixCacheMeta] = field(default_factory=list)
+    block_extra_hashes: PrefixCacheBlockExtraHashes = field(default_factory=dict, repr=False)
+    num_indexed_metas: int = 0
+
+    # Trie cursor for the deepest prefix block already shared by this sequence.
+    last_shared_node: Any = field(default=None, repr=False)
+
+    # SSM checkpoint restore state pinned by a prefix hit before forward.
+    restore_state: int = -1
+    restore_state_acquired: bool = False
+    restore_node: Any = field(default=None, repr=False)
+
+    # SSM checkpoint save state staged until model forward publishes it.
+    save_state: int = -1
+    save_step: int = 0
+    save_is_decode: bool = False
+    save_node: Any = field(default=None, repr=False)
+    save_state_acquired: bool = False
+    save_acquired_state: int = -1
+    save_acquired_node: Any = field(default=None, repr=False)
+
+    # Latest decode checkpoint node owned by this sequence.
+    decode_state_node: Any = field(default=None, repr=False)
+
+    # Tentative match state used for chunking, MTP overlap, and metrics.
+    match_start_step: int = -1
+    match_recompute_blocks: int = 0
+    private_recompute_start_step: int = -1
+    private_recompute_end_step: int = -1
+    suppress_match_stats: bool = False
+
+
 @dataclass
 class SamplingParam:
     """Sampling parameter."""
@@ -61,6 +139,7 @@ class SamplingParam:
     logits_processors: None | list[LogitsProcessor] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
+    out_ce_loss: bool = False
     num_logprobs: int = -1
     return_routed_experts: bool = False
 
@@ -157,6 +236,7 @@ class SamplingParam:
             min_new_tokens=min_new_tokens,
             logits_processors=gen_config.logits_processors,
             out_logits=(output_logits is not None),
+            out_ce_loss=gen_config.return_ppl,
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
@@ -629,16 +709,22 @@ class SchedulerSequence:
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
     history_embeddings: HistoryEmbeddings = field(default_factory=HistoryEmbeddings)
     history_multimodals: HistoryMultiModals = field(default_factory=HistoryMultiModals)
+    prefix_cache: PrefixCacheState = field(default_factory=PrefixCacheState)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     logical_state: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
+    input_start_pos: int = 0
+    input_end_pos: int = 0
     output_start_pos: int = 0
     meta: Any = None
     num_ignored_history: int = 0
     model_meta: dict[str, Any] = None
+    # Exclusive absolute token limit for temporary KV ownership. Non-final
+    # long-context chunks use this to allocate only the computed prefix.
+    kv_token_limit: int | None = None
 
     # For Disaggregation
     migration_request: None | MigrationRequest = None
@@ -654,8 +740,15 @@ class SchedulerSequence:
     # logits
     all_logits: HistoryLogits = field(default_factory=HistoryLogits)
 
+    # accumulated, unnormalized cross-entropy (NLL) of the input prompt
+    ce_loss: float = 0.0
+    ce_loss_finished: bool = False
+
     # mrope
     history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
+
+    # Prefix-cache tokens accepted by the scheduler that are present in the current request prompt.
+    cached_tokens: int = 0
 
     def __post_init__(self):
         """Post init."""
@@ -814,11 +907,98 @@ class SchedulerSequence:
             logits = logits.view(torch.int16).numpy()
         self.all_logits.append(logits)
 
+    @property
+    def return_ce_loss(self):
+        return self.sampling_param.out_ce_loss
+
+    def append_ce_loss(self, ce_loss, finish: bool = False):
+        """Accumulate the summed cross-entropy (NLL) of the input prompt."""
+        if not self.return_ce_loss or self.ce_loss_finished or ce_loss is None:
+            return
+        if isinstance(ce_loss, Tensor):
+            ce_loss = ce_loss.item()
+        self.ce_loss += float(ce_loss)
+        self.ce_loss_finished = finish
+
     def get_input_multimodals(self):
         """Get input multimodals."""
         start = self.num_history_ids
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
+
+    def get_chunk_limit_multimodals(self):
+        """Get multimodals that should affect long-context chunk size."""
+        input_multimodals = self.get_input_multimodals()
+        match_start = self.prefix_cache.match_start_step
+        if match_start >= 0 and self.num_history_ids > match_start:
+            return self.history_multimodals.get_datas(match_start, self.num_all_ids)
+        return input_multimodals
+
+    def get_prefix_cache_extra_hashes(self, start: int, end: int) -> PrefixCacheExtraHashes:
+        """Get canonical multimodal identity entries for a token range.
+
+        The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
+        candidates.  Returning only overlapping spans keeps text-only blocks unchanged while making blocks that touch
+        multimodal placeholders content-aware.
+        """
+        prefix_cache = self.prefix_cache
+        if len(prefix_cache.metas) == 0:
+            return ()
+
+        if prefix_cache.num_indexed_metas != len(prefix_cache.metas):
+            self._index_prefix_cache_metas()
+        start_block = start // self.block_size
+        end_block = (max(start, end - 1)) // self.block_size
+        if start_block == end_block:
+            extras = prefix_cache.block_extra_hashes.get(start_block, ())
+            if start % self.block_size == 0 and end - start == self.block_size:
+                # Full-block lookup is the hot path; the indexed tuple already
+                # contains exactly the spans that overlap this block.
+                return extras
+            return tuple(extra for extra in extras if extra[0] < end and start < extra[1])
+
+        extras = []
+        for block_id in range(start_block, end_block + 1):
+            extras.extend(prefix_cache.block_extra_hashes.get(block_id, ()))
+        extras = [extra for extra in set(extras) if extra[0] < end and start < extra[1]]
+        return tuple(sorted(extras))
+
+    def clamp_prefix_cache_match_step(self, step: int):
+        """Clamp a prefix-cache match so forward never starts inside a span.
+
+        Multimodal processors expect an image/video span to be consumed as a whole.  If a candidate cache hit would stop
+        in the middle of such a span, rewind to the span start and then to a block boundary.  Rounding a later span
+        start down can itself land inside an earlier span when multimodal spans are close together, so keep rewinding
+        until the final block boundary is outside every span.
+        """
+        if step <= 0:
+            return step
+
+        spans = [(meta.start, meta.end) for meta in self.prefix_cache.metas]
+        spans.extend((emb.start, emb.end) for emb in self.history_embeddings.embeddings)
+        if len(spans) == 0:
+            return (step // self.block_size) * self.block_size
+
+        clamped = step
+        while clamped > 0:
+            next_step = clamped
+            for start, end in spans:
+                if start < next_step < end:
+                    next_step = min(next_step, start)
+            next_step = (next_step // self.block_size) * self.block_size
+            if next_step == clamped:
+                break
+            clamped = next_step
+        return clamped
+
+    def get_prefix_cache_max_match_step(self):
+        """Get the deepest prefix step allowed for a cache hit."""
+        block_size = self.block_size
+        max_step = ((self.num_valid_ids - 1) // block_size) * block_size
+        recompute_blocks = max(0, self.prefix_cache.match_recompute_blocks)
+        if recompute_blocks > 0:
+            max_step = max(0, max_step - recompute_blocks * block_size)
+        return self.clamp_prefix_cache_match_step(max_step)
 
     def record_event(
         self,
@@ -842,7 +1022,53 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
+        if self.session.scheduler.cache_config.enable_prefix_caching:
+            self._update_prefix_cache_metas(multimodals)
         self.history_multimodals.add_inputs(multimodals)
+
+    def _update_prefix_cache_metas(self, multimodals: MultiModalInputs):
+        """Record multimodal span identities for future trie keying."""
+        for modal_datas in multimodals.values():
+            for modal_data in modal_datas:
+                modality = modal_data.modality
+                if isinstance(modality, enum.Enum):
+                    modality = modality.value
+                content_hash = modal_data.content_hash
+                if content_hash is None:
+                    # Most request paths precompute the hash after model
+                    # preprocessing.  Keep this fallback for unit tests and
+                    # defensive correctness if a processor omits it.
+                    content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
+                                                                modal_data.mrope_pos_ids)
+                self.prefix_cache.metas.append(
+                    PrefixCacheMeta(start=modal_data.start,
+                                    end=modal_data.end,
+                                    modality=str(modality),
+                                    content_hash=str(content_hash)))
+
+    def _index_prefix_cache_metas(self):
+        """Build the lazy block -> multimodal identity index.
+
+        The trie asks for block keys many times during match/allocation, so we pay the span-to-block indexing cost once
+        per newly appended metadata entry instead of scanning all multimodal spans for every block.
+        """
+        prefix_cache = self.prefix_cache
+        block_size = self.block_size
+        new_metas = prefix_cache.metas[prefix_cache.num_indexed_metas:]
+        if len(new_metas) == 0:
+            return
+
+        for meta in new_metas:
+            if meta.end <= meta.start:
+                continue
+            extra = (meta.start, meta.end, meta.modality, meta.content_hash)
+            start_block = meta.start // block_size
+            end_block = (meta.end - 1) // block_size
+            for block_id in range(start_block, end_block + 1):
+                extras = list(prefix_cache.block_extra_hashes.get(block_id, ()))
+                extras.append(extra)
+                prefix_cache.block_extra_hashes[block_id] = tuple(sorted(extras))
+        prefix_cache.num_indexed_metas = len(prefix_cache.metas)
 
     def _update_mrope_pos_ids(self):
         """Update mrope pos ids."""

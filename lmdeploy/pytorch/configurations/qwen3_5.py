@@ -2,11 +2,13 @@
 import torch
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.utils import is_bf16_supported
+from lmdeploy.utils import get_logger, is_bf16_supported
 
 from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
 from .qwen3_next import _check_env_qwen3_next
+
+logger = get_logger('lmdeploy')
 
 
 class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
@@ -35,6 +37,16 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         if getattr(hf_config.text_config, 'attn_output_gate', False):
             cfg.num_attention_heads *= 2
+
+        is_lmdeploy_patched_fp8 = (quantization_config is not None and quantization_config.get('quant_method') == 'fp8'
+                                   and quantization_config.get('lmdeploy_patched', False))
+        is_moe_model = hf_config.model_type in ['qwen3_5_moe', 'intern_s2_preview']
+        if is_lmdeploy_patched_fp8 and _envs.fp8_moe_only and is_moe_model:
+            quantization_config['fp8_quant_scope'] = 'moe_only'
+            logger.info(f'Enable fp8_quant_scope=moe_only for {hf_config.model_type} '
+                        f'(is_draft_model={is_draft_model}, spec_method={spec_method}) because '
+                        'LMDEPLOY_FP8_MOE_ONLY=1 and the FP8 quantization config is LMDeploy-synthesized.')
+
         # update num layers
         num_layers = cfg.num_layers
         layer_types = text_config.layer_types
@@ -55,9 +67,9 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         # for spec decoding
         if num_spec_tokens > 0:
-            recurrent_state_shape = (num_delta_layers, 1 + num_spec_tokens, num_v_heads, head_k_dim, head_v_dim)
+            recurrent_state_shape = (num_delta_layers, 1 + num_spec_tokens, num_v_heads, head_v_dim, head_k_dim)
         else:
-            recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
+            recurrent_state_shape = (num_delta_layers, num_v_heads, head_v_dim, head_k_dim)
 
         device_type = kwargs.get('device_type', 'auto')
         if is_bf16_supported(device_type):

@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from functools import partial
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Literal
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from lmdeploy.serve.parsers import ResponseParser
 
+import shortuuid
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -47,6 +48,10 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
 )
 from lmdeploy.serve.anthropic import create_anthropic_router
 from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
+from lmdeploy.serve.core.generation_config import (
+    build_generation_config,
+    resolve_default_gen_config,
+)
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
     ChatCompletionRequest,
@@ -63,6 +68,7 @@ from lmdeploy.serve.openai.protocol import (
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
     DeltaMessage,
+    DestroyWeightsUpdateGroupRequest,
     EmbeddingsRequest,
     EncodeRequest,
     EncodeResponse,
@@ -70,16 +76,23 @@ from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
+    InitWeightsUpdateGroupRequest,
     LogProbs,
     ModelCard,
     ModelList,
     ModelPermission,
     PoolingRequest,
     PoolingResponse,
+    PPLRequest,
+    PPLResponse,
     TopLogprob,
     UpdateParamsRequest,
+    UpdateWeightsFromDistributedRequest,
     UsageInfo,
 )
+from lmdeploy.serve.openai.responses import create_responses_router
+from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
+from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -102,6 +115,7 @@ class VariableInterface:
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
     response_parser_cls: type[ResponseParser] | None = None
+    default_gen_config: dict = {}
 
     @classmethod
     def create_session(cls, user_session_id: int | None = None) -> Session:
@@ -137,6 +151,30 @@ class VariableInterface:
     @classmethod
     def get_engine_config(cls):
         return cls.async_engine.backend_config
+
+
+def _build_serving_generation_config(request, **extra_kwargs) -> GenerationConfig:
+    """Build ``GenerationConfig`` with server and request sampling merge.
+
+    Same-name request fields are extracted automatically; ``extra_kwargs`` is
+    for renamed, computed, or raw-json fields only.
+    """
+    max_new_tokens = getattr(request, 'max_completion_tokens', None)
+    if max_new_tokens is None:
+        max_new_tokens = getattr(request, 'max_tokens', None)
+    return build_generation_config(
+        request,
+        VariableInterface.default_gen_config,
+        max_new_tokens=max_new_tokens,
+        **extra_kwargs,
+    )
+
+
+async def _with_request_cleanup(generator, result_generators, sessions):
+    """Yield from an API generator and cleanup when the HTTP task exits."""
+    session_mgr = VariableInterface.get_session_manager()
+    async for item in with_request_cleanup(generator, result_generators, sessions, session_mgr):
+        yield item
 
 
 router = APIRouter()
@@ -260,6 +298,8 @@ async def health() -> JSONResponse:
                     message='Engine health monitor is not initialized.')
         return JSONResponse(jsonable_encoder(data), status_code=HTTPStatus.SERVICE_UNAVAILABLE)
     data = monitor.snapshot()
+    if data['status'] == 'unhealthy':
+        data = await monitor.refresh_snapshot()
     status_code = HTTPStatus.OK if data['status'] in ('healthy', 'sleeping') else HTTPStatus.SERVICE_UNAVAILABLE
     return JSONResponse(jsonable_encoder(data), status_code=status_code)
 
@@ -436,7 +476,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
-    request_id = str(session.session_id)
+    request_id = f'chatcmpl-{shortuuid.random()}'
     created_time = int(time.time())
 
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
@@ -460,41 +500,24 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-    random_seed = request.seed if request.seed is not None else None
-
     parser_cls = VariableInterface.response_parser_cls
     try:
-        response_parser = parser_cls(request=request, tokenizer=tokenizer)
+        response_parser = parser_cls(request)
     except ValueError as e:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(e))
     # request is normalized and may be adjusted by the parser
     # (e.g. GPT-OSS clears response_format and injects the schema into messages)
     request = response_parser.request
 
-    gen_config = GenerationConfig(
-        max_new_tokens=request.max_completion_tokens,
-        do_sample=True,
+    gen_config = _build_serving_generation_config(
+        request,
         logprobs=gen_logprobs,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        include_stop_str_in_output=request.include_stop_str_in_output,
-        skip_special_tokens=request.skip_special_tokens,
-        response_format=request.response_format,
         logits_processors=logits_processors,
-        min_new_tokens=request.min_new_tokens,
-        min_p=request.min_p,
-        random_seed=random_seed,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
+        random_seed=request.seed,
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
-        return_routed_experts=request.return_routed_experts,
     )
 
     # text completion for string input or input_ids
@@ -540,6 +563,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                          output_token_logprobs=output_token_logprobs,
                                                          output_ids=output_ids,
                                                          routed_experts=routed_experts)
+        choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
@@ -573,11 +597,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_logprob:
                 output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
-                total_tokens = sum([res.input_token_len, res.generate_token_len])
-                final_usage = UsageInfo(
+                final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
-                    total_tokens=total_tokens,
+                    cached_tokens=res.cached_tokens,
                 )
             delta_token_ids = res.token_ids if res.token_ids is not None else []
             stream_deltas = response_parser.stream_chunk(
@@ -636,7 +659,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     final_logprobs = []
@@ -645,19 +669,20 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     text = ''
     cache_block_ids = []
     remote_token_ids = []
-    async for res in result_generator:
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            await session.async_abort()
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-        final_res = res
-        text += res.response
-        if res.token_ids:
-            final_token_ids.extend(res.token_ids)
-        if res.logprobs:
-            final_logprobs.extend(res.logprobs)
-        cache_block_ids.append(res.cache_block_ids)
-        remote_token_ids.append(res.token_ids)
+    async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+        async for res in generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                await session.async_abort()
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+            final_res = res
+            text += res.response
+            if res.token_ids:
+                final_token_ids.extend(res.token_ids)
+            if res.logprobs:
+                final_logprobs.extend(res.logprobs)
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
 
     tool_calls = None
     reasoning_content = None
@@ -702,17 +727,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         output_ids=final_token_ids if request.return_token_ids else None,
         routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     )
+    choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
     choices.append(choice_data)
 
     if with_cache:
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
-    usage = UsageInfo(
+    usage = UsageInfo.build(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
+        cached_tokens=final_res.cached_tokens,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -810,28 +835,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             sessions.append(VariableInterface.create_session(i + 1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
-    random_seed = request.seed if request.seed is not None else None
-    max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
-    gen_config = GenerationConfig(
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        logprobs=request.logprobs,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
+    gen_config = _build_serving_generation_config(
+        request,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens,
-        min_p=request.min_p,
-        random_seed=random_seed,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
+        random_seed=request.seed,
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
     generators = []
     for prompt, session in zip(request.prompt, sessions):
@@ -906,7 +917,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(completion_stream_generator(), generators, sessions)
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     # Non-streaming response
     usage = UsageInfo()
@@ -914,25 +926,26 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     cache_block_ids = []
     remote_token_ids = []
 
-    async def _inner_call(i, generator):
+    async def _inner_call(i, generator, session):
         nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
         text = ''
-        async for res in generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            final_res = res
-            text += res.response
-            cache_block_ids.append(res.cache_block_ids)
-            remote_token_ids.append(res.token_ids)
-            if res.token_ids:
-                final_token_ids.extend(res.token_ids)
-            if res.logprobs:
-                final_logprobs.extend(res.logprobs)
+        async with aclosing(_with_request_cleanup(generator, [generator], [session])) as cleanup_generator:
+            async for res in cleanup_generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await VariableInterface.async_engine.stop_session(request.session_id)
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                final_res = res
+                text += res.response
+                cache_block_ids.append(res.cache_block_ids)
+                remote_token_ids.append(res.token_ids)
+                if res.token_ids:
+                    final_token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    final_logprobs.extend(res.logprobs)
 
         logprobs = None
         assert final_res is not None
@@ -951,7 +964,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
 
-    await asyncio.gather(*[_inner_call(i, generators[i]) for i in range(len(generators))])
+    await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
 
     response = CompletionResponse(
         id=request_id,
@@ -993,24 +1006,10 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         prompt = [dict(role='user', content=[text_input] + image_input)]
         input_ids = None
 
-    gen_config = GenerationConfig(
-        max_new_tokens=request.max_tokens,
-        do_sample=True,
+    gen_config = _build_serving_generation_config(
+        request,
         logprobs=1 if request.return_logprob else None,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        min_p=request.min_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        stop_token_ids=request.stop_token_ids,
-        skip_special_tokens=request.skip_special_tokens,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
-        include_stop_str_in_output=request.include_stop_str_in_output,
-        return_routed_experts=request.return_routed_experts,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
 
     result_generator = VariableInterface.async_engine.generate(
@@ -1056,7 +1055,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         yield 'data: [DONE]\n\n'
 
     if request.stream:
-        return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
+        stream_generator = _with_request_cleanup(generate_stream_generator(), [result_generator], [session])
+        return StreamingResponse(stream_generator, media_type='text/event-stream')
 
     response = None
 
@@ -1064,14 +1064,15 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''
         output_ids = []
         logprobs = []
-        async for res in result_generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await session.async_abort()
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            text += res.response or ''
-            output_ids.extend(res.token_ids or [])
-            logprobs.extend(res.logprobs or [])
+        async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
+            async for res in generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await session.async_abort()
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                text += res.response or ''
+                output_ids.extend(res.token_ids or [])
+                logprobs.extend(res.logprobs or [])
 
         output_token_logprobs = []
         if len(logprobs) and len(output_ids):
@@ -1166,7 +1167,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
-    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    usage = UsageInfo.build(prompt_tokens=prompt_tokens, completion_tokens=0, cached_tokens=0)
 
     data = []
     for i, score in enumerate(batch_scores):
@@ -1180,11 +1181,89 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     return response.model_dump()
 
 
+@router.post('/get_ppl', dependencies=[Depends(validate_json_request)])
+async def get_ppl(request: PPLRequest, raw_request: Request = None):
+    """Get the perplexity (mean cross-entropy loss) of the input prompt.
+
+    The request should be a JSON object with the following fields:
+
+    - **input** (str | list[int]): the input to score, either raw text or token
+      ids. Text is tokenized with ``tokenizer.encode`` (no chat template is
+      applied).
+    """
+    async_engine = VariableInterface.async_engine
+
+    request_input = request.input
+
+    # pydantic already validated `input` as `str | list[int]`; text ->
+    # tokenizer.encode, otherwise the token ids are used as-is
+    if isinstance(request_input, str):
+        input_ids = async_engine.tokenizer.encode(request_input)
+    else:
+        input_ids = request_input
+    if not input_ids:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must not be empty.')
+
+    try:
+        ppl = await async_engine.async_get_ppl(input_ids)
+    except ValueError as e:
+        return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
+
+    response = PPLResponse(ppl=ppl)
+    return response.model_dump()
+
+
 @router.post('/update_weights', dependencies=[Depends(validate_json_request)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
+
+
+def _check_pytorch_backend_for_disagg_weight_update():
+    """Disaggregated weight-update endpoints are PyTorch-backend only for
+    now."""
+    backend = getattr(VariableInterface.async_engine, 'backend', None)
+    if backend != 'pytorch':
+        return create_error_response(
+            HTTPStatus.NOT_IMPLEMENTED,
+            f'Disaggregated weight-update endpoints require backend="pytorch", got {backend!r}.')
+    return None
+
+
+@router.post('/init_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def init_weights_update_group(request: InitWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Initialize the torch.distributed process group used by an external
+    trainer to broadcast weights into this rollout engine."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.init_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/update_weights_from_distributed', dependencies=[Depends(validate_json_request)])
+async def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest, raw_request: Request = None):
+    """Receive a bucket of weights through a previously initialized weights-
+    update group and load them into the running model."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.update_weights_from_distributed(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
+
+
+@router.post('/destroy_weights_update_group', dependencies=[Depends(validate_json_request)])
+async def destroy_weights_update_group(request: DestroyWeightsUpdateGroupRequest, raw_request: Request = None):
+    """Tear down a previously initialized weights-update group."""
+    err = _check_pytorch_backend_for_disagg_weight_update()
+    if err is not None:
+        return err
+    success, message = await VariableInterface.async_engine.engine.destroy_weights_update_group(request)
+    content = {'success': success, 'message': message}
+    return JSONResponse(content=content, status_code=200 if success else HTTPStatus.BAD_REQUEST)
 
 
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
@@ -1486,6 +1565,7 @@ def serve(model_path: str,
           allow_terminate_by_client: bool = False,
           enable_abort_handling: bool = False,
           speculative_config: SpeculativeConfig | None = None,
+          generation_config: str = 'auto',
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1498,11 +1578,10 @@ def serve(model_path: str,
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
         model_name (str): the name of the served model. It can be accessed
             by the RESTful API `/v1/models`. If it is not specified,
@@ -1545,6 +1624,14 @@ def serve(model_path: str,
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     VariableInterface.enable_abort_handling = enable_abort_handling
+    from lmdeploy.serve.parsers import validate_parser_names
+    reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
+
+    VariableInterface.default_gen_config = resolve_default_gen_config(
+        generation_config,
+        model_path,
+        trust_remote_code,
+    )
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
@@ -1583,6 +1670,7 @@ def serve(model_path: str,
 
     app.include_router(router)
     app.include_router(create_anthropic_router(VariableInterface))
+    app.include_router(create_responses_router(VariableInterface))
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     mount_metrics(app, backend_config)
 

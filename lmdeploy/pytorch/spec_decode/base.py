@@ -18,6 +18,9 @@ def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeCo
     if specdecode_config is None:
         return None
 
+    if specdecode_config.method == 'qwen3_5_mtp':
+        return dist_ctx
+
     draft_dist_config = specdecode_config.dist_config
     return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)
 
@@ -96,6 +99,10 @@ class BaseSpecModelAgent:
         'reset graph runner'
         pass
 
+    def reset_runtime_state(self):
+        """Discard request-local runtime state after sleep cancels sessions."""
+        pass
+
     def update_main_model_outputs(self, output: dict[str, torch.Tensor],
                                   model_inputs: ModelInputs):
         """Update outputs of main model."""
@@ -105,10 +112,7 @@ class BaseSpecModelAgent:
 
         hidden_states = output['hidden_states']
 
-        # use original is_decoding if dp_meta is not None
         is_decoding = model_inputs.is_decoding
-        if model_inputs.dp_meta is not None:
-            is_decoding = model_inputs.dp_meta.is_decoding
 
         if not is_decoding:
             logits_indices = model_inputs.seq_length.cumsum(0) - 1

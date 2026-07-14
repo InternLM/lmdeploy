@@ -546,11 +546,11 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
     PRAGMA_UNROLL
     for (int i = 0; i < k_per_thread; ++i) {
-        const int   idx       = ei2 * k_per_thread + i;
-        const int   expert_id = smem.shared_exp_id[idx][bti2];
-        const float scale     = smem.shared_scales[idx][bti2];
-
+        const int idx = ei2 * k_per_thread + i;
         if (ti2 < token_num && idx < top_k) {
+            const int   expert_id = smem.shared_exp_id[idx][bti2];
+            const float scale     = smem.shared_scales[idx][bti2];
+
             masks[expert_id * token_num_padded + ti2] = idx;
             scales[idx * token_num + ti2]             = scale * routed_scale;
             atomicAdd(&smem.shared_accum[ti2 >> log_tile][expert_id], 1);
@@ -657,8 +657,8 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
             }
         }
         else if (experts <= 512) {
-            if (experts_per_token <= 8) {
-                return invoke(_Int<512>, _Int<8>, _Int<16>, _Int<4>);
+            if (experts_per_token <= 10) {
+                return invoke(_Int<512>, _Int<10>, _Int<16>, _Int<4>);
             }
         }
         return false;
@@ -1127,6 +1127,9 @@ void invokeMoeReduce(T*           dst,
             break;
         case 8:
             invoke(std::integral_constant<int, 8>{});
+            break;
+        case 10:
+            invoke(std::integral_constant<int, 10>{});
             break;
         default:
             fprintf(stderr, "Unsupported experts_per_token %d\n", experts_per_token);

@@ -21,6 +21,8 @@ h:
     ep: 8
     extra:
       session-len: 65536
+      cache-max-entry-count: 0.9
+      max-batch-size: 256
   backends:
   - name: pytorch
     communicators:

@@ -28,7 +28,7 @@ def build_fused_moe(
     quant_method = None
     if quant_config is not None:
         quant_config = get_build_model_context().quant_config
-        quant_method = quant_config.get_quant_method(prefix)
+        quant_method = quant_config.get_quant_method(prefix, module_kind='moe')
 
     if quant_method is None:
         from .default import FusedMoE

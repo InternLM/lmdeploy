@@ -37,7 +37,7 @@ def _build_parser():
             },
         }],
     )
-    return cls(request=request, tokenizer=object())
+    return cls(request=request)
 
 
 def test_llama3_streaming_without_close_tag():

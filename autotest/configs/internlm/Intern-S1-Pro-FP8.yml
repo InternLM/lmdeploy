@@ -7,7 +7,6 @@ h:
     ep: 16
     extra:
       session-len: 65536
-      max-prefill-token-num: 1024
       max-batch-size: 128
   backends:
   - name: pytorch

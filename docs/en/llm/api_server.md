@@ -148,6 +148,10 @@ May refer to [api_server_tools](./api_server_tools.md).
 
 May refer to [api_server_anthropic](./api_server_anthropic.md).
 
+### OpenAI Responses-Compatible Endpoint
+
+May refer to [api_server_responses](./api_server_responses.md).
+
 ### Integrate with Java/Golang/Rust
 
 May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.
@@ -183,7 +187,7 @@ curl http://{server_ip}:{server_port}/v1/models
 curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```

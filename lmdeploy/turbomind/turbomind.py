@@ -279,8 +279,8 @@ class TurboMind:
         input."""
         if not multimodal:
             return None
-        if self.engine_config.disable_vision_encoder:
-            logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+        if self.engine_config.language_model_only:
+            logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
             return None
 
         parser = getattr(self.source_model, 'to_turbomind_multimodal', None)
@@ -353,11 +353,10 @@ class TurboMind:
                       ii) and iii)
                     - ii) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
-                      "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - iii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "internlm/internlm-chat-7b",
-                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      on huggingface.co, such as "internlm/internlm2-chat-7b",
+                      "Qwen/Qwen2.5-7B-Instruct"
                       and so on.
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
@@ -428,6 +427,16 @@ def _get_logits(outputs, offset: int):
 
     def _func(out: EngineOutput, step: int, **kwargs):
         out.logits = logits[:step - offset - 1, :]
+
+    return _func
+
+
+def _get_ce_loss(outputs):
+    ce_loss = outputs['ce_loss']
+
+    def _func(out: EngineOutput, step: int, **kwargs):
+        if out.status == ResponseType.FINISH:
+            out.ce_loss = ce_loss[0].item()
 
     return _func
 
@@ -589,6 +598,8 @@ class TurboMindInstance:
         if gen_config.output_logits:
             offset = _get_offset(gen_config.output_logits)
             fs.append(_get_logits(outputs, offset))
+        if gen_config.return_ppl:
+            fs.append(_get_ce_loss(outputs))
         if gen_config.output_last_hidden_state:
             offset = _get_offset(gen_config.output_last_hidden_state)
             fs.append(_get_last_hidden_state(outputs, offset))
@@ -839,6 +850,7 @@ class TurboMindInstance:
             c.output_last_hidden_state = output_type[cfg.output_last_hidden_state]
         if cfg.output_logits:
             c.output_logits = output_type[cfg.output_logits]
+        c.return_ppl = cfg.return_ppl
         if cfg.logprobs:
             if cfg.logprobs > MAX_LOGPROBS:
                 cfg.logprobs = MAX_LOGPROBS

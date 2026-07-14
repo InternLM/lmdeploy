@@ -24,6 +24,32 @@ logger = get_logger('lmdeploy')
 
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
 
+def validate_parser_names(
+    reasoning_parser_name: str | None = None,
+    tool_parser_name: str | None = None,
+    *,
+    warn_legacy: bool = True,
+) -> tuple[str | None, str | None]:
+    """Validate parser registry names before expensive engine startup."""
+    from .reasoning_parser import LEGACY_REASONING_PARSER_NAMES, ReasoningParserManager
+    from .tool_parser import ToolParserManager
+
+    if reasoning_parser_name in LEGACY_REASONING_PARSER_NAMES:
+        if warn_legacy:
+            logger.warning(f'The reasoning parser {reasoning_parser_name} is deprecated, '
+                           'please use the default reasoning parser instead.')
+        reasoning_parser_name = 'default'
+
+    if reasoning_parser_name is not None and reasoning_parser_name not in ReasoningParserManager.module_dict:
+        raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
+                         f'{ReasoningParserManager.module_dict.keys()}')
+
+    if tool_parser_name is not None and tool_parser_name not in ToolParserManager.module_dict:
+        raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
+                         f'{ToolParserManager.module_dict.keys()}')
+
+    return reasoning_parser_name, tool_parser_name
+
 
 def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
     """Return dict-like tool arguments for request message normalization.
@@ -138,7 +164,7 @@ class ResponseParser:
     ) -> None:
         pass
 
-    def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
+    def __init__(self, request: ChatCompletionRequest):
         self.request = request
 
     @abstractmethod
@@ -221,27 +247,15 @@ class BaseResponseParser(ResponseParser):
         from .reasoning_parser import ReasoningParserManager
         from .tool_parser import ToolParserManager
 
-        legacy_reasoning_parser_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
-        if reasoning_parser_name in legacy_reasoning_parser_names:
-            logger.warning(f'The reasoning parser {reasoning_parser_name} is deprecated, '
-                           'please use the default reasoning parser instead.')
-            reasoning_parser_name = 'default'
+        reasoning_parser_name, tool_parser_name = validate_parser_names(reasoning_parser_name, tool_parser_name)
 
         if reasoning_parser_name is not None:
-            if reasoning_parser_name in ReasoningParserManager.module_dict:
-                cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
-                if tokenizer is not None:
-                    cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
-            else:
-                raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
-                                 f'{ReasoningParserManager.module_dict.keys()}')
+            cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
+            if tokenizer is not None:
+                cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
 
         if tool_parser_name is not None:
-            if tool_parser_name in ToolParserManager.module_dict:
-                cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
-            else:
-                raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
-                                 f'{ToolParserManager.module_dict.keys()}')
+            cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
 
     @classmethod
     def chat_template_kwargs_from_request(cls, request: ChatCompletionRequest) -> dict:
@@ -262,11 +276,7 @@ class BaseResponseParser(ResponseParser):
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.')
         return chat_template_kwargs
 
-    def __init__(
-        self,
-        request: ChatCompletionRequest,
-        tokenizer: PreTrainedTokenizerBase,
-    ):
+    def __init__(self, request: ChatCompletionRequest):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
         self._kwargs = type(self).chat_template_kwargs_from_request(request)
@@ -280,7 +290,8 @@ class BaseResponseParser(ResponseParser):
 
         self.request = normalize_chat_request(self.request)
 
-        self._accumulated_text = ''
+        self._accumulated_chunks: list[str] = []
+        self._received_any_text = False
 
         self.profile = self._build_profile()
         if (self.reasoning_parser is not None and self.enable_thinking is not False
@@ -315,7 +326,7 @@ class BaseResponseParser(ResponseParser):
         if (
             not delta_text
             and not delta_token_ids
-            and self._accumulated_text == ''
+            and not self._received_any_text
         ):
             return [(DeltaMessage(role='assistant', content=''), False)]
 
@@ -324,7 +335,9 @@ class BaseResponseParser(ResponseParser):
                 return []
             return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
-        self._accumulated_text += delta_text
+        if delta_text:
+            self._accumulated_chunks.append(delta_text)
+            self._received_any_text = True
         self._pending += delta_text
         produced_any = False
         deltas: list[tuple[DeltaMessage, bool]] = []
@@ -360,7 +373,7 @@ class BaseResponseParser(ResponseParser):
         if (
             delta_text == ''
             and not produced_any
-            and self._accumulated_text != ''
+            and self._received_any_text
             and not deltas
         ):
             deltas.append((DeltaMessage(role='assistant', content=''), False))
@@ -606,6 +619,9 @@ class BaseResponseParser(ResponseParser):
         mode = self.MODE_REASONING if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
                                        and self.enable_thinking is not False) else self.MODE_PLAIN
         n = len(text)
+        plain_open_tags = [
+            t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t
+        ]
 
         while pos < n:
             if mode == self.MODE_REASONING:
@@ -632,11 +648,7 @@ class BaseResponseParser(ResponseParser):
                 mode = self.MODE_PLAIN
                 continue
 
-            open_idx, open_tag = self._find_first(
-                text,
-                [t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t],
-                pos,
-            )
+            open_idx, open_tag = self._find_first(text, plain_open_tags, pos)
             if open_idx < 0:
                 content_parts.append(text[pos:])
                 break
@@ -674,8 +686,11 @@ class BaseResponseParser(ResponseParser):
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
         return content if content != '' else None, tool_calls or None, reasoning_content
 
+    def _get_accumulated_text(self) -> str:
+        return ''.join(self._accumulated_chunks)
+
     def validate_complete(self, text: str | None = None) -> bool:
-        text = self._accumulated_text if text is None else text
+        text = self._get_accumulated_text() if text is None else text
 
         if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
                 and self.enable_thinking is not False):
