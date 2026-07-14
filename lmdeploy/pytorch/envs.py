@@ -131,6 +131,7 @@ with set_envs():
     torch_profile_delay = env_to_int('LMDEPLOY_PROFILE_DELAY', 0)
     torch_profile_duration = env_to_int('LMDEPLOY_PROFILE_DURATION', -1)
     torch_profile_output_prefix = os.getenv('LMDEPLOY_PROFILE_OUT_PREFIX', 'lmdeploy_profile_')
+    torch_profile_use_gzip = env_to_bool('LMDEPLOY_PROFILE_USE_GZIP', True)
 
     # ray timeline
     ray_timeline_enable = env_to_bool('LMDEPLOY_RAY_TIMELINE_ENABLE', False)

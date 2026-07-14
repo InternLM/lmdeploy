@@ -17,9 +17,11 @@ export LMDEPLOY_PROFILE_DELAY=3
 export LMDEPLOY_PROFILE_DURATION=10
 # prefix path to save profile files
 export LMDEPLOY_PROFILE_OUT_PREFIX="/path/to/save/profile_"
+# save gzip-compressed traces by default; set to 0 for uncompressed JSON
+export LMDEPLOY_PROFILE_USE_GZIP=1
 ```
 
-After the program exits, the profiling data will be saved to the path specified by `LMDEPLOY_PROFILE_OUT_PREFIX` for performance analysis.
+After the program exits, the profiling data will be saved to the path specified by `LMDEPLOY_PROFILE_OUT_PREFIX` for performance analysis. Profile traces are gzip-compressed by default.
 
 ## Nsight System
 
