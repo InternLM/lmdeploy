@@ -71,6 +71,20 @@ def store_default_state_tile_direct(State: T.Buffer, h_local: T.Buffer, state_id
 
 
 @T.macro
+def round_state_tile_to_cache_dtype(h_local: T.Buffer, k_off, v_off, K: int, V: int, k_per_thr: int,
+                                    v_per_warp: int, state_dtype) -> None:
+    """Apply the same cache-dtype round-trip as storing and reloading state."""
+    for j in T.Unroll(k_per_thr):
+        if (k_off + j) < K:
+            for i in T.Unroll(v_per_warp):
+                v_idx = v_off + i
+                if v_idx < V:
+                    h_local[j, i] = T.cast(T.cast(h_local[j, i], state_dtype), T.float32)
+                else:
+                    h_local[j, i] = 0.0
+
+
+@T.macro
 def store_transposed_state_tile(State: T.Buffer, h_local: T.Buffer, state_id, state_update_id, hv_id, k_off, v_off,
                                 K: int, V: int, k_per_thr: int, v_per_warp: int) -> None:
     """Per-warp store for transposed State layout [V, K]."""
@@ -301,6 +315,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
     write_direct_circular_state = write_circular_state and not use_coalesced_circular_write
     write_coalesced_circular_state = write_circular_state and use_coalesced_circular_write
     write_final_state = output_final_state and not is_circular_buffer
+    roundtrip_state_between_tokens = state_dtype != torch.float32
 
     B = T.dynamic('B')
     N = B if not use_state_indices else T.dynamic('N')
@@ -397,13 +412,18 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                         if write_direct_circular_state:
                             store_default_state_tile_direct(State, h_local, state_id, state_update_id, hv_id, k_off,
                                                             v_off, K, V, k_per_thr, v_per_warp, state_vw)
-                            state_update_id = (state_update_id + 1) % NUM_STATE
 
                         o_local = T.alloc_local([v_per_warp], dtype)
                         compute_output_tile(q_local, h_local, o_local, k_per_thr, v_per_warp)
 
                         if lane_id == 0:
                             vec_store_output(Out, o_local, b_id, seq_id, hv_id, v_off, V, v_per_warp, data_vw)
+
+                        if roundtrip_state_between_tokens and write_direct_circular_state and seq_id < SEQLEN - 1:
+                            round_state_tile_to_cache_dtype(h_local, k_off, v_off, K, V, k_per_thr, v_per_warp,
+                                                            state_dtype)
+                        if write_direct_circular_state:
+                            state_update_id = (state_update_id + 1) % NUM_STATE
 
                         if write_coalesced_circular_state:
                             stage_state_tile_to_smem(h_smem, h_local, k_off, v_warp_off, K, k_per_thr, v_per_warp,
@@ -412,6 +432,9 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                 v_idx = v_start * v_per_cta + j
                                 if v_idx < V:
                                     State[state_id, state_update_id, hv_id, i, v_idx] = h_smem[i, j]
+                            if roundtrip_state_between_tokens and seq_id < SEQLEN - 1:
+                                load_state_tile_from_smem(h_smem, h_local, k_off, v_warp_off, K, k_per_thr,
+                                                          v_per_warp, state_vw)
                             state_update_id = (state_update_id + 1) % NUM_STATE
 
                         if write_final_state:
@@ -524,13 +547,18 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                         if write_circular_state:
                             store_transposed_state_tile(State, h_local, state_id, state_update_id, hv_id, k_off, v_off,
                                                         K, V, k_per_thr, v_per_warp)
-                            state_update_id = (state_update_id + 1) % NUM_STATE
 
                         o_local = T.alloc_local([v_per_warp], dtype)
                         compute_output_tile(q_local, h_local, o_local, k_per_thr, v_per_warp)
 
                         if lane_id == 0:
                             vec_store_output(Out, o_local, b_id, seq_id, hv_id, v_off, V, v_per_warp, data_vw)
+
+                        if roundtrip_state_between_tokens and write_circular_state and seq_id < SEQLEN - 1:
+                            round_state_tile_to_cache_dtype(h_local, k_off, v_off, K, V, k_per_thr, v_per_warp,
+                                                            state_dtype)
+                        if write_circular_state:
+                            state_update_id = (state_update_id + 1) % NUM_STATE
 
                     if write_final_state:
                         store_transposed_state_tile(State, h_local, state_id, state_update_id, hv_id, k_off, v_off, K,

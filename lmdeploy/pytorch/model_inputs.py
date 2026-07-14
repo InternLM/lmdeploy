@@ -330,6 +330,10 @@ class StepContext:
 
     # chunk with multimodal
     is_chunk_multimodal: bool = False
+    is_dummy: bool = False
+    is_chunk: bool = False
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
 
     @classmethod
     def new(
@@ -398,6 +402,10 @@ class StepContext:
             target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
             is_chunk_multimodal=inputs.is_chunk_multimodal,
+            is_dummy=inputs.is_dummy,
+            is_chunk=inputs.is_chunk,
+            is_first_chunk=inputs.is_first_chunk,
+            is_last_chunk=inputs.is_last_chunk,
         )
 
         ret = get_backend().update_step_context(ret)
