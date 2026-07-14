@@ -46,6 +46,7 @@ def apply_rotary_pos_emb_qk_kernel(
     stride_keh: tl.constexpr,
     stride_ked: tl.constexpr,
     half_size: tl.constexpr,
+    interleaved: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_QH: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -59,13 +60,21 @@ def apply_rotary_pos_emb_qk_kernel(
     pos_offset = tl.max_contiguous(tl.multiple_of(pos_offset % seq_len, BLOCK), BLOCK)
 
     feat_size = half_size * 2
-    feat_offset_l = tl.arange(0, BLOCK_N)
-    feat_mask = feat_offset_l < half_size
-    feat_offset_l = feat_offset_l % half_size
-    feat_offset_h = half_size + feat_offset_l
+    pair_offset = tl.arange(0, BLOCK_N)
+    feat_mask = pair_offset < half_size
+    pair_offset = pair_offset % half_size
+    if interleaved:
+        feat_offset_l = pair_offset * 2
+        feat_offset_h = feat_offset_l + 1
+    else:
+        feat_offset_l = pair_offset
+        feat_offset_h = half_size + pair_offset
     seq_mask = pos_mask[:, None] & feat_mask[None, :]
-    cs_offset_l = pos_offset[:, None] * feat_size + feat_offset_l[None, :]
-    cs_offset_h = pos_offset[:, None] * feat_size + feat_offset_h[None, :]
+    cs_offset_l = pos_offset[:, None] * feat_size + pair_offset[None, :]
+    if interleaved:
+        cs_offset_h = cs_offset_l
+    else:
+        cs_offset_h = pos_offset[:, None] * feat_size + feat_offset_h[None, :]
     q_elem_type = Q.dtype.element_ty
     cos_l = tl.load(COS + cs_offset_l).to(q_elem_type)
     cos_h = tl.load(COS + cs_offset_h).to(q_elem_type)
@@ -117,7 +126,8 @@ def apply_rotary_pos_emb(q: Tensor,
                          cos: Tensor,
                          sin: Tensor,
                          q_embed: Tensor = None,
-                         k_embed: Tensor = None):
+                         k_embed: Tensor = None,
+                         interleaved: bool = False):
     """Apply rotary positional embedding on query and key.
 
     Args:
@@ -127,6 +137,7 @@ def apply_rotary_pos_emb(q: Tensor,
         sin (Tensor): sine matrix (seq_len, dim).
         q_embed (Tensor): output q, can be same as q
         k_embed (Tensor): output k, can be same as k
+        interleaved (bool): whether rotary pairs use adjacent dimensions
 
     Returns:
         tuple[Tensor, Tensor]: Embedded query and key.
@@ -189,6 +200,7 @@ def apply_rotary_pos_emb(q: Tensor,
                                          stride_keh=k_embed.stride(-2),
                                          stride_ked=k_embed.stride(-1),
                                          half_size=half_size,
+                                         interleaved=interleaved,
                                          BLOCK=BLOCK,
                                          BLOCK_QH=num_heads_q,
                                          BLOCK_N=BLOCK_N,

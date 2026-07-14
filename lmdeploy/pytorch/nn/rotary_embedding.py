@@ -241,11 +241,11 @@ def build_rotary_embedding_from_config(config: PretrainedConfig, device: torch.d
 class ApplyRotaryEmb(nn.Module):
     """Apply rotary embedding."""
 
-    def __init__(self):
+    def __init__(self, interleaved: bool = False):
         super().__init__()
         backend = get_backend()
         builder = backend.get_layer_impl_builder(OpType.ApplyRotaryEmb)
-        self.impl = builder.build()
+        self.impl = builder.build(interleaved=interleaved)
 
     def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
         """forward."""

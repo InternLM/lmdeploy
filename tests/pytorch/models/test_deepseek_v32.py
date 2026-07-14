@@ -4,15 +4,14 @@ import pytest
 import torch
 from torch import nn
 
+from lmdeploy.pytorch.backends.default.apply_rotary_emb import DefaultApplyRotaryEmbImpl, rotate_interleaved
 from lmdeploy.pytorch.models.deepseek_v2 import DeepseekV2BMM, DeepseekV2MoE, MoEGate
 from lmdeploy.pytorch.models.deepseek_v32 import (
     DeepseekV32Attention,
     DeepseekV32ForCausalLM,
     DSATopKIndicesBuffer,
     Indexer,
-    apply_interleaved_rotary_pos_emb,
     get_layer_indexer_type,
-    rotate_interleaved,
 )
 
 
@@ -46,13 +45,14 @@ def _patch_minimal_attention(attn, monkeypatch, dp=1, attn_tp=1, seen=None):
     attn.o_proj = nn.Identity()
 
 
-def test_interleaved_rotary_uses_pairwise_layout_with_half_split_freqs():
+def test_default_interleaved_rotary_uses_pairwise_layout_with_half_split_freqs():
     query = torch.tensor([[[[1.0, 2.0, 3.0, 4.0]]]])
     key = torch.tensor([[[[5.0, 6.0, 7.0, 8.0]]]])
     cos = torch.tensor([[10.0, 20.0, 10.0, 20.0]])
     sin = torch.tensor([[1.0, 2.0, 1.0, 2.0]])
 
-    query_out, key_out = apply_interleaved_rotary_pos_emb(query, key, cos, sin)
+    rotary = DefaultApplyRotaryEmbImpl(interleaved=True)
+    query_out, key_out = rotary.forward(query, key, cos, sin, inplace=False)
 
     interleaved_cos = torch.tensor([[[10.0, 10.0, 20.0, 20.0]]])
     interleaved_sin = torch.tensor([[[1.0, 1.0, 2.0, 2.0]]])
@@ -64,7 +64,7 @@ def test_interleaved_rotary_uses_pairwise_layout_with_half_split_freqs():
 
 def test_indexer_rope_interleave_uses_interleaved_layout():
     indexer = Indexer.__new__(Indexer)
-    indexer.rope_interleave = True
+    indexer.apply_rotary_pos_emb = DefaultApplyRotaryEmbImpl(interleaved=True).forward
 
     query = torch.tensor([[[1.0, 2.0, 3.0, 4.0]]])
     key = torch.tensor([[5.0, 6.0, 7.0, 8.0]])
@@ -84,7 +84,6 @@ def test_indexer_rope_interleave_uses_interleaved_layout():
 
 def test_indexer_rope_interleave_can_fall_back_to_half_split_layout():
     indexer = Indexer.__new__(Indexer)
-    indexer.rope_interleave = False
     indexer.apply_rotary_pos_emb = lambda q, k, cos, sin, inplace=False: ('half-split', q, k, cos, sin, inplace)
 
     query = torch.zeros(1, 1, 4)

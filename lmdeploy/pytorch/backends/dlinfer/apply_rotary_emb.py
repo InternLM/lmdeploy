@@ -24,6 +24,9 @@ class DlinferApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
     """Apply rotary embedding implementation builder."""
 
     @staticmethod
-    def build():
+    def build(interleaved: bool = False):
         """Build implementation."""
+        if interleaved:
+            from ..default.apply_rotary_emb import DefaultApplyRotaryEmbImpl
+            return DefaultApplyRotaryEmbImpl(interleaved=True)
         return DlinferApplyRotaryEmbImpl()
