@@ -46,8 +46,17 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         end = max(0, self.num_valid_ids - 1)
         if 0 < end <= len(self.all_routed_experts):
             return self.all_routed_experts.get_real()[:end]
-        else:
+        return None
+
+    @property
+    def indexer_topk(self) -> np.ndarray:
+        if not self.return_indexer_topk:
             return None
+
+        end = max(0, self.num_valid_ids - 1)
+        if 0 < end <= len(self.all_indexer_topk):
+            return self.all_indexer_topk.get_real()[:end]
+        return None
 
     @property
     def generated_ids(self) -> np.ndarray:
@@ -67,7 +76,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self.history_cache.append(token_ids)
 
     def _update_token_ids_prefill(self, token_ids: np.ndarray, draft_token_ids: np.ndarray,
-                                  stop_pos: int = -1, routed_experts: np.ndarray = None):
+                                  stop_pos: int = -1, routed_experts: np.ndarray = None,
+                                  indexer_topk: np.ndarray = None):
         """Update token ids for prefill."""
         # back to last valid position
         self.history_cache.resize(self.num_valid_ids)
@@ -75,6 +85,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         num_valid = len(token_ids)
         self.history_cache.append(token_ids)
         self.append_routed_experts(routed_experts)
+        self.append_indexer_topk(indexer_topk)
         self._num_history_ids += self._num_token_ids
         self.num_new_tokens += num_valid
         self._num_valid_ids = self.num_history_ids + num_valid
@@ -85,7 +96,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             self.history_cache.append(draft_token_ids)
 
     def _update_token_ids_decode(self, token_ids: np.ndarray, draft_token_ids: np.ndarray,
-                                 stop_pos: int = -1, routed_experts: np.ndarray = None):
+                                 stop_pos: int = -1, routed_experts: np.ndarray = None,
+                                 indexer_topk: np.ndarray = None):
         """Update token ids for decode."""
         # back to last valid position
         self.history_cache.resize(self.num_valid_ids)
@@ -104,6 +116,9 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         if routed_experts is not None:
             routed_experts = routed_experts[:num_valid]
             self.append_routed_experts(routed_experts)
+        if indexer_topk is not None:
+            indexer_topk = indexer_topk[:num_valid]
+            self.append_indexer_topk(indexer_topk)
 
         if stop_pos > -1:
             self._num_token_ids = 1
@@ -120,6 +135,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
                          draft_token_ids: Tensor = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          routed_experts: np.ndarray = None,
+                         indexer_topk: np.ndarray = None,
                          stop_pos: int = -1,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""
@@ -142,10 +158,12 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             self._update_token_ids_inputs(token_ids)
         elif mode == UpdateTokenMode.PREFILL:
             self._update_token_ids_prefill(token_ids, draft_token_ids,
-                                           stop_pos=stop_pos, routed_experts=routed_experts)
+                                           stop_pos=stop_pos, routed_experts=routed_experts,
+                                           indexer_topk=indexer_topk)
         else:
             self._update_token_ids_decode(token_ids, draft_token_ids,
-                                          stop_pos=stop_pos, routed_experts=routed_experts)
+                                          stop_pos=stop_pos, routed_experts=routed_experts,
+                                          indexer_topk=indexer_topk)
         if model_meta is not None:
             self.model_meta = model_meta
 
@@ -171,6 +189,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             # chunk long context might not have all routed experts
             if len(self.all_routed_experts) > step:
                 self.all_routed_experts.resize(step)
+        if self.return_indexer_topk and len(self.all_indexer_topk) > step:
+            self.all_indexer_topk.resize(step)
 
     def cleanup(self):
         """Setup history meta after sequence stopped or cancelled."""
@@ -222,6 +242,10 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
         if batched_outputs.all_routed_experts is not None:
             all_routed_experts = batched_outputs.all_routed_experts.split(num_tokens, dim=0)
             all_routed_experts = [experts.numpy() for experts in all_routed_experts]
+        all_indexer_topk = [None] * len(num_tokens)
+        if batched_outputs.all_indexer_topk is not None:
+            all_indexer_topk = batched_outputs.all_indexer_topk.split(num_tokens, dim=0)
+            all_indexer_topk = [topk.numpy() for topk in all_indexer_topk]
 
         batch_size = len(running)
         next_token_ids = next_token_ids.view(batch_size, -1).numpy()
@@ -234,6 +258,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
 
         for idx, token in enumerate(next_token_ids):
             routed_experts = all_routed_experts[idx]
+            indexer_topk = all_indexer_topk[idx]
             msg = running[idx]
             stop = stopped[idx]
             model_meta = model_metas[idx]
@@ -246,6 +271,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                                  model_meta=model_meta,
                                  mode=update_mode,
                                  routed_experts=routed_experts,
+                                 indexer_topk=indexer_topk,
                                  stop_pos=stop_pos[idx])
             if stop:
                 msg.state.finish()

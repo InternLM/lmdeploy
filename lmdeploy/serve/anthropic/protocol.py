@@ -10,6 +10,7 @@ import shortuuid
 from pydantic import BaseModel, ConfigDict, Field
 
 RoutedExperts = list[list[list[int]]] | str | None
+IndexerTopK = list[list[list[int]]] | str | None
 MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
 
 
@@ -130,6 +131,10 @@ class MessagesRequest(BaseModel):
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
     )
+    return_indexer_topk: bool | None = Field(
+        default=False,
+        description=('Whether to return sparse-attention indexer top-k indices in the response.'),
+    )
     return_token_ids: bool | None = Field(
         default=False,
         description=('Whether to include output token IDs in the response.'),
@@ -194,6 +199,7 @@ class MessagesResponse(BaseModel):
     output_ids: list[int] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
     routed_experts: RoutedExperts = None
+    indexer_topk: IndexerTopK = None
 
 
 class StreamTextBlock(BaseModel):
@@ -312,6 +318,7 @@ class MessageDeltaEvent(BaseModel):
     delta: MessageDelta
     usage: MessageDeltaUsage
     routed_experts: RoutedExperts = None
+    indexer_topk: IndexerTopK = None
 
 
 class MessageStopEvent(BaseModel):

@@ -142,6 +142,7 @@ class SamplingParam:
     out_ce_loss: bool = False
     num_logprobs: int = -1
     return_routed_experts: bool = False
+    return_indexer_topk: bool = False
 
     # ngram
     repetition_ngram_size: int = 0
@@ -239,6 +240,7 @@ class SamplingParam:
             out_ce_loss=gen_config.return_ppl,
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
+            return_indexer_topk=gen_config.return_indexer_topk,
             repetition_ngram_size=repetition_ngram_size,
             repetition_ngram_threshold=repetition_ngram_threshold,
         )
@@ -589,6 +591,37 @@ class HistoryRouterExperts(_HistoryDataBase):
         return ((0, reserve_size), (0, 0), (0, 0))
 
 
+class HistoryIndexerTopK(_HistoryDataBase):
+    """History of sparse-attention indexer results."""
+    ALLOC_SIZE = 1
+
+    def __init__(self, indexer_topk: np.ndarray = None, dtype: np.dtype = np.int32):
+        super().__init__(indexer_topk, dtype)
+
+    def _create_empty_array(self, dtype):
+        return None
+
+    def _get_pad_width(self, reserve_size: int):
+        return ((0, reserve_size), (0, 0), (0, 0))
+
+    def append(self, new_data: np.ndarray, reserve_size: int | None = None):
+        """Append results, reserving the expected request length once."""
+        new_data = np.asarray(new_data)
+        if new_data.ndim != 3:
+            raise ValueError(f'indexer_topk must be a 3D array, got shape {new_data.shape}.')
+        if self._data is None:
+            capacity = len(new_data)
+            if reserve_size is not None:
+                capacity = max(capacity, reserve_size)
+            self._data = np.empty((capacity, *new_data.shape[1:]), dtype=self.dtype)
+        elif self._data.shape[1:] != new_data.shape[1:]:
+            raise ValueError(
+                f'indexer_topk shape changed from {self._data.shape[1:]} to {new_data.shape[1:]}.')
+        if reserve_size is not None:
+            self.reserve(reserve_size)
+        super().append(new_data)
+
+
 class HistoryLogits(_HistoryDataBase):
     """History logits."""
     ALLOC_SIZE = 64
@@ -737,6 +770,9 @@ class SchedulerSequence:
     # for router replay
     all_routed_experts: HistoryRouterExperts = field(default_factory=HistoryRouterExperts)
 
+    # exact sparse-attention indexer results
+    all_indexer_topk: HistoryIndexerTopK = field(default_factory=HistoryIndexerTopK)
+
     # logits
     all_logits: HistoryLogits = field(default_factory=HistoryLogits)
 
@@ -840,6 +876,30 @@ class SchedulerSequence:
         if isinstance(routed_experts, Tensor):
             routed_experts = routed_experts.cpu().numpy()
         self.all_routed_experts.append(routed_experts)
+
+    @property
+    def return_indexer_topk(self) -> bool:
+        return self.sampling_param.return_indexer_topk
+
+    @property
+    def indexer_topk(self) -> np.ndarray:
+        if not self.return_indexer_topk:
+            return None
+
+        end = max(0, self.num_valid_ids - 1)
+        if 0 < end <= len(self.all_indexer_topk):
+            return self.all_indexer_topk.get_real()[:end]
+        return None
+
+    def append_indexer_topk(self, indexer_topk: Tensor | np.ndarray):
+        """Append exact sparse-attention indexer results."""
+        if not self.return_indexer_topk or indexer_topk is None:
+            return
+        if isinstance(indexer_topk, Tensor):
+            indexer_topk = indexer_topk.cpu().numpy()
+        reserve_size = self.output_start_pos + self.sampling_param.max_new_tokens
+        reserve_size = max(reserve_size, len(self.all_indexer_topk) + len(indexer_topk))
+        self.all_indexer_topk.append(indexer_topk, reserve_size=reserve_size)
 
     @property
     def num_history_ids(self):

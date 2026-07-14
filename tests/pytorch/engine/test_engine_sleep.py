@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
-from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType
 from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.engine.engine_instance import EngineInstance
 from lmdeploy.pytorch.engine.executor.mp_executor import MPExecutor
@@ -205,3 +207,33 @@ def test_engine_instance_new_request_after_sleep_returns_cancel(event_loop):
     assert len(outputs) == 1
     assert outputs[0].status == ResponseType.CANCEL
     assert engine.req_manager._loop_task is None
+
+
+def test_engine_instance_transfers_trimmed_indexer_topk(monkeypatch):
+    import lmdeploy.pytorch.engine.engine_instance as engine_instance_module
+
+    transferred = []
+
+    class _Put:
+
+        def remote(self, data):
+            transferred.append(data.copy())
+            return f'key-{len(transferred)}'
+
+    store = SimpleNamespace(put=_Put())
+    monkeypatch.setattr(engine_instance_module, '_SHARED_STORE', store)
+    monkeypatch.setitem(sys.modules, 'ray', SimpleNamespace(get=lambda key: key))
+
+    instance = SimpleNamespace(_enable_transfer_obj_ref=True)
+    indexer_topk = np.arange(5 * 2 * 3, dtype=np.int32).reshape(5, 2, 3)
+    resp = Response(type=ResponseType.FINISH,
+                    sender_id=0,
+                    event=None,
+                    data=dict(token_ids=np.array([10, 11]), indexer_topk=indexer_topk))
+    gen_config = GenerationConfig(stop_token_ids=[11], include_stop_str_in_output=False)
+
+    outputs = EngineInstance._get_extra_outputs(instance, resp, num_all_ids=6, gen_config=gen_config)
+
+    assert outputs['indexer_topk'] == 'key-1'
+    assert transferred[0].shape == (4, 2, 3)
+    assert np.array_equal(transferred[0], indexer_topk[:-1])

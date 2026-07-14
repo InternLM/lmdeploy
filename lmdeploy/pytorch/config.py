@@ -572,6 +572,7 @@ class MiscConfig:
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
+    enable_return_indexer_topk: bool = False
     enable_chunked_prefill: bool = False
 
     @classmethod
@@ -592,6 +593,7 @@ class MiscConfig:
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
+            enable_return_indexer_topk=engine_config.enable_return_indexer_topk,
             enable_chunked_prefill=False,
         )
         return misc_config

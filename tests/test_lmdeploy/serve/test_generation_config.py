@@ -20,6 +20,8 @@ _DEFAULTS = GenerationConfig()
 
 class _FakeEngineConfig:
     logprobs_mode = None
+    enable_return_routed_experts = False
+    enable_return_indexer_topk = False
 
 
 class _FakeSessionManager:
@@ -85,6 +87,15 @@ def test_build_generation_config_from_merged_values():
     assert gen_config.top_k == 5
     assert gen_config.max_new_tokens == 32
     assert gen_config.do_sample is True
+
+
+def test_indexer_topk_request_flag_reaches_generation_config():
+    chat_request = ChatCompletionRequest(model='test', messages='hi', return_indexer_topk=True)
+    generate_request = GenerateReqInput(prompt='hi', return_indexer_topk=True)
+
+    assert build_generation_config(chat_request, {}).return_indexer_topk is True
+    assert build_generation_config(generate_request, {}).return_indexer_topk is True
+    assert 'indexer top-k requested' in check_generate_request(generate_request, _FakeServerContext())
 
 
 def test_build_generation_config_max_new_tokens_defaults_to_none():

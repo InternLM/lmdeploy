@@ -110,6 +110,7 @@ class SubCliServe:
         ArgumentHelper.dllm_denoising_steps(pt_group)
         ArgumentHelper.dllm_confidence_threshold(pt_group)
         ArgumentHelper.enable_return_routed_experts(pt_group)
+        ArgumentHelper.enable_return_indexer_topk(pt_group)
         ArgumentHelper.distributed_executor_backend(pt_group)
         ArgumentHelper.kernel_block_size(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
@@ -262,6 +263,7 @@ class SubCliServe:
                 dllm_denoising_steps=args.dllm_denoising_steps,
                 dllm_confidence_threshold=args.dllm_confidence_threshold,
                 enable_return_routed_experts=args.enable_return_routed_experts,
+                enable_return_indexer_topk=args.enable_return_indexer_topk,
                 distributed_executor_backend=args.distributed_executor_backend,
             )
         else:

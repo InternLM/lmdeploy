@@ -98,6 +98,7 @@ class BatchedOutputs:
     new_token_timestamp: int = 0
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
+    all_indexer_topk: torch.Tensor | None = None
     ce_loss: torch.Tensor | None = None
 
     def to_cpu(self):
@@ -679,6 +680,7 @@ class BaseModelAgent:
                                             return_ce_loss: bool = False,
                                             seq_length: torch.Tensor = None,
                                             all_routed_experts: Any = None,
+                                            all_indexer_topk: Any = None,
                                             extra_inputs: ExtraInputs = None):
         """Step postprocess with output."""
         rank = self.rank
@@ -728,6 +730,7 @@ class BaseModelAgent:
                            model_metas=model_metas,
                            logprobs=logprobs,
                            all_routed_experts=all_routed_experts,
+                           all_indexer_topk=all_indexer_topk,
                            extra_outputs=extra_outputs,
                            ce_loss=ce_loss))
 
@@ -776,6 +779,7 @@ class BaseModelAgent:
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
         return_routed_experts: bool = False,
+        return_indexer_topk: bool = False,
         return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
     ):
@@ -859,6 +863,10 @@ class BaseModelAgent:
                 all_routed_experts = output.get('all_routed_experts', None)
             else:
                 all_routed_experts = None
+            if return_indexer_topk:
+                all_indexer_topk = output.get('all_indexer_topk', None)
+            else:
+                all_indexer_topk = None
 
             (
                 inputs,
@@ -879,6 +887,7 @@ class BaseModelAgent:
                     return_ce_loss=return_ce_loss,
                     seq_length=seq_length,
                     all_routed_experts=all_routed_experts,
+                    all_indexer_topk=all_indexer_topk,
                     extra_inputs=extra_inputs,
                 ))
         else:
@@ -1110,11 +1119,13 @@ class BaseModelAgent:
         logger.debug(msg_with_rank(rank, 'build model.'))
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
+        enable_return_indexer_topk = self.misc_config.enable_return_indexer_topk and self.need_output
 
         build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
                                             dllm_config=self.misc_config.dllm_config,
                                             strategy_factory=self.strategy_factory,
                                             enable_return_routed_experts=enable_return_routed_experts,
+                                            enable_return_indexer_topk=enable_return_indexer_topk,
                                             quant_config=self.model_config.quant_config,
                                             fp32_lm_head=self.model_config.fp32_lm_head,
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,

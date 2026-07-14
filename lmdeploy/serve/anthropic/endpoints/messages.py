@@ -58,6 +58,12 @@ def _validate_extended_outputs(request: MessagesRequest, server_context):
             ('routed experts requested but not configured in engine configuration. '
              'May start the api_server with --enable-return-routed-experts flag.'))
 
+    if request.return_indexer_topk and not engine_config.enable_return_indexer_topk:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            ('indexer top-k requested but not configured in engine configuration. '
+             'May start the api_server with --enable-return-indexer-topk flag.'))
+
     return None
 
 
@@ -200,6 +206,7 @@ def register(router: APIRouter, server_context) -> None:
                         response_parser=response_parser,
                         return_token_ids=request.return_token_ids or False,
                         return_routed_experts=request.return_routed_experts or False,
+                        return_indexer_topk=request.return_indexer_topk or False,
                         logprobs=request.return_logprob or False,
                     ),
                     [result_generator],
@@ -238,7 +245,7 @@ def register(router: APIRouter, server_context) -> None:
             return create_error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
         should_validate_complete = (
             final_res.finish_reason in ('stop', 'length')
-            and (request.return_token_ids or request.return_routed_experts)
+            and (request.return_token_ids or request.return_routed_experts or request.return_indexer_topk)
         )
         if should_validate_complete and not response_parser.validate_complete(raw_text):
             final_res.finish_reason = 'parse_error'
@@ -269,5 +276,6 @@ def register(router: APIRouter, server_context) -> None:
             output_ids=final_token_ids if request.return_token_ids else None,
             output_token_logprobs=output_token_logprobs,
             routed_experts=final_res.routed_experts if request.return_routed_experts else None,
+            indexer_topk=final_res.indexer_topk if request.return_indexer_topk else None,
         )
         return response.model_dump()

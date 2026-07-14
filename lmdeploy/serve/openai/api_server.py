@@ -555,6 +555,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                     logprobs: ChoiceLogprobs | None = None,
                                     output_token_logprobs: list[tuple[float, int]] | None = None,
                                     routed_experts=None,
+                                    indexer_topk=None,
                                     output_ids=None) -> dict:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
@@ -562,7 +563,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                          logprobs=logprobs,
                                                          output_token_logprobs=output_token_logprobs,
                                                          output_ids=output_ids,
-                                                         routed_experts=routed_experts)
+                                                         routed_experts=routed_experts,
+                                                         indexer_topk=indexer_topk)
         choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
         response = ChatCompletionStreamResponse(
             id=request_id,
@@ -616,7 +618,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
             should_validate_complete = (
                 res.finish_reason in ('stop', 'length')
-                and (request.return_token_ids or request.return_routed_experts)
+                and (request.return_token_ids or request.return_routed_experts or request.return_indexer_topk)
             )
             if should_validate_complete and not response_parser.validate_complete():
                 res.finish_reason = 'parse_error'
@@ -638,6 +640,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
                 # Only output routed_experts in the final chunk
                 routed_experts = res.routed_experts if finish_reason is not None else None
+                indexer_topk = res.indexer_topk if finish_reason is not None else None
                 # Emit token ids once per engine yield on the last parsed delta, when
                 # accumulated delta text and token ids for this step are aligned.
                 stream_output_ids = delta_token_ids if (request.return_token_ids and is_last_delta) else None
@@ -648,6 +651,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                             logprobs=chunk_logprobs,
                                                             output_token_logprobs=chunk_output_token_logprobs,
                                                             routed_experts=routed_experts,
+                                                            indexer_topk=indexer_topk,
                                                             output_ids=stream_output_ids)
                 if res.cache_block_ids is not None and is_last_delta:
                     response_json['cache_block_ids'] = res.cache_block_ids
@@ -692,7 +696,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
         should_validate_complete = (
             final_res.finish_reason in ('stop', 'length')
-            and (request.return_token_ids or request.return_routed_experts)
+            and (request.return_token_ids or request.return_routed_experts or request.return_indexer_topk)
         )
         if should_validate_complete and not response_parser.validate_complete(raw_text):
             final_res.finish_reason = 'parse_error'
@@ -726,6 +730,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         finish_reason=final_res.finish_reason,
         output_ids=final_token_ids if request.return_token_ids else None,
         routed_experts=final_res.routed_experts if request.return_routed_experts else None,
+        indexer_topk=final_res.indexer_topk if request.return_indexer_topk else None,
     )
     choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
     choices.append(choice_data)
@@ -1024,16 +1029,24 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
-    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
+    def create_generate_response_json(res,
+                                      text,
+                                      output_ids,
+                                      logprobs,
+                                      finish_reason,
+                                      routed_experts=None,
+                                      indexer_topk=None):
         # only output router experts in last chunk
         routed_experts = None if finish_reason is None else routed_experts
+        indexer_topk = None if finish_reason is None else indexer_topk
         meta = GenerateReqMetaOutput(finish_reason=dict(type=finish_reason) if finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      routed_experts=routed_experts,
+                                     indexer_topk=indexer_topk,
                                      completion_tokens=res.generate_token_len)
 
-        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta, routed_experts=routed_experts)
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
         return response.model_dump_json()
 
     async def generate_stream_generator():
@@ -1041,6 +1054,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
             text = res.response or ''
             output_ids = res.token_ids
             routed_experts = res.routed_experts
+            indexer_topk = res.indexer_topk
             logprobs = []
             if res.logprobs:
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
@@ -1050,7 +1064,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                                           output_ids,
                                                           logprobs,
                                                           res.finish_reason,
-                                                          routed_experts=routed_experts)
+                                                          routed_experts=routed_experts,
+                                                          indexer_topk=indexer_topk)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -1084,6 +1099,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                      output_token_logprobs=output_token_logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      routed_experts=res.routed_experts,
+                                     indexer_topk=res.indexer_topk,
                                      completion_tokens=res.generate_token_len)
         response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
@@ -1609,6 +1625,11 @@ def serve(model_path: str,
         backend_config.enable_mp_engine = True
         # router replay
         if backend_config.enable_return_routed_experts:
+            backend_config.enable_transfer_obj_ref = True
+        if backend_config.enable_return_indexer_topk:
+            if backend_config.distributed_executor_backend != 'ray':
+                raise ValueError('--enable-return-indexer-topk requires '
+                                 '--distributed-executor-backend ray for HTTP serving.')
             backend_config.enable_transfer_obj_ref = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
                                                     model_name=model_name,

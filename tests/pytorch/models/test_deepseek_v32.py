@@ -4,9 +4,10 @@ import pytest
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.models.deepseek_v2 import DeepseekV2BMM
+from lmdeploy.pytorch.models.deepseek_v2 import DeepseekV2BMM, DeepseekV2MoE, MoEGate
 from lmdeploy.pytorch.models.deepseek_v32 import (
     DeepseekV32Attention,
+    DeepseekV32ForCausalLM,
     DSATopKIndicesBuffer,
     Indexer,
     apply_interleaved_rotary_pos_emb,
@@ -113,17 +114,21 @@ def test_full_indexer_layer_writes_shared_topk_buffer(monkeypatch):
 
     attn.attn_fwd = fake_attn_fwd
     topk_buffer = DSATopKIndicesBuffer(topk=3)
+    all_indexer_topk = torch.full((2, 4, 3), -1, dtype=torch.int32)
 
     output = attn(
         hidden_states=torch.zeros(1, 2, 2),
         rotary_pos_emb=(torch.zeros(2, 1), torch.zeros(2, 1)),
         past_key_value=[torch.zeros(1, 1, 2), torch.zeros(1, 1, 1)],
         topk_indices_buffer=topk_buffer,
+        all_indexer_topk=all_indexer_topk,
     )
 
     assert output.shape == (1, 2, 1)
     assert torch.equal(topk_buffer.indices[:2], computed_topk)
     assert seen['nsa_indices'].data_ptr() == topk_buffer.indices[:2].data_ptr()
+    assert torch.equal(all_indexer_topk[:, 0], computed_topk)
+    assert torch.all(all_indexer_topk[:, 1:] == -1)
 
 
 @pytest.mark.parametrize('dp,attn_tp,expected_num_heads', [(1, 2, 2), (2, 2, 4)])
@@ -179,17 +184,22 @@ def test_shared_indexer_layer_reuses_shared_topk_buffer(monkeypatch):
 
     attn.attn_fwd = fake_attn_fwd
     topk_buffer = DSATopKIndicesBuffer(topk=3)
-    topk_buffer.write(torch.tensor([[5, 4, 3]], dtype=torch.int32))
+    shared_topk = torch.tensor([[5, 4, 3]], dtype=torch.int32)
+    topk_buffer.write(shared_topk)
+    all_indexer_topk = torch.full((1, 4, 3), -1, dtype=torch.int32)
 
     output = attn(
         hidden_states=torch.zeros(1, 1, 2),
         rotary_pos_emb=(torch.zeros(1, 1), torch.zeros(1, 1)),
         past_key_value=[torch.zeros(1, 1, 2), torch.zeros(1, 1, 1)],
         topk_indices_buffer=topk_buffer,
+        all_indexer_topk=all_indexer_topk,
     )
 
     assert output.shape == (1, 1, 1)
     assert seen['nsa_indices'].data_ptr() == topk_buffer.indices[:1].data_ptr()
+    assert torch.equal(all_indexer_topk[:, 3], shared_topk)
+    assert torch.all(all_indexer_topk[:, :3] == -1)
 
 
 def test_shared_indexer_layer_requires_shared_topk_buffer(monkeypatch):
@@ -229,3 +239,106 @@ def test_layer_indexer_type_defaults_to_full_and_reads_shared_entries():
     assert get_layer_indexer_type(config, 1) == 'shared'
     assert get_layer_indexer_type(config, 2) == 'full'
     assert get_layer_indexer_type(SimpleNamespace(indexer_types=None), 1) == 'full'
+
+
+def test_moe_gate_captures_logical_experts_before_eplb_mapping(monkeypatch):
+    class FakeTopK(nn.Module):
+
+        def forward(self, logits):
+            logical_ids = torch.tensor([[3, 1], [2, 0]], device=logits.device)
+            return torch.ones_like(logical_ids, dtype=torch.float32), logical_ids
+
+    gate = MoEGate.__new__(MoEGate)
+    nn.Module.__init__(gate)
+    gate.weight = nn.Parameter(torch.zeros(4, 2))
+    gate.fake_eplb = False
+    gate.topk_method = 'greedy'
+    gate.renormalize = False
+    gate.routed_scaling_factor = 1.0
+    gate.softmax_topk = FakeTopK()
+    gate.eplb_dispatch_info = object()
+    monkeypatch.setattr(
+        'lmdeploy.pytorch.models.deepseek_v2.EPLBManager.topk_ids_logical_to_physical',
+        lambda ids, info: ids + 10,
+    )
+    captured = torch.full((2, 2), torch.iinfo(torch.uint16).max, dtype=torch.uint16)
+
+    _, dispatch_ids = gate(torch.zeros(2, 2), routed_experts=captured)
+
+    expected = torch.tensor([[3, 1], [2, 0]])
+    assert torch.equal(captured, expected.to(torch.uint16))
+    assert torch.equal(dispatch_ids, expected + 10)
+
+
+def test_deepseek_moe_writes_only_its_routed_expert_layer():
+    class FakeGate(nn.Module):
+
+        def forward(self, hidden_states, routed_experts=None):
+            ids = torch.tensor([[3, 1], [2, 0]], device=hidden_states.device)
+            if routed_experts is not None:
+                routed_experts.copy_(ids)
+            return torch.ones_like(ids, dtype=torch.float32), ids
+
+    class FakeExperts(nn.Module):
+
+        def forward(self, hidden_states, topk_weights, topk_ids):
+            return hidden_states
+
+    moe = DeepseekV2MoE.__new__(DeepseekV2MoE)
+    nn.Module.__init__(moe)
+    moe.layer_idx = 3
+    moe.hidden_dim = 2
+    moe.gate = FakeGate()
+    moe.experts = FakeExperts()
+    moe.shared_experts = None
+    moe._all_reduce = False
+    sentinel = torch.iinfo(torch.uint16).max
+    all_routed_experts = torch.full((2, 5, 2), sentinel, dtype=torch.uint16)
+
+    output = moe(torch.zeros(1, 2, 2), all_routed_experts=all_routed_experts)
+
+    assert output.shape == (1, 2, 2)
+    assert torch.equal(all_routed_experts[:, 3], torch.tensor([[3, 1], [2, 0]], dtype=torch.uint16))
+    assert torch.all(all_routed_experts[:, :3] == sentinel)
+    assert torch.all(all_routed_experts[:, 4] == sentinel)
+
+
+def test_glm52_causal_lm_returns_routed_experts_and_indexer_topk(monkeypatch):
+    class FakeModel(nn.Module):
+
+        def forward(self, input_ids, all_routed_experts=None, all_indexer_topk=None, **kwargs):
+            if all_routed_experts is not None:
+                all_routed_experts[:, 3].fill_(7)
+                all_routed_experts[:, 4].fill_(9)
+            if all_indexer_topk is not None:
+                all_indexer_topk.fill_(5)
+            return torch.zeros(1, input_ids.size(1), 4)
+
+        forward_microbatch = forward
+
+    context = SimpleNamespace(enable_microbatch=False)
+    monkeypatch.setattr(
+        'lmdeploy.pytorch.models.deepseek_v32.get_step_ctx_manager',
+        lambda: SimpleNamespace(current_context=lambda: context),
+    )
+    model = DeepseekV32ForCausalLM.__new__(DeepseekV32ForCausalLM)
+    nn.Module.__init__(model)
+    model.config = SimpleNamespace(num_hidden_layers=5, num_experts_per_tok=8, index_topk=3)
+    model.enable_return_routed_experts = True
+    model.enable_return_indexer_topk = True
+    model.model = FakeModel()
+
+    outputs = model(
+        input_ids=torch.ones(1, 2, dtype=torch.long),
+        position_ids=torch.arange(2)[None],
+        past_key_values=[],
+    )
+
+    routed_experts = outputs['all_routed_experts']
+    assert routed_experts.dtype == torch.uint16
+    assert routed_experts.shape == (2, 5, 8)
+    assert torch.all(routed_experts[:, :3] == torch.iinfo(torch.uint16).max)
+    assert torch.all(routed_experts[:, 3] == 7)
+    assert torch.all(routed_experts[:, 4] == 9)
+    assert outputs['all_indexer_topk'].shape == (2, 5, 3)
+    assert torch.all(outputs['all_indexer_topk'] == 5)

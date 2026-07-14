@@ -31,6 +31,7 @@ from .deepseek_v2 import (
     DeepseekV2MoE,
     yarn_get_mscale,
 )
+from .patch import get_build_model_context
 
 
 def get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
@@ -383,6 +384,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         past_key_value: Sequence[torch.Tensor] = None,
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        all_indexer_topk: torch.Tensor | None = None,
     ):
         """Rewrite of LlamaAttention.forward."""
         dist_config = get_dist_manager().current_config()
@@ -419,6 +421,9 @@ class DeepseekV32Attention(DeepseekV2Attention):
                                         attn_metadata=attn_metadata)
             if topk_indices_buffer is not None:
                 topk_indices = topk_indices_buffer.write(topk_indices)
+
+        if all_indexer_topk is not None:
+            all_indexer_topk[:, self.layer_idx, :].copy_(topk_indices)
 
         attn_output = self.attn_fwd(
             query_states,
@@ -481,6 +486,8 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        all_routed_experts: torch.Tensor | None = None,
+        all_indexer_topk: torch.Tensor | None = None,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
 
         if residual is None:
@@ -496,6 +503,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
                 past_key_value=past_key_value,
                 attn_metadata=attn_metadata,
                 topk_indices_buffer=topk_indices_buffer,
+                all_indexer_topk=all_indexer_topk,
             )
         else:
             hidden_states = self.self_attn(
@@ -506,7 +514,10 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
             )
 
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
+        if isinstance(self.mlp, DeepseekV2MoE):
+            hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
+        else:
+            hidden_states = self.mlp(hidden_states)
 
         return hidden_states, residual
 
@@ -557,6 +568,8 @@ class DeepseekV32Model(DeepseekV2Model):
         past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
         inputs_embeds: torch.FloatTensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
+        all_indexer_topk: torch.Tensor | None = None,
     ):
         """forward."""
         if inputs_embeds is None:
@@ -576,6 +589,8 @@ class DeepseekV32Model(DeepseekV2Model):
                 residual=residual,
                 attn_metadata=attn_metadata,
                 topk_indices_buffer=self.topk_indices_buffer,
+                all_routed_experts=all_routed_experts,
+                all_indexer_topk=all_indexer_topk,
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -589,6 +604,8 @@ class DeepseekV32Model(DeepseekV2Model):
         past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
         inputs_embeds: torch.FloatTensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
+        all_indexer_topk: torch.Tensor | None = None,
     ):
         """forward_microbatch."""
         # DSA shared top-k indices are model-global; use normal forward until
@@ -599,6 +616,8 @@ class DeepseekV32Model(DeepseekV2Model):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
+            all_indexer_topk=all_indexer_topk,
         )
 
 
@@ -622,6 +641,52 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
+        bm_ctx = get_build_model_context()
+        self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+        self.enable_return_indexer_topk = bm_ctx.enable_return_indexer_topk
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """Model forward with optional exact DSA indexer capture."""
+        step_ctx = get_step_ctx_manager().current_context()
+        num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            all_routed_experts = position_ids.new_full(
+                (num_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok),
+                torch.iinfo(torch.uint16).max,
+                dtype=torch.uint16,
+            )
+        all_indexer_topk = None
+        if self.enable_return_indexer_topk:
+            all_indexer_topk = position_ids.new_empty(
+                (num_tokens, self.config.num_hidden_layers, self.config.index_topk), dtype=torch.int32)
+
+        forward = self.model.forward_microbatch if step_ctx.enable_microbatch else self.model.forward
+        hidden_states = forward(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
+            all_indexer_topk=all_indexer_topk,
+        )
+        if all_routed_experts is None and all_indexer_topk is None:
+            return hidden_states
+        outputs = dict(hidden_states=hidden_states)
+        if all_routed_experts is not None:
+            outputs['all_routed_experts'] = all_routed_experts
+        if all_indexer_topk is not None:
+            outputs['all_indexer_topk'] = all_indexer_topk
+        return outputs
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):

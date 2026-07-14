@@ -356,4 +356,6 @@ class CudaGraphMixin:
         outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
         if output_buffers.get('all_routed_experts', None) is not None:
             outputs['all_routed_experts'] = output_buffers['all_routed_experts'][:num_tokens, ...].clone()
+        if output_buffers.get('all_indexer_topk', None) is not None:
+            outputs['all_indexer_topk'] = output_buffers['all_indexer_topk'][:num_tokens, ...].clone()
         return outputs

@@ -820,6 +820,10 @@ class InputsMakerAsync:
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
 
+        def __need_indexer_topk(seqs: 'SeqList'):
+            """Need sparse-attention indexer top-k results."""
+            return any(getattr(seq, 'return_indexer_topk', False) for seq in seqs)
+
         def __need_ce_loss(seqs: 'SeqList'):
             """Need input cross-entropy loss."""
             return any(seq.return_ce_loss for seq in seqs)
@@ -1086,6 +1090,7 @@ class InputsMakerAsync:
 
         return_logits = __need_logits(running)
         return_routed_experts = __need_routed_experts(running)
+        return_indexer_topk = __need_indexer_topk(running)
         return_ce_loss = __need_ce_loss(running)
 
         return dict(
@@ -1099,6 +1104,7 @@ class InputsMakerAsync:
             return_logits=return_logits,
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
+            return_indexer_topk=return_indexer_topk,
             return_ce_loss=return_ce_loss,
         )
 

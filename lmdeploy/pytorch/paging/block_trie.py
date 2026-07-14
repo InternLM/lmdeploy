@@ -133,6 +133,7 @@ class Node:
                  state_ref_count: int = 0,
                  state_access_time: float = 0.0,
                  routed_experts: np.ndarray = None,
+                 indexer_topk: np.ndarray = None,
                  adapter_name: str = None):
         self.hash_key = hash_key
         self.block = block
@@ -144,6 +145,7 @@ class Node:
         self.state_ref_count = state_ref_count
         self.state_access_time = state_access_time
         self.routed_experts = routed_experts
+        self.indexer_topk = indexer_topk
         self.adapter_name = adapter_name
         self.children: dict[int, Node] = dict()
         self._parent: Node = None
@@ -358,6 +360,56 @@ class BlockTrie:
             return
         for seq in seqs:
             self.cache_routed_experts_for_seq(seq)
+
+    @staticmethod
+    def _get_indexer_topk_for_range(seq: SchedulerSequence, start: int, end: int):
+        """Get a copy of indexer results for a full token range, if present."""
+        if not seq.return_indexer_topk:
+            return None
+        all_indexer_topk = seq.all_indexer_topk
+        if len(all_indexer_topk) < seq.num_history_ids or len(all_indexer_topk) < end:
+            return None
+        indexer_topk = all_indexer_topk.get_real()
+        if indexer_topk is None or len(indexer_topk) < end:
+            return None
+        return indexer_topk[start:end].copy()
+
+    def _try_cache_node_indexer_topk(self, node: Node, seq: SchedulerSequence, start: int, end: int):
+        """Attach indexer results to a trie node when a sequence has them."""
+        if node.indexer_topk is not None:
+            return
+        indexer_topk = self._get_indexer_topk_for_range(seq, start, end)
+        if indexer_topk is not None and len(indexer_topk) == end - start:
+            node.indexer_topk = indexer_topk
+
+    def _append_matched_indexer_topk(self, seq: SchedulerSequence, nodes: list[Node], start: int):
+        """Replay cached indexer results for a matched trie range."""
+        if not seq.return_indexer_topk or len(nodes) == 0:
+            return
+        if len(seq.all_indexer_topk) != start:
+            return
+        if any(node.indexer_topk is None or len(node.indexer_topk) != self.block_size for node in nodes):
+            return
+        for node in nodes:
+            seq.append_indexer_topk(node.indexer_topk)
+
+    def cache_indexer_topk_for_seq(self, seq: SchedulerSequence):
+        """Enrich attached trie nodes with sparse-attention indexer results."""
+        if not self.enable or not seq.return_indexer_topk:
+            return
+        node = seq.prefix_cache.last_shared_node
+        while node is not None and node.parent is not None:
+            end = node.num_matched
+            start = end - self.block_size
+            self._try_cache_node_indexer_topk(node, seq, start, end)
+            node = node.parent
+
+    def cache_indexer_topk(self, seqs: list[SchedulerSequence]):
+        """Enrich trie nodes with indexer results from multiple sequences."""
+        if not self.enable:
+            return
+        for seq in seqs:
+            self.cache_indexer_topk_for_seq(seq)
 
     def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int) -> StateCheckpointKey:
         """Make the sparse SSM checkpoint lookup key for a sequence prefix.
@@ -980,6 +1032,12 @@ class BlockTrie:
             if not self._match_node(block_node, tokens, extra_hashes):
                 return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
                                                    reason=f'block payload mismatch at block {idx}')
+            if seq.return_routed_experts and block_node.routed_experts is None:
+                return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
+                                                   reason=f'routed experts missing at block {idx}')
+            if seq.return_indexer_topk and block_node.indexer_topk is None:
+                return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
+                                                   reason=f'indexer results missing at block {idx}')
             matched_blocks.append(block_node.block)
 
         return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.HIT,
@@ -1039,6 +1097,7 @@ class BlockTrie:
                 seq.logical_blocks.append(matched_blocks)
                 seq.set_step(step)
                 self._append_matched_routed_experts(seq, matched_nodes, init_num_matched)
+                self._append_matched_indexer_topk(seq, matched_nodes, init_num_matched)
                 seq.prefix_cache.restore_state = node.state_idx
                 seq.prefix_cache.restore_node = node
                 seq.prefix_cache.last_shared_node = node
@@ -1108,6 +1167,10 @@ class BlockTrie:
             child = curr.children[key]
             if not self._match_node(child, curr_tokens, extra_hashes):
                 break
+            if seq.return_routed_experts and child.routed_experts is None:
+                break
+            if seq.return_indexer_topk and child.indexer_topk is None:
+                break
 
             matched_nodes.append(child)
             __match_success(child)
@@ -1130,8 +1193,9 @@ class BlockTrie:
                 num_matched = init_num_matched
 
         max_match_step = seq.get_prefix_cache_max_match_step()
-        raw_num_matched = num_matched
-        effective_num_matched = seq.clamp_prefix_cache_match_step(min(raw_num_matched, max_match_step))
+        candidate_num_matched = num_matched
+        raw_num_matched = self._find_raw_block_match_step(seq, init_curr)
+        effective_num_matched = seq.clamp_prefix_cache_match_step(min(candidate_num_matched, max_match_step))
         __clamp_match_step(effective_num_matched)
         self._set_private_recompute_range(seq, num_matched, raw_num_matched)
 
@@ -1142,6 +1206,7 @@ class BlockTrie:
             seq.logical_blocks.append(matched_blocks)
             seq.set_step(num_matched)
             self._append_matched_routed_experts(seq, matched_nodes, init_num_matched)
+            self._append_matched_indexer_topk(seq, matched_nodes, init_num_matched)
             if self.requires_state_checkpoint:
                 seq.prefix_cache.restore_state = curr.state_idx
 
@@ -1211,18 +1276,21 @@ class BlockTrie:
                 # trie-owned block and release this sequence's duplicate block.
                 node = child
                 self._try_cache_node_routed_experts(node, seq, start, end)
+                self._try_cache_node_indexer_topk(node, seq, start, end)
                 if block != node.block:
                     free_blocks.append(block)
                     logical_blocks[block_id] = node.block
                     blocks.append(node.block)
             else:
                 routed_experts = self._get_routed_experts_for_range(seq, start, end)
+                indexer_topk = self._get_indexer_topk_for_range(seq, start, end)
                 node = Node(hash_key=hash_key,
                             block=block,
                             tokens=curr_tokens,
                             num_matched=num_matched + block_size,
                             extra_hashes=extra_hashes,
                             routed_experts=routed_experts,
+                            indexer_topk=indexer_topk,
                             adapter_name=seq.adapter_name)
                 node.parent = parent
                 blocks.append(node.block)

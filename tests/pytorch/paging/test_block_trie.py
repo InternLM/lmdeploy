@@ -110,6 +110,10 @@ class TestBlockTire:
         values = np.arange(offset, offset + num_tokens * 2, dtype=np.uint16)
         return values.reshape(num_tokens, 2, 1)
 
+    def _indexer_topk(self, num_tokens: int, offset: int = 0):
+        values = np.arange(offset, offset + num_tokens * 6, dtype=np.int32)
+        return values.reshape(num_tokens, 2, 3)
+
     def _add_ready_ssm_checkpoint(self, scheduler, token_ids):
         seq = scheduler.add_session(len(scheduler.sessions)).add_sequence(token_ids)
         scheduler.block_manager.allocate(seq)
@@ -446,6 +450,46 @@ class TestBlockTire:
         assert matched.num_history_ids == block_size * 2
         assert len(matched.all_routed_experts) == 0
 
+    def test_match_replays_cached_indexer_topk(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        sampling_param = SamplingParam(return_indexer_topk=True)
+        seq = sess.add_sequence(token_ids, sampling_param=sampling_param)
+        indexer_topk = self._indexer_topk(block_size * 2)
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        seq.append_indexer_topk(indexer_topk)
+        block_trie.cache_indexer_topk_for_seq(seq)
+
+        matched = sess.add_sequence(token_ids, sampling_param=sampling_param)
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == block_size * 2
+        assert np.array_equal(matched.all_indexer_topk.get_real(), indexer_topk)
+
+    def test_match_stops_before_block_missing_indexer_topk(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        sampling_param = SamplingParam(return_indexer_topk=True)
+        seq = sess.add_sequence(token_ids, sampling_param=sampling_param)
+        first_block_topk = self._indexer_topk(block_size)
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        seq.append_indexer_topk(first_block_topk)
+        block_trie.cache_indexer_topk_for_seq(seq)
+
+        matched = sess.add_sequence(token_ids, sampling_param=sampling_param)
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == block_size
+        assert np.array_equal(matched.all_indexer_topk.get_real(), first_block_topk)
+        assert matched.prefix_cache.private_recompute_start_step == block_size
+        assert matched.prefix_cache.private_recompute_end_step == block_size * 2
+
     def test_existing_node_can_be_enriched_with_routed_experts(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
@@ -469,7 +513,7 @@ class TestBlockTire:
         block_trie.match(matched)
         assert np.array_equal(matched.all_routed_experts.get_real(), experts)
 
-    def test_match_does_not_partially_replay_routed_experts(self, block_trie, block_mgr, scheduler):
+    def test_match_stops_before_block_missing_routed_experts(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
         token_ids = [1] * block_size + [2] * block_size + [3]
@@ -483,8 +527,10 @@ class TestBlockTire:
         matched = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
         block_trie.match(matched)
 
-        assert matched.num_history_ids == block_size * 2
-        assert len(matched.all_routed_experts) == 0
+        assert matched.num_history_ids == block_size
+        assert np.array_equal(matched.all_routed_experts.get_real(), self._routed_experts(block_size))
+        assert matched.prefix_cache.private_recompute_start_step == block_size
+        assert matched.prefix_cache.private_recompute_end_step == block_size * 2
 
     def test_missing_replay_does_not_enrich_from_misaligned_tail(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
@@ -501,7 +547,7 @@ class TestBlockTire:
         matched = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
         block_trie.match(matched)
 
-        assert matched.num_history_ids == block_size * 2
+        assert matched.num_history_ids == 0
         assert len(matched.all_routed_experts) == 0
 
         matched.append_routed_experts(self._routed_experts(1, offset=1000))

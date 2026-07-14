@@ -54,6 +54,7 @@ class GenOut:
     last_hidden_state: Any = None
     cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
+    indexer_topk: Any = None  # for sparse-attention indexer replay
     cached_tokens: int = 0
 
     def to_response(self, index: int = 0) -> Response:
@@ -71,6 +72,7 @@ class GenOut:
                         last_hidden_state=self.last_hidden_state,
                         logits=self.logits,
                         routed_experts=self.routed_experts,
+                        indexer_topk=self.indexer_topk,
                         cached_tokens=self.cached_tokens,
                         index=index)
 
@@ -708,6 +710,7 @@ class AsyncEngine:
                                  finish_reason,
                                  token_ids=res,
                                  routed_experts=outputs.routed_experts,
+                                 indexer_topk=outputs.indexer_topk,
                                  cache_block_ids=outputs.cache_block_ids,
                                  cached_tokens=cached_tokens)
                     if outputs.logprobs is not None:
@@ -748,6 +751,10 @@ class AsyncEngine:
                     if routed_experts is not None and not isinstance(routed_experts, str) and (
                             not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
                         routed_experts = routed_experts[:-1]
+                    indexer_topk = outputs.indexer_topk
+                    if indexer_topk is not None and not isinstance(indexer_topk, str) and (
+                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
+                        indexer_topk = indexer_topk[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
@@ -762,6 +769,7 @@ class AsyncEngine:
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
+                                 indexer_topk=indexer_topk,
                                  cache_block_ids=outputs.cache_block_ids,
                                  cached_tokens=cached_tokens)
                     # Note: We remove the session step update here. Let the caller(e.g., pipeline.chat) take care of it.
