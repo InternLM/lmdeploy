@@ -26,16 +26,38 @@ def test_origin_blocked_fp8_large_m_uses_bm64_down_config():
     assert down_config == dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
 
 
-def test_origin_blocked_fp8_small_expert_count_uses_default_config():
+def test_origin_blocked_fp8_large_m_high_avg_routes_uses_default_down_config():
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
 
-    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=65,
-                                                               num_routes=650,
-                                                               num_experts=128,
-                                                               local_experts=128)
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=2048,
+                                                               num_routes=512 * 40,
+                                                               num_experts=512,
+                                                               local_experts=512)
     expected = dict(block_m=128, block_n=128, num_warps=4, num_stages=3)
     assert gate_config == expected
     assert down_config == expected
+
+
+def test_origin_blocked_fp8_uses_average_routes_for_256_experts():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=64,
+                                                               num_routes=256 * 2,
+                                                               num_experts=256,
+                                                               local_experts=256)
+    assert gate_config == dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
+    assert down_config == dict(block_m=16, block_n=128, num_warps=4, num_stages=3)
+
+
+def test_origin_blocked_fp8_large_m_uses_average_routes_for_256_experts():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=512,
+                                                               num_routes=256 * 16,
+                                                               num_experts=256,
+                                                               local_experts=256)
+    assert gate_config == dict(block_m=128, block_n=128, num_warps=4, num_stages=3)
+    assert down_config == dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
 
 
 @pytest.mark.parametrize(('num_routes', 'block_m'), [(640, 64), (512 * 40, 64), (512 * 64, 128),
@@ -52,8 +74,8 @@ def test_compact_blocked_fp8_configs_use_average_routes(num_routes, block_m):
 @pytest.mark.parametrize(('num_tokens', 'num_routes', 'origin_ctas', 'compact_ctas'), [
     (65, 650, 512 * 2 * 32, 512 * 1 * 32),
     (1024, 512 * 20, 512 * 16 * 32, 512 * 1 * 32),
-    (4096, 512 * 80, 512 * 64 * 32, 512 * 1 * 32),
-    (8192, 512 * 160, 512 * 128 * 32, 512 * 2 * 32),
+    (4096, 512 * 80, 512 * 32 * 32, 512 * 1 * 32),
+    (8192, 512 * 160, 512 * 64 * 32, 512 * 2 * 32),
 ])
 def test_blocked_fp8_moe_cta_estimates(num_tokens, num_routes, origin_ctas, compact_ctas):
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _blocked_fp8_moe_cta_estimates
@@ -65,23 +87,28 @@ def test_blocked_fp8_moe_cta_estimates(num_tokens, num_routes, origin_ctas, comp
                                           out_features=4096) == (origin_ctas, compact_ctas)
 
 
-@pytest.mark.parametrize(('num_tokens', 'num_routes', 'local_experts', 'expected'), [
-    (64, 640, 512, False),
-    (511, 512 * 10, 512, False),
-    (512, 512 * 10, 512, True),
-    (1024, 512 * 20, 512, True),
-    (1024, 512 * 20, 128, False),
+@pytest.mark.parametrize(('num_tokens', 'num_routes', 'num_experts', 'local_experts', 'out_features', 'expected'), [
+    (64, 640, 512, 512, 4096, False),
+    (511, 512 * 10, 512, 512, 4096, False),
+    (512, 512 * 10, 512, 512, 4096, True),
+    (1024, 512 * 20, 512, 512, 4096, True),
+    (1024, 512 * 20, 512, 128, 4096, False),
+    (2048, 256 * 64, 256, 256, 2048, False),
+    (4096, 256 * 128, 256, 256, 2048, True),
+    (512, 256 * 16, 256, 256, 7168, False),
+    (1024, 256 * 32, 256, 256, 7168, True),
 ])
-def test_compact_blocked_fp8_down_policy_is_prefill_and_cta_gated(num_tokens, num_routes, local_experts, expected):
+def test_compact_blocked_fp8_down_policy_is_prefill_and_cta_gated(num_tokens, num_routes, num_experts, local_experts,
+                                                                  out_features, expected):
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
         _should_use_compact_blocked_fp8_moe_down_by_shape,
     )
 
     assert _should_use_compact_blocked_fp8_moe_down_by_shape(num_tokens,
                                                              num_routes,
-                                                             num_experts=512,
+                                                             num_experts=num_experts,
                                                              local_experts=local_experts,
-                                                             out_features=4096) is expected
+                                                             out_features=out_features) is expected
 
 
 def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):

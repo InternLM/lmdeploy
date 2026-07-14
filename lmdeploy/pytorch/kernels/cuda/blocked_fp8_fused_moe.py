@@ -472,14 +472,21 @@ def _blocked_fp8_block_m_from_avg_routes(num_routes: int, num_experts: int):
     return 64
 
 
+def _blocked_fp8_prefill_down_block_m_from_avg_routes(num_routes: int, num_experts: int):
+    """Choose origin down-projection tile for non-decode shapes."""
+    avg_routes = triton.cdiv(num_routes, num_experts)
+    if avg_routes <= 32:
+        return 64
+    return 128
+
+
 def _origin_blocked_fp8_moe_configs(num_tokens: int, num_routes: int, num_experts: int, local_experts: int):
     """Choose origin per-expert blocked-FP8 MoE launch config."""
     default_config = dict(block_m=128, block_n=128, num_warps=4, num_stages=3)
-    if local_experts < 512:
-        return default_config, default_config
 
     if num_tokens > 64:
-        down_config = dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
+        down_block_m = _blocked_fp8_prefill_down_block_m_from_avg_routes(num_routes, num_experts)
+        down_config = dict(block_m=down_block_m, block_n=128, num_warps=4, num_stages=3)
         return default_config, down_config
 
     down_block_m = _blocked_fp8_block_m_from_avg_routes(num_routes, num_experts)
@@ -511,6 +518,17 @@ def _blocked_fp8_moe_cta_estimates(num_tokens: int, num_routes: int, num_experts
     compact_ctas = (local_experts * max(1, triton.cdiv(avg_routes, compact_cfg['block_m'])) *
                     triton.cdiv(out_features, compact_cfg['block_n']))
     return origin_ctas, compact_ctas
+
+
+def _compact_blocked_fp8_moe_down_min_cta_ratio(local_experts: int, out_features: int):
+    """Return compact/origin CTA saving required for down projection."""
+    if local_experts < 256:
+        return None
+    if local_experts >= 512:
+        return 4
+    if out_features >= 4096:
+        return 16
+    return 32
 
 
 def _supports_compact_blocked_fp8_moe(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
@@ -554,11 +572,12 @@ def _should_use_compact_blocked_fp8_moe_down_by_shape(num_tokens: int, num_route
     scheduling."""
     if num_tokens < 512:
         return False
-    if local_experts < 512:
+    min_cta_ratio = _compact_blocked_fp8_moe_down_min_cta_ratio(local_experts, out_features)
+    if min_cta_ratio is None:
         return False
     origin_ctas, compact_ctas = _blocked_fp8_moe_cta_estimates(num_tokens, num_routes, num_experts, local_experts,
                                                                out_features)
-    return origin_ctas >= 4 * compact_ctas
+    return origin_ctas >= min_cta_ratio * compact_ctas
 
 
 def _should_use_compact_blocked_fp8_moe_down(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
@@ -566,7 +585,7 @@ def _should_use_compact_blocked_fp8_moe_down(input: torch.Tensor, input_scale: t
                                              topk_ids: torch.Tensor, num_experts: int):
     """Return whether blocked-FP8 MoE down projection should use compact
     scheduling."""
-    if w1.size(0) < 512:
+    if w1.size(0) < 256:
         return False
     if not _supports_compact_blocked_fp8_moe(input, input_scale, w1, w1_scale, w2, w2_scale, topk_ids, num_experts):
         return False
