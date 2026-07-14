@@ -179,8 +179,9 @@ endif()
 
 
 set(CXX_STD "17" CACHE STRING "C++ standard")
-# enable gold linker for binary and .so
-if(NOT MSVC)
+# Use gold with Ninja to speed up linking. Other generators use the compiler's
+# default linker for better toolchain compatibility.
+if(CMAKE_GENERATOR MATCHES "^Ninja" AND NOT MSVC)
   find_program(GOLD_PATH ld.gold REQUIRED)
   if(NOT GOLD_PATH)
     message(FATAL_ERROR "GNU gold linker is required but not found. "
