@@ -992,15 +992,12 @@ struct QwenVit::Impl {
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.merger_fc2, output));
         TM_CUDA_CHECK(cudaGetLastError());
         AllReduceSum(output, stream);
-        ApplyBias(output, weights_.merger_fc2->bias, stream);
-        TM_CUDA_CHECK(cudaGetLastError());
-        if (d_comm_) {
-            Tensor tmp = empty_like(output);
-            Copy(output, tmp);
-            output = tmp;
-        }
 
-        return output;
+        Tensor result = empty_like(output);
+        ApplyBias(result, output, weights_.merger_fc2->bias, stream);
+        TM_CUDA_CHECK(cudaGetLastError());
+
+        return result;
     }
 };
 
