@@ -157,11 +157,10 @@ class GuidedSpecHelper:
 
         for pos in range(num_expand):
             await asyncio.to_thread(self._fill_bitmask, forked, bitmask)
-            pos_logits = scores_3d[:, pos, :].contiguous()
-            self._mgr.apply_batched_bitmap(pos_logits, bitmask)
-            # Copying back mutates inference-mode logits from model forward.
+            pos_logits = scores_3d[:, pos, :]
+            # Masking updates inference-mode logits from model forward.
             with torch.inference_mode():
-                scores_3d[:, pos, :] = pos_logits
+                self._mgr.apply_batched_bitmap(pos_logits, bitmask)
 
             # Advance fork using draft tokens for draft positions.
             if pos < num_spec_tokens:

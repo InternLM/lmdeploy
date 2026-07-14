@@ -102,6 +102,9 @@ def test_guided_serial_bitmask_updates_inference_tensor():
 
         def __init__(self):
             self.accepted = []
+            self.seen_is_contiguous = []
+            self.seen_is_inference = []
+            self.seen_inference_mode = []
 
         def allocate_batched_bitmap(self, batch_size):
             return torch.zeros(batch_size, 1, dtype=torch.int32)
@@ -110,6 +113,9 @@ def test_guided_serial_bitmask_updates_inference_tensor():
             return None
 
         def apply_batched_bitmap(self, logits, guided_bitmask):
+            self.seen_is_contiguous.append(logits.is_contiguous())
+            self.seen_is_inference.append(logits.is_inference())
+            self.seen_inference_mode.append(torch.is_inference_mode_enabled())
             logits[:, 0] = -123.0
 
         def is_terminated(self, processor):
@@ -136,6 +142,9 @@ def test_guided_serial_bitmask_updates_inference_tensor():
         ))
 
     torch.testing.assert_close(scores_3d[:, :, 0], torch.full((batch_size, num_expand), -123.0))
+    assert manager.seen_is_contiguous == [False, False, False]
+    assert manager.seen_is_inference == [True, True, True]
+    assert manager.seen_inference_mode == [True, True, True]
     assert manager.accepted == [10, 20, 11, 21]
 
 
