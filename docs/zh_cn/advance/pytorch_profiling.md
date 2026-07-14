@@ -17,7 +17,7 @@ export LMDEPLOY_PROFILE_DELAY=3
 export LMDEPLOY_PROFILE_DURATION=10
 # prefix path to save profile files
 export LMDEPLOY_PROFILE_OUT_PREFIX="/path/to/save/profile_"
-# 默认使用 gzip 压缩 trace；设置为 0 可保存未压缩的 JSON
+# save gzip-compressed traces by default; set to 0 for uncompressed JSON
 export LMDEPLOY_PROFILE_USE_GZIP=1
 ```
 
