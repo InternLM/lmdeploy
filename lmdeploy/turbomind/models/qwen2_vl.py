@@ -400,7 +400,8 @@ class Qwen2VLModel:
 
     _vision = True
 
-    def __init__(self, cfg, *, resolver, vision_resolver=None, disable_vision_encoder: bool = False):
+    def __init__(self, cfg, *, resolver, vision_resolver=None,
+                 language_model_only: bool = False):
         text_cfg = getattr(cfg, 'text_config', cfg)
         if text_cfg is None:
             raise ValueError('Qwen2VLModel requires a checkpoint with text_config.')
@@ -411,7 +412,7 @@ class Qwen2VLModel:
         archs = getattr(cfg, 'architectures', None) or []
         self._arch = archs[0] if archs else ''
         vision_cfg = getattr(cfg, 'vision_config', None)
-        if disable_vision_encoder or vision_cfg is None:
+        if language_model_only or vision_cfg is None:
             self.vision_model = None
         else:
             vision_cls = _VISION_MODEL_CLS.get(self._arch)

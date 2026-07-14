@@ -389,7 +389,8 @@ class InternVLModel:
 
     _vision = True
 
-    def __init__(self, cfg: PretrainedConfig, *, resolver, vision_resolver=None, disable_vision_encoder: bool = False):
+    def __init__(self, cfg: PretrainedConfig, *, resolver,
+                 vision_resolver=None, language_model_only: bool = False):
         llm_cfg = _cfg_get(cfg, 'llm_config')
         if llm_cfg is None:
             llm_cfg = _cfg_get(cfg, 'text_config')
@@ -421,7 +422,9 @@ class InternVLModel:
         elif arch == 'InternVLChatModel':
             self._checkpoint_mappings.append(map_legacy_internvl_keys)
         vision_cfg = cfg.vision_config if hasattr(cfg, 'vision_config') else None
-        if not disable_vision_encoder and vision_cfg is not None:
+        if language_model_only or vision_cfg is None:
+            self.vision_model = None
+        else:
             if arch == 'InternVLChatModel':
                 _validate_legacy_internvl_chat(cfg)
                 self.vision_model = LegacyInternVitVisionModel(vision_cfg,
@@ -433,8 +436,6 @@ class InternVLModel:
                                                          parent_cfg=cfg)
             else:
                 raise ValueError(f'InternVL TurboMind vision architecture {arch!r} is not supported.')
-        else:
-            self.vision_model = None
 
     def bind_runtime(self, *, ctx, root_handles,
                      attn_tp, mlp_tp, model_tp):
