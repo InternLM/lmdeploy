@@ -28,7 +28,9 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
                                                      int        num_v_heads,
                                                      int        num_k_heads,
                                                      int        k_dim_total,
-                                                     int        state_layer_offset)
+                                                     int        state_layer_offset,
+                                                     int        num_head_groups,
+                                                     int        heads_per_block)
 {
     const int bh    = blockIdx.x;
     const int b     = bh / num_v_heads;
@@ -42,7 +44,10 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
     const int conv_dim   = 2 * k_dim_total + num_v_heads * v_head_dim;
     const int v_dim      = num_v_heads * v_head_dim;
 
-    S* s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
+    const int hg    = h / heads_per_block;                  // head-group within the layer
+    S*        s_ptr = state_ptrs[b * num_head_groups + hg]  // per (batch, layer-group, head-group) block base
+               + state_layer_offset                         // (L % L_b) * H_b * state_size (per-layer, via weights)
+               + (h % heads_per_block) * state_size;        // head within the head-group
 
     const float scale = rsqrtf((float)k_head_dim);
 
@@ -255,11 +260,15 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
                                     DataType              state_dtype,
                                     int /*sm_count*/,
                                     int* /*work_counter*/,
-                                    cudaStream_t stream)
+                                    cudaStream_t stream,
+                                    int          num_head_groups,
+                                    int          heads_per_block)
 {
     auto& v_out = v_out_.get();
 
-    const int num_v_heads    = beta.shape(1);
+    const int num_v_heads = beta.shape(1);
+    if (heads_per_block <= 0)
+        heads_per_block = num_v_heads;  // sentinel: one head-group spans all heads (today's behavior)
     const int v_dim          = v_out.shape(1);
     const int value_head_dim = v_dim / num_v_heads;
     const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
@@ -296,7 +305,9 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
                                                                num_v_heads,
                                                                num_k_heads,
                                                                k_dim_total,
-                                                               state_layer_offset);
+                                                               state_layer_offset,
+                                                               num_head_groups,
+                                                               heads_per_block);
         };
         if (state_dtype == kFloat32) {
             launch(float{});
@@ -323,18 +334,21 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
 // directly from global memory. smem_sz = 0 in the host launcher.
 // =============================================================================
 template<int k_head_dim, int v_head_dim, int block_dim, class T, class S>
-__global__ __launch_bounds__(block_dim, 2) void recurrent_gated_delta_rule_kernel_v3(T*         v_out,
-                                                                                     const T*   qkv_in,
-                                                                                     const T*   beta_in,
-                                                                                     const T*   g_in,
-                                                                                     S* const*  state_ptrs,
-                                                                                     const int* q_offsets,
-                                                                                     int*       work_counter,
-                                                                                     int        total_work,
-                                                                                     int        num_v_heads,
-                                                                                     int        num_k_heads,
-                                                                                     int        k_dim_total,
-                                                                                     int        state_layer_offset)
+__global__ __launch_bounds__(block_dim, 2) void recurrent_gated_delta_rule_kernel_v3(T*          v_out,
+                                                                                     const T*    qkv_in,
+                                                                                     const T*    beta_in,
+                                                                                     const T*    g_in,
+                                                                                     S* const*   state_ptrs,
+                                                                                     const int*  q_offsets,
+                                                                                     const bool* finished,
+                                                                                     int*        work_counter,
+                                                                                     int         total_work,
+                                                                                     int         num_v_heads,
+                                                                                     int         num_k_heads,
+                                                                                     int         k_dim_total,
+                                                                                     int         state_layer_offset,
+                                                                                     int         num_head_groups,
+                                                                                     int         heads_per_block)
 {
     constexpr int state_size = k_head_dim * v_head_dim;
     const int     conv_dim   = 2 * k_dim_total + num_v_heads * v_head_dim;
@@ -368,9 +382,13 @@ __global__ __launch_bounds__(block_dim, 2) void recurrent_gated_delta_rule_kerne
         const int ratio = num_v_heads / num_k_heads;
         const int kh    = h / ratio;
 
-        const int global_t = q_offsets[b];  // seq_len == 1 guaranteed
+        const bool skip_state_store = finished != nullptr && finished[b];
+        const int  global_t         = q_offsets[b];  // seq_len == 1 guaranteed
 
-        S* s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
+        const int hg    = h / heads_per_block;                  // head-group within the layer
+        S*        s_ptr = state_ptrs[b * num_head_groups + hg]  // per (batch, layer-group, head-group) block base
+                   + state_layer_offset                         // (L % L_b) * H_b * state_size (per-layer, via weights)
+                   + (h % heads_per_block) * state_size;        // head within the head-group
 
         // --- Load state: global → registers (direct strided tile loads, tile_v contiguous) ---
         Array<float, tile_v> vec_S[v_iters][tile_k];
@@ -472,12 +490,14 @@ __global__ __launch_bounds__(block_dim, 2) void recurrent_gated_delta_rule_kerne
         }
 
         // --- Store state: registers → global (direct strided tile stores, tile_v contiguous) ---
-        PRAGMA_UNROLL
-        for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
+        if (!skip_state_store) {
             PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                auto tmp = cast<S>(vec_S[v_iter][k]);
-                Store(&s_ptr[(offset_k * tile_k + k) * v_head_dim + (offset_v + v_iter * v_threads) * tile_v], tmp);
+            for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
+                PRAGMA_UNROLL
+                for (int k = 0; k < tile_k; ++k) {
+                    auto tmp = cast<S>(vec_S[v_iter][k]);
+                    Store(&s_ptr[(offset_k * tile_k + k) * v_head_dim + (offset_v + v_iter * v_threads) * tile_v], tmp);
+                }
             }
         }
     }
@@ -489,17 +509,22 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
                                     const Tensor&         g,
                                     const Buffer_<void*>& state_ptrs,
                                     const Buffer_<int>&   q_offsets,
+                                    const Buffer_<bool>&  finished,
                                     int                   batch_size,
                                     int                   num_k_heads,
                                     int                   state_layer_offset,
                                     DataType              state_dtype,
                                     int                   sm_count,
                                     int*                  work_counter,
-                                    cudaStream_t          stream)
+                                    cudaStream_t          stream,
+                                    int                   num_head_groups,
+                                    int                   heads_per_block)
 {
     auto& v_out = v_out_.get();
 
     const int num_v_heads = beta.shape(1);
+    if (heads_per_block <= 0)
+        heads_per_block = num_v_heads;  // sentinel: one head-group spans all heads (today's behavior)
     const int v_dim       = v_out.shape(1);
     const int k_dim_total = (qkv_in.shape(1) - v_dim) / 2;
 
@@ -532,12 +557,15 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
                                                                 g.data<T>(),
                                                                 (S* const*)state_ptrs.data(),
                                                                 q_offsets.data(),
+                                                                finished ? finished.data() : nullptr,
                                                                 work_counter,
                                                                 total_work,
                                                                 num_v_heads,
                                                                 num_k_heads,
                                                                 k_dim_total,
-                                                                state_layer_offset);
+                                                                state_layer_offset,
+                                                                num_head_groups,
+                                                                heads_per_block);
         };
         if (state_dtype == kFloat32)
             launch(float{});
@@ -557,16 +585,19 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
 // State load/store uses the full swizzled smem buffer (same as v2).
 // =============================================================================
 template<int kHeadDim, int kChunkSize, int kBlockDim, class T, class S>
-__global__ void chunked_gated_delta_rule_kernel(T*         v_out,
-                                                const T*   qkv_in,
-                                                const T*   beta_in,
-                                                const T*   g_in,
-                                                S* const*  state_ptrs,
-                                                const int* q_offsets,
-                                                int        num_v_heads,
-                                                int        num_k_heads,
-                                                int        k_dim_total,
-                                                int        state_layer_offset)
+__global__ void chunked_gated_delta_rule_kernel(T*          v_out,
+                                                const T*    qkv_in,
+                                                const T*    beta_in,
+                                                const T*    g_in,
+                                                S* const*   state_ptrs,
+                                                const int*  q_offsets,
+                                                const bool* finished,
+                                                int         num_v_heads,
+                                                int         num_k_heads,
+                                                int         k_dim_total,
+                                                int         state_layer_offset,
+                                                int         num_head_groups,
+                                                int         heads_per_block)
 {
     constexpr int C = kChunkSize;
     constexpr int D = kHeadDim;
@@ -577,16 +608,20 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     const int ratio = num_v_heads / num_k_heads;
     const int kh    = h / ratio;
 
-    const int tok_off    = q_offsets[b];
-    const int seq_len    = q_offsets[b + 1] - tok_off;
-    const int state_size = D * D;
-    const int conv_dim   = 2 * k_dim_total + num_v_heads * D;
-    const int v_dim      = num_v_heads * D;
+    const bool skip_state_store = finished != nullptr && finished[b];
+    const int  tok_off          = q_offsets[b];
+    const int  seq_len          = q_offsets[b + 1] - tok_off;
+    const int  state_size       = D * D;
+    const int  conv_dim         = 2 * k_dim_total + num_v_heads * D;
+    const int  v_dim            = num_v_heads * D;
 
     if (seq_len == 0)
         return;
 
-    S*          s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
+    const int hg    = h / heads_per_block;                  // head-group within the layer
+    S*        s_ptr = state_ptrs[b * num_head_groups + hg]  // per (batch, layer-group, head-group) block base
+               + state_layer_offset                         // (L % L_b) * H_b * state_size (per-layer, via weights)
+               + (h % heads_per_block) * state_size;        // head within the head-group
     const float scale = rsqrtf((float)D);
 
     // ── State tiling (same as v2) ──
@@ -804,7 +839,7 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     // ================================================================
     //  STORE STATE  registers → smem (swizzled) → global   (same as v2)
     // ================================================================
-    {
+    if (!skip_state_store) {
         using Map_S          = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
         constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;
         constexpr int kShift = 10 - kBase;
@@ -850,17 +885,22 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                                         const Tensor&         g,
                                         const Buffer_<void*>& state_ptrs,
                                         const Buffer_<int>&   q_offsets,
+                                        const Buffer_<bool>&  finished,
                                         int                   batch_size,
                                         int                   num_k_heads,
                                         int                   state_layer_offset,
                                         DataType              state_dtype,
                                         int /*sm_count*/,
                                         int* /*work_counter*/,
-                                        cudaStream_t stream)
+                                        cudaStream_t stream,
+                                        int          num_head_groups,
+                                        int          heads_per_block)
 {
     auto& v_out = v_out_.get();
 
-    const int num_v_heads    = beta.shape(1);
+    const int num_v_heads = beta.shape(1);
+    if (heads_per_block <= 0)
+        heads_per_block = num_v_heads;  // sentinel: one head-group spans all heads (today's behavior)
     const int v_dim          = v_out.shape(1);
     const int value_head_dim = v_dim / num_v_heads;
     const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
@@ -903,10 +943,13 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                                                                g.data<T>(),
                                                                (S* const*)state_ptrs.data(),
                                                                q_offsets.data(),
+                                                               finished ? finished.data() : nullptr,
                                                                num_v_heads,
                                                                num_k_heads,
                                                                k_dim_total,
-                                                               state_layer_offset);
+                                                               state_layer_offset,
+                                                               num_head_groups,
+                                                               heads_per_block);
         };
         if (state_dtype == kFloat32) {
             launch(float{});
@@ -1075,6 +1118,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                                                                             void* const* conv_state_ptrs,
                                                                             const int*   q_offsets,
                                                                             const int*   k_offsets,
+                                                                            const bool*  finished,
                                                                             int*         work_counter,
                                                                             int          batch_size,
                                                                             int          conv_dim,
@@ -1176,8 +1220,9 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
             n_tokens = min(NUM_TOKENS, seq_len - t_local_start);
         }
 
-        const int ring_start = (history_len + t_local_start + 1) % D_CONV;
-        T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
+        const bool skip_state_store = finished != nullptr && finished[b];
+        const int  ring_start       = (history_len + t_local_start + 1) % D_CONV;
+        T*         state_base       = (T*)conv_state_ptrs[b] + state_layer_offset;
 
         if (ch_active) {
             constexpr int                 VALS_SIZE = NUM_TOKENS + D_CONV - 1;
@@ -1222,7 +1267,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                 }
             }
 
-            if (t_local_start + n_tokens >= seq_len) {
+            if (!skip_state_store && t_local_start + n_tokens >= seq_len) {
                 PRAGMA_UNROLL
                 for (int i = 0; i < VALS_SIZE; ++i) {
                     int pos = t_local_start - (D_CONV - 1) + i;
@@ -1243,6 +1288,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                            const Buffer_<void*>& conv_state_ptrs,
                            const Buffer_<int>&   q_offsets,
                            const Buffer_<int>&   k_offsets,
+                           const Buffer_<bool>&  finished,
                            int                   batch_size,
                            int                   state_layer_offset,
                            int                   sm_count,
@@ -1285,6 +1331,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                                                      conv_state_ptrs.data(),
                                                      q_offsets.data(),
                                                      k_offsets.data(),
+                                                     finished ? finished.data() : nullptr,
                                                      work_counter,
                                                      batch_size,
                                                      conv_dim,

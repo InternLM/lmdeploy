@@ -18,6 +18,7 @@ __global__ void sampling(const T*       logits,
                          const int*     indices,
                          const int*     kept,
                          curandState_t* curandstate,
+                         const int*     curandstate_indices,
                          int*           output_ids,
                          int*           sequence_length,
                          T*             sampled_logprobs,
@@ -34,7 +35,8 @@ __global__ void sampling(const T*       logits,
     __shared__ float rand_num_s;
     __shared__ int   selected;
     if (tid == 0) {
-        rand_num_s = curand_uniform(curandstate + batch_id);
+        const int state_row = curandstate_indices[batch_id];
+        rand_num_s          = curand_uniform(curandstate + state_row);
     }
     __syncthreads();
 
@@ -91,6 +93,7 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    params.indices,
                                                    params.kept,
                                                    params.curandstate,
+                                                   params.curandstate_indices,
                                                    params.output_ids,
                                                    params.sequence_length,
                                                    (T*)params.sampled_logprobs,
