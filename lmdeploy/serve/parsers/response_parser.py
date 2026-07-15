@@ -508,10 +508,19 @@ class BaseResponseParser(ResponseParser):
             raise RuntimeError('Invariant violated: MODE_REASONING requires a reasoning_close_tag.')
 
         idx = self._pending.find(close_tag)
-        # No close tag found, treat the whole pending text as reasoning content.
+        # No close tag found. Keep a possible close-tag prefix suffix in
+        # buffer so a close tag split across chunks can still be recognized,
+        # mirroring _consume_plain's handling of split open tags.
         if idx < 0:
             if not self._pending:
                 return None, False
+            keep = self._longest_open_tag_prefix_suffix(self._pending, [close_tag])
+            if keep > 0:
+                if keep >= len(self._pending):
+                    return None, False
+                out = self._pending[:-keep]
+                self._pending = self._pending[-keep:]
+                return (out if out else None), bool(out)
             out = self._pending
             self._pending = ''
             return out, True
