@@ -3,6 +3,7 @@
 HF-style InternVL/InternS1)."""
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -36,6 +37,14 @@ def _cfg_get(cfg, name: str, default=None):
     if isinstance(cfg, dict):
         return cfg.get(name, default)
     return getattr(cfg, name, default)
+
+
+def _resolve_fingerprint(input_mm: dict) -> bytes:
+    fp = input_mm.get('fingerprint')
+    if fp is not None:
+        return fp
+    pixels = input_mm['pixel_values'].contiguous().cpu().view(torch.uint8)
+    return hashlib.sha256(pixels.numpy().tobytes()).digest()
 
 
 def _to_tm_norm_type(norm_type: str):
@@ -178,12 +187,14 @@ class InternVitVisionModel(TextModel):
             pixel_values = self._tm_tensor(input_mm['pixel_values'])
             token_begin = int(input_mm['offset'])
             token_end = token_begin + int(input_mm['image_tokens'])
+            fingerprint = _resolve_fingerprint(input_mm)
             items.append(
                 _tm.multimodal.InternVitItem(
                     modality=_tm.multimodal.Modality.IMAGE,
                     data=pixel_values,
                     token_begin=token_begin,
                     token_end=token_end,
+                    fingerprint=fingerprint,
                 ))
 
         return _tm.multimodal.InternVitInput(items)

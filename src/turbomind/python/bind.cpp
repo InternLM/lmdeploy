@@ -363,7 +363,7 @@ PYBIND11_MODULE(_turbomind, m)
             return fp;  // empty sentinel
         }
         if (len != 32) {
-            throw std::invalid_argument("Qwen3_5VitItem.fingerprint must be 0 or 32 bytes (SHA-256)");
+            throw std::invalid_argument("fingerprint must be 0 or 32 bytes (SHA-256)");
         }
         std::memcpy(fp.words.data(), buf, 32);
         return fp;
@@ -405,20 +405,29 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readwrite("items", &QwenVitInput::items);
     py::class_<InternVitItem>(multimodal, "InternVitItem")
         .def(py::init<>())
-        .def(py::init([](MMModality modality, std::shared_ptr<Tensor> data, int token_begin, int token_end) {
-                 return InternVitItem{modality, *data, token_begin, token_end};
+        .def(py::init([fp_from_bytes](MMModality              modality,
+                                      std::shared_ptr<Tensor> data,
+                                      int                     token_begin,
+                                      int                     token_end,
+                                      py::bytes               fingerprint) {
+                 return InternVitItem{modality, *data, token_begin, token_end, fp_from_bytes(fingerprint)};
              }),
              "modality"_a,
              "data"_a,
              "token_begin"_a,
-             "token_end"_a)
+             "token_end"_a,
+             "fingerprint"_a = py::bytes())
         .def_readwrite("modality", &InternVitItem::modality)
         .def_property(
             "data",
             [](const InternVitItem& self) { return std::make_shared<Tensor>(self.data); },
             [](InternVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
         .def_readwrite("token_begin", &InternVitItem::token_begin)
-        .def_readwrite("token_end", &InternVitItem::token_end);
+        .def_readwrite("token_end", &InternVitItem::token_end)
+        .def_property(
+            "fingerprint",
+            [fp_to_bytes](const InternVitItem& self) { return fp_to_bytes(self.fingerprint); },
+            [fp_from_bytes](InternVitItem& self, py::bytes b) { self.fingerprint = fp_from_bytes(b); });
     py::class_<InternVitInput, MMInput, std::shared_ptr<InternVitInput>>(multimodal, "InternVitInput")
         .def(py::init<>())
         .def(py::init<std::vector<InternVitItem>>(), "items"_a)

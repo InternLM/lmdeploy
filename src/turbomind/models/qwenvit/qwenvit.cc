@@ -176,9 +176,9 @@ struct QwenVit::Impl {
 
             if ((not s.autoregres) && (not s.multimodal_inputs.empty())) {
                 ++mm_prefill_seqs;
+                images_total += (int)s.multimodal_inputs.size();
                 Interval text{s.history_len + s.inflight_input_len, Interval::Size{s.input_len}};
                 for (const auto& mm : s.multimodal_inputs) {
-                    images_total++;
                     auto o = mm->interval & text;
                     if (auto size = (int)o.size()) {
                         pixel_values.push_back(mm->data);

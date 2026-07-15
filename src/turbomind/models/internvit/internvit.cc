@@ -210,6 +210,8 @@ struct InternVit::Impl {
         auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
         const auto& cfg  = config_;
 
+        int mm_prefill_seqs      = 0;  // prefill sequences carrying multimodal inputs
+        int images_total         = 0;  // total images across those sequences
         int input_ids_offsets    = 0;
         int image_embeds_offsets = 0;
         d.Clear();
@@ -220,6 +222,8 @@ struct InternVit::Impl {
             const auto& s = *rc[i];
 
             if ((not s.autoregres) && (not s.multimodal_inputs.empty())) {
+                ++mm_prefill_seqs;
+                images_total += (int)s.multimodal_inputs.size();
                 Interval text{s.history_len + s.inflight_input_len, Interval::Size{s.input_len}};
                 for (const auto& mm : s.multimodal_inputs) {
                     auto o = mm->interval & text;
@@ -238,6 +242,18 @@ struct InternVit::Impl {
             }
 
             input_ids_offsets += s.autoregres ? 1 : s.input_len;
+        }
+
+        // Prefix-cache observability: on a fully-cached image, the window filter
+        // above batches 0 images (ViT skipped). Only logged for multimodal
+        // prefill passes so decode steps stay quiet.
+        if (mm_prefill_seqs > 0) {
+            const int images_batched = (int)pixel_values.size();
+            TM_LOG_INFO("InternViT setup: mm_seqs={} images_batched={} images_skipped={} patches={}",
+                        mm_prefill_seqs,
+                        images_batched,
+                        images_total - images_batched,
+                        d.batch_size);
         }
 
         if (d.batch_size > 0) {

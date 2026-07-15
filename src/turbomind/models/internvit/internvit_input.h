@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/multimodal_input.h"
 
 #include <utility>

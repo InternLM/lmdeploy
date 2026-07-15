@@ -2,7 +2,9 @@
 """Qwen2-VL / Qwen2.5-VL aggregate source model for TurboMind."""
 from __future__ import annotations
 
+import hashlib
 import math
+import struct
 from typing import Any
 
 import _turbomind as _tm
@@ -72,6 +74,16 @@ def _to_tm_norm_type(norm_type: str):
     if norm_type == 'rms_norm':
         return _tm.NormType.RMS_NORM
     raise ValueError(f'Unsupported Qwen2 ViT norm_type: {norm_type!r}')
+
+
+def _resolve_fingerprint(input_mm: dict, grid_thw: tuple[int, int, int]) -> bytes:
+    fp = input_mm.get('fingerprint')
+    if fp is not None:
+        return fp
+    pixels = input_mm['pixel_values'].contiguous().cpu().view(torch.uint8)
+    h_obj = hashlib.sha256(struct.pack('<3i', *grid_thw))
+    h_obj.update(pixels.numpy().tobytes())
+    return h_obj.digest()
 
 
 class _BaseQwen2VisionModel(TextModel):
@@ -169,6 +181,7 @@ class _BaseQwen2VisionModel(TextModel):
             data = self._tm_tensor(input_mm['pixel_values'])
             grid_thw = self._grid_thw(input_mm['image_grid_thw'])
             token_begin, token_end = self._token_range(input_mm)
+            fingerprint = _resolve_fingerprint(input_mm, grid_thw)
             items.append(
                 _tm.multimodal.QwenVitItem(
                     modality=_tm.multimodal.Modality.IMAGE,
@@ -176,6 +189,7 @@ class _BaseQwen2VisionModel(TextModel):
                     token_begin=token_begin,
                     token_end=token_end,
                     grid_thw=grid_thw,
+                    fingerprint=fingerprint,
                 ))
 
         return _tm.multimodal.QwenVitInput(items)
