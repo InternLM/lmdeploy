@@ -14,7 +14,7 @@ WITH_PUSH=true ./build_all_lmdeploy_builders.sh
 For custom builds with specific versions:
 
 ```bash
-MANY_LINUX_VERSION=2014 GPU_ARCH_VERSION=12.4 ./build_lmdeploy_builder.sh
+MANY_LINUX_VERSION=2_28 GPU_ARCH_VERSION=12.8 ./build_lmdeploy_builder.sh
 ```
 
 ## Build lmdeploy wheels
