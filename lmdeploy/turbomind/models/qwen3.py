@@ -114,7 +114,7 @@ class Qwen3TextModel(TextModel):
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in m.range(self._n_experts):
+        for e in m.range(self.cfg.num_experts):
             experts[e] = self.ffn(pfx + 'experts' + e, is_expert=True)
         m.experts = experts.build()
 
