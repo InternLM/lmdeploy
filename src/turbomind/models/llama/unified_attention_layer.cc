@@ -19,6 +19,7 @@
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
 
+#include "src/turbomind/engine/block.h"
 #include <algorithm>
 #include <functional>
 #include <math.h>
@@ -39,6 +40,9 @@
 
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/kernels/attention/block.h"
+#include "src/turbomind/memory/object.h"
+#include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_rope.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -53,6 +57,31 @@
 // #include "dbg.h"
 
 namespace turbomind {
+
+namespace {
+// clang-format off
+struct BlockConfig {
+    int head_dim_;
+    int head_num_;
+    int block_len_;
+    int t_bits_;
+    int q_bits_;
+    bool share_kv_;
+    int t_bits() const { return t_bits_; }
+    int q_bits() const { return q_bits_; }
+    int head_dim() const { return head_dim_; }
+    int head_num() const { return head_num_; }
+    int block_len() const { return block_len_; }
+    bool is_share_kv() const { return share_kv_; }
+    auto as_tuple() const noexcept {
+        return std::tie(head_dim_, head_num_, block_len_, t_bits_, q_bits_, share_kv_);
+    }
+    friend bool operator==(const BlockConfig& a, const BlockConfig& b) {
+        return a.as_tuple() == b.as_tuple();
+    }
+};
+// clang-format on
+}  // namespace
 
 struct AttentionData {
     struct Stat {
@@ -77,6 +106,7 @@ struct AttentionData {
     Buffer_<bool> finished;
     Buffer_<int>  q_offsets;
     Buffer_<int>  k_offsets;
+    Buffer_<int>  readonly_block_num;  // per-request, batch order
 
     // int dbg_offset;
     // int dbg_size;
@@ -93,43 +123,59 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
     aux_stream_             = {};
 }
 
-UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant_policy,
-                                             const std::vector<int>&       layer_types,
-                                             int                           layer_num,
-                                             std::vector<AttentionWeight*> attn_weights,
+UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weights,
+                                             CacheRegistry&                registry,
                                              const EngineParam&            engine,
-                                             const Context&                ctx,
+                                             const Context&                context,
                                              int                           phases,
                                              bool                          init):
-    quant_policy_{quant_policy},
-    rope_{attn_weights[0]->rope},
+    quant_policy_{engine.quant_policy},
+    rope_{weights.at(0)->rope},
     engine_param_{engine},
-    cp_fn_ctx_{ctx.comm.d_comm, ctx.comm.d_cp_group},
-    is_warm_up_{*ctx.is_warm_up},
-    context_{ctx},
+    cp_fn_ctx_{context.comm.d_comm, context.comm.d_cp_group},
+    is_warm_up_{*context.is_warm_up},
+    context_{context},
     init_{init},
-    linear_(*ctx.linear),
+    linear_(*context.linear),
     arch_{getSMVersion()}
 {
-    TM_CHECK(!attn_weights.empty()) << "attn_weights must not be empty";
-    TM_CHECK(attn_weights[0]) << "attn_weights[0] must not be null";
+    TM_CHECK_GE(weights.size(), 1);
+
+    const auto dtype = engine.data_type;
+
+    const int dtype_bits = byte_size(dtype, 8);
+    const int qaunt_bits = quant_policy_ ? quant_policy_ : dtype_bits;
+
+    auto get_block_config = [&](const AttentionWeight& w) {
+        BlockConfig b{w.head_dim,
+                      w.kv_head_num / w.tp_size,
+                      engine.cache_block_seq_len,
+                      dtype_bits == qaunt_bits ? 0 : dtype_bits,
+                      qaunt_bits,
+                      w.head_dim == 576};
+        return b;
+    };
+
+    size_t offset = 0;  // byte size (quantization aware)
+    for (int i = 0; i < weights.size(); ++i) {
+        block::Layout layout{get_block_config(*weights[i])};
+        weights[i]->cache_block_offset = offset;
+        offset += layout.layer_size();
+    }
+
+    const size_t cache_block_byte_size = offset;
+    prefix_cache_offset_               = registry.prefix().Register(cache_block_byte_size, /*alignment=*/1);
+
+    const auto max_block_num = engine.max_batch_size * cdiv(engine.session_len, engine.cache_block_seq_len);
+
+    block_ptrs_buf_         = {max_block_num, kCPUpinned};
+    block_ptrs_offsets_buf_ = {engine.max_batch_size + 1, kCPUpinned};
 
     TM_CUDA_CHECK(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
     TM_CUDA_CHECK(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
     TM_CUDA_CHECK(cudaEventCreateWithFlags(&aux_event_, cudaEventDisableTiming));
 
     init_rope_kernel_param(rope_, rope_param_);
-
-    // Skip other attention layer types
-    std::vector<int> types = layer_types;
-    types.resize(layer_num);
-    cache_layer_ids_.resize(types.size(), -1);
-    int next_cache_id = 0;
-    for (size_t i = 0; i < types.size(); ++i) {
-        if (types[i] == 0) {
-            cache_layer_ids_[i] = next_cache_id++;
-        }
-    }
 
     const int bsz = engine.max_batch_size;
 
@@ -152,7 +198,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant
 
     // Eagerly initialize workspace buffers (was previously lazy in Init())
     {
-        const auto& w              = *attn_weights[0];
+        const auto& w              = *weights[0];
         const int   tp_size        = w.tp_size;
         const int   local_head_num = w.head_num / tp_size;
         const int   size_per_head  = w.head_dim;
@@ -179,7 +225,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant
     }
 }
 
-static void init_dynamic_ntk(RequestCache& cache, const core::RopeConfig& rope)
+static void init_dynamic_ntk(Sequence& cache, const core::RopeConfig& rope)
 {
     cache.rope_base = rope.base;
     if (auto scaling_factor = rope.factor; scaling_factor > 1.f) {
@@ -199,7 +245,7 @@ static void init_dynamic_ntk(RequestCache& cache, const core::RopeConfig& rope)
 void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
 {
     if (op == BatchOp::kAdd) {
-        Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        Buffer_<Sequence*> rc = env.at("requests").buffer();
         if (rope_param_.type == RopeType::kDynamic) {
             for (int i = 0; i < rc.size(); ++i) {
                 init_dynamic_ntk(*rc[i], rope_);
@@ -210,9 +256,10 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
         Setup(phase, env);
     }
     else if (op == BatchOp::kPrepare) {
-        data_.at(phase)->finished  = env.at("finished").buffer().borrow();
-        data_.at(phase)->q_offsets = env.at("q_offsets").buffer().borrow();
-        data_.at(phase)->k_offsets = env.at("k_offsets").buffer().borrow();
+        data_.at(phase)->finished           = env.at("finished").buffer().borrow();
+        data_.at(phase)->q_offsets          = env.at("q_offsets").buffer().borrow();
+        data_.at(phase)->k_offsets          = env.at("k_offsets").buffer().borrow();
+        data_.at(phase)->readonly_block_num = env.at("readonly_block_num").buffer().borrow();
 
         // This is needed in async mode to clear the `attn` buffer for the finished sequences. Ohterwise random NaNs
         // will crash the MoE router later
@@ -230,16 +277,31 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
 
 void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
 {
-    const auto& rc  = env.at("batch").data<BatchData*>()[0]->rc;
-    const int   bsz = rc.size();
+    // const auto& rc  = env.at("batch").data<BatchData*>()[0]->rc;  // active requests
+    Buffer_<Sequence*> rc = env.at("requests").buffer();
+
+    const int bsz = rc.size();
 
     auto& d    = *data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     {  /// Upload KV cache ptrs
-        const Buffer_<int> offsets = env.at("block_ptrs_offsets").buffer();
-        copy(env.at("block_ptrs").buffer(), offsets[bsz], d.block_ptrs);
-        copy(offsets, bsz + 1, d.block_ptrs_offsets);
+        auto blocks  = block_ptrs_buf_.data();
+        auto offsets = block_ptrs_offsets_buf_.data();
+
+        offsets[0] = 0;
+        for (int i = 0; i < rc.size(); ++i) {
+            const auto& r = *rc[i];
+            for (const auto& h : r.block_ids) {
+                const CacheBlock& cb = *h->prefix;
+                TM_CHECK_NOTNULL(cb.allocation.a);
+                *blocks++ = cb.base(0) + prefix_cache_offset_;
+            }
+            offsets[i + 1] = offsets[i] + r.block_ids.size();
+        }
+
+        copy(block_ptrs_buf_, block_ptrs_offsets_buf_[bsz], d.block_ptrs);
+        copy(block_ptrs_offsets_buf_, bsz + 1, d.block_ptrs_offsets);
     }
 
     /// prepare Q/K stats for decode/prefill
@@ -260,9 +322,9 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
 
         auto& s = i < d.decode.n ? d.decode : d.prefill;
         s.q_sum += c.input_len;
-        s.k_sum += c.history_len + c.alpha + c.input_len;
+        s.k_sum += c.history_len + c.inflight_input_len + c.input_len;
         s.q_max = std::max(s.q_max, c.input_len);
-        s.k_max = std::max(s.k_max, c.history_len + c.alpha + c.input_len);
+        s.k_max = std::max(s.k_max, c.history_len + c.inflight_input_len + c.input_len);
     }
 
     // auto &D = d.decode, &P = d.prefill;
@@ -275,7 +337,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         }
         copy(rope_base_buf_, bsz, d.rope_base);
     }
-    if (rope_param_.mrope_mode != MropeMode::kNone) {
+    else if (rope_param_.mrope_mode != MropeMode::kNone) {
         auto* mrope_length           = env.try_("mrope_length");
         auto* mrope_position_delta   = env.try_("mrope_position_delta");
         auto* mrope_position_offsets = env.try_("mrope_position_offsets");
@@ -411,8 +473,6 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
     Tensor tmp_kv{{local_kv_head_num, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, size_per_head}, dtype, device};
 
-    const int cache_layer_id = cache_layer_ids_[p.layer_id];
-
     auto CreateParams = [&](int offset, AttentionData::Stat stat, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
 
@@ -449,10 +509,12 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.max_q_len = stat.q_max;
         params.max_k_len = stat.k_max;
 
+        TM_CHECK_LE(weights.cache_block_offset, INT_MAX);
+
         // decode only
         params.block_iter_params = BlockIteratorParams{(char**)d.block_ptrs.data(),  //
                                                        d.block_ptrs_offsets.data() + offset,
-                                                       cache_layer_id,
+                                                       (int)weights.cache_block_offset,
                                                        engine_param_.cache_block_seq_len};
 
         // prefill only
@@ -471,14 +533,14 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             };
         }
 
-        params.finished = d.finished.data() + offset;
-        params.cu_q_len = d.q_offsets.data() + offset;
-        params.cu_k_len = d.k_offsets.data() + offset;
+        params.finished           = d.finished.data() + offset;
+        params.cu_q_len           = d.q_offsets.data() + offset;
+        params.cu_k_len           = d.k_offsets.data() + offset;
+        params.readonly_block_num = d.readonly_block_num.data() + offset;
 
         params.num_heads     = local_head_num;
         params.num_kv_heads  = local_kv_head_num;
         params.size_per_head = size_per_head;
-        params.layer_id      = cache_layer_id;
 
         double scaling = 1.;
         if (weights.softmax_scale) {  // model predefined softmax scale

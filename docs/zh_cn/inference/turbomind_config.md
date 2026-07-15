@@ -85,6 +85,8 @@ TurboMind 2.x 实现了 Paged Attention，按块管理 k/v cache。
 cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_data_type)
 ```
 
+启用序列并行后，该公式仍表示每个 rank 上 block 的实际显存大小。由于 token 交错存储在各个 CP rank 上，调度器中对应的逻辑块覆盖 `cache_block_seq_len * cp` 个全局 token。
+
 对于 llama2-7b 模型来说，以 half 类型存放 k/v 时，一块 k/v block 的内存为：`128 * 32 * 32 * 128 * 2 * sizeof(half) = 64MB`
 
 `cache_max_entry_count` 根据取值不同，表示不同的含义：
@@ -105,7 +107,28 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 前缀缓存功能主要适用于多个请求具有相同的prompt前缀（比如system prompt）的场景，该相同前缀部分的 k/v block 会被缓存起来，被多个请求重复利用，从而节省了重复计算的开销，提高推理性能。相同prompt前缀长度越长，性能提升越大。
 
-由于前缀缓存对 k/v 重复利用的最小粒度是block，如果相同prompt前缀不足一个block（前缀长度\<`cache_block_seq_len`），则推理性能不会有提升。
+对于前缀缓存的整块复用，一个完整 k/v block 是最小粒度；不开启序列并行时其前缀长度阈值为 `cache_block_seq_len`，开启后为 `cache_block_seq_len * cp`。
+
+### 非整块边界复用
+
+有两个模式开关控制是否在 prompt 与生成边界处发布非整块（partial-block）前缀节点：`cache_prompt`（取 `'all'` 或 `'auto'`，默认 `'auto'`）与 `cache_generation`（取 `'all'`、`'auto'` 或 `'none'`，默认 `'auto'`）。二者都需要开启 `enable_prefix_caching`，且适用于所有开启前缀缓存的模型：所发布的节点携带该非整块的 k/v；对于循环/混合模型（例如包含 GatedDeltaNet 层的模型），该节点还会额外携带循环状态 checkpoint。
+
+将 `cache_prompt='all'` 用于同一 prompt 会被反复处理的场景（多次采样解码、共享/系统 prompt），使重复 prompt 跳过 prefill；默认 `'auto'` 仅对包含图像 token 的非整块 prompt 块生效（复用视觉编码 KV），对纯文本 prompt 无效果。将 `cache_generation='all'` 用于需要从生成精确末端恢复的场景（例如多轮对话）；`'auto'`（默认）仅缓存完整生成块；`'none'` 不缓存任何生成块。非整块节点会带来额外的显存与拷贝带宽开销，除非复用收益明确，否则建议使用 `'auto'`。
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(
+    enable_prefix_caching=True,
+    cache_prompt='all',
+    cache_generation='all',
+)
+pipe = pipeline('your-model', backend_config=backend_config)
+```
+
+- `cache_prompt`：非整块 prompt 边界发布模式，取 `'all'` 或 `'auto'`（默认 `'auto'`）。`'all'` 在 `B = prompt_len - cache_prompt_boundary_skip` 且 `B` 落在块内部时发布可复用的 prompt 边界节点（当 `B` 对齐块边界时还会启用循环状态 checkpoint 钳位），使重复 prompt 跳过 prefill。`'auto'` 仅当该非整块包含图像 token 时生效（复用视觉编码 KV），对纯文本 prompt 无效果。代价是产生该节点的请求需要额外一次 prefill 前向计算，以及（当 `B` 落在块内部时）一个非整块缓存块（partial 块）。
+- `cache_prompt_boundary_skip`：将 prompt 末尾的若干 token 视为易变的生成前缀后缀（例如 chat 模板的 `<think>\n`），从可复用的 prompt 边界节点中排除，使节点移动到 `prompt_len - cache_prompt_boundary_skip`。当 `cache_prompt` 为 `'all'` 或 `'auto'` 时生效。默认 1（仅排除最后一个 token）。对于 chat 模板会追加多 token 后缀、且下一轮历史会丢弃该后缀的思考型模型，可调大该值。
+- `cache_generation`：生成块缓存模式，取 `'all'`、`'auto'`（默认）或 `'none'`。`'all'` 索引完整生成块及末端非整块，并采用末端循环 frontier checkpoint（精确多轮恢复）。`'auto'` 仅索引完整生成块。`'none'` 不索引任何生成块。当 `'all'` 索引末端非整块时，代价是一个非整块缓存块（partial 块）。无论该设置如何，块边界处的整块 checkpoint 始终会发布。
 
 ### kv 量化推理开关
 

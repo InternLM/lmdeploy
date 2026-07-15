@@ -12,6 +12,7 @@
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/batch.h"
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/generation/generation.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -60,10 +61,12 @@ struct LanguageModel::Impl {
     int max_logits_len_ = 0;
 
     Buffer_<int>  sequence_length_buf_;
+    Buffer_<int>  readonly_block_num_buf_;  // {max_batch_size}, kCPUpinned
     Buffer_<bool> finished_buf_;
 
     struct Data {
         Buffer_<int>  sequence_length;
+        Buffer_<int>  readonly_block_num;
         Buffer_<bool> finished;
 
         Buffer_<bool> autoregres;
@@ -100,7 +103,8 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
+    Impl(
+        CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
     Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
@@ -112,7 +116,8 @@ struct LanguageModel::Impl {
     void Fetch(int phase, TensorMap& env);
 };
 
-LanguageModel::Impl::Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
+LanguageModel::Impl::Impl(
+    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
@@ -132,19 +137,21 @@ LanguageModel::Impl::Impl(const EngineParam& engine, const Context& ctx, const M
     // autoreg_ids_offsets_ = {engine.max_batch_size + 1, kCPU};
     // std::fill_n(autoreg_ids_offsets_.data(), autoreg_ids_offsets_.size(), 0);
 
-    sequence_length_buf_ = {engine.max_batch_size, kCPUpinned};
-    sequence_length_     = {{engine.max_batch_size}, kInt, kDEVICE};
+    sequence_length_buf_    = {engine.max_batch_size, kCPUpinned};
+    readonly_block_num_buf_ = {engine.max_batch_size, kCPUpinned};
+    sequence_length_        = {{engine.max_batch_size}, kInt, kDEVICE};
     for (int i = 0; i < phases; ++i) {
-        auto& d           = data_.emplace_back();
-        d.sequence_length = empty_like(sequence_length_buf_, kDEVICE);
-        d.finished        = empty_like(finished_buf_, kDEVICE);
-        d.autoregres      = {engine.max_batch_size, kCPU};
-        d.generating      = {engine.max_batch_size, kCPU};
+        auto& d              = data_.emplace_back();
+        d.sequence_length    = empty_like(sequence_length_buf_, kDEVICE);
+        d.readonly_block_num = empty_like(readonly_block_num_buf_, kDEVICE);
+        d.finished           = empty_like(finished_buf_, kDEVICE);
+        d.autoregres         = {engine.max_batch_size, kCPU};
+        d.generating         = {engine.max_batch_size, kCPU};
     }
 
     input_processor_.emplace(engine, weights_.hidden_units, weights_.data_type, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(engine, ctx, phases, weights_);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(registry, engine, ctx, phases, weights_);
 
     const int vocab_size = weights_.output->output_dim * tp_size_;
 
@@ -306,7 +313,7 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
     auto& d    = data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-    const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
+    Buffer_<Sequence*> rc = env.at("requests").buffer();
 
     d.n_generating = 0;
 
@@ -316,11 +323,13 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
         d.generating[i] = c.generating;
         d.n_generating += c.generating;
         if (TM_UNLIKELY(!c.autoregres)) {
-            sequence_length_buf_[i] = c.history_len + c.alpha + c.input_len;
+            sequence_length_buf_[i] = c.history_len + c.inflight_input_len + c.input_len;
         }
+        readonly_block_num_buf_[i] = c.readonly_block_num;  // all rows, batch order
     }
 
     copy(sequence_length_buf_, rc.size(), d.sequence_length);
+    copy(readonly_block_num_buf_, rc.size(), d.readonly_block_num);
 
     unified_decoder_->Run(BatchOp::kSetup, phase, env);
     generation_->Run(BatchOp::kSetup, phase, env);
@@ -353,7 +362,9 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     }
 
     if (auto group = copy.group()) {
-        // sequence_length = history_len + input_len
+        // Non-autoregressive rows use the submitted prefix length:
+        // sequence_length = history_len + inflight_input_len + input_len.
+        // Existing autoregressive rows carry the previous sequence_length forward.
         for (int i = 0; i < b.bsz; ++i) {
             if (const int j = b.perm[i]; j < b.bs0 && d.autoregres[i]) {
                 copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
@@ -381,6 +392,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
     env.produce("finished", finished_.front());
     env.produce("sequence_length", sequence_length_.front());
+    env.produce("readonly_block_num", d.readonly_block_num);
     env.produce("k_offsets", k_offsets);
     if (symm_buf_) {
         env.produce("symm_buf", symm_buf_);
@@ -446,6 +458,7 @@ void LanguageModel::Impl::Unprep(int phase, TensorMap& env)
 
     copy(finished_.front().buffer(), d.finished.size(), d.finished);
 
+    unified_decoder_->Run(BatchOp::kUnprep, phase, env);
     generation_->Run(BatchOp::kUnprep, phase, env);
 }
 
@@ -469,9 +482,10 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
+LanguageModel::LanguageModel(
+    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
 {
-    impl_ = std::make_unique<Impl>(engine, ctx, weights, phases);
+    impl_ = std::make_unique<Impl>(registry, engine, ctx, weights, phases);
 }
 
 void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)

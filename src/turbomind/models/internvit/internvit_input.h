@@ -12,15 +12,20 @@ namespace turbomind {
 namespace multimodal {
 
 struct InternVitItem {
-    Modality modality;
-    Tensor   data;
-    int      token_begin;
-    int      token_end;
+    Modality    modality;
+    Tensor      data;
+    int         token_begin;
+    int         token_end;
+    Fingerprint fingerprint{};  // image content hash from the converter (empty if none supplied)
 
     InternVitItem() = default;
 
-    InternVitItem(Modality modality, Tensor data, int token_begin, int token_end):
-        modality{modality}, data{std::move(data)}, token_begin{token_begin}, token_end{token_end}
+    InternVitItem(Modality modality, Tensor data, int token_begin, int token_end, Fingerprint fingerprint = {}):
+        modality{modality},
+        data{std::move(data)},
+        token_begin{token_begin},
+        token_end{token_end},
+        fingerprint{fingerprint}
     {
     }
 };

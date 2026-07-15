@@ -15,7 +15,6 @@
 #include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -162,15 +161,11 @@ struct InternVit::Impl {
         TM_CUDA_CHECK(cudaGetLastError());
     }
 
-    int Add(RequestCache& c)
+    int Add(Sequence& s)
     {
-        const auto& [r, s] = std::tie(*c.req, *c.seq);
+        auto& r = *s.req;
         if (!r.mm_inputs) {
             return Request::kOk;
-        }
-
-        if ((not r.session.start_flag) or (not r.session.end_flag)) {
-            return Request::kInvalid;
         }
 
         const auto mm_inputs = std::dynamic_pointer_cast<multimodal::InternVitInput>(r.mm_inputs);
@@ -188,9 +183,10 @@ struct InternVit::Impl {
                 return Request::kInvalid;
             }
 
-            auto mm_item = std::make_shared<MultiModalData>(
-                MultiModalData{item.data, Interval{item.token_begin, Interval::Size{tokens}}, std::array<int, 3>{}});
+            const Interval interval{item.token_begin, Interval::Size{tokens}};
+            auto mm_item = std::make_shared<MultiModalData>(MultiModalData{item.data, interval, std::array<int, 3>{}});
             s.multimodal_inputs.push_back(mm_item);
+            s.multimodal_spans.push_back(MultiModalSpan{interval, item.fingerprint});
         }
 
         return Request::kOk;
@@ -198,11 +194,11 @@ struct InternVit::Impl {
 
     void Add(int /*phase*/, TensorMap& env)
     {
-        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        const Buffer_<Sequence*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
-            auto& c = *TM_CHECK_NOTNULL(rc[i]);
-            if (c.status == 0) {
-                c.status = Add(c);
+            auto& s = *TM_CHECK_NOTNULL(rc[i]);
+            if (s.status == 0) {
+                s.status = Add(s);
             }
         }
     }
@@ -219,13 +215,12 @@ struct InternVit::Impl {
         d.Clear();
         std::vector<Tensor> pixel_values;
 
-        const auto& rc = b.rc;
+        Buffer_<Sequence*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
-            const auto& c = *rc[i];
-            const auto& s = *c.seq;
+            const auto& s = *rc[i];
 
-            if ((not c.autoregres) && (not s.multimodal_inputs.empty())) {
-                Interval text{c.history_len + c.alpha, Interval::Size{c.input_len}};
+            if ((not s.autoregres) && (not s.multimodal_inputs.empty())) {
+                Interval text{s.history_len + s.inflight_input_len, Interval::Size{s.input_len}};
                 for (const auto& mm : s.multimodal_inputs) {
                     auto o = mm->interval & text;
                     if (auto size = (int)o.size()) {
@@ -242,7 +237,7 @@ struct InternVit::Impl {
                 }
             }
 
-            input_ids_offsets += c.autoregres ? 1 : c.input_len;
+            input_ids_offsets += s.autoregres ? 1 : s.input_len;
         }
 
         if (d.batch_size > 0) {
