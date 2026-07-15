@@ -34,11 +34,15 @@ GuidedDecoding::GuidedDecoding(const BaseGenerationParam& base, const comm::Host
 void GuidedDecoding::Setup(int phase, TensorMap& env)
 {
     auto& d = *data_.at(phase);
-    auto& b = *env.at("batch").data<BatchData*>()[0];
+    // auto& b = *env.at("batch").data<BatchData*>()[0];
+    Buffer_<Sequence*> rs = env.at("requests").buffer();
 
     d.matchers.clear();
     d.active = false;
-    for (const auto& r : b.rc) {
+    for (const auto& r : rs) {
+        if (!r->generating) {
+            continue;
+        }
         if (d.matchers.emplace_back(r->req->matcher)) {
             d.active = true;
         }
@@ -80,9 +84,8 @@ void GuidedDecoding::ApplyMask(int phase, TensorMap& env)
             comm::Broadcast(tp_group_, bitmask_buf_.data(), numel, 0);
         }
         Copy(bitmask_buf_.buffer(), numel, d.bitmask.buffer());
-        // Use logits shape(0) instead of d.matchers.size() to ensure dimension match.
-        // d.matchers.size() is the total number of requests in batch, but logits may be
-        // sliced to only include requests that are still generating (generation_size).
+        // Matchers are compacted to the generating prefix in Setup, matching the
+        // logits rows consumed by generation.
         auto logits = env.at("logits");
         ApplyTokenBitmaskInplace(logits, d.bitmask.slice(0, logits.shape(0)));
     }

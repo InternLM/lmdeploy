@@ -188,6 +188,7 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
     loop.inputs_maker = _InputsMaker(block_trie)
     loop.executor = _Executor(block_trie)
+    loop._sleep_requested = False
     model_inputs = SimpleNamespace(state_prefix_cache_save_offsets=[1])
     forward_inputs = dict(inputs=model_inputs, delta=None)
 
@@ -201,6 +202,61 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         ('release_restore', True),
         ('prefetch', True),
         ('get_output', True),
+        ('release_save', True),
+    ]
+    assert not block_trie.pinned
+
+
+def test_engine_loop_skips_prefetch_when_sleep_requested_but_releases_state_save():
+    events = []
+
+    class _BlockTrie:
+        enable = True
+        pinned = False
+
+        def commit_state_checkpoints(self, seqs, acquire_save_ref=False):
+            events.append(('commit', acquire_save_ref))
+            self.pinned = True
+
+        def release_state_checkpoint_restores(self, seqs):
+            events.append(('release_restore', self.pinned))
+
+        def release_state_checkpoint_saves(self, seqs):
+            events.append(('release_save', self.pinned))
+            self.pinned = False
+
+    class _InputsMaker:
+
+        def update_running_seqs(self, running, model_inputs):
+            events.append('update_running')
+
+        async def prefetch_next_inputs(self):
+            raise AssertionError('sleep drain must not prefetch more work')
+
+    class _Executor:
+
+        async def get_output_async(self):
+            events.append('get_output')
+            return None
+
+    block_trie = _BlockTrie()
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.inputs_maker = _InputsMaker()
+    loop.executor = _Executor()
+    loop._sleep_requested = True
+    model_inputs = SimpleNamespace(state_prefix_cache_save_offsets=[1])
+    forward_inputs = dict(inputs=model_inputs, delta=None)
+
+    forward_inputs, next_running = asyncio.run(loop._main_loop_get_outputs([object()], forward_inputs))
+
+    assert forward_inputs is None
+    assert next_running is None
+    assert events == [
+        'update_running',
+        ('commit', True),
+        ('release_restore', True),
+        'get_output',
         ('release_save', True),
     ]
     assert not block_trie.pinned
@@ -236,6 +292,22 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
 
     assert result == ('forward_inputs', ['long-seq'])
     assert events == ['collect_migration_done', 'send_next_inputs']
+
+
+def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():
+    events = []
+
+    class _InputsMaker:
+
+        def reset_runtime_state(self):
+            events.append('reset_inputs_maker')
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.inputs_maker = _InputsMaker()
+
+    loop.reset_runtime_state()
+
+    assert events == ['reset_inputs_maker']
 
 
 def _make_policy_maker(long_seq, decode_seq=None):
@@ -291,6 +363,40 @@ def test_inputs_maker_clamps_opt_ttft_short_turns_to_one(monkeypatch):
     )
 
     assert maker._short_prefill_turns_per_long_chunk == 1
+
+
+def test_inputs_maker_reset_runtime_state_discards_request_local_state():
+    scheduler = SimpleNamespace(cache_config=SimpleNamespace(block_size=16, kernel_block_size=16))
+    config = InputsMakerConfig(max_batches=1, max_prefill_token_num=512, role=EngineRole.Decode)
+    maker = InputsMakerAsync(
+        executor=SimpleNamespace(device_type='cpu'),
+        scheduler=scheduler,
+        adapter_manager=SimpleNamespace(),
+        engine_strategy=_FakeEngineStrategy(),
+        sampling_strategy=_FakeSamplingStrategy(),
+        model_agent_strategy=_FakeModelAgentStrategy(),
+        config=config,
+    )
+    seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    maker.long_context_chunker.set_seq(seq)
+    maker._decode_count = 7
+    maker._last_forward_kind = 'long_context_chunk'
+    maker._short_prefill_turns_since_long_chunk = 2
+    maker.next_is_prefill = False
+    maker.forward_inputs = {'inputs': object()}
+    maker.running_seqs = [object()]
+    maker.to_evict_seqs = [object()]
+
+    maker.reset_runtime_state()
+
+    assert maker._decode_count == 0
+    assert maker._last_forward_kind is None
+    assert maker._short_prefill_turns_since_long_chunk == 0
+    assert maker.next_is_prefill is True
+    assert maker.forward_inputs is None
+    assert maker.running_seqs == []
+    assert maker.to_evict_seqs == []
+    assert not maker.long_context_chunker.enabled()
 
 
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():

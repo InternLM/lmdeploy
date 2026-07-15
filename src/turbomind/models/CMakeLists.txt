@@ -15,19 +15,16 @@ add_library(models STATIC
         model_weight.cc
         model_root.cc
         vision_model.cc
+        qwen3_5vit/qwen3_5vit_block_weight.cc
+        qwen3_5vit/qwen3_5vit_weight.cc
         qwen3_5vit/fast_pos_embed.cu
         qwen3_5vit/fast_rotary_pos_emb.cu
         qwen3_5vit/fused_embed_merge.cu
         qwen3_5vit/qkv_preprocess.cu
         qwen3_5vit/mrope_position_ids.cu
         qwen3_5vit/bias_gelu.cu
-        qwen3_5vit/qwen3_5vit_block_weight.cc
-        qwen3_5vit/qwen3_5vit_weight.cc
         qwen3_5vit/qwen3_5vit.cc
         llama/LlamaLinear.cu
-        llama/BlockManager.cc
-        llama/BlockTrie.cc
-        llama/SequenceManager.cc
         llama/LlamaFfnLayer.cc
         llama/moe_ffn_layer.cc
         llama/unified_decoder.cc
@@ -42,6 +39,7 @@ set_property(TARGET models PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(models PUBLIC
         generation
         core
+        memory
         gemm2
         rms_norm
         layer_norm

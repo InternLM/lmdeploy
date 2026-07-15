@@ -247,6 +247,29 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
+        cache_checkpoint_interval: minimum token gap between reusable
+            recurrent-state checkpoints (CacheRegistry checkpoint_min_interval).
+            Must be > 0. Default 4096.
+        cache_prompt: partial prompt-boundary publication mode, one of
+            'all' | 'auto'. 'all' publishes the reusable partial fork_to node at
+            B = prompt_len - cache_prompt_boundary_skip whenever B is mid-block
+            (and arms a recurrent-state checkpoint clamp when B is block-aligned),
+            so a duplicate prompt skips prefill (costs one extra prefill forward +
+            a partial block). 'auto' (default) does that only when the partial
+            block holds image tokens (reusing vision-encoded KV) and is inert for
+            text-only prompts. Requires enable_prefix_caching.
+        cache_prompt_boundary_skip: number of trailing prompt tokens treated as
+            the volatile generation-prompt suffix (e.g. a chat template's
+            `<think>\n`) and excluded from the reusable prompt-boundary node, so
+            the node ends at prompt_len - cache_prompt_boundary_skip. Default 1
+            (exclude only the last token). Applies when cache_prompt is 'all' or
+            'auto'.
+        cache_generation: generated-block caching mode, one of
+            'all' | 'auto' | 'none'. 'all' indexes full generated blocks and the
+            terminal partial block, and adopts the terminal recurrent frontier
+            checkpoint (exact multi-turn resume, costs a partial block). 'auto'
+            (default) indexes full generated blocks only. 'none' indexes no
+            generated blocks at all. Requires enable_prefix_caching.
         quant_policy: default to 0. For TurboMind, when k/v is quantized
             into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
@@ -299,6 +322,10 @@ class TurbomindEngineConfig:
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
+    cache_checkpoint_interval: int = 4096
+    cache_prompt: str = 'auto'
+    cache_prompt_boundary_skip: int = 1
+    cache_generation: str = 'auto'
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
@@ -333,6 +360,10 @@ class TurbomindEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+        assert self.cache_prompt in ('all', 'auto'), 'invalid cache_prompt'
+        assert self.cache_generation in ('all', 'auto', 'none'), 'invalid cache_generation'
+        assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
+        assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
 
 
@@ -531,8 +562,10 @@ class ResponseType(enum.Enum):
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
-    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
+    PREFIX_CACHE_CONFLICT = enum.auto()
     NO_QUEUE = enum.auto()
+    NOT_SUPPORTED = enum.auto()
+    OUT_OF_MEMORY = enum.auto()
 
 
 @dataclass
