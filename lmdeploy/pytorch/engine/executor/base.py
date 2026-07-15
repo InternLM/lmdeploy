@@ -42,13 +42,6 @@ class ExecutorBase:
                  trust_remote_code: bool = False):
         """Initialize Executor."""
         cache_config.window_size = model_config.sliding_window
-        if cache_config.window_size is not None and cache_config.window_size > 0:
-            # do not support sliding window prefix caching
-            logger.warning('Sliding window prefix caching is not supported.')
-            cache_config.enable_prefix_caching = False
-        if cache_config.role != EngineRole.Hybrid and cache_config.enable_prefix_caching:
-            logger.warning('PD prefix caching is not supported.')
-            cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
@@ -58,6 +51,24 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
+
+    def _has_cache_update_hook(self):
+        """Return whether the model may normalize cache config later."""
+        return getattr(self.model_config, 'update_cache_config_func', None) is not None
+
+    def _maybe_disable_unsupported_prefix_caching(self, *, check_window: bool = True):
+        """Disable prefix caching for unsupported executor/cache modes."""
+        if not getattr(self.cache_config, 'enable_prefix_caching', False):
+            return
+        if check_window and self.cache_config.window_size is not None and self.cache_config.window_size > 0:
+            # do not support generic sliding window prefix caching
+            logger.warning('Sliding window prefix caching is not supported.')
+            self.cache_config.enable_prefix_caching = False
+            return
+        if self.cache_config.role != EngineRole.Hybrid:
+            logger.warning('PD prefix caching is not supported.')
+            self.cache_config.enable_prefix_caching = False
 
     def download_models(self):
         """Download model."""
@@ -369,6 +380,7 @@ class ExecutorBase:
     def update_configs(self) -> None:
         """Update cache config."""
         self._adjust_block_size()
+        self._maybe_disable_unsupported_prefix_caching()
         self._sync_spec_cache_block_size()
         self.cache_config.states_shapes = self.model_config.states_shapes
 

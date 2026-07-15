@@ -131,6 +131,53 @@ def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rul
     assert executor.cache_config.window_size == -1
 
 
+def test_executor_disables_prefix_cache_with_generic_sliding_window():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True)
+    model_config = SimpleNamespace(sliding_window=4096, update_cache_config_func=None)
+
+    ExecutorBase(model_path='',
+                 model_config=model_config,
+                 cache_config=cache_config,
+                 backend_config=SimpleNamespace(),
+                 dist_config=SimpleNamespace(dp=1, world_size=1),
+                 misc_config=SimpleNamespace())
+
+    assert cache_config.window_size == 4096
+    assert not cache_config.enable_prefix_caching
+
+
+def test_executor_keeps_prefix_cache_after_deepseek_v4_window_normalization():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=192,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True)
+    model_config = SimpleNamespace(sliding_window=4096,
+                                   update_cache_config_func=update_deepseek_v4_cache_config)
+
+    executor = ExecutorBase(model_path='',
+                            model_config=model_config,
+                            cache_config=cache_config,
+                            backend_config=SimpleNamespace(),
+                            dist_config=SimpleNamespace(dp=1, world_size=1),
+                            misc_config=SimpleNamespace())
+
+    assert cache_config.enable_prefix_caching
+
+    executor._adjust_block_size()
+    executor._maybe_disable_unsupported_prefix_caching()
+
+    assert cache_config.block_size == 256
+    assert cache_config.kernel_block_size == 256
+    assert cache_config.window_size == -1
+    assert cache_config.enable_prefix_caching
+
+
 def test_executor_keeps_prefix_cache_with_spec_decode():
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
