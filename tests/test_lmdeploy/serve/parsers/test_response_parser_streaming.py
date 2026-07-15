@@ -21,11 +21,12 @@ def _make_parser():
 
 
 class TestResponseParserReasoningCloseTagAcrossChunks:
-    """A reasoning close tag (e.g. ``</think>``) is not a single vocab
-    token, so real token-by-token streaming can split it across multiple
-    ``stream_chunk`` calls. _consume_reasoning must buffer a possible
-    partial-tag suffix instead of flushing it as reasoning content,
-    mirroring how _consume_plain already handles split open tags.
+    """A reasoning close tag (e.g. ``</think>``) is not a single vocab token,
+    so real token-by-token streaming can split it across multiple
+    ``stream_chunk`` calls.
+
+    _consume_reasoning must buffer a possible partial-tag suffix instead of flushing it as reasoning content, mirroring
+    how _consume_plain already handles split open tags.
     """
 
     def test_close_tag_split_across_two_chunks_is_not_leaked(self):
