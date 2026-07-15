@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from ._base import Builder, ParallelGroup, SplitSide
-from .module_list import ModuleListBuilder, ModuleListConfig
 
 # ---------------------------------------------------------------------------
 # MoeBuilder -- gate, non-expert params
@@ -40,16 +39,13 @@ class MoeBuilder(Builder):
             split_side = None  # specs may pass None for broadcast
         self._add_tensor(name, tensor, split_side)
 
-    def add_experts(self, build_expert, name='experts'):
-        """Build and attach expert modules with contiguous EP ownership."""
-        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for expert_idx in range(self.config.expert_num):
-            active_mask = self._expert_active_mask(expert_idx)
+    def range(self, num_experts):
+        for e in range(num_experts):
+            active_mask = self._expert_active_mask(e)
             if not any(active_mask):
                 continue
             with self._ctx.active_mask_scope(active_mask):
-                experts[expert_idx] = build_expert(expert_idx)
-        setattr(self, name, experts.build())
+                yield e
 
     def _expert_active_mask(self, expert_idx: int):
         ep_size = self.ep.size

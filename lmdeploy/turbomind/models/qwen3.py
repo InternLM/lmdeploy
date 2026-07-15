@@ -113,8 +113,10 @@ class Qwen3TextModel(TextModel):
         m = MoeBuilder(cfg, self._ctx, ep=self._ep)
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
-        m.add_experts(
-            lambda e: self.ffn(pfx + 'experts' + e, is_expert=True))
+        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for e in m.range(self._n_experts):
+            experts[e] = self.ffn(pfx + 'experts' + e, is_expert=True)
+        m.experts = experts.build()
 
         return m.build()
 

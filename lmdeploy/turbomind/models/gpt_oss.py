@@ -110,7 +110,10 @@ class GptOssModel(TextModel):
         m = MoeBuilder(cfg, self._ctx, ep=self._ep)
         m.add_gate('gate', self._linear(pfx + 'router'))
         experts_pfx = pfx + 'experts'
-        m.add_experts(lambda e: self._packed_moe_ffn(experts_pfx, e))
+        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for e in m.range(cfg.expert_num):
+            experts[e] = self._packed_moe_ffn(experts_pfx, e)
+        m.experts = experts.build()
         return m.build()
 
     def layers(self, pfx):

@@ -122,10 +122,11 @@ class Glm4MoeLiteModel(TextModel):
         correction = pfx.pop('gate.e_score_correction_bias')
         m.add_param('score_correction_bias', correction)
 
-        m.add_experts(
-            lambda e: self.ffn(pfx + 'experts' + e,
-                               self.cfg.moe_intermediate_size,
-                               is_expert=True))
+        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for e in m.range(cfg.expert_num):
+            experts[e] = self.ffn(pfx + 'experts' + e,
+                                  self.cfg.moe_intermediate_size, is_expert=True)
+        m.experts = experts.build()
 
         shared = self.ffn(pfx + 'shared_experts',
                           self.cfg.intermediate_size * self.cfg.n_shared_experts)

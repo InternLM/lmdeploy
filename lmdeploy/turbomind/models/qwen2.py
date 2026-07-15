@@ -114,10 +114,12 @@ class Qwen2Model(TextModel):
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
-        m.add_experts(
-            lambda e: self.ffn(pfx + 'experts' + e,
-                               self.cfg.moe_intermediate_size,
-                               is_expert=True))
+        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for e in m.range(self.cfg.num_experts):
+            experts[e] = self.ffn(pfx + 'experts' + e,
+                                  self.cfg.moe_intermediate_size,
+                                  is_expert=True)
+        m.experts = experts.build()
 
         m.add_gate('shared_gate', self._linear(pfx + 'shared_expert_gate'))
         shared = self.ffn(pfx + 'shared_expert',

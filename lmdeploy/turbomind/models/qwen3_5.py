@@ -211,9 +211,11 @@ class Qwen3_5TextModel(TextModel):
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts_pfx = pfx + 'experts'
-        m.add_experts(
-            lambda e: self._moe_expert_ffn(
-                experts_pfx, e, self.cfg.moe_intermediate_size))
+        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for e in m.range(self._n_experts):
+            experts[e] = self._moe_expert_ffn(
+                experts_pfx, e, self.cfg.moe_intermediate_size)
+        m.experts = experts.build()
 
         m.add_gate('shared_gate', self._linear(pfx + 'shared_expert_gate'))
         shared = self.ffn(pfx + 'shared_expert', self.cfg.shared_expert_intermediate_size)
