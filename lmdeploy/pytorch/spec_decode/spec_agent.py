@@ -158,6 +158,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         misc_config: MiscConfig,
         dist_ctx: DistContext,
         device: str = 'cuda',
+        guided_decoding_manager=None,
     ):
         super().__init__(specdecode_config,
                          backend_config,
@@ -168,10 +169,9 @@ class SpecModelAgent(BaseSpecModelAgent):
                          device,
                          )
 
+        self.guided_helper = GuidedSpecHelper(guided_decoding_manager)
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
-
-        # Guided decoding — set by ModelAgent after construction
-        self.guided_helper = GuidedSpecHelper()
+        self.proposer.guided_helper = self.guided_helper
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
