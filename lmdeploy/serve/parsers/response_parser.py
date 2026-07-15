@@ -563,6 +563,16 @@ class BaseResponseParser(ResponseParser):
         if idx < 0:
             if not self._pending:
                 return [], False
+            # No close tag found. Keep a possible close-tag prefix suffix in
+            # buffer so a close tag split across chunks can still be
+            # recognized, mirroring _consume_reasoning's handling.
+            keep = self._longest_open_tag_prefix_suffix(self._pending, [close_tag])
+            if keep > 0:
+                if keep >= len(self._pending):
+                    return [], False
+                emit = self._pending[:-keep]
+                self._pending = self._pending[-keep:]
+                return self.tool_parser.decode_tool_incremental(added_text=emit, final=False), True
             emit = self._pending
             self._pending = ''
             return self.tool_parser.decode_tool_incremental(added_text=emit, final=False), True
