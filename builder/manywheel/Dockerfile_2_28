@@ -5,7 +5,7 @@ ENV LC_ALL=en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US.UTF-8
 
-RUN sed -e 's|^mirrorlist=|#mirrorlist=|g' \
+RUN sed -i -e 's|^mirrorlist=|#mirrorlist=|g' \
         -e 's|^# baseurl=https://repo.almalinux.org|baseurl=https://mirror.sjtu.edu.cn|g' \
         /etc/yum.repos.d/almalinux*.repo && \
     yum install -y \
