@@ -27,11 +27,40 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                            const Buffer_<void*>& conv_state_ptrs,
                            const Buffer_<int>&   q_offsets,
                            const Buffer_<int>&   k_offsets,
+                           const Buffer_<bool>&  finished,
                            int                   batch_size,
                            int                   state_layer_offset,
                            int                   sm_count,
                            int*                  work_counter,
                            cudaStream_t          stream);
+
+inline void invokeFusedConv1dSiLU(Ref<Tensor>           out,
+                                  const Tensor&         in,
+                                  const Tensor&         weight,
+                                  const Tensor&         bias,
+                                  const Buffer_<void*>& conv_state_ptrs,
+                                  const Buffer_<int>&   q_offsets,
+                                  const Buffer_<int>&   k_offsets,
+                                  int                   batch_size,
+                                  int                   state_layer_offset,
+                                  int                   sm_count,
+                                  int*                  work_counter,
+                                  cudaStream_t          stream)
+{
+    invokeFusedConv1dSiLU(out,
+                          in,
+                          weight,
+                          bias,
+                          conv_state_ptrs,
+                          q_offsets,
+                          k_offsets,
+                          Buffer_<bool>{},
+                          batch_size,
+                          state_layer_offset,
+                          sm_count,
+                          work_counter,
+                          stream);
+}
 
 // All three recurrent-rule launchers share the same trailing parameters for
 // interface consistency:
@@ -53,7 +82,9 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
                                     DataType              state_dtype,
                                     int                   sm_count,
                                     int*                  work_counter,
-                                    cudaStream_t          stream);
+                                    cudaStream_t          stream,
+                                    int                   num_head_groups = 1,
+                                    int                   heads_per_block = 0);
 
 // v3: persistent decode kernel, seq_len == 1 only.
 // Launches min(total_work, blocks_per_sm * sm_count) blocks; each block claims
@@ -65,13 +96,46 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
                                     const Tensor&         g,
                                     const Buffer_<void*>& state_ptrs,
                                     const Buffer_<int>&   q_offsets,
+                                    const Buffer_<bool>&  finished,
                                     int                   batch_size,
                                     int                   num_k_heads,
                                     int                   state_layer_offset,
                                     DataType              state_dtype,
                                     int                   sm_count,
                                     int*                  work_counter,
-                                    cudaStream_t          stream);
+                                    cudaStream_t          stream,
+                                    int                   num_head_groups = 1,
+                                    int                   heads_per_block = 0);
+
+inline void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
+                                           const Tensor&         qkv_in,
+                                           const Tensor&         beta,
+                                           const Tensor&         g,
+                                           const Buffer_<void*>& state_ptrs,
+                                           const Buffer_<int>&   q_offsets,
+                                           int                   batch_size,
+                                           int                   num_k_heads,
+                                           int                   state_layer_offset,
+                                           DataType              state_dtype,
+                                           int                   sm_count,
+                                           int*                  work_counter,
+                                           cudaStream_t          stream)
+{
+    invokeGatedDeltaRuleBatched_v3(v_out,
+                                   qkv_in,
+                                   beta,
+                                   g,
+                                   state_ptrs,
+                                   q_offsets,
+                                   Buffer_<bool>{},
+                                   batch_size,
+                                   num_k_heads,
+                                   state_layer_offset,
+                                   state_dtype,
+                                   sm_count,
+                                   work_counter,
+                                   stream);
+}
 
 // =============================================================================
 // Chunked Gated Delta Rule — for accelerating prefill
@@ -88,13 +152,46 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
                                         const Tensor&         g,
                                         const Buffer_<void*>& state_ptrs,
                                         const Buffer_<int>&   q_offsets,
+                                        const Buffer_<bool>&  finished,
                                         int                   batch_size,
                                         int                   num_k_heads,
                                         int                   state_layer_offset,
                                         DataType              state_dtype,
                                         int                   sm_count,
                                         int*                  work_counter,
-                                        cudaStream_t          stream);
+                                        cudaStream_t          stream,
+                                        int                   num_head_groups = 1,
+                                        int                   heads_per_block = 0);
+
+inline void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
+                                               const Tensor&         qkv_in,
+                                               const Tensor&         beta,
+                                               const Tensor&         g,
+                                               const Buffer_<void*>& state_ptrs,
+                                               const Buffer_<int>&   q_offsets,
+                                               int                   batch_size,
+                                               int                   num_k_heads,
+                                               int                   state_layer_offset,
+                                               DataType              state_dtype,
+                                               int                   sm_count,
+                                               int*                  work_counter,
+                                               cudaStream_t          stream)
+{
+    invokeChunkedGatedDeltaRuleBatched(v_out,
+                                       qkv_in,
+                                       beta,
+                                       g,
+                                       state_ptrs,
+                                       q_offsets,
+                                       Buffer_<bool>{},
+                                       batch_size,
+                                       num_k_heads,
+                                       state_layer_offset,
+                                       state_dtype,
+                                       sm_count,
+                                       work_counter,
+                                       stream);
+}
 
 // =============================================================================
 // Helper kernels
