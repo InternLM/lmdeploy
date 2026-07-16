@@ -3,8 +3,9 @@
 set -eou pipefail
 
 TOPDIR=$(git rev-parse --show-toplevel)/builder
-GPU_ARCH_VERSION=${GPU_ARCH_VERSION}
+GPU_ARCH_VERSION=${GPU_ARCH_VERSION:-12.8}
 WITH_PUSH=${WITH_PUSH:-}
+MANY_LINUX_VERSION=${MANY_LINUX_VERSION:-2_28}
 
 TARGET=cuda_final
 DOCKER_TAG=manylinux_${MANY_LINUX_VERSION}-cuda${GPU_ARCH_VERSION}

@@ -5,7 +5,7 @@ set -eou pipefail
 TOPDIR=$(git rev-parse --show-toplevel)/builder
 
 CUDA_VER=${CUDA_VER:-12.8}
-PLAT_NAME=${PLAT_NAME:-manylinux_2_28_x86_64}
+PLAT_NAME=manylinux_2_28_x86_64
 
 for cuver in ${CUDA_VER}; do
     DOCKER_TAG=manylinux_2_28-cuda${cuver}

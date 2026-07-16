@@ -24,7 +24,7 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+  OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/stable_reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   COMPASS_DATA_CACHE: /nvme/qa_test_models/dataset
@@ -38,8 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
-      PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda11.8
+      PLAT_NAME: manylinux_2_28_x86_64
+      DOCKER_TAG: cuda12.8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3

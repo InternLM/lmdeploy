@@ -107,6 +107,27 @@ function install_128 {
     ldconfig
 }
 
+function install_130 {
+    echo "Installing CUDA 13.0 and NCCL 2.30.3"
+    rm -rf /usr/local/cuda-13.0 /usr/local/cuda
+    # install CUDA 13.0.3 in the same container
+    wget -q https://developer.download.nvidia.com/compute/cuda/13.0.3/local_installers/cuda_13.0.3_580.126.20_linux.run
+    chmod +x cuda_13.0.3_580.126.20_linux.run
+    ./cuda_13.0.3_580.126.20_linux.run --toolkit --silent
+    rm -f cuda_13.0.3_580.126.20_linux.run
+    rm -f /usr/local/cuda && ln -s /usr/local/cuda-13.0 /usr/local/cuda
+
+    # NCCL license: https://docs.nvidia.com/deeplearning/nccl/#licenses
+    mkdir tmp_nccl && cd tmp_nccl
+    wget -q https://developer.download.nvidia.com/compute/redist/nccl/v2.30.3/nccl_2.30.3-1+cuda13.2_x86_64.txz
+    tar xf nccl_2.30.3-1+cuda13.2_x86_64.txz
+    cp -a nccl_2.30.3-1+cuda13.2_x86_64/include/* /usr/local/cuda/include/
+    cp -a nccl_2.30.3-1+cuda13.2_x86_64/lib/* /usr/local/cuda/lib64/
+    cd ..
+    rm -rf tmp_nccl
+    ldconfig
+}
+
 function install_132 {
     echo "Installing CUDA 13.2 and NCCL 2.30.3"
     rm -rf /usr/local/cuda-13.2 /usr/local/cuda
@@ -147,7 +168,9 @@ do
             ;;
     12.8) install_128
             ;;
-	13.2) install_132
+	13.0) install_130
+            ;;
+    13.2) install_132
             ;;
 	*) echo "bad argument $1"; exit 1
 	   ;;
