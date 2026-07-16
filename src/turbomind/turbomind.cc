@@ -245,7 +245,7 @@ void TurboMind::Impl::CreateContext(int index)
         p.model_tp_rank = c.d_comm->rank(c.d_tp_group);
         p.attn_tp_rank  = p.model_tp_rank / p.attn_cp_size;
         p.mlp_tp_rank   = inner_rank % p.mlp_tp_size;
-        p.ep_rank       = inner_rank % p.ep_size;
+        p.ep_rank       = inner_rank / p.mlp_tp_size;
     }
 
     if (c.h_tp_group->rank() == 0) {
