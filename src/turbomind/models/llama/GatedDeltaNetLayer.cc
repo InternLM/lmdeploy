@@ -2,6 +2,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
@@ -35,54 +38,99 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     tp_size_{engine.attn_tp_size * engine.attn_cp_size}, state_dtype_{engine.data_type}, linear_{*context.linear}
 {
     TM_CHECK(!weights.empty());
-    layer_num_ = static_cast<int>(weights.size());
+    const auto& first = *TM_CHECK_NOTNULL(weights.front());
+    layer_num_        = static_cast<int>(weights.size());
 
-    const auto [l_state_size, c_state_size] = get_lc_state_size(*weights[0], tp_size_);
+    arch_     = getSMVersion() * 10;
+    sm_count_ = getSMCount();
 
-    const int num_v_heads = weights[0]->num_v_heads / tp_size_;
-    const int cell_elems =
-        weights[0]->key_head_dim * weights[0]->value_head_dim;  // one (layer, head) state, in elements
-    TM_CHECK_EQ(l_state_size, num_v_heads * cell_elems);        // sanity: get_lc_state_size agrees
-
-    // Block unit (L_b layers x H_b v_heads). Unset env => one part per layer,
-    // no head-grouping == today's behavior.
-    int L_b = 1;
-    int H_b = num_v_heads;
-    if (const char* e = std::getenv("TM_GDN_BLOCK_CONFIG")) {
-        TM_CHECK_EQ(std::sscanf(e, "%d,%d", &L_b, &H_b), 2) << "expected TM_GDN_BLOCK_CONFIG=l,h (e.g. 4,16)";
+    TM_CHECK_EQ(first.num_k_heads % tp_size_, 0);
+    TM_CHECK_EQ(first.num_v_heads % tp_size_, 0);
+    TM_CHECK_EQ(first.key_head_dim, 128);
+    TM_CHECK_EQ(first.value_head_dim, 128);
+    for (const auto* weight_ptr : weights) {
+        const auto& weight = *TM_CHECK_NOTNULL(weight_ptr);
+        TM_CHECK_EQ(weight.num_k_heads, first.num_k_heads);
+        TM_CHECK_EQ(weight.num_v_heads, first.num_v_heads);
+        TM_CHECK_EQ(weight.key_head_dim, first.key_head_dim);
+        TM_CHECK_EQ(weight.value_head_dim, first.value_head_dim);
+        TM_CHECK_EQ(weight.d_conv, first.d_conv);
+        TM_CHECK_EQ(weight.data_type, first.data_type);
+        TM_CHECK_EQ(weight.num_k_heads % tp_size_, 0);
+        TM_CHECK_EQ(weight.num_v_heads % tp_size_, 0);
     }
-    TM_CHECK_GT(L_b, 0);
-    TM_CHECK_GT(H_b, 0);
 
-    auto cdiv_i       = [](int a, int b) { return (a + b - 1) / b; };
-    layers_per_block_ = L_b;
-    heads_per_block_  = H_b;
-    num_head_groups_  = cdiv_i(num_v_heads, H_b);  // == 1 when H_b >= num_v_heads
-    num_layer_groups_ = cdiv_i(layer_num_, L_b);   // == layer_num_ when L_b == 1
-    num_blocks_       = num_layer_groups_ * num_head_groups_;
-    block_bytes_      = byte_size(state_dtype_, (size_t)L_b * H_b * cell_elems);
+    input_dtype_  = first.data_type;
+    num_k_heads_  = first.num_k_heads / tp_size_;
+    num_v_heads_  = first.num_v_heads / tp_size_;
+    head_dim_     = first.key_head_dim;
+    gate_stride_  = (num_v_heads_ + 3) / 4 * 4;
+    TM_CHECK_EQ(num_v_heads_ % num_k_heads_, 0);
 
-    // recurrent: num_blocks_ uniform parts, base part id == 1
+    const auto [linear_state_size, conv_state_size] = get_lc_state_size(first, tp_size_);
+    const int cell_elements = first.key_head_dim * first.value_head_dim;
+    TM_CHECK_EQ(linear_state_size, num_v_heads_ * cell_elements);
+
+    int layers_per_block = 1;
+    int heads_per_block  = num_v_heads_;
+    if (const char* value = std::getenv("TM_GDN_BLOCK_CONFIG")) {
+        TM_CHECK_EQ(std::sscanf(value, "%d,%d", &layers_per_block, &heads_per_block), 2)
+            << "expected TM_GDN_BLOCK_CONFIG=l,h (e.g. 4,16)";
+    }
+    TM_CHECK_GT(layers_per_block, 0);
+    TM_CHECK_GT(heads_per_block, 0);
+
+    auto ceil_div       = [](int value, int divisor) { return (value + divisor - 1) / divisor; };
+    layers_per_block_   = layers_per_block;
+    heads_per_block_    = heads_per_block;
+    num_head_groups_    = ceil_div(num_v_heads_, heads_per_block_);
+    num_layer_groups_   = ceil_div(layer_num_, layers_per_block_);
+    num_blocks_         = num_layer_groups_ * num_head_groups_;
+    block_bytes_        = byte_size(
+        state_dtype_, size_t(layers_per_block_) * heads_per_block_ * cell_elements);
+
+    auto require_mode = [&](linear_attn::delta_rule::GdrMode mode) {
+        using namespace linear_attn::delta_rule;
+        PlanningContext planning{};
+        planning.arch              = arch_;
+        planning.sm_count          = sm_count_;
+        planning.input_dtype       = input_dtype_;
+        planning.state_dtype       = state_dtype_;
+        planning.physical_batch    = 1;
+        planning.token_slots       = mode == GdrMode::kRecurrent ? 1 : 16;
+        planning.hq                = num_k_heads_;
+        planning.hv                = num_v_heads_;
+        planning.head_dim          = head_dim_;
+        planning.gate_stride       = gate_stride_;
+        planning.gate_batch_stride = int64_t(planning.token_slots) * gate_stride_;
+        planning.num_head_groups   = num_head_groups_;
+        planning.heads_per_block   = heads_per_block_;
+        if (mode == GdrMode::kChunked) {
+            planning.q_offsets = {0, 16};
+        }
+        Operation operation{};
+        operation.mode = mode;
+        Plan plan;
+        TM_CHECK(delta_rule_.Plan(operation, planning, &plan));
+    };
+    require_mode(linear_attn::delta_rule::GdrMode::kRecurrent);
+    require_mode(linear_attn::delta_rule::GdrMode::kChunked);
+
     rec_base_ = registry.checkpoint().Register({{block_bytes_, 1, static_cast<size_t>(num_blocks_)}});
 
-    // conv: accumulation -> part 0; ELEMENT offsets kept exactly as today.
-    size_t off = 0;
-    for (int i = 0; i < layer_num_; ++i) {
-        weights[i]->conv_state_offset = off;
-        off += c_state_size;
+    size_t conv_offset = 0;
+    for (int layer = 0; layer < layer_num_; ++layer) {
+        weights[layer]->conv_state_offset = conv_offset;
+        conv_offset += conv_state_size;
     }
-    conv_total_bytes_ = byte_size(state_dtype_, off);
-    registry.checkpoint().Register(conv_total_bytes_, /*alignment=*/1);  // reserves part 0
+    conv_total_bytes_ = byte_size(state_dtype_, conv_offset);
+    registry.checkpoint().Register(conv_total_bytes_, 1);
 
-    // Visibility: slot-level interchange with the prefix object requires
-    // block_bytes_ == prefix object bytes. Not enforced (optimal sizing is
-    // out of scope); just log. Attention registers prefix before this ctor.
     const size_t prefix_bytes = registry.prefix().accumulation_bytes();
-    // Logger is fmtlib-style ({} placeholders), matching slab.h's TM_LOG_WARN.
     TM_LOG_INFO("[GDN] block config L_b={} H_b={} -> num_layer_groups={} num_head_groups={} "
                 "num_blocks={} block_bytes={} prefix_object_bytes={} ({})",
-                L_b,
-                H_b,
+                layers_per_block_,
+                heads_per_block_,
                 num_layer_groups_,
                 num_head_groups_,
                 num_blocks_,
@@ -90,26 +138,22 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                 prefix_bytes,
                 (prefix_bytes != 0 && block_bytes_ == prefix_bytes) ? "slab-shared" : "separate-slab-class");
 
-    for (int L = 0; L < layer_num_; ++L) {
-        // in-block row offset (elements) for this layer within its block-row;
-        // == 0 when L_b == 1 (today's behavior).
-        weights[L]->linear_state_offset = (L % L_b) * H_b * cell_elems;
-        layer_index_[weights[L]]        = L;  // weight ptr -> GDN-local layer index
+    for (int layer = 0; layer < layer_num_; ++layer) {
+        weights[layer]->linear_state_offset =
+            (layer % layers_per_block_) * heads_per_block_ * cell_elements;
+        layer_index_[weights[layer]] = layer;
     }
 
-    // Staging buffers: conv stays [batch]; recurrent becomes a [layer_group][batch][head_group] table.
-    conv_state_ptrs_buf_      = {engine.max_batch_size, kCPUpinned};
-    recurrent_state_ptrs_buf_ = {(ssize_t)num_layer_groups_ * engine.max_batch_size * num_head_groups_, kCPUpinned};
+    conv_state_ptrs_buf_ = {engine.max_batch_size, kCPUpinned};
+    recurrent_state_ptrs_buf_ = {
+        core::ssize_t(num_layer_groups_) * engine.max_batch_size * num_head_groups_, kCPUpinned};
 
-    for (int i = 0; i < phases; ++i) {
+    for (int phase = 0; phase < phases; ++phase) {
         data_.emplace_back();
-        data_.at(i).conv_state_ptrs      = empty_like(conv_state_ptrs_buf_, kDEVICE);
-        data_.at(i).recurrent_state_ptrs = empty_like(recurrent_state_ptrs_buf_, kDEVICE);
+        data_.at(phase).conv_state_ptrs      = empty_like(conv_state_ptrs_buf_, kDEVICE);
+        data_.at(phase).recurrent_state_ptrs = empty_like(recurrent_state_ptrs_buf_, kDEVICE);
     }
 
-    int device = 0;
-    cudaGetDevice(&device);
-    cudaDeviceGetAttribute(&sm_count_, cudaDevAttrMultiProcessorCount, device);
     work_counter_ = {1, kDEVICE};
 
     TM_CUDA_CHECK(cudaStreamCreateWithPriority(&aux_stream_, cudaStreamNonBlocking, -1));
@@ -127,293 +171,353 @@ GatedDeltaNetLayer::~GatedDeltaNetLayer()
 void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
 {
     if (op == BatchOp::kAdd) {
-        Buffer_<Sequence*> rc = env.at("requests").buffer();
-        for (int i = 0; i < rc.size(); ++i) {}
+        Buffer_<Sequence*> requests = env.at("requests").buffer();
+        for (int i = 0; i < requests.size(); ++i) {}
     }
     else if (op == BatchOp::kSetup) {
         Setup(phase, env);
     }
     else if (op == BatchOp::kPrepare) {
-        auto& d     = data_.at(phase);
-        d.q_offsets = env.at("q_offsets").buffer().borrow();
-        d.k_offsets = env.at("k_offsets").buffer().borrow();
-        d.finished  = env.at("finished").buffer().borrow();
-        for (const auto& [ptr, bytes] : d.reset_ptrs) {
-            Clear(Buffer_<uint8_t>{ptr, static_cast<ssize_t>(bytes), kDEVICE});
+        auto& data       = data_.at(phase);
+        data.q_offsets   = env.at("q_offsets").buffer().borrow();
+        data.k_offsets   = env.at("k_offsets").buffer().borrow();
+        data.finished    = env.at("finished").buffer().borrow();
+        for (const auto& [ptr, bytes] : data.reset_ptrs) {
+            Clear(Buffer_<uint8_t>{ptr, static_cast<core::ssize_t>(bytes), kDEVICE});
         }
-        d.reset_ptrs.clear();
+        data.reset_ptrs.clear();
+
+        if (data.recurrent_plan) {
+            core::Tensor state_ptrs{
+                data.recurrent_state_ptrs,
+                core::Layout{{num_layer_groups_, data.decode_count, num_head_groups_},
+                             {data.batch_size * num_head_groups_, num_head_groups_, 1}},
+                core::Tensor::PreserveBufferCapacity{}};
+            core::Tensor state_descs;
+            if (data.recurrent_state_tma_descs) {
+                state_descs = core::Tensor{
+                    data.recurrent_state_tma_descs,
+                    core::Layout{{num_layer_groups_, data.decode_count, num_head_groups_, 128}}};
+            }
+            delta_rule_.PrepareState(state_ptrs,
+                                     state_descs,
+                                     num_layer_groups_,
+                                     layers_per_block_,
+                                     *data.recurrent_plan,
+                                     core::Context::stream().handle());
+        }
     }
 }
 
 void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
 {
-    auto& d = data_.at(phase);
+    auto& data = data_.at(phase);
+    Buffer_<Sequence*> requests = env.at("requests").buffer();
 
-    Buffer_<Sequence*> rc = env.at("requests").buffer();
+    data.batch_size = requests.size();
+    data.input_lens.resize(data.batch_size);
+    data.reset_ptrs.clear();
 
-    d.batch_size = rc.size();
-    d.input_lens.resize(d.batch_size);
-    d.reset_ptrs.clear();
+    std::vector<int32_t> host_offsets(data.batch_size + 1, 0);
+    for (int sequence = 0; sequence < data.batch_size; ++sequence) {
+        data.input_lens[sequence] = requests[sequence]->input_len;
+        host_offsets[sequence + 1] = host_offsets[sequence] + data.input_lens[sequence];
+    }
+    const int token_slots = *env.at("token_num").data<int>();
+    data.decode_count = 0;
+    while (data.decode_count < data.batch_size && data.input_lens[data.decode_count] == 1) {
+        ++data.decode_count;
+    }
+    data.prefill_count = data.batch_size - data.decode_count;
 
-    for (int i = 0; i < d.batch_size; ++i) {
-        auto& s         = *rc[i];
-        d.input_lens[i] = s.input_len;
+    data.recurrent_plan.reset();
+    data.chunked_plan.reset();
+    data.chunked_workspace = {};
+    data.recurrent_state_tma_descs = {};
 
-        const CacheBlock& cb = *TM_CHECK_NOTNULL(s.frontier.get());
-        TM_CHECK_NOTNULL(cb.allocation.a);
+    auto make_context = [&] {
+        linear_attn::delta_rule::PlanningContext planning{};
+        planning.arch            = arch_;
+        planning.sm_count        = sm_count_;
+        planning.input_dtype     = input_dtype_;
+        planning.state_dtype     = state_dtype_;
+        planning.hq              = num_k_heads_;
+        planning.hv              = num_v_heads_;
+        planning.head_dim        = head_dim_;
+        planning.gate_stride     = gate_stride_;
+        planning.num_head_groups = num_head_groups_;
+        planning.heads_per_block = heads_per_block_;
+        return planning;
+    };
 
-        conv_state_ptrs_buf_[i] = cb.base(0);  // conv accumulation part
-        // One pointer per (layer-group, head-group) == per recurrent part; the L_b
-        // layers of a block-row share this base (differ only by linear_state_offset).
-        for (int lg = 0; lg < num_layer_groups_; ++lg) {
-            for (int hg = 0; hg < num_head_groups_; ++hg) {
-                const int part = rec_base_ + lg * num_head_groups_ + hg;
-                recurrent_state_ptrs_buf_[(lg * d.batch_size + i) * num_head_groups_ + hg] = cb.base(part);
+    if (data.decode_count != 0) {
+        auto planning = make_context();
+        planning.physical_batch    = data.decode_count;
+        planning.token_slots       = 1;
+        planning.gate_batch_stride = gate_stride_;
+        linear_attn::delta_rule::Operation operation{};
+        operation.mode = linear_attn::delta_rule::GdrMode::kRecurrent;
+        linear_attn::delta_rule::Plan plan;
+        TM_CHECK(delta_rule_.Plan(operation, planning, &plan));
+        data.recurrent_plan.emplace(std::move(plan));
+    }
+
+    if (data.prefill_count != 0) {
+        auto planning = make_context();
+        planning.physical_batch    = 1;
+        planning.token_slots       = token_slots;
+        planning.gate_batch_stride = int64_t(token_slots) * gate_stride_;
+        planning.q_offsets.assign(host_offsets.begin() + data.decode_count, host_offsets.end());
+        linear_attn::delta_rule::Operation operation{};
+        operation.mode = linear_attn::delta_rule::GdrMode::kChunked;
+        linear_attn::delta_rule::Plan plan;
+        TM_CHECK(delta_rule_.Plan(operation, planning, &plan));
+        data.chunked_plan.emplace(std::move(plan));
+    }
+
+    if (data.chunked_plan && data.chunked_plan->workspace_bytes != 0) {
+        data.chunked_workspace = core::Tensor{
+            core::Layout{{static_cast<core::ssize_t>(data.chunked_plan->workspace_bytes)}},
+            kUint8,
+            kDEVICE};
+    }
+    if (data.recurrent_plan && data.recurrent_plan->state_tma_desc_bytes_per_layer_group != 0) {
+        const core::ssize_t descriptor_bytes =
+            core::ssize_t(num_layer_groups_)
+            * data.recurrent_plan->state_tma_desc_bytes_per_layer_group;
+        data.recurrent_state_tma_descs = {descriptor_bytes, kDEVICE};
+    }
+
+    for (int sequence = 0; sequence < data.batch_size; ++sequence) {
+        auto& request = *requests[sequence];
+
+        const CacheBlock& block = *TM_CHECK_NOTNULL(request.frontier.get());
+        TM_CHECK_NOTNULL(block.allocation.a);
+
+        conv_state_ptrs_buf_[sequence] = block.base(0);
+        for (int layer_group = 0; layer_group < num_layer_groups_; ++layer_group) {
+            for (int head_group = 0; head_group < num_head_groups_; ++head_group) {
+                const int part = rec_base_ + layer_group * num_head_groups_ + head_group;
+                recurrent_state_ptrs_buf_[
+                    (layer_group * data.batch_size + sequence) * num_head_groups_ + head_group] =
+                    block.base(part);
             }
         }
 
-        // The forward for this batch starts at history_len + inflight_input_len.
-        // Reset only when the true start position is 0; clear every part
-        // (including any rounding padding -- harmless, never read by kernels).
-        if (s.history_len + s.inflight_input_len == 0) {
-            d.reset_ptrs.push_back({reinterpret_cast<uint8_t*>(cb.base(0)), conv_total_bytes_});
-            for (int blk = 0; blk < num_blocks_; ++blk) {
-                d.reset_ptrs.push_back({reinterpret_cast<uint8_t*>(cb.base(rec_base_ + blk)), block_bytes_});
+        if (request.history_len + request.inflight_input_len == 0) {
+            data.reset_ptrs.push_back(
+                {reinterpret_cast<uint8_t*>(block.base(0)), conv_total_bytes_});
+            for (int recurrent_block = 0; recurrent_block < num_blocks_; ++recurrent_block) {
+                data.reset_ptrs.push_back(
+                    {reinterpret_cast<uint8_t*>(block.base(rec_base_ + recurrent_block)), block_bytes_});
             }
         }
     }
 
-    Copy(conv_state_ptrs_buf_, d.batch_size, d.conv_state_ptrs);
+    Copy(conv_state_ptrs_buf_, data.batch_size, data.conv_state_ptrs);
     Copy(recurrent_state_ptrs_buf_,
-         (ssize_t)num_layer_groups_ * d.batch_size * num_head_groups_,
-         d.recurrent_state_ptrs);
+         core::ssize_t(num_layer_groups_) * data.batch_size * num_head_groups_,
+         data.recurrent_state_ptrs);
 }
 
-void GatedDeltaNetLayer::Forward(ForwardParam p)
+void GatedDeltaNetLayer::Forward(ForwardParam param)
 {
     TM_FUNCTION_SCOPE();
 
-    const int token_num = p.input.shape(0);
-    if (token_num == 0)
+    const int token_num = param.input.shape(0);
+    if (token_num == 0) {
         return;
+    }
 
-    const auto  dtype   = p.input.dtype();
-    const auto  device  = p.input.device();
-    const auto  stream  = core::Context::stream().handle();
-    const auto& weights = *p.weights;
+    const auto dtype  = param.input.dtype();
+    const auto device = param.input.device();
+    const auto stream = core::Context::stream().handle();
+    const auto& weights = *param.weights;
+    auto& phase_data = data_.at(param.phase);
 
-    auto& pd = data_.at(p.phase);
+    TM_CHECK(dtype == kHalf || dtype == kBfloat16);
 
-    auto dispatch = [&](auto t) {
-        using T = decltype(t);
+    const int key_dim   = num_k_heads_ * head_dim_;
+    const int value_dim = num_v_heads_ * head_dim_;
+    const int conv_dim  = key_dim * 2 + value_dim;
 
-        const auto& w              = *p.weights;
-        const int   num_k_heads    = w.num_k_heads / tp_size_;
-        const int   num_v_heads    = w.num_v_heads / tp_size_;
-        const int   key_head_dim   = w.key_head_dim;
-        const int   value_head_dim = w.value_head_dim;
-        const int   d_conv         = w.d_conv;
-        const int   key_dim        = num_k_heads * key_head_dim;
-        const int   value_dim      = num_v_heads * value_head_dim;
-        const int   conv_dim       = key_dim * 2 + value_dim;
+    Tensor all_proj;
+    TM_SCOPE_CALL(linear_.Forward(param.input, *weights.in_proj_all, all_proj));
 
-        // =================================================================
-        // 1. Single fused input projection: reads p.input once from HBM.
-        //    Output columns are ordered: [qkv | z | b | a]
-        //    where the split dims are: conv_dim, value_dim, v_heads_tp, v_heads_tp
-        // =================================================================
-        const int v_heads_tp = num_v_heads;  // already TP-sharded
-        Tensor    all_proj;
-        TM_SCOPE_CALL(linear_.Forward(p.input, *weights.in_proj_all, all_proj));
+    const int value_heads = num_v_heads_;
+    const int value_gate_offset = conv_dim + value_dim;
+    const int decay_gate_offset = value_gate_offset + value_heads;
 
-        // Column offsets per token (all_proj is token-major, row-major):
-        //   [0, conv_dim)           -> mixed_qkv
-        //   [conv_dim, +value_dim) -> z
-        //   [conv_dim+value_dim, +v_heads_tp) -> b (beta logit)
-        //   [conv_dim+value_dim+v_heads_tp, +v_heads_tp) -> a (alpha/dt)
-        const int all_col = conv_dim + value_dim + v_heads_tp * 2;
-        // const T* sub-pointers are derived per-request below; stride = all_col.
+    const core::ssize_t gate_capacity = core::ssize_t(token_num) * gate_stride_;
+    const core::Layout gate_layout{
+        {1, token_num, num_v_heads_},
+        {gate_capacity, gate_stride_, 1}};
+    Tensor beta{core::Buffer{gate_capacity, kFloat32, device},
+                gate_layout,
+                Tensor::PreserveBufferCapacity{}};
+    Tensor g{core::Buffer{gate_capacity, kFloat32, device},
+             gate_layout,
+             Tensor::PreserveBufferCapacity{}};
 
-        // =================================================================
-        // 2. Compute beta and g for all tokens
-        //    b_raw and a_raw are sliced from the fused projection output.
-        //    Stride between tokens is all_col elements.
-        // =================================================================
-        const int bg_total = token_num * num_v_heads;
+    Tensor beta_projection = all_proj.slice({0, value_gate_offset}, {-1, value_heads});
+    Tensor decay_projection = all_proj.slice({0, decay_gate_offset}, {-1, value_heads});
+    ComputeBetaG(beta,
+                 g,
+                 beta_projection,
+                 decay_projection,
+                 weights.A_log,
+                 weights.dt_bias,
+                 stream);
 
-        const int b_offset = conv_dim + value_dim;   // column offset to b logits
-        const int a_offset = b_offset + v_heads_tp;  // column offset to a logits
+    Tensor attn_out{{token_num, value_dim}, dtype, device};
+    Tensor conv_out{{token_num, conv_dim}, dtype, device};
 
-        Tensor beta{{token_num, num_v_heads}, dtype, device};
-        Tensor g{{token_num, num_v_heads}, dtype, device};
+    invokeFusedConv1dSiLU(conv_out,
+                          all_proj,
+                          weights.conv1d,
+                          Tensor{},
+                          phase_data.conv_state_ptrs,
+                          phase_data.q_offsets,
+                          phase_data.k_offsets,
+                          phase_data.finished,
+                          phase_data.batch_size,
+                          weights.conv_state_offset,
+                          sm_count_,
+                          work_counter_.data(),
+                          stream);
 
-        auto b = all_proj.slice({0, b_offset}, {-1, v_heads_tp});
-        auto a = all_proj.slice({0, a_offset}, {-1, v_heads_tp});
-
-        ComputeBetaG_v2(beta, g, b, a, weights.A_log, weights.dt_bias, stream);
-
-        TM_CUDA_CHECK(cudaGetLastError());
-
-        // =================================================================
-        // 3. Process all requests at once via batched kernel launches
-        // =================================================================
-        Tensor attn_out{{token_num, value_dim}, dtype, device};
-        Tensor conv_out{{token_num, conv_dim}, dtype, device};
-
-        // ----- 3a. Fused Causal Conv1d + SiLU (all requests) -----
-        // all_proj carries the non-contiguous qkv slice (stride = all_col);
-        // in_stride is derived from all_proj.stride(0) inside the launcher.
-        invokeFusedConv1dSiLU(conv_out,
-                              all_proj,
-                              weights.conv1d,
-                              Tensor{},
-                              pd.conv_state_ptrs,
-                              pd.q_offsets,
-                              pd.k_offsets,
-                              pd.finished,
-                              pd.batch_size,
-                              weights.conv_state_offset,
-                              sm_count_,
-                              work_counter_.data(),
-                              stream);
-        TM_CUDA_CHECK(cudaGetLastError());
-
-        // ----- 3b. Gated Delta Rule -----
-        // Requests are sorted by input_len: decode (seq_len==1) first, prefill last.
-        // Find the split point and dispatch each half to its optimal kernel.
-        // When both are present, run them concurrently on separate streams.
-        const int lg = layer_index_.at(p.weights) / layers_per_block_;  // layer-group (block row)
-        auto      layer_rec =
-            pd.recurrent_state_ptrs.slice(lg * pd.batch_size * num_head_groups_, pd.batch_size * num_head_groups_);
-        {
-            int decode_count = 0;
-            for (int i = 0; i < pd.batch_size; ++i) {
-                if (pd.input_lens[i] <= 1)
-                    ++decode_count;
-                else
-                    break;
-            }
-            const int prefill_count = pd.batch_size - decode_count;
-
-            if (decode_count > 0 && prefill_count > 0) {
-                // Fork: aux_stream (high priority) waits for prior work on main stream
-                TM_CUDA_CHECK(cudaEventRecord(ev_before_, stream));
-                TM_CUDA_CHECK(cudaStreamWaitEvent(aux_stream_, ev_before_));
-
-                // Decode on main stream
-                auto dc_state = layer_rec.slice(0, decode_count * num_head_groups_);
-                auto dc_q     = pd.q_offsets.slice(0, decode_count + 1);
-                auto dc_done  = pd.finished.slice(0, decode_count);
-                invokeGatedDeltaRuleBatched_v3(attn_out,
-                                               conv_out,
-                                               beta,
-                                               g,
-                                               dc_state,
-                                               dc_q,
-                                               dc_done,
-                                               decode_count,
-                                               num_k_heads,
-                                               weights.linear_state_offset,
-                                               state_dtype_,
-                                               sm_count_,
-                                               work_counter_.data(),
-                                               stream,
-                                               num_head_groups_,
-                                               heads_per_block_);
-
-                // Prefill on aux stream (higher priority)
-                auto pf_state = layer_rec.slice(decode_count * num_head_groups_, prefill_count * num_head_groups_);
-                auto pf_q     = pd.q_offsets.slice(decode_count, prefill_count + 1);
-                auto pf_done  = pd.finished.slice(decode_count, prefill_count);
-                invokeChunkedGatedDeltaRuleBatched(attn_out,
-                                                   conv_out,
-                                                   beta,
-                                                   g,
-                                                   pf_state,
-                                                   pf_q,
-                                                   pf_done,
-                                                   prefill_count,
-                                                   num_k_heads,
-                                                   weights.linear_state_offset,
-                                                   state_dtype_,
-                                                   sm_count_,
-                                                   work_counter_.data(),
-                                                   aux_stream_,
-                                                   num_head_groups_,
-                                                   heads_per_block_);
-
-                // Join: main stream waits for prefill to finish
-                TM_CUDA_CHECK(cudaEventRecord(ev_after_, aux_stream_));
-                TM_CUDA_CHECK(cudaStreamWaitEvent(stream, ev_after_));
-            }
-            else if (decode_count > 0) {
-                auto state_slice = layer_rec.slice(0, decode_count * num_head_groups_);
-                auto q_slice     = pd.q_offsets.slice(0, decode_count + 1);
-                auto done_slice  = pd.finished.slice(0, decode_count);
-                invokeGatedDeltaRuleBatched_v3(attn_out,
-                                               conv_out,
-                                               beta,
-                                               g,
-                                               state_slice,
-                                               q_slice,
-                                               done_slice,
-                                               decode_count,
-                                               num_k_heads,
-                                               weights.linear_state_offset,
-                                               state_dtype_,
-                                               sm_count_,
-                                               work_counter_.data(),
-                                               stream,
-                                               num_head_groups_,
-                                               heads_per_block_);
-            }
-            else if (prefill_count > 0) {
-                auto state_slice = layer_rec.slice(decode_count * num_head_groups_, prefill_count * num_head_groups_);
-                auto q_slice     = pd.q_offsets.slice(decode_count, prefill_count + 1);
-                auto done_slice  = pd.finished.slice(decode_count, prefill_count);
-                invokeChunkedGatedDeltaRuleBatched(attn_out,
-                                                   conv_out,
-                                                   beta,
-                                                   g,
-                                                   state_slice,
-                                                   q_slice,
-                                                   done_slice,
-                                                   prefill_count,
-                                                   num_k_heads,
-                                                   weights.linear_state_offset,
-                                                   state_dtype_,
-                                                   sm_count_,
-                                                   work_counter_.data(),
-                                                   stream,
-                                                   num_head_groups_,
-                                                   heads_per_block_);
-                // invokeChunkedGatedDeltaRuleBatched
-            }
-        }
-        TM_CUDA_CHECK(cudaGetLastError());
-
-        // ----- 3c. RMSNormGated (all tokens at once) -----
-        // Gate (z) lives at column conv_dim of all_proj with row-stride all_col.
-        Tensor gate        = all_proj.slice({0, conv_dim}, {-1, value_dim});
-        Tensor hidden_view = attn_out.view({token_num * num_v_heads, value_head_dim});
-        invokeRMSNormGated(hidden_view, gate, weights.norm->weight, weights.norm->norm_eps_, stream);
-        TM_CUDA_CHECK(cudaGetLastError());
-
-        // =================================================================
-        // 4. Output projection (all tokens at once)
-        // =================================================================
-        TM_SCOPE_CALL(linear_.Forward(attn_out, *weights.out_proj, p.output));
+    auto make_view = [](const Tensor& storage, core::ssize_t offset, core::Layout layout) {
+        return Tensor{storage.buffer().slice(offset, storage.buffer().size() - offset),
+                      std::move(layout),
+                      Tensor::PreserveBufferCapacity{}};
     };
 
-    if (dtype == kHalf) {
-        dispatch(half{});
+    const core::Layout qk_layout{
+        {1, token_num, num_k_heads_, 128},
+        {int64_t(token_num) * conv_dim, conv_dim, 128, 1}};
+    const core::Layout v_layout{
+        {1, token_num, num_v_heads_, 128},
+        {int64_t(token_num) * conv_dim, conv_dim, 128, 1}};
+    const core::Layout out_layout{
+        {1, token_num, num_v_heads_, 128},
+        {int64_t(token_num) * value_dim, value_dim, 128, 1}};
+    Tensor q = make_view(conv_out, 0, qk_layout);
+    Tensor k = make_view(conv_out, key_dim, qk_layout);
+    Tensor v = make_view(conv_out, 2 * key_dim, v_layout);
+    Tensor out{attn_out.buffer(), out_layout};
+    invokeL2NormalizeQK(q, k, 1e-6f, stream);
+
+    const int layer = layer_index_.at(param.weights);
+    const int layer_group = layer / layers_per_block_;
+    const int64_t state_layer_offset = weights.linear_state_offset;
+
+    auto pointer_view = [&](int first_sequence, int sequence_count) {
+        const core::ssize_t offset =
+            (core::ssize_t(layer_group) * phase_data.batch_size + first_sequence) * num_head_groups_;
+        const core::ssize_t count = core::ssize_t(sequence_count) * num_head_groups_;
+        return Tensor{phase_data.recurrent_state_ptrs.slice(offset, count),
+                      core::Layout{{sequence_count, num_head_groups_}}};
+    };
+
+    const bool mixed = phase_data.recurrent_plan.has_value() && phase_data.chunked_plan.has_value();
+    if (mixed) {
+        TM_CUDA_CHECK(cudaEventRecord(ev_before_, stream));
+        TM_CUDA_CHECK(cudaStreamWaitEvent(aux_stream_, ev_before_));
     }
-    else if (dtype == kBfloat16) {
-        dispatch(nv_bfloat16{});
+    const cudaStream_t chunk_stream = mixed ? aux_stream_ : stream;
+
+    if (phase_data.recurrent_plan) {
+        const core::Layout recurrent_qk_layout{
+            {phase_data.decode_count, 1, num_k_heads_, 128},
+            {conv_dim, conv_dim, 128, 1}};
+        const core::Layout recurrent_v_layout{
+            {phase_data.decode_count, 1, num_v_heads_, 128},
+            {conv_dim, conv_dim, 128, 1}};
+        const core::Layout recurrent_out_layout{
+            {phase_data.decode_count, 1, num_v_heads_, 128},
+            {value_dim, value_dim, 128, 1}};
+        const core::Layout recurrent_gate_layout{
+            {phase_data.decode_count, 1, num_v_heads_},
+            {gate_stride_, gate_stride_, 1}};
+        Tensor recurrent_q{
+            q.buffer(), recurrent_qk_layout, Tensor::PreserveBufferCapacity{}};
+        Tensor recurrent_k{
+            k.buffer(), recurrent_qk_layout, Tensor::PreserveBufferCapacity{}};
+        Tensor recurrent_v{
+            v.buffer(), recurrent_v_layout, Tensor::PreserveBufferCapacity{}};
+        Tensor recurrent_out{
+            out.buffer(), recurrent_out_layout, Tensor::PreserveBufferCapacity{}};
+        Tensor recurrent_g{
+            g.buffer(), recurrent_gate_layout, Tensor::PreserveBufferCapacity{}};
+        Tensor recurrent_beta{
+            beta.buffer(), recurrent_gate_layout, Tensor::PreserveBufferCapacity{}};
+        Tensor recurrent_state_ptrs = pointer_view(0, phase_data.decode_count);
+        Tensor recurrent_finished{
+            phase_data.finished.slice(0, phase_data.decode_count),
+            core::Layout{{phase_data.decode_count}}};
+        Tensor recurrent_state_descs;
+        if (phase_data.recurrent_state_tma_descs) {
+            const core::ssize_t descriptor_count =
+                core::ssize_t(phase_data.decode_count) * num_head_groups_ * 128;
+            const core::ssize_t descriptor_offset =
+                core::ssize_t(layer_group) * descriptor_count;
+            recurrent_state_descs = Tensor{
+                phase_data.recurrent_state_tma_descs.slice(
+                    descriptor_offset, descriptor_count),
+                core::Layout{{phase_data.decode_count, num_head_groups_, 128}}};
+        }
+
+        linear_attn::delta_rule::Arguments arguments{};
+        arguments.q                  = recurrent_q;
+        arguments.k                  = recurrent_k;
+        arguments.v                  = recurrent_v;
+        arguments.g                  = recurrent_g;
+        arguments.beta               = recurrent_beta;
+        arguments.state_ptrs         = recurrent_state_ptrs;
+        arguments.state_tma_descs    = recurrent_state_descs;
+        arguments.finished           = recurrent_finished;
+        arguments.out                = &recurrent_out;
+        arguments.state_layer_offset = state_layer_offset;
+        delta_rule_.Run(arguments, *phase_data.recurrent_plan, stream);
     }
-    else {
-        TM_LOG_FATAL("Unsupported dtype for GatedDeltaNetLayer");
+
+    if (phase_data.chunked_plan) {
+        Tensor chunk_state_ptrs =
+            pointer_view(phase_data.decode_count, phase_data.prefill_count);
+        Tensor chunk_finished{
+            phase_data.finished.slice(phase_data.decode_count, phase_data.prefill_count),
+            core::Layout{{phase_data.prefill_count}}};
+        Tensor chunk_q_offsets{
+            phase_data.q_offsets.slice(phase_data.decode_count, phase_data.prefill_count + 1),
+            core::Layout{{phase_data.prefill_count + 1}}};
+
+        linear_attn::delta_rule::Arguments arguments{};
+        arguments.q                  = q;
+        arguments.k                  = k;
+        arguments.v                  = v;
+        arguments.g                  = g;
+        arguments.beta               = beta;
+        arguments.state_ptrs         = chunk_state_ptrs;
+        arguments.q_offsets          = chunk_q_offsets;
+        arguments.finished           = chunk_finished;
+        arguments.out                = &out;
+        arguments.workspace          = phase_data.chunked_workspace
+                                           ? &phase_data.chunked_workspace
+                                           : nullptr;
+        arguments.state_layer_offset = state_layer_offset;
+        delta_rule_.Run(arguments, *phase_data.chunked_plan, chunk_stream);
     }
+
+    if (mixed) {
+        TM_CUDA_CHECK(cudaEventRecord(ev_after_, aux_stream_));
+        TM_CUDA_CHECK(cudaStreamWaitEvent(stream, ev_after_));
+    }
+
+    Tensor gate = all_proj.slice({0, conv_dim}, {-1, value_dim});
+    Tensor hidden_view = attn_out.view({token_num * num_v_heads_, head_dim_});
+    invokeRMSNormGated(hidden_view, gate, weights.norm->weight, weights.norm->norm_eps_, stream);
+
+    TM_SCOPE_CALL(linear_.Forward(attn_out, *weights.out_proj, param.output));
 }
 
 }  // namespace turbomind

@@ -13,6 +13,8 @@ namespace turbomind::core {
 
 class Tensor {
 public:
+    struct PreserveBufferCapacity {};
+
     Tensor() = default;
 
     Tensor(Layout layout, DataType dtype, Device device): Tensor{layout, dtype, Context::alloc(device)} {}
@@ -23,6 +25,11 @@ public:
     }
 
     Tensor(Buffer buffer, Layout layout): layout_{std::move(layout)}, buffer_{buffer.slice(0, layout_.cosize())} {}
+
+    Tensor(Buffer buffer, Layout layout, PreserveBufferCapacity): layout_{std::move(layout)}, buffer_{std::move(buffer)}
+    {
+        TM_CHECK_GE(buffer_.size(), layout_.cosize());
+    }
 
     Tensor(Buffer buffer): layout_{buffer.size()}, buffer_{buffer} {}
 
@@ -229,22 +236,6 @@ void Copy(const Tensor& src, Ref<Tensor> dst_);
 void Clear(Ref<Tensor> a_, const Stream& stream);
 
 void Clear(Ref<Tensor> a_);
-
-#if 0
-
-void Copy(const Tensor& src, Tensor&& dst, Stream& stream);
-
-// Launch a kernel to perform the complicated copying
-void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream);
-
-Tensor Reshape(const Tensor& t, vector<ssize_t> shape);
-
-Tensor Transpoe(const Tensor& t, int dim0, int dim1);
-
-Tensor Permute(const Tensor& t, vector<int> dims);
-
-Tensor Contiguous(const Tensor& t);
-#endif
 
 template<class T>
 struct Tensor_: public Tensor {

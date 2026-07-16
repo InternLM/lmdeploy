@@ -24,6 +24,7 @@
 #include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/multimodal_input.h"
+#include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
@@ -45,6 +46,10 @@
 namespace py = pybind11;
 namespace ft = turbomind;
 using namespace pybind11::literals;
+
+namespace turbomind::linear_attn::delta_rule {
+void bind_delta_rule(pybind11::module_& m);
+}
 
 using ft::core::Tensor;
 
@@ -239,12 +244,79 @@ std::shared_ptr<Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
     assert(dl_tensor.ndim > 0);
     std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
 
-    std::shared_ptr<void> ptr{dl_tensor.data, [tensor](void* p) {
+    auto* data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    std::shared_ptr<void> ptr{data, [tensor](void* p) {
                                   if (tensor->deleter) {
                                       tensor->deleter(tensor);
                                   }
                               }};
     return std::make_shared<Tensor>(ptr, std::move(shape), dtype, where);
+}
+
+ft::core::ssize_t TorchStorageCapacityElements(py::handle source, ft::DataType dtype, ft::core::ssize_t fallback)
+{
+    if (!source || !py::hasattr(source, "untyped_storage") || !py::hasattr(source, "storage_offset")) {
+        return fallback;
+    }
+
+    try {
+        const auto elem_bytes = ft::byte_size(dtype);
+        if (elem_bytes <= 0) {
+            return fallback;
+        }
+        auto storage       = source.attr("untyped_storage")();
+        auto storage_bytes = py::cast<ft::core::ssize_t>(storage.attr("nbytes")());
+        auto offset        = py::cast<ft::core::ssize_t>(source.attr("storage_offset")());
+        if (storage_bytes < 0 || offset < 0) {
+            return fallback;
+        }
+        const auto offset_bytes = offset * elem_bytes;
+        if (offset_bytes < 0 || offset_bytes > storage_bytes) {
+            return fallback;
+        }
+        const auto capacity = (storage_bytes - offset_bytes) / elem_bytes;
+        return capacity > fallback ? capacity : fallback;
+    }
+    catch (py::error_already_set& e) {
+        e.restore();
+        PyErr_Clear();
+        return fallback;
+    }
+}
+
+std::shared_ptr<Tensor> DLManagedTensorToTritonTensorWithStrides(DLManagedTensor* tensor, py::handle source = {})
+{
+    auto& dl_tensor = tensor->dl_tensor;
+    auto  where     = getMemoryType(dl_tensor.device);
+    auto  dtype     = getDataType(dl_tensor.dtype);
+    assert(dl_tensor.ndim > 0);
+    std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
+
+    // Compute row-major strides if DLPack strides are NULL (contiguous tensor)
+    std::vector<ft::core::ssize_t> strides;
+    if (dl_tensor.strides) {
+        strides.assign(dl_tensor.strides, dl_tensor.strides + dl_tensor.ndim);
+    }
+    else {
+        strides.resize(dl_tensor.ndim, 1);
+        for (int i = dl_tensor.ndim - 2; i >= 0; --i) {
+            strides[i] = strides[i + 1] * shape[i + 1];
+        }
+    }
+
+    ft::core::Layout layout(std::move(shape), std::move(strides));
+
+    auto* data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    std::shared_ptr<void> ptr{data, [tensor](void* p) {
+                                  if (tensor->deleter) {
+                                      tensor->deleter(tensor);
+                                  }
+                              }};
+
+    const auto capacity = layout.is_contiguous() ? layout.cosize()
+                                                 : TorchStorageCapacityElements(source, dtype, layout.cosize());
+    auto       buffer   = ft::core::Buffer{ptr, capacity, dtype, where};
+    return std::make_shared<Tensor>(std::move(buffer), std::move(layout), Tensor::PreserveBufferCapacity{});
 }
 
 static void safe_memcpy(void* dst, const void* src, size_t size)
@@ -585,6 +657,27 @@ PYBIND11_MODULE(_turbomind, m)
             return ret;
         },
         "dl_managed_tensor"_a);
+    m.def(
+        "from_dlpack_with_strides",
+        [](py::object obj) {
+            py::capsule      cap = obj.attr("__dlpack__")();
+            DLManagedTensor* dlmt =
+                static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+            auto ret = DLManagedTensorToTritonTensorWithStrides(dlmt, obj);
+            // take ownership of capsule's payload
+            cap.set_name("used_dltensor");
+            return ret;
+        },
+        "dl_managed_tensor"_a);
+    m.def(
+        "generic_copy_on_stream",
+        [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
+            using ft::core::GenericCopy;
+            GenericCopy(*src, *dst, reinterpret_cast<cudaStream_t>(stream_ptr));
+        },
+        "src"_a,
+        "dst"_a,
+        "stream_ptr"_a);
 
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
@@ -804,4 +897,6 @@ PYBIND11_MODULE(_turbomind, m)
         .def("attn_tp_rank", &TurboMind::GetAttnTpRank, "index"_a)
         .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a)
         .def("model_tp_rank", &TurboMind::GetModelTpRank, "index"_a);
+
+    turbomind::linear_attn::delta_rule::bind_delta_rule(m);
 }
