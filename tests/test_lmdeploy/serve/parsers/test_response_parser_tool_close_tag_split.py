@@ -23,8 +23,7 @@ class TestResponseParserToolCloseTagAcrossChunks:
     so real token-by-token streaming can split it across multiple
     ``stream_chunk`` calls.
 
-    _consume_tool must buffer a possible partial-tag suffix instead of leaking it into the tool payload, mirroring how
-    _consume_reasoning already handles a split reasoning close tag.
+    _consume_tool must buffer a possible partial-tag suffix instead of leaking it into the tool payload.
     """
 
     def test_close_tag_split_across_two_chunks_is_not_leaked(self):

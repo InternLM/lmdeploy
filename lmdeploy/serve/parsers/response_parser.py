@@ -565,7 +565,7 @@ class BaseResponseParser(ResponseParser):
                 return [], False
             # No close tag found. Keep a possible close-tag prefix suffix in
             # buffer so a close tag split across chunks can still be
-            # recognized, mirroring _consume_reasoning's handling.
+            # recognized.
             keep = self._longest_open_tag_prefix_suffix(self._pending, [close_tag])
             if keep > 0:
                 if keep >= len(self._pending):
