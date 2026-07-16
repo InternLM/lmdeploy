@@ -43,7 +43,7 @@ private:
 
     // Config passed at construction
     const int      tp_size_;
-    const DataType state_dtype_;
+    const DataType recurrent_state_dtype_;
 
     LlamaLinear& linear_;
 

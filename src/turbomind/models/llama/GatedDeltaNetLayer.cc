@@ -35,7 +35,9 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                                        const EngineParam&           engine,
                                        const Context&               context,
                                        int                          phases):
-    tp_size_{engine.attn_tp_size * engine.attn_cp_size}, state_dtype_{engine.data_type}, linear_{*context.linear}
+    tp_size_{engine.attn_tp_size * engine.attn_cp_size},
+    recurrent_state_dtype_{engine.state_dtype},
+    linear_{*context.linear}
 {
     TM_CHECK(!weights.empty());
     const auto& first = *TM_CHECK_NOTNULL(weights.front());
@@ -66,6 +68,9 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     head_dim_     = first.key_head_dim;
     gate_stride_  = (num_v_heads_ + 3) / 4 * 4;
     TM_CHECK_EQ(num_v_heads_ % num_k_heads_, 0);
+    TM_CHECK(recurrent_state_dtype_ == kFloat32 || recurrent_state_dtype_ == input_dtype_)
+        << "GDN recurrent state dtype must be float32 or match the input dtype, got state_dtype="
+        << recurrent_state_dtype_ << " input_dtype=" << input_dtype_;
 
     const auto [linear_state_size, conv_state_size] = get_lc_state_size(first, tp_size_);
     const int cell_elements = first.key_head_dim * first.value_head_dim;
@@ -87,7 +92,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     num_layer_groups_   = ceil_div(layer_num_, layers_per_block_);
     num_blocks_         = num_layer_groups_ * num_head_groups_;
     block_bytes_        = byte_size(
-        state_dtype_, size_t(layers_per_block_) * heads_per_block_ * cell_elements);
+        recurrent_state_dtype_, size_t(layers_per_block_) * heads_per_block_ * cell_elements);
 
     auto require_mode = [&](linear_attn::delta_rule::GdrMode mode) {
         using namespace linear_attn::delta_rule;
@@ -95,7 +100,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
         planning.arch              = arch_;
         planning.sm_count          = sm_count_;
         planning.input_dtype       = input_dtype_;
-        planning.state_dtype       = state_dtype_;
+        planning.state_dtype       = recurrent_state_dtype_;
         planning.physical_batch    = 1;
         planning.token_slots       = mode == GdrMode::kRecurrent ? 1 : 16;
         planning.hq                = num_k_heads_;
@@ -123,12 +128,15 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
         weights[layer]->conv_state_offset = conv_offset;
         conv_offset += conv_state_size;
     }
-    conv_total_bytes_ = byte_size(state_dtype_, conv_offset);
+    conv_total_bytes_ = byte_size(input_dtype_, conv_offset);
     registry.checkpoint().Register(conv_total_bytes_, 1);
 
     const size_t prefix_bytes = registry.prefix().accumulation_bytes();
-    TM_LOG_INFO("[GDN] block config L_b={} H_b={} -> num_layer_groups={} num_head_groups={} "
-                "num_blocks={} block_bytes={} prefix_object_bytes={} ({})",
+    TM_LOG_INFO("[GDN] input_dtype={} state_dtype={} block config L_b={} H_b={} -> "
+                "num_layer_groups={} num_head_groups={} num_blocks={} block_bytes={} "
+                "prefix_object_bytes={} ({})",
+                input_dtype_,
+                recurrent_state_dtype_,
                 layers_per_block_,
                 heads_per_block_,
                 num_layer_groups_,
@@ -240,7 +248,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         planning.arch            = arch_;
         planning.sm_count        = sm_count_;
         planning.input_dtype     = input_dtype_;
-        planning.state_dtype     = state_dtype_;
+        planning.state_dtype     = recurrent_state_dtype_;
         planning.hq              = num_k_heads_;
         planning.hv              = num_v_heads_;
         planning.head_dim        = head_dim_;
