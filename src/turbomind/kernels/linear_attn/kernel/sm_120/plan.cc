@@ -12,8 +12,8 @@ namespace {
 
 constexpr int kHeadDim                = 128;
 constexpr int kTmaDescriptorBytes     = 128;
-constexpr int kKktTmaDescCount        = 3;
-constexpr int kFusedGdrDataDescCount  = 7;
+constexpr int kKktTmaDescCount        = 2;
+constexpr int kFusedGdrDataDescCount  = 6;
 constexpr int kFusedGdrStateDescCount = 1;
 
 size_t KktTmaDescriptorBytes(const Problem& problem)

@@ -154,6 +154,8 @@ struct Sm90FusedGdrH {
                                                          int     gate_lane,
                                                          int64_t gate_stride,
                                                          int64_t gate_batch_stride,
+                                                         int64_t beta_stride,
+                                                         int64_t beta_batch_stride,
                                                          int     token_num,
                                                          int     flat_token0,
                                                          int     value_head)
@@ -164,11 +166,13 @@ struct Sm90FusedGdrH {
             const int     flat_token  = flat_token0 + source_row;
             const int     batch_id    = flat_token / token_num;
             const int     local_token = flat_token - batch_id * token_num;
-            const int64_t offset      = static_cast<int64_t>(batch_id) * gate_batch_stride
-                                   + static_cast<int64_t>(local_token) * gate_stride + value_head;
-            cute::SM80_CP_ASYNC_CACHEALWAYS<float>::copy(g_cumsum[offset], gate_stage[stage][0][row][gate_lane]);
+            const int64_t gate_offset = static_cast<int64_t>(batch_id) * gate_batch_stride
+                                        + static_cast<int64_t>(local_token) * gate_stride + value_head;
+            const int64_t beta_offset = static_cast<int64_t>(batch_id) * beta_batch_stride
+                                        + static_cast<int64_t>(local_token) * beta_stride + value_head;
+            cute::SM80_CP_ASYNC_CACHEALWAYS<float>::copy(g_cumsum[gate_offset], gate_stage[stage][0][row][gate_lane]);
             cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<float>::copy(
-                beta[offset], gate_stage[stage][1][row][gate_lane], row < valid);
+                beta[beta_offset], gate_stage[stage][1][row][gate_lane], row < valid);
         }
     }
 
@@ -189,7 +193,9 @@ struct Sm90FusedGdrH {
                                                 int     hq,
                                                 int     hv,
                                                 int64_t gate_stride,
-                                                int64_t gate_batch_stride)
+                                                int64_t gate_batch_stride,
+                                                int64_t beta_stride,
+                                                int64_t beta_batch_stride)
     {
         static_assert(kFusedGdrHBlockDv == kWideGdrBlockDv);
         using Element = typename FusedGdrMmaTraits<T>::Element;
@@ -314,6 +320,8 @@ struct Sm90FusedGdrH {
                                       gate_lane,
                                       gate_stride,
                                       gate_batch_stride,
+                                      beta_stride,
+                                      beta_batch_stride,
                                       token_num,
                                       flat_token0,
                                       value_head);
@@ -770,6 +778,8 @@ struct Sm90FusedGdrH {
                                                int            hv,
                                                int64_t        gate_stride,
                                                int64_t        gate_batch_stride,
+                                               int64_t        beta_stride,
+                                               int64_t        beta_batch_stride,
                                                unsigned char* smem_raw)
     {
         auto& smem = *reinterpret_cast<SharedStorage*>(smem_raw);
@@ -813,7 +823,9 @@ struct Sm90FusedGdrH {
                        hq,
                        hv,
                        gate_stride,
-                       gate_batch_stride);
+                       gate_batch_stride,
+                       beta_stride,
+                       beta_batch_stride);
         }
         else {
             Body<false>(smem,
@@ -832,7 +844,9 @@ struct Sm90FusedGdrH {
                         hq,
                         hv,
                         gate_stride,
-                        gate_batch_stride);
+                        gate_batch_stride,
+                        beta_stride,
+                        beta_batch_stride);
         }
     }
 };
@@ -854,7 +868,9 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
     int     hq,
     int     hv,
     int64_t gate_stride,
-    int64_t gate_batch_stride)
+    int64_t gate_batch_stride,
+    int64_t beta_stride,
+    int64_t beta_batch_stride)
 {
     extern __shared__ __align__(1024) unsigned char smem_raw[];
     Sm90FusedGdrH<T>::Run(tma_desc_workspace,
@@ -873,6 +889,8 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
                           hv,
                           gate_stride,
                           gate_batch_stride,
+                          beta_stride,
+                          beta_batch_stride,
                           smem_raw);
 }
 
@@ -928,7 +946,9 @@ void LaunchSm90FusedGdrHTyped(const core::Tensor&        k,
                                               problem.hq,
                                               problem.hv,
                                               problem.gate_stride,
-                                              problem.gate_batch_stride);
+                                              problem.gate_batch_stride,
+                                              problem.beta_stride,
+                                              problem.beta_batch_stride);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

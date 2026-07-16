@@ -16,9 +16,9 @@ namespace {
 constexpr int kHeadDim                                = 128;
 constexpr int kTmaDescriptorBytes                     = 128;
 constexpr int kKktTmaDescCount                        = 4;
-constexpr int kFusedGdrDataDescCount                  = 7;
+constexpr int kFusedGdrDataDescCount                  = 5;
 constexpr int kFusedGdrStateDescCount                 = 1;
-constexpr int kFusedGdrHDataDescCount                 = 5;
+constexpr int kFusedGdrHDataDescCount                 = 4;
 constexpr int kFusedGdrHTensorDescCount               = 2;
 constexpr int kCorrectInitialStatesTensorDescCount    = 3;
 constexpr int kContextParallelFusedGdrTensorDescCount = 1;
@@ -155,13 +155,9 @@ bool PlanSm90Operation(const GdrKernelSpec&   spec,
                        Plan*                  plan)
 {
     plan->problem = BuildProblem(context, spec);
-    if (IsChunkedGdr(plan->problem)
-        && (plan->problem.gate_stride % 4 != 0 || plan->problem.gate_batch_stride % 4 != 0)) {
-        return false;
-    }
-    plan->cp = operation.mode == GdrMode::kChunked && operation.cp_mode == ContextParallelMode::kAuto ?
-                   BuildContextParallelPlan(plan->problem, context.q_offsets) :
-                   BuildDisabledContextParallelPlan(plan->problem);
+    plan->cp      = operation.mode == GdrMode::kChunked && operation.cp_mode == ContextParallelMode::kAuto ?
+                        BuildContextParallelPlan(plan->problem, context.q_offsets) :
+                        BuildDisabledContextParallelPlan(plan->problem);
     const size_t descriptor_bytes =
         KktTmaDescriptorBytes(plan->problem) + FusedGdrTmaDescriptorBytes(plan->problem) + 127;
     BuildOptimizedTensorPlans(plan, descriptor_bytes);

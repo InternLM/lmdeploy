@@ -47,9 +47,9 @@ constexpr int      kCorrectInitialStatesBf16BlockDv            = kCorrectInitial
 constexpr int      kCorrectInitialStatesBf16ExternalTmaBlockDv = 8;
 constexpr int      kCorrectInitialStatesKTile                  = 128;
 constexpr int      kCorrectInitialStatesMRowsPerTma            = 32;
-constexpr int      kFusedGdrTmaDescCount                       = 8;
-constexpr int      kKktTmaDescCount                            = 3;
-constexpr int      kFusedGdrHTmaDescCount                      = 7;
+constexpr int      kFusedGdrTmaDescCount                       = 7;
+constexpr int      kKktTmaDescCount                            = 2;
+constexpr int      kFusedGdrHTmaDescCount                      = 6;
 constexpr int      kCorrectInitialStatesTmaDescCount           = 4;
 constexpr int      kTmaDescriptorBytes                         = 128;
 constexpr int      kFusedGdrMmaThreads                         = 128;
@@ -101,8 +101,7 @@ constexpr bool kFusedGdrValidStateT = std::is_same_v<StateT, float> || std::is_s
 constexpr const char* kContextParallelSegmentUnsupportedMessage = "Fused GDR H requires fixed CP segment tensors";
 constexpr const char* kGdrTargetUnsupportedMessage =
     "fused GDR forward supports only the SM120 bf16 chunked target shape "
-    "(int32 q_offsets, bool finished mask, head_dim=128, chunk_size=32 or 64, "
-    "gate stride divisible by 4, Hv % Hq == 0)";
+    "(int32 q_offsets, bool finished mask, head_dim=128, chunk_size=32 or 64, Hv % Hq == 0)";
 
 template<int ChunkSize>
 constexpr bool kSupportedGdrChunkSize = ChunkSize == 32 || ChunkSize == 64;
@@ -359,7 +358,6 @@ enum FusedGdrTmaDescIndex : int
     kFusedGdrKDesc,
     kFusedGdrVDesc,
     kFusedGdrGDesc,
-    kFusedGdrBetaDesc,
     kFusedGdrResolventDesc,
     kFusedGdrOutDesc,
     kFusedGdrStateDesc,
@@ -370,7 +368,6 @@ enum FusedGdrHTmaDescIndex : int
     kFusedGdrHKDesc = 0,
     kFusedGdrHVDesc,
     kFusedGdrHGDesc,
-    kFusedGdrHBetaDesc,
     kFusedGdrHResolventDesc,
     kFusedGdrHSegmentStateDesc,
     kFusedGdrHSegmentMDesc,
@@ -546,14 +543,12 @@ __device__ __forceinline__ void FusedGdrBuildSequenceDataTmaDescriptors(CUtensor
                                                                         const CUtensorMap&         k_tma_desc,
                                                                         const CUtensorMap&         v_tma_desc,
                                                                         const CUtensorMap&         g_tma_desc,
-                                                                        const CUtensorMap&         beta_tma_desc,
                                                                         const CUtensorMap&         resolvent_tma_desc,
                                                                         const CUtensorMap&         out_tma_desc,
                                                                         StridedTensorBase<const T> q,
                                                                         StridedTensorBase<const T> k,
                                                                         StridedTensorBase<const T> v,
                                                                         StridedTensorBase<const float> g_cumsum,
-                                                                        StridedTensorBase<const float> beta,
                                                                         StridedTensorBase<const T>     resolvent,
                                                                         StridedTensorBase<T>           out,
                                                                         int                            tid,
@@ -597,14 +592,6 @@ __device__ __forceinline__ void FusedGdrBuildSequenceDataTmaDescriptors(CUtensor
                                     &smem_desc[kFusedGdrGDesc],
                                     g_tma_desc,
                                     g_cumsum,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<1>(&gmem_desc[kFusedGdrBetaDesc],
-                                    &smem_desc[kFusedGdrBetaDesc],
-                                    beta_tma_desc,
-                                    beta,
                                     physical_batch,
                                     local_seq_start,
                                     seq_len,
@@ -1491,8 +1478,7 @@ static_assert((kChunkSize * kChunkSize * sizeof(cute::bfloat16_t)) % alignof(__n
 inline bool CanUseFusedGdrFwd(const Problem& problem)
 {
     return problem.arch == 1200 && problem.input_dtype == kBfloat16 && problem.batch == problem.sequence_num
-           && problem.gate_stride % 4 == 0 && problem.gate_batch_stride % 4 == 0 && problem.hv % problem.hq == 0
-           && problem.head_dim == kHeadDim && problem.chunk_size == kChunkSize;
+           && problem.hv % problem.hq == 0 && problem.head_dim == kHeadDim && problem.chunk_size == kChunkSize;
 }
 
 template<int BlockDv>

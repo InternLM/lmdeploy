@@ -259,13 +259,18 @@ void RunSm90RecurrentEntry(const Arguments& args, const Plan& plan, cudaStream_t
 
 void RunSm90Chunk64WithoutContextParallel(const Arguments& args, const Plan& plan, cudaStream_t stream)
 {
-    auto workspace = PartitionSm90DirectChunkWorkspace(args, plan);
+    auto        workspace               = PartitionSm90DirectChunkWorkspace(args, plan);
+    const auto& beta                    = args.beta;
+    auto        execution_problem       = plan.problem;
+    execution_problem.gate_stride       = workspace.g_cumsum.stride(1);
+    execution_problem.gate_batch_stride = workspace.g_cumsum.stride(0);
+    execution_problem.beta_stride       = beta.stride(1);
+    execution_problem.beta_batch_stride = beta.stride(0);
     PrepareSm90GdrTmaDescriptorsAndCumsum(args.q,
                                           args.k,
                                           args.v,
                                           args.g,
                                           workspace.g_cumsum,
-                                          args.beta,
                                           workspace.resolvent,
                                           args.q_offsets,
                                           args.finished,
@@ -277,25 +282,25 @@ void RunSm90Chunk64WithoutContextParallel(const Arguments& args, const Plan& pla
                                           plan.problem.state_dtype,
                                           stream);
     LaunchSm90KktSolve(args.k,
-                       args.beta,
+                       beta,
                        args.q_offsets,
                        &workspace.g_cumsum,
                        args.finished,
                        workspace.resolvent,
-                       plan.problem,
+                       execution_problem,
                        workspace.kkt_tma_desc,
                        stream);
     LaunchSm90FusedChunk(args.q,
                          args.k,
                          args.v,
                          workspace.g_cumsum,
-                         args.beta,
+                         beta,
                          workspace.resolvent,
                          args.state_ptrs,
                          args.q_offsets,
                          args.finished,
                          *args.out,
-                         plan.problem,
+                         execution_problem,
                          args.state_layer_offset,
                          plan.problem.state_dtype,
                          nullptr,
@@ -313,13 +318,18 @@ void RunSm90Chunk64Entry(const Arguments& args, const Plan& plan, cudaStream_t s
         return;
     }
 
-    auto workspace = PartitionSm90ContextParallelWorkspace(args, plan);
+    auto        workspace               = PartitionSm90ContextParallelWorkspace(args, plan);
+    const auto& beta                    = args.beta;
+    auto        execution_problem       = plan.problem;
+    execution_problem.gate_stride       = workspace.g_cumsum.stride(1);
+    execution_problem.gate_batch_stride = workspace.g_cumsum.stride(0);
+    execution_problem.beta_stride       = beta.stride(1);
+    execution_problem.beta_batch_stride = beta.stride(0);
     PrepareSm90GdrTmaDescriptorsAndCumsum(args.q,
                                           args.k,
                                           args.v,
                                           args.g,
                                           workspace.g_cumsum,
-                                          args.beta,
                                           workspace.resolvent,
                                           args.q_offsets,
                                           args.finished,
@@ -331,22 +341,22 @@ void RunSm90Chunk64Entry(const Arguments& args, const Plan& plan, cudaStream_t s
                                           plan.problem.state_dtype,
                                           stream);
     LaunchSm90KktSolve(args.k,
-                       args.beta,
+                       beta,
                        args.q_offsets,
                        &workspace.g_cumsum,
                        args.finished,
                        workspace.resolvent,
-                       plan.problem,
+                       execution_problem,
                        workspace.kkt_tma_desc,
                        stream);
     LaunchSm90FusedGdrH(args.k,
                         args.v,
                         workspace.g_cumsum,
-                        args.beta,
+                        beta,
                         workspace.resolvent,
                         workspace.segment_state,
                         workspace.segment_m,
-                        plan.problem,
+                        execution_problem,
                         plan.cp,
                         args.q_offsets,
                         workspace.cp_source_indices,
@@ -368,12 +378,12 @@ void RunSm90Chunk64Entry(const Arguments& args, const Plan& plan, cudaStream_t s
                                    plan.problem.state_dtype,
                                    workspace.correct_initial_states_tma_desc,
                                    stream);
-    Problem context_parallel_problem = MakeContextParallelProblem(plan.problem, plan.cp);
+    Problem context_parallel_problem = MakeContextParallelProblem(execution_problem, plan.cp);
     LaunchSm90FusedChunk(args.q,
                          args.k,
                          args.v,
                          workspace.g_cumsum,
-                         args.beta,
+                         beta,
                          workspace.resolvent,
                          args.state_ptrs,
                          workspace.cp_q_offsets,

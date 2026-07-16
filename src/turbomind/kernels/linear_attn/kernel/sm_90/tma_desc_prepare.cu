@@ -9,7 +9,6 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
                                            const core::Tensor&        v,
                                            const core::Tensor&        g,
                                            core::Tensor&              g_cumsum,
-                                           const core::Tensor&        beta,
                                            core::Tensor&              resolvent,
                                            const core::Tensor&        q_offsets,
                                            const core::Tensor&        finished,
@@ -21,11 +20,10 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
                                            DataType                   state_dtype,
                                            cudaStream_t               stream)
 {
-    const bool     context_parallel = cp.enabled;
-    constexpr auto kVectorAlignment = alignof(float4);
-    if (reinterpret_cast<std::uintptr_t>(g.raw_data()) % kVectorAlignment != 0
-        || reinterpret_cast<std::uintptr_t>(g_cumsum.raw_data()) % kVectorAlignment != 0) {
-        throw std::invalid_argument("SM90 chunk64 GDR requires 16-byte-aligned gate and gate-cumsum tensors");
+    const bool               context_parallel = cp.enabled;
+    constexpr std::uintptr_t kTmaAlignment    = 16;
+    if (reinterpret_cast<std::uintptr_t>(g_cumsum.raw_data()) % kTmaAlignment != 0) {
+        throw std::invalid_argument("SM90 chunk64 GDR internal gate-cumsum workspace must be 16-byte aligned");
     }
     const auto kkt_k_desc             = MakeChunkedKktTmaDesc(k);
     const auto kkt_resolvent_desc     = MakeChunkedKktResolventTmaDesc(resolvent);
@@ -41,7 +39,6 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
     const auto fused_resolvent_desc = MakeFusedGdrResolventTmaDesc(resolvent);
     const auto fused_out_desc       = MakeFusedGdrOutputTmaDesc(out, fused_block_dv);
 
-    CUtensorMap fused_gdr_h_beta_desc{};
     CUtensorMap fused_gdr_h_g_desc{};
     CUtensorMap fused_gdr_h_v_desc{};
     CUtensorMap fused_gdr_h_resolvent_desc{};
@@ -51,7 +48,6 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
     CUtensorMap correct_initial_states_segment_state_desc{};
     CUtensorMap correct_initial_states_segment_m_desc{};
     if (context_parallel) {
-        fused_gdr_h_beta_desc      = MakeFusedGdrHGateTmaDesc(beta);
         fused_gdr_h_g_desc         = MakeFusedGdrHGateTmaDesc(g_cumsum);
         fused_gdr_h_v_desc         = MakeFusedGdrValueTmaDesc(v, kFusedGdrHBlockDv);
         fused_gdr_h_resolvent_desc = MakeFusedGdrHResolventTmaDesc(resolvent);
@@ -74,10 +70,9 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
             MakeCorrectInitialStatesSegmentMatrixTmaDesc(segment_m_ptr, cp.total_segments, problem.hv);
     }
 
-    const auto                             q_base    = MakeStridedTensorBase<__nv_bfloat16>(q);
-    const auto                             k_base    = MakeStridedTensorBase<__nv_bfloat16>(k);
-    const auto                             v_base    = MakeStridedTensorBase<__nv_bfloat16>(v);
-    const auto                             beta_base = MakeStridedTensorBase<float>(beta);
+    const auto                             q_base = MakeStridedTensorBase<__nv_bfloat16>(q);
+    const auto                             k_base = MakeStridedTensorBase<__nv_bfloat16>(k);
+    const auto                             v_base = MakeStridedTensorBase<__nv_bfloat16>(v);
     const StridedTensorBase<__nv_bfloat16> resolvent_base{
         resolvent.data<__nv_bfloat16>(), resolvent.stride(0), resolvent.stride(1)};
     const auto out_base = MakeStridedTensorBase<__nv_bfloat16>(out);
@@ -98,7 +93,6 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
                                                        layout,
                                                        kkt_k_desc,
                                                        kkt_resolvent_desc,
-                                                       fused_gdr_h_beta_desc,
                                                        fused_gdr_h_g_desc,
                                                        fused_q_desc,
                                                        fused_k_desc,
@@ -115,7 +109,6 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
                                                        q_base,
                                                        k_base,
                                                        v_base,
-                                                       beta_base,
                                                        resolvent_base,
                                                        out_base,
                                                        g.data<float>(),
@@ -130,8 +123,10 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
                                                        cp.total_segments,
                                                        cp.segment_chunks,
                                                        cp.segment_tokens,
-                                                       problem.gate_stride,
-                                                       problem.gate_batch_stride);
+                                                       g.stride(1),
+                                                       g.stride(0),
+                                                       g_cumsum.stride(1),
+                                                       g_cumsum.stride(0));
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

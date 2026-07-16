@@ -49,13 +49,17 @@ static_assert(Sm120FusedGdrHSharedBytes<__nv_bfloat16, kContextParallelGdrBlockD
 template<class T, int BlockDv>
 __global__ __launch_bounds__(kFusedGdrThreads,
                              1) void Sm120FusedGdrHKernel(const CUtensorMap* __restrict__ tma_desc_workspace,
+                                                          const float* __restrict__ beta,
                                                           const int32_t* __restrict__ q_offsets,
                                                           const int32_t* __restrict__ cp_source_indices,
                                                           const int32_t* __restrict__ cp_q_offsets,
                                                           const bool* __restrict__ cp_finished,
-                                                          int sequence_num,
-                                                          int hq,
-                                                          int hv)
+                                                          int     sequence_num,
+                                                          int     token_num,
+                                                          int     hq,
+                                                          int     hv,
+                                                          int64_t beta_stride,
+                                                          int64_t beta_batch_stride)
 {
     static_assert(BlockDv == kContextParallelGdrBlockDv);
     extern __shared__ __align__(1024) unsigned char smem_raw[];
@@ -79,6 +83,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
         return;
     }
     const int     token_base             = segment_begin - sequence_begin;
+    const int     physical_batch         = sequence_begin / token_num;
+    const int     local_sequence_begin   = sequence_begin - physical_batch * token_num;
     constexpr int kDvTilesPerHead        = kHeadDim / BlockDv;
     const int     head_tile              = static_cast<int>(blockIdx.y);
     const int     value_head             = head_tile / kDvTilesPerHead;
@@ -95,7 +101,6 @@ __global__ __launch_bounds__(kFusedGdrThreads,
     const auto*   k_tma_desc             = &data_desc[kFusedGdrHKDesc];
     const auto*   v_tma_desc             = &data_desc[kFusedGdrHVDesc];
     const auto*   g_tma_desc             = &data_desc[kFusedGdrHGDesc];
-    const auto*   beta_tma_desc          = &data_desc[kFusedGdrHBetaDesc];
     const auto*   resolvent_tma_desc     = &data_desc[kFusedGdrHResolventDesc];
     const auto*   segment_state_tma_desc = slices.segment_state;
     const auto*   segment_m_tma_desc     = slices.segment_m;
@@ -133,48 +138,54 @@ __global__ __launch_bounds__(kFusedGdrThreads,
     if (wg_idx == 3) {
         cutlass::arch::warpgroup_reg_dealloc<kSm120FusedGdrHProducerRegisters>();
 
-        if (producer_leader && chunks > 0) {
+        if (role_tid < kCudaWarpThreads && chunks > 0) {
             constexpr int kQkTmaBytesPerRow = kHeadDim * static_cast<int>(sizeof(T));
             constexpr int kVBytes           = BlockDv * static_cast<int>(sizeof(T));
             constexpr int kABytes           = kChunk32Size * static_cast<int>(sizeof(T));
-            constexpr int kGateBytes        = 2 * 4 * static_cast<int>(sizeof(float));
+            constexpr int kGateBytes        = 4 * static_cast<int>(sizeof(float));
             constexpr int kEarlyBytesPerRow = kVBytes + kABytes + kGateBytes;
             const int     token0            = token_base;
             auto&         early0            = smem.early[0];
+            const int     initial_valid     = min(seq_len, kChunk32Size);
+            float         beta_value        = 0.0f;
+            if (role_tid < initial_valid) {
+                const int64_t beta_offset =
+                    static_cast<int64_t>(physical_batch) * beta_batch_stride
+                    + static_cast<int64_t>(local_sequence_begin + token0 + role_tid) * beta_stride + value_head;
+                beta_value = beta[beta_offset];
+            }
+            early0.gate_stage[1][role_tid][value_head & 3] = beta_value;
+            __syncwarp();
 
-            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.early_ready_mbar[0],
-                                                                           kChunk32Size * kEarlyBytesPerRow);
-            cute::SM90_TMA_LOAD_2D::copy(
-                v_tma_desc, &smem.early_ready_mbar[0], kTmaNoCacheHint, &early0.v[0][0], value_tma_coord, token0);
-            cute::SM90_TMA_LOAD_2D::copy(resolvent_tma_desc,
-                                         &smem.early_ready_mbar[0],
-                                         kTmaNoCacheHint,
-                                         &early0.a[0][0],
-                                         resolvent_tma_coord,
-                                         token0);
-            cute::SM90_TMA_LOAD_2D::copy(g_tma_desc,
-                                         &smem.early_ready_mbar[0],
-                                         kTmaNoCacheHint,
-                                         &early0.gate_stage[0][0][0],
-                                         gate_tma_coord,
-                                         token0);
-            cute::SM90_TMA_LOAD_2D::copy(beta_tma_desc,
-                                         &smem.early_ready_mbar[0],
-                                         kTmaNoCacheHint,
-                                         &early0.gate_stage[1][0][0],
-                                         gate_tma_coord,
-                                         token0);
+            if (producer_leader) {
+                cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.early_ready_mbar[0],
+                                                                               kChunk32Size * kEarlyBytesPerRow);
+                cute::SM90_TMA_LOAD_2D::copy(
+                    v_tma_desc, &smem.early_ready_mbar[0], kTmaNoCacheHint, &early0.v[0][0], value_tma_coord, token0);
+                cute::SM90_TMA_LOAD_2D::copy(resolvent_tma_desc,
+                                             &smem.early_ready_mbar[0],
+                                             kTmaNoCacheHint,
+                                             &early0.a[0][0],
+                                             resolvent_tma_coord,
+                                             token0);
+                cute::SM90_TMA_LOAD_2D::copy(g_tma_desc,
+                                             &smem.early_ready_mbar[0],
+                                             kTmaNoCacheHint,
+                                             &early0.gate_stage[0][0][0],
+                                             gate_tma_coord,
+                                             token0);
 
-            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.k_ready_mbar[0],
-                                                                           kChunk32Size * kQkTmaBytesPerRow);
-            cute::SM90_TMA_LOAD_4D::copy(k_tma_desc,
-                                         &smem.k_ready_mbar[0],
-                                         kTmaNoCacheHint,
-                                         &smem.k_stage[0][0][0],
-                                         0,
-                                         0,
-                                         qk_tma_head_coord,
-                                         token0);
+                cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.k_ready_mbar[0],
+                                                                               kChunk32Size * kQkTmaBytesPerRow);
+                cute::SM90_TMA_LOAD_4D::copy(k_tma_desc,
+                                             &smem.k_ready_mbar[0],
+                                             kTmaNoCacheHint,
+                                             &smem.k_stage[0][0][0],
+                                             0,
+                                             0,
+                                             qk_tma_head_coord,
+                                             token0);
+            }
         }
 
         int early_free_phase0 = 0;
@@ -184,18 +195,18 @@ __global__ __launch_bounds__(kFusedGdrThreads,
         for (int chunk = 0; chunk < chunks; ++chunk) {
             const int next_chunk = chunk + 1;
 
-            if (producer_leader) {
+            if (role_tid < kCudaWarpThreads) {
                 constexpr int kQkTmaBytesPerRow = kHeadDim * static_cast<int>(sizeof(T));
                 constexpr int kVBytes           = BlockDv * static_cast<int>(sizeof(T));
                 constexpr int kABytes           = kChunk32Size * static_cast<int>(sizeof(T));
-                constexpr int kGateBytes        = 2 * 4 * static_cast<int>(sizeof(float));
+                constexpr int kGateBytes        = 4 * static_cast<int>(sizeof(float));
                 constexpr int kEarlyBytesPerRow = kVBytes + kABytes + kGateBytes;
 
                 if (next_chunk < chunks) {
                     const int next_buf    = next_chunk & 1;
                     const int next_token0 = token_base + next_chunk * kChunk32Size;
                     auto&     next_early  = smem.early[next_buf];
-                    if (next_chunk >= 2) {
+                    if (producer_leader && next_chunk >= 2) {
                         if (next_buf == 0) {
                             cute::wait_barrier(smem.early_free_bar[0], early_free_phase0);
                             early_free_phase0 ^= 1;
@@ -205,53 +216,62 @@ __global__ __launch_bounds__(kFusedGdrThreads,
                             early_free_phase1 ^= 1;
                         }
                     }
-                    cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.early_ready_mbar[next_buf],
-                                                                                   kChunk32Size * kEarlyBytesPerRow);
-                    cute::SM90_TMA_LOAD_2D::copy(v_tma_desc,
-                                                 &smem.early_ready_mbar[next_buf],
-                                                 kTmaNoCacheHint,
-                                                 &next_early.v[0][0],
-                                                 value_tma_coord,
-                                                 next_token0);
-                    cute::SM90_TMA_LOAD_2D::copy(resolvent_tma_desc,
-                                                 &smem.early_ready_mbar[next_buf],
-                                                 kTmaNoCacheHint,
-                                                 &next_early.a[0][0],
-                                                 resolvent_tma_coord,
-                                                 next_token0);
-                    cute::SM90_TMA_LOAD_2D::copy(g_tma_desc,
-                                                 &smem.early_ready_mbar[next_buf],
-                                                 kTmaNoCacheHint,
-                                                 &next_early.gate_stage[0][0][0],
-                                                 gate_tma_coord,
-                                                 next_token0);
-                    cute::SM90_TMA_LOAD_2D::copy(beta_tma_desc,
-                                                 &smem.early_ready_mbar[next_buf],
-                                                 kTmaNoCacheHint,
-                                                 &next_early.gate_stage[1][0][0],
-                                                 gate_tma_coord,
-                                                 next_token0);
-
-                    if (next_chunk >= 2) {
-                        if (next_buf == 0) {
-                            cute::wait_barrier(smem.k_free_bar[0], k_free_phase0);
-                            k_free_phase0 ^= 1;
-                        }
-                        else {
-                            cute::wait_barrier(smem.k_free_bar[1], k_free_phase1);
-                            k_free_phase1 ^= 1;
-                        }
+                    __syncwarp();
+                    const int next_valid = min(seq_len - next_chunk * kChunk32Size, kChunk32Size);
+                    float     beta_value = 0.0f;
+                    if (role_tid < next_valid) {
+                        const int64_t beta_offset =
+                            static_cast<int64_t>(physical_batch) * beta_batch_stride
+                            + static_cast<int64_t>(local_sequence_begin + next_token0 + role_tid) * beta_stride
+                            + value_head;
+                        beta_value = beta[beta_offset];
                     }
-                    cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.k_ready_mbar[next_buf],
-                                                                                   kChunk32Size * kQkTmaBytesPerRow);
-                    cute::SM90_TMA_LOAD_4D::copy(k_tma_desc,
-                                                 &smem.k_ready_mbar[next_buf],
-                                                 kTmaNoCacheHint,
-                                                 &smem.k_stage[next_buf][0][0],
-                                                 0,
-                                                 0,
-                                                 qk_tma_head_coord,
-                                                 next_token0);
+                    next_early.gate_stage[1][role_tid][value_head & 3] = beta_value;
+                    __syncwarp();
+
+                    if (producer_leader) {
+                        cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
+                            &smem.early_ready_mbar[next_buf], kChunk32Size * kEarlyBytesPerRow);
+                        cute::SM90_TMA_LOAD_2D::copy(v_tma_desc,
+                                                     &smem.early_ready_mbar[next_buf],
+                                                     kTmaNoCacheHint,
+                                                     &next_early.v[0][0],
+                                                     value_tma_coord,
+                                                     next_token0);
+                        cute::SM90_TMA_LOAD_2D::copy(resolvent_tma_desc,
+                                                     &smem.early_ready_mbar[next_buf],
+                                                     kTmaNoCacheHint,
+                                                     &next_early.a[0][0],
+                                                     resolvent_tma_coord,
+                                                     next_token0);
+                        cute::SM90_TMA_LOAD_2D::copy(g_tma_desc,
+                                                     &smem.early_ready_mbar[next_buf],
+                                                     kTmaNoCacheHint,
+                                                     &next_early.gate_stage[0][0][0],
+                                                     gate_tma_coord,
+                                                     next_token0);
+
+                        if (next_chunk >= 2) {
+                            if (next_buf == 0) {
+                                cute::wait_barrier(smem.k_free_bar[0], k_free_phase0);
+                                k_free_phase0 ^= 1;
+                            }
+                            else {
+                                cute::wait_barrier(smem.k_free_bar[1], k_free_phase1);
+                                k_free_phase1 ^= 1;
+                            }
+                        }
+                        cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
+                            &smem.k_ready_mbar[next_buf], kChunk32Size * kQkTmaBytesPerRow);
+                        cute::SM90_TMA_LOAD_4D::copy(k_tma_desc,
+                                                     &smem.k_ready_mbar[next_buf],
+                                                     kTmaNoCacheHint,
+                                                     &smem.k_stage[next_buf][0][0],
+                                                     0,
+                                                     0,
+                                                     qk_tma_head_coord,
+                                                     next_token0);
+                    }
                 }
             }
         }
@@ -649,14 +669,13 @@ void LaunchSm120FusedGdrHTyped(const core::Tensor&        k,
     static_cast<void>(k);
     static_cast<void>(v);
     static_cast<void>(g_cumsum);
-    static_cast<void>(beta);
     static_cast<void>(resolvent);
     static_cast<void>(segment_state);
     static_cast<void>(segment_m);
     static_cast<void>(cp_fallback);
 
     if (problem.arch != 1200 || problem.input_dtype != kBfloat16 || problem.hv % problem.hq != 0
-        || problem.gate_stride % 4 != 0 || problem.head_dim != kHeadDim || problem.chunk_size != kChunk32Size) {
+        || problem.head_dim != kHeadDim || problem.chunk_size != kChunk32Size) {
         throw std::invalid_argument(kSm120FusedGdrHUnsupportedMessage);
     }
     if (tma_desc_workspace == nullptr) {
@@ -684,13 +703,17 @@ void LaunchSm120FusedGdrHTyped(const core::Tensor&        k,
     SetFusedGdrHSharedMemoryLimit<block_dv>(smem_bytes);
     Sm120FusedGdrHKernel<__nv_bfloat16, block_dv>
         <<<grid, block, smem_bytes, stream>>>(reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
+                                              beta.data<float>(),
                                               q_offsets.data<int32_t>(),
                                               cp_source_indices.data<int32_t>(),
                                               cp_q_offsets.data<int32_t>(),
                                               cp_finished.data<bool>(),
                                               problem.sequence_num,
+                                              problem.token_num,
                                               problem.hq,
-                                              problem.hv);
+                                              problem.hv,
+                                              problem.beta_stride,
+                                              problem.beta_batch_stride);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

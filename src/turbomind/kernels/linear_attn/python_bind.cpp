@@ -118,6 +118,8 @@ py::dict ProblemToDict(const Problem& problem)
     out["hv"]                = problem.hv;
     out["gate_stride"]       = problem.gate_stride;
     out["gate_batch_stride"] = problem.gate_batch_stride;
+    out["beta_stride"]       = problem.beta_stride;
+    out["beta_batch_stride"] = problem.beta_batch_stride;
     out["head_dim"]          = problem.head_dim;
     out["chunk_size"]        = problem.chunk_size;
     out["total_chunks"]      = problem.total_chunks;
@@ -208,6 +210,7 @@ Operation MakeOperation(GdrMode mode, std::optional<int> chunk_size, ContextPara
 PlanningContext MakePlanningContext(const core::Tensor& q,
                                     const core::Tensor& v,
                                     const core::Tensor& g,
+                                    const core::Tensor& beta,
                                     DataType            state_dtype,
                                     GdrMode             mode,
                                     const core::Tensor& q_offsets,
@@ -226,6 +229,8 @@ PlanningContext MakePlanningContext(const core::Tensor& q,
     context.head_dim          = static_cast<int>(q.shape(3));
     context.gate_stride       = g.stride(1);
     context.gate_batch_stride = g.stride(0);
+    context.beta_stride       = beta.stride(1);
+    context.beta_batch_stride = beta.stride(0);
     context.num_head_groups   = num_head_groups;
     context.heads_per_block   = requested_heads_per_block == 0 ? context.hv : requested_heads_per_block;
     if (mode == GdrMode::kChunked) {
@@ -317,6 +322,7 @@ py::dict PlanBridge(const py::object&  q,
     const auto context            = MakePlanningContext(q_tensor,
                                              v_tensor,
                                              g_tensor,
+                                             beta_tensor,
                                              parsed_state_dtype,
                                              parsed_mode,
                                              q_offsets_tensor,

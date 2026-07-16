@@ -193,8 +193,8 @@ struct Sm90KktSolve {
                                                               int     beta_quad,
                                                               int     physical_batch,
                                                               int     local_token0,
-                                                              int64_t gate_stride,
-                                                              int64_t gate_batch_stride)
+                                                              int64_t beta_stride,
+                                                              int64_t beta_batch_stride)
     {
         const int row_in_half = role_tid >> 2;
         const int col         = role_tid & 3;
@@ -202,8 +202,8 @@ struct Sm90KktSolve {
         for (int half = 0; half < 2; ++half) {
             const int     row           = row_in_half + half * (kChunkSize / 2);
             const int     source_row    = row < valid ? row : valid - 1;
-            const int64_t source_offset = static_cast<int64_t>(physical_batch) * gate_batch_stride
-                                          + static_cast<int64_t>(local_token0 + source_row) * gate_stride
+            const int64_t source_offset = static_cast<int64_t>(physical_batch) * beta_batch_stride
+                                          + static_cast<int64_t>(local_token0 + source_row) * beta_stride
                                           + static_cast<int64_t>(beta_quad * 4 + col);
             const int destination_offset = static_cast<int>(BetaStageLayout()(row, col));
             cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<float>::copy(
@@ -476,8 +476,8 @@ struct Sm90KktSolve {
                                                int            sequence_num,
                                                int            hq,
                                                int            hv,
-                                               int64_t        gate_stride,
-                                               int64_t        gate_batch_stride,
+                                               int64_t        beta_stride,
+                                               int64_t        beta_batch_stride,
                                                int            groups_per_k_head,
                                                unsigned char* shared_raw)
     {
@@ -593,8 +593,8 @@ struct Sm90KktSolve {
                                    first_beta_quad,
                                    physical_batch,
                                    local_beta_token0,
-                                   gate_stride,
-                                   gate_batch_stride);
+                                   beta_stride,
+                                   beta_batch_stride);
                 // Acquire both K halves from TMA completion at phase 0; all expected
                 // bytes are visible to the consumer WG before asynchronous SM90 GMMA.
                 cute::wait_barrier(*k_ready0, 0);
@@ -742,8 +742,8 @@ struct Sm90KktSolve {
                                                next_beta_quad,
                                                physical_batch,
                                                local_beta_token0,
-                                               gate_stride,
-                                               gate_batch_stride);
+                                               beta_stride,
+                                               beta_batch_stride);
                         }
                     }
 
@@ -1029,8 +1029,8 @@ __global__ void __launch_bounds__(Sm90KktSolve<K, ConsumerThreads, ConsumerRegis
                        int          sequence_num,
                        int          hq,
                        int          hv,
-                       int64_t      gate_stride,
-                       int64_t      gate_batch_stride,
+                       int64_t      beta_stride,
+                       int64_t      beta_batch_stride,
                        int          groups_per_k_head)
 {
     extern __shared__ __align__(1024) unsigned char shared_raw[];
@@ -1042,8 +1042,8 @@ __global__ void __launch_bounds__(Sm90KktSolve<K, ConsumerThreads, ConsumerRegis
                                                              sequence_num,
                                                              hq,
                                                              hv,
-                                                             gate_stride,
-                                                             gate_batch_stride,
+                                                             beta_stride,
+                                                             beta_batch_stride,
                                                              groups_per_k_head,
                                                              shared_raw);
 }
@@ -1089,8 +1089,8 @@ void LaunchKktSolveTyped(const K*            k_ptr,
                                                                                          problem.sequence_num,
                                                                                          problem.hq,
                                                                                          problem.hv,
-                                                                                         problem.gate_stride,
-                                                                                         problem.gate_batch_stride,
+                                                                                         problem.beta_stride,
+                                                                                         problem.beta_batch_stride,
                                                                                          groups_per_k_head);
     TM_CUDA_CHECK(cudaGetLastError());
 }

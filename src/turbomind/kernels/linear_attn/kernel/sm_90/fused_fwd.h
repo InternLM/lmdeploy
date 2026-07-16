@@ -36,8 +36,7 @@ struct Sm90FusedGdrFwd {
 
     static constexpr const char* kUnsupportedMessage =
         "fused GDR forward supports only the SM90 bf16 chunked target shape "
-        "(int32 q_offsets, bool finished mask, head_dim=128, chunk_size=64, "
-        "gate stride divisible by 4, Hv % Hq == 0)";
+        "(int32 q_offsets, bool finished mask, head_dim=128, chunk_size=64, Hv % Hq == 0)";
 
     // Active SM90 fused-forward actor/barrier contract:
     // - Producer WG3 warp 0 loads Q/K, warp 1 loads V/beta, warp 2 loads resolvent/g,
@@ -232,8 +231,7 @@ struct Sm90FusedGdrFwd {
     static inline bool CanUseFusedGdrFwd(const Problem& problem)
     {
         return problem.arch == 900 && problem.input_dtype == kBfloat16 && problem.batch == problem.sequence_num
-               && problem.gate_stride % 4 == 0 && problem.gate_batch_stride % 4 == 0 && problem.hv % problem.hq == 0
-               && problem.head_dim == kHeadDim && problem.chunk_size == kChunkSize;
+               && problem.hv % problem.hq == 0 && problem.head_dim == kHeadDim && problem.chunk_size == kChunkSize;
     }
 
     static __device__ __forceinline__ void AcquireAndPrefetchDataTmaDescriptors(const CUtensorMap* desc, int tid)
@@ -457,6 +455,8 @@ struct Sm90FusedGdrFwd {
                                                const float* __restrict__ beta,
                                                int64_t gate_batch_stride,
                                                int64_t gate_stride,
+                                               int64_t beta_batch_stride,
+                                               int64_t beta_stride,
                                                int     token_num,
                                                const int32_t* __restrict__ q_offsets,
                                                const bool* __restrict__ finished,
@@ -516,6 +516,9 @@ struct Sm90FusedGdrFwd {
         const int     gate_local_sequence_begin = sequence_begin - gate_physical_batch * token_num;
         const int64_t gate_sequence_offset      = static_cast<int64_t>(gate_physical_batch) * gate_batch_stride
                                              + static_cast<int64_t>(gate_local_sequence_begin) * gate_stride
+                                             + value_head;
+        const int64_t beta_sequence_offset = static_cast<int64_t>(gate_physical_batch) * beta_batch_stride
+                                             + static_cast<int64_t>(gate_local_sequence_begin) * beta_stride
                                              + value_head;
         const int          qk_tma_head_coord  = qk_head;
         constexpr int      qk_tma_batch_coord = 0;
@@ -675,8 +678,8 @@ struct Sm90FusedGdrFwd {
                                           role_tid - 32,
                                           valid,
                                           token0,
-                                          gate_sequence_offset,
-                                          gate_stride);
+                                          beta_sequence_offset,
+                                          beta_stride);
                     // Release: each V/beta lane attaches its pre-counted arrival to
                     // completion of both per-head beta cp.async copies. Consumers
                     // acquire beta together with completion of the V transaction bytes.
@@ -1181,6 +1184,8 @@ __global__
                                                                  const float* __restrict__ beta,
                                                                  int64_t gate_batch_stride,
                                                                  int64_t gate_stride,
+                                                                 int64_t beta_batch_stride,
+                                                                 int64_t beta_stride,
                                                                  int     token_num,
                                                                  const int32_t* __restrict__ q_offsets,
                                                                  const bool* __restrict__ finished,
@@ -1201,6 +1206,8 @@ __global__
                                                               beta,
                                                               gate_batch_stride,
                                                               gate_stride,
+                                                              beta_batch_stride,
+                                                              beta_stride,
                                                               token_num,
                                                               q_offsets,
                                                               finished,
@@ -1282,6 +1289,8 @@ void LaunchSm90FusedGdrFwdTyped(const core::Tensor& q,
                                               beta.data<float>(),
                                               problem.gate_batch_stride,
                                               problem.gate_stride,
+                                              problem.beta_batch_stride,
+                                              problem.beta_stride,
                                               problem.token_num,
                                               q_offsets_ptr,
                                               finished_ptr,

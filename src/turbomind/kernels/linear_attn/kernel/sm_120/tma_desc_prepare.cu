@@ -6,7 +6,6 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
                                    const core::Tensor&        k,
                                    const core::Tensor&        v,
                                    const core::Tensor&        g_cumsum,
-                                   const core::Tensor&        beta,
                                    const core::Tensor&        resolvent,
                                    const core::Tensor&        state_ptrs,
                                    const core::Tensor&        q_offsets,
@@ -27,14 +26,12 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
     const auto* state_ptrs_ptr = needs_fused_desc ? reinterpret_cast<const int64_t*>(state_ptrs.raw_data()) : nullptr;
 
     const auto kkt_k_desc         = MakeChunkedKktTmaDesc<ChunkSize>(k);
-    const auto kkt_beta_desc      = MakeChunkedKktGateTmaDesc<ChunkSize>(beta);
     const auto kkt_resolvent_desc = MakeChunkedKktResolventTmaDesc<ChunkSize>(resolvent);
 
     CUtensorMap fused_q_desc{};
     CUtensorMap fused_k_desc{};
     CUtensorMap fused_v_desc{};
     CUtensorMap fused_g_desc{};
-    CUtensorMap fused_beta_desc{};
     CUtensorMap fused_resolvent_desc{};
     CUtensorMap fused_state_desc{};
     CUtensorMap fused_out_desc{};
@@ -48,7 +45,6 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
         fused_gdr_h_v_desc                = MakeFusedGdrValueTmaDesc<ChunkSize>(v, kContextParallelGdrBlockDv);
         context_parallel_fused_gdr_v_desc = MakeFusedGdrValueTmaDesc<ChunkSize>(v, kContextParallelGdrBlockDv);
         fused_g_desc                      = MakeFusedGdrGateTmaDesc<ChunkSize>(g_cumsum);
-        fused_beta_desc                   = MakeFusedGdrGateTmaDesc<ChunkSize>(beta);
         fused_resolvent_desc              = MakeFusedGdrResolventTmaDesc<ChunkSize>(resolvent);
         fused_state_desc =
             state_dtype == kBfloat16 ?
@@ -124,7 +120,6 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
     const auto                             k_base    = MakeStridedTensorBase<__nv_bfloat16>(k);
     const auto                             v_base    = MakeStridedTensorBase<__nv_bfloat16>(v);
     const auto                             g_base    = MakeStridedTensorBase<float>(g_cumsum);
-    const auto                             beta_base = MakeStridedTensorBase<float>(beta);
     const StridedTensorBase<__nv_bfloat16> resolvent_base{
         const_cast<__nv_bfloat16*>(resolvent.data<__nv_bfloat16>()), resolvent.stride(0), resolvent.stride(1)};
     const StridedTensorBase<__nv_bfloat16> out_base =
@@ -135,13 +130,11 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
             <<<blocks, 32, 0, stream>>>(mode,
                                         layout,
                                         kkt_k_desc,
-                                        kkt_beta_desc,
                                         kkt_resolvent_desc,
                                         fused_q_desc,
                                         fused_k_desc,
                                         fused_v_desc,
                                         fused_g_desc,
-                                        fused_beta_desc,
                                         fused_resolvent_desc,
                                         fused_state_desc,
                                         fused_out_desc,
@@ -157,7 +150,6 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
                                         k_base,
                                         v_base,
                                         g_base,
-                                        beta_base,
                                         resolvent_base,
                                         out_base,
                                         state_ptrs_ptr,
@@ -181,13 +173,11 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
             <<<blocks, 32, 0, stream>>>(mode,
                                         layout,
                                         kkt_k_desc,
-                                        kkt_beta_desc,
                                         kkt_resolvent_desc,
                                         fused_q_desc,
                                         fused_k_desc,
                                         fused_v_desc,
                                         fused_g_desc,
-                                        fused_beta_desc,
                                         fused_resolvent_desc,
                                         fused_state_desc,
                                         fused_out_desc,
@@ -203,7 +193,6 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
                                         k_base,
                                         v_base,
                                         g_base,
-                                        beta_base,
                                         resolvent_base,
                                         out_base,
                                         state_ptrs_ptr,

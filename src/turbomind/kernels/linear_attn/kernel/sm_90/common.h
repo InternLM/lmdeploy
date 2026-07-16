@@ -49,7 +49,7 @@ constexpr int      kCorrectInitialStatesBf16BlockDv  = kCorrectInitialStatesF32B
 constexpr int      kCorrectInitialStatesMRowsPerTma  = 64;
 constexpr int      kFusedGdrTmaDescCount             = 6;
 constexpr int      kKktTmaDescCount                  = 4;
-constexpr int      kFusedGdrHTmaDescCount            = 7;
+constexpr int      kFusedGdrHTmaDescCount            = 6;
 constexpr int      kCorrectInitialStatesTmaDescCount = 4;
 constexpr int      kTmaDescriptorBytes               = 128;
 constexpr int      kCudaWarpThreads                  = 32;
@@ -595,7 +595,6 @@ enum FusedGdrHTmaDescIndex : int
     kFusedGdrHKDesc = 0,
     kFusedGdrHVDesc,
     kFusedGdrHGDesc,
-    kFusedGdrHBetaDesc,
     kFusedGdrHResolventDesc,
     kFusedGdrHSegmentStateDesc,
     kFusedGdrHSegmentMDesc,

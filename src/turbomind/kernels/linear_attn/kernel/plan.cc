@@ -50,6 +50,8 @@ Problem BuildProblem(const PlanningContext& context, const GdrKernelSpec& spec)
     problem.hv                = context.hv;
     problem.gate_stride       = context.gate_stride;
     problem.gate_batch_stride = context.gate_batch_stride;
+    problem.beta_stride       = context.beta_stride;
+    problem.beta_batch_stride = context.beta_batch_stride;
     problem.head_dim          = context.head_dim;
     problem.chunk_size        = spec.chunk_size;
     problem.num_head_groups   = context.num_head_groups;
@@ -97,12 +99,14 @@ void BuildOptimizedTensorPlans(Plan* plan, size_t direct_descriptor_bytes)
         TensorPlan{core::Layout{{problem.batch, problem.token_num, problem.hv, 128}, {value_batch, value_row, 128, 1}},
                    problem.input_dtype,
                    value_elements};
-    plan->g_cumsum              = TensorPlan{core::Layout{{problem.batch, problem.token_num, problem.hv},
-                                             {problem.gate_batch_stride, problem.gate_stride, 1}},
-                                kFloat32};
-    plan->g_cumsum.storage_size = size_t(problem.batch - 1) * problem.gate_batch_stride
-                                  + size_t(problem.token_num - 1) * problem.gate_stride
-                                  + AlignUp(size_t(problem.hv), 4);
+    const bool          chunked     = IsChunkedGdr(problem);
+    const core::ssize_t gate_stride = chunked ? core::ssize_t(AlignUp(size_t(problem.hv), 4)) : problem.gate_stride;
+    const core::ssize_t gate_batch_stride =
+        chunked ? core::ssize_t(problem.token_num) * gate_stride : problem.gate_batch_stride;
+    plan->g_cumsum = TensorPlan{
+        core::Layout{{problem.batch, problem.token_num, problem.hv}, {gate_batch_stride, gate_stride, 1}}, kFloat32};
+    plan->g_cumsum.storage_size = size_t(problem.batch - 1) * gate_batch_stride
+                                  + size_t(problem.token_num - 1) * gate_stride + AlignUp(size_t(problem.hv), 4);
     const core::ssize_t resolvent_head     = problem.chunk_size;
     const core::ssize_t resolvent_token    = core::ssize_t(problem.hv) * resolvent_head;
     const core::ssize_t resolvent_batch    = core::ssize_t(problem.token_num) * resolvent_token;
@@ -112,7 +116,7 @@ void BuildOptimizedTensorPlans(Plan* plan, size_t direct_descriptor_bytes)
                                  problem.input_dtype,
                                  resolvent_elements};
     plan->workspace_bytes = 0;
-    if (IsChunkedGdr(problem)) {
+    if (chunked) {
         AddWorkspaceBytes(&plan->workspace_bytes, plan->g_cumsum.storage_size * sizeof(float));
         AddWorkspaceBytes(&plan->workspace_bytes, resolvent_elements * byte_size(problem.input_dtype, 1));
         AddWorkspaceBytes(&plan->workspace_bytes,

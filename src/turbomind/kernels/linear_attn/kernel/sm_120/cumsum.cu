@@ -39,8 +39,10 @@ __global__ void ParallelChunkLocalCumsumKernel(const float* __restrict__ g,
                                                int     sequence_num,
                                                int     token_num,
                                                int     hv,
-                                               int64_t gate_stride,
-                                               int64_t gate_batch_stride)
+                                               int64_t input_gate_stride,
+                                               int64_t input_gate_batch_stride,
+                                               int64_t output_gate_stride,
+                                               int64_t output_gate_batch_stride)
 {
     static_assert(ChunkSize == 32);
     static_assert(ChunkSize % kCumsumWarpSize == 0);
@@ -75,15 +77,19 @@ __global__ void ParallelChunkLocalCumsumKernel(const float* __restrict__ g,
     const int remaining   = seq_end - token0;
     const int token_count = remaining < ChunkSize ? remaining : ChunkSize;
 
-    float      value  = 0.0f;
-    int64_t    offset = 0;
-    const bool valid  = hv_id < hv && token_lane < token_count;
+    float      value         = 0.0f;
+    int64_t    input_offset  = 0;
+    int64_t    output_offset = 0;
+    const bool valid         = hv_id < hv && token_lane < token_count;
     if (valid) {
         const int flat_token = token0 + token_lane;
         const int batch_id   = flat_token / token_num;
         const int token      = flat_token - batch_id * token_num;
-        offset = static_cast<int64_t>(batch_id) * gate_batch_stride + static_cast<int64_t>(token) * gate_stride + hv_id;
-        value  = g[offset];
+        input_offset         = static_cast<int64_t>(batch_id) * input_gate_batch_stride
+                       + static_cast<int64_t>(token) * input_gate_stride + hv_id;
+        output_offset = static_cast<int64_t>(batch_id) * output_gate_batch_stride
+                        + static_cast<int64_t>(token) * output_gate_stride + hv_id;
+        value = g[input_offset];
     }
 
     value = WarpInclusiveScan(value, warp_lane);
@@ -96,7 +102,7 @@ __global__ void ParallelChunkLocalCumsumKernel(const float* __restrict__ g,
         value += lower_totals[head_lane];
     }
     if (valid) {
-        g_cumsum[offset] = value;
+        g_cumsum[output_offset] = value;
     }
 }
 
@@ -125,8 +131,10 @@ void LaunchChunkCumsum(const core::Tensor& g,
                                                                                              problem.sequence_num,
                                                                                              problem.token_num,
                                                                                              problem.hv,
-                                                                                             problem.gate_stride,
-                                                                                             problem.gate_batch_stride);
+                                                                                             g.stride(1),
+                                                                                             g.stride(0),
+                                                                                             g_cumsum.stride(1),
+                                                                                             g_cumsum.stride(0));
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

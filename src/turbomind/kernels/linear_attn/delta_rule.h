@@ -55,6 +55,8 @@ struct PlanningContext {
     int                  head_dim{128};
     int64_t              gate_stride{};
     int64_t              gate_batch_stride{};
+    int64_t              beta_stride{};
+    int64_t              beta_batch_stride{};
     int                  num_head_groups{1};
     int                  heads_per_block{};
     std::vector<int32_t> q_offsets;
@@ -80,6 +82,8 @@ struct Problem {
     int      hv{};
     int64_t  gate_stride{};
     int64_t  gate_batch_stride{};
+    int64_t  beta_stride{};
+    int64_t  beta_batch_stride{};
     int      head_dim{128};
     int      chunk_size{kAutoGdrChunkSize};
     int      total_chunks{};

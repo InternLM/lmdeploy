@@ -66,7 +66,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     num_k_heads_ = first.num_k_heads / tp_size_;
     num_v_heads_ = first.num_v_heads / tp_size_;
     head_dim_    = first.key_head_dim;
-    gate_stride_ = (num_v_heads_ + 3) / 4 * 4;
+    gate_stride_ = num_v_heads_;
     TM_CHECK_EQ(num_v_heads_ % num_k_heads_, 0);
     TM_CHECK(recurrent_state_dtype_ == kFloat32 || recurrent_state_dtype_ == input_dtype_)
         << "GDN recurrent state dtype must be float32 or match the input dtype, got state_dtype="
@@ -107,6 +107,8 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
         planning.head_dim          = head_dim_;
         planning.gate_stride       = gate_stride_;
         planning.gate_batch_stride = int64_t(planning.token_slots) * gate_stride_;
+        planning.beta_stride       = planning.gate_stride;
+        planning.beta_batch_stride = planning.gate_batch_stride;
         planning.num_head_groups   = num_head_groups_;
         planning.heads_per_block   = heads_per_block_;
         if (mode == GdrMode::kChunked) {
@@ -249,6 +251,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         planning.hv              = num_v_heads_;
         planning.head_dim        = head_dim_;
         planning.gate_stride     = gate_stride_;
+        planning.beta_stride     = gate_stride_;
         planning.num_head_groups = num_head_groups_;
         planning.heads_per_block = heads_per_block_;
         return planning;
@@ -259,6 +262,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         planning.physical_batch    = data.decode_count;
         planning.token_slots       = 1;
         planning.gate_batch_stride = gate_stride_;
+        planning.beta_batch_stride = gate_stride_;
         linear_attn::delta_rule::Operation operation{};
         operation.mode = linear_attn::delta_rule::GdrMode::kRecurrent;
         linear_attn::delta_rule::Plan plan;
@@ -271,6 +275,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         planning.physical_batch    = 1;
         planning.token_slots       = token_slots;
         planning.gate_batch_stride = int64_t(token_slots) * gate_stride_;
+        planning.beta_batch_stride = planning.gate_batch_stride;
         planning.q_offsets.assign(host_offsets.begin() + data.decode_count, host_offsets.end());
         linear_attn::delta_rule::Operation operation{};
         operation.mode = linear_attn::delta_rule::GdrMode::kChunked;

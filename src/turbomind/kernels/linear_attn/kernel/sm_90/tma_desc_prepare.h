@@ -607,12 +607,10 @@ struct Sm90GdrTmaDescPrepare {
                                              const CUtensorMap&             k_tma_desc,
                                              const CUtensorMap&             v_tma_desc,
                                              const CUtensorMap&             g_tma_desc,
-                                             const CUtensorMap&             beta_tma_desc,
                                              const CUtensorMap&             resolvent_tma_desc,
                                              StridedTensorBase<const T>     k,
                                              StridedTensorBase<const T>     v,
                                              StridedTensorBase<const float> g_cumsum,
-                                             StridedTensorBase<const float> beta,
                                              StridedTensorBase<const T>     resolvent,
                                              int                            tid,
                                              int                            local_sequence_begin,
@@ -646,14 +644,6 @@ struct Sm90GdrTmaDescPrepare {
                                         local_sequence_begin,
                                         sequence_len,
                                         lane_id);
-            RebaseSequenceDescriptor<1>(&gmem_desc[kFusedGdrHBetaDesc],
-                                        &smem_desc[kFusedGdrHBetaDesc],
-                                        beta_tma_desc,
-                                        beta,
-                                        physical_batch,
-                                        local_sequence_begin,
-                                        sequence_len,
-                                        lane_id);
             RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrHResolventDesc],
                                         &smem_desc[kFusedGdrHResolventDesc],
                                         resolvent_tma_desc,
@@ -673,12 +663,10 @@ struct Sm90GdrTmaDescPrepare {
                                              const CUtensorMap&             k_tma_desc,
                                              const CUtensorMap&             v_tma_desc,
                                              const CUtensorMap&             g_tma_desc,
-                                             const CUtensorMap&             beta_tma_desc,
                                              const CUtensorMap&             resolvent_tma_desc,
                                              StridedTensorBase<const T>     k,
                                              StridedTensorBase<const T>     v,
                                              StridedTensorBase<const float> g_cumsum,
-                                             StridedTensorBase<const float> beta,
                                              StridedTensorBase<const T>     resolvent,
                                              int                            tid,
                                              int                            local_sequence_begin,
@@ -690,12 +678,10 @@ struct Sm90GdrTmaDescPrepare {
                                                              k_tma_desc,
                                                              v_tma_desc,
                                                              g_tma_desc,
-                                                             beta_tma_desc,
                                                              resolvent_tma_desc,
                                                              k,
                                                              v,
                                                              g_cumsum,
-                                                             beta,
                                                              resolvent,
                                                              tid,
                                                              local_sequence_begin,
@@ -788,88 +774,79 @@ struct Sm90GdrTmaDescPrepare {
                   < cutlass::arch::NamedBarrier::HardwareMaxNumNamedBarriers);
 
     struct alignas(128) SetupSharedStorage {
-        alignas(16) float4 lower_total;
+        alignas(16) float lower_total[kSetupHeadsPerScan];
         alignas(128) CUtensorMap desc[kSetupDescriptorWarps][kFusedGdrDataDescCount];
     };
 
     static_assert(sizeof(SetupSharedStorage) == 1408);
 
-    static __device__ __forceinline__ void ScanGateQuad(const float* __restrict__ g,
-                                                        float* __restrict__ g_cumsum,
-                                                        int                 flat_token0,
-                                                        int                 valid_token_end,
-                                                        int                 token_num,
-                                                        int                 head0,
-                                                        int                 hv,
-                                                        int64_t             gate_stride,
-                                                        int64_t             gate_batch_stride,
-                                                        SetupSharedStorage& smem)
+    static __device__ __forceinline__ void ScanGateHeads(const float* __restrict__ g,
+                                                         float* __restrict__ g_cumsum,
+                                                         int                 flat_token0,
+                                                         int                 valid_token_end,
+                                                         int                 token_num,
+                                                         int                 head0,
+                                                         int                 hv,
+                                                         int64_t             input_gate_stride,
+                                                         int64_t             input_gate_batch_stride,
+                                                         int64_t             output_gate_stride,
+                                                         int64_t             output_gate_batch_stride,
+                                                         SetupSharedStorage& smem)
     {
-        const int  scan_tid       = static_cast<int>(threadIdx.x);
-        const int  warp           = scan_tid / 32;
-        const int  lane           = scan_tid & 31;
-        const int  flat_token     = flat_token0 + scan_tid;
-        const bool valid_token    = flat_token < valid_token_end;
-        const bool full_head_quad = head0 + kSetupHeadsPerScan <= hv;
+        const int  scan_tid    = static_cast<int>(threadIdx.x);
+        const int  warp        = scan_tid / 32;
+        const int  lane        = scan_tid & 31;
+        const int  flat_token  = flat_token0 + scan_tid;
+        const bool valid_token = flat_token < valid_token_end;
 
-        float4  prefix      = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        int64_t gate_offset = 0;
+        float   prefix[kSetupHeadsPerScan]{};
+        int64_t input_gate_offset  = 0;
+        int64_t output_gate_offset = 0;
         if (valid_token) {
             const int physical_batch = flat_token / token_num;
             const int physical_token = flat_token - physical_batch * token_num;
-            gate_offset              = static_cast<int64_t>(physical_batch) * gate_batch_stride
-                          + static_cast<int64_t>(physical_token) * gate_stride + head0;
-            if (full_head_quad) {
-                prefix = *reinterpret_cast<const float4*>(g + gate_offset);
-            }
-            else {
-                prefix.x = g[gate_offset];
-                prefix.y = head0 + 1 < hv ? g[gate_offset + 1] : 0.0f;
-                prefix.z = head0 + 2 < hv ? g[gate_offset + 2] : 0.0f;
-                prefix.w = head0 + 3 < hv ? g[gate_offset + 3] : 0.0f;
+            input_gate_offset        = static_cast<int64_t>(physical_batch) * input_gate_batch_stride
+                                + static_cast<int64_t>(physical_token) * input_gate_stride + head0;
+            output_gate_offset = static_cast<int64_t>(physical_batch) * output_gate_batch_stride
+                                 + static_cast<int64_t>(physical_token) * output_gate_stride + head0;
+            CUTE_UNROLL
+            for (int i = 0; i < kSetupHeadsPerScan; ++i) {
+                if (head0 + i < hv) {
+                    prefix[i] = g[input_gate_offset + i];
+                }
             }
         }
 
-#pragma unroll
+        CUTE_UNROLL
         for (int step = 1; step < 32; step <<= 1) {
-            const float4 addend = make_float4(__shfl_up_sync(0xffffffffu, prefix.x, step),
-                                              __shfl_up_sync(0xffffffffu, prefix.y, step),
-                                              __shfl_up_sync(0xffffffffu, prefix.z, step),
-                                              __shfl_up_sync(0xffffffffu, prefix.w, step));
-            if (lane >= step) {
-                prefix.x += addend.x;
-                prefix.y += addend.y;
-                prefix.z += addend.z;
-                prefix.w += addend.w;
+            CUTE_UNROLL
+            for (int i = 0; i < kSetupHeadsPerScan; ++i) {
+                const float addend = __shfl_up_sync(0xffffffffu, prefix[i], step);
+                if (lane >= step) {
+                    prefix[i] += addend;
+                }
             }
         }
 
         if (warp == 0 && lane == 31) {
-            smem.lower_total = prefix;
+            CUTE_UNROLL
+            for (int i = 0; i < kSetupHeadsPerScan; ++i) {
+                smem.lower_total[i] = prefix[i];
+            }
         }
         cutlass::arch::NamedBarrier::sync(kSetupScanThreads, kSetupScanBarrier);
 
         if (warp == 1) {
-            const float4 lower_total = smem.lower_total;
-            prefix.x += lower_total.x;
-            prefix.y += lower_total.y;
-            prefix.z += lower_total.z;
-            prefix.w += lower_total.w;
+            CUTE_UNROLL
+            for (int i = 0; i < kSetupHeadsPerScan; ++i) {
+                prefix[i] += smem.lower_total[i];
+            }
         }
         if (valid_token) {
-            if (full_head_quad) {
-                *reinterpret_cast<float4*>(g_cumsum + gate_offset) = prefix;
-            }
-            else {
-                g_cumsum[gate_offset] = prefix.x;
-                if (head0 + 1 < hv) {
-                    g_cumsum[gate_offset + 1] = prefix.y;
-                }
-                if (head0 + 2 < hv) {
-                    g_cumsum[gate_offset + 2] = prefix.z;
-                }
-                if (head0 + 3 < hv) {
-                    g_cumsum[gate_offset + 3] = prefix.w;
+            CUTE_UNROLL
+            for (int i = 0; i < kSetupHeadsPerScan; ++i) {
+                if (head0 + i < hv) {
+                    g_cumsum[output_gate_offset + i] = prefix[i];
                 }
             }
         }
@@ -879,7 +856,6 @@ struct Sm90GdrTmaDescPrepare {
                                                     Sm90GdrTmaLayout   layout,
                                                     const CUtensorMap* kkt_k_desc_ptr,
                                                     const CUtensorMap* kkt_resolvent_desc_ptr,
-                                                    const CUtensorMap* fused_gdr_h_beta_desc_ptr,
                                                     const CUtensorMap* fused_gdr_h_g_desc_ptr,
                                                     const CUtensorMap* fused_q_desc_ptr,
                                                     const CUtensorMap* fused_k_desc_ptr,
@@ -896,7 +872,6 @@ struct Sm90GdrTmaDescPrepare {
                                                     StridedTensorBase<const __nv_bfloat16> q,
                                                     StridedTensorBase<const __nv_bfloat16> k,
                                                     StridedTensorBase<const __nv_bfloat16> v,
-                                                    StridedTensorBase<const float>         beta,
                                                     StridedTensorBase<__nv_bfloat16>       resolvent,
                                                     StridedTensorBase<__nv_bfloat16>       out,
                                                     const float* __restrict__ g,
@@ -911,8 +886,10 @@ struct Sm90GdrTmaDescPrepare {
                                                     int                 total_segments,
                                                     int                 segment_chunks,
                                                     int                 segment_tokens,
-                                                    int64_t             gate_stride,
-                                                    int64_t             gate_batch_stride,
+                                                    int64_t             input_gate_stride,
+                                                    int64_t             input_gate_batch_stride,
+                                                    int64_t             output_gate_stride,
+                                                    int64_t             output_gate_batch_stride,
                                                     SetupSharedStorage& smem)
     {
         static_assert(kDescriptorChunkSize == 64, "the unified setup kernel is specialized for chunk64");
@@ -958,8 +935,18 @@ struct Sm90GdrTmaDescPrepare {
             const int sequence_begin = q_offsets[sequence_id];
             const int sequence_end   = q_offsets[sequence_id + 1];
             const int chunk_begin    = sequence_begin + local_chunk_id * kDescriptorChunkSize;
-            ScanGateQuad(
-                g, g_cumsum, chunk_begin, sequence_end, token_num, head0, hv, gate_stride, gate_batch_stride, smem);
+            ScanGateHeads(g,
+                          g_cumsum,
+                          chunk_begin,
+                          sequence_end,
+                          token_num,
+                          head0,
+                          hv,
+                          input_gate_stride,
+                          input_gate_batch_stride,
+                          output_gate_stride,
+                          output_gate_batch_stride,
+                          smem);
 
             bool owns_segment_metadata = false;
             if (context_parallel) {
@@ -1077,7 +1064,7 @@ struct Sm90GdrTmaDescPrepare {
             MakeCorrectInitialStatesTmaDescriptorSlices(correct_initial_states_desc);
         const auto context_parallel_fused_gdr_slices =
             MakeContextParallelFusedGdrTmaDescriptorSlices(context_parallel_fused_gdr_desc, sequence_num);
-        const StridedTensorBase<const float> g_cumsum_read{g_cumsum, gate_batch_stride, gate_stride};
+        const StridedTensorBase<const float> g_cumsum_read{g_cumsum, output_gate_batch_stride, output_gate_stride};
 
         const int fused_gdr_h_tensor_task_begin = FusedGdrHTensorTaskBegin(sequence_num);
         if (descriptor_task < fused_gdr_h_tensor_task_begin) {
@@ -1094,12 +1081,10 @@ struct Sm90GdrTmaDescPrepare {
                     *fused_k_desc_ptr,
                     *fused_gdr_h_v_desc_ptr,
                     *fused_gdr_h_g_desc_ptr,
-                    *fused_gdr_h_beta_desc_ptr,
                     *fused_gdr_h_resolvent_desc_ptr,
                     k,
                     v,
                     g_cumsum_read,
-                    beta,
                     resolvent_read,
                     lane,
                     local_sequence_begin,
@@ -1164,7 +1149,6 @@ __global__ __launch_bounds__(
                                                             Sm90GdrTmaLayout                    layout,
                                                             const __grid_constant__ CUtensorMap kkt_k_desc,
                                                             const __grid_constant__ CUtensorMap kkt_resolvent_desc,
-                                                            const __grid_constant__ CUtensorMap fused_gdr_h_beta_desc,
                                                             const __grid_constant__ CUtensorMap fused_gdr_h_g_desc,
                                                             const __grid_constant__ CUtensorMap fused_q_desc,
                                                             const __grid_constant__ CUtensorMap fused_k_desc,
@@ -1187,7 +1171,6 @@ __global__ __launch_bounds__(
                                                             StridedTensorBase<const __nv_bfloat16> q,
                                                             StridedTensorBase<const __nv_bfloat16> k,
                                                             StridedTensorBase<const __nv_bfloat16> v,
-                                                            StridedTensorBase<const float>         beta,
                                                             StridedTensorBase<__nv_bfloat16>       resolvent,
                                                             StridedTensorBase<__nv_bfloat16>       out,
                                                             const float* __restrict__ g,
@@ -1202,8 +1185,10 @@ __global__ __launch_bounds__(
                                                             int     total_segments,
                                                             int     segment_chunks,
                                                             int     segment_tokens,
-                                                            int64_t gate_stride,
-                                                            int64_t gate_batch_stride)
+                                                            int64_t input_gate_stride,
+                                                            int64_t input_gate_batch_stride,
+                                                            int64_t output_gate_stride,
+                                                            int64_t output_gate_batch_stride)
 {
     using Kernel = Sm90GdrTmaDescPrepare<ChunkSize>;
     __shared__ typename Kernel::SetupSharedStorage smem;
@@ -1211,7 +1196,6 @@ __global__ __launch_bounds__(
                      layout,
                      &kkt_k_desc,
                      &kkt_resolvent_desc,
-                     &fused_gdr_h_beta_desc,
                      &fused_gdr_h_g_desc,
                      &fused_q_desc,
                      &fused_k_desc,
@@ -1228,7 +1212,6 @@ __global__ __launch_bounds__(
                      q,
                      k,
                      v,
-                     beta,
                      resolvent,
                      out,
                      g,
@@ -1243,8 +1226,10 @@ __global__ __launch_bounds__(
                      total_segments,
                      segment_chunks,
                      segment_tokens,
-                     gate_stride,
-                     gate_batch_stride,
+                     input_gate_stride,
+                     input_gate_batch_stride,
+                     output_gate_stride,
+                     output_gate_batch_stride,
                      smem);
 }
 

@@ -55,7 +55,6 @@ constexpr uint64_t kTmaNoCacheHint  = 0;
 enum KktTmaDescIndex : int
 {
     kKktKDesc = 0,
-    kKktBetaDesc,
     kKktResolventDesc,
     kKktTmaDescCount,
 };
@@ -92,7 +91,6 @@ struct __align__(1024) KktSolveSharedStorage
     __align__(128) float             beta_stage[kChunkSize][4];
     __align__(8) uint64_t            k_ready0;
     __align__(8) uint64_t            k_ready1;
-    __align__(8) uint64_t            beta_ready;
 };
 
 template<class K, int ConsumerThreads>
@@ -174,12 +172,14 @@ template<class K, int ConsumerThreads, int ConsumerRegisters>
 __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
     Sm120KktSolveKernel(const int32_t* __restrict__ q_offsets,
                         const bool* __restrict__ finished,
+                        const float* __restrict__ beta,
                         CUtensorMap* tma_desc_workspace,
-                        int          total_tokens,
+                        int          token_num,
                         int          sequence_num,
                         int          hq,
                         int          hv,
-                        int64_t      gate_batch_stride,
+                        int64_t      beta_stride,
+                        int64_t      beta_batch_stride,
                         int          groups_per_k_head)
 {
     static_assert(ConsumerThreads == kKktSolveRoleThreads,
@@ -209,13 +209,18 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
     if (sequence_id < 0) {
         return;
     }
-    const int token0 = local_chunk_id * kChunkSize;
+    const int seq_start       = q_offsets[sequence_id];
+    const int seq_end         = q_offsets[sequence_id + 1];
+    const int seq_len         = seq_end - seq_start;
+    const int token0          = local_chunk_id * kChunkSize;
+    const int valid           = min(seq_len - token0, kChunkSize);
+    const int physical_batch  = seq_start / token_num;
+    const int local_seq_start = seq_start - physical_batch * token_num;
 
     extern __shared__ __align__(1024) unsigned char shared_raw[];
     auto&                                           smem     = *reinterpret_cast<KktSolveSharedStorage<K>*>(shared_raw);
     uint64_t*                                       k_ready0 = &smem.k_ready0;
     uint64_t*                                       k_ready1 = &smem.k_ready1;
-    uint64_t*                                       beta_ready = &smem.beta_ready;
 
     using MmaElement       = typename KktMmaTraits<K>::Element;
     MmaElement* k_tile0    = smem.k_tile;
@@ -225,13 +230,11 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
     const auto* gmem_desc  = tma_desc_workspace + sequence_id * kKktTmaDescCount;
     KktAcquireAndPrefetchTmaDescriptors(gmem_desc, tx);
     const CUtensorMap* k_desc         = &gmem_desc[kKktKDesc];
-    const CUtensorMap* beta_desc      = &gmem_desc[kKktBetaDesc];
     const CUtensorMap* resolvent_desc = &gmem_desc[kKktResolventDesc];
 
     if (tx == 0) {
         cute::initialize_barrier(*k_ready0, 1);
         cute::initialize_barrier(*k_ready1, 1);
-        cute::initialize_barrier(*beta_ready, 1);
         cutlass::arch::fence_barrier_init();
     }
     __syncthreads();
@@ -264,17 +267,12 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
             auto c_a32       = cute::make_identity_tensor(cute::Shape<cute::_32, cute::_32>{});
             auto t_a32_coord = mma32.get_thread_slice(role_tid).partition_C(c_a32);
 
-            constexpr int k_tma_box_rows   = kChunkSize;
-            const int     first_beta_quad  = value_head_base / 4;
-            const int     first_beta_coord = first_beta_quad * 4;
+            constexpr int k_tma_box_rows = kChunkSize;
             if (role_tid == 0) {
                 cute::set_barrier_transaction_bytes(*k_ready0, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
                 cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready0, kTmaNoCacheHint, k_tile0, 0, 0, qk_head, token0, 0);
                 cute::set_barrier_transaction_bytes(*k_ready1, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
                 cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready1, kTmaNoCacheHint, k_tile1, 0, 1, qk_head, token0, 0);
-                cute::set_barrier_transaction_bytes(*beta_ready, k_tma_box_rows * 4 * static_cast<int>(sizeof(float)));
-                cute::SM90_TMA_LOAD_3D::copy(
-                    beta_desc, beta_ready, kTmaNoCacheHint, beta_stage, first_beta_coord, token0, 0);
             }
             cute::wait_barrier(*k_ready0, 0);
 
@@ -301,25 +299,24 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
                                    SM75_U32x4_LDSM_N{},
                                    SM75_U32x4_LDSM_N{});
 
-            int beta_phase        = 0;
-            int loaded_beta_quad  = -1;
-            int pending_beta_quad = first_beta_quad;
+            int loaded_beta_quad = -1;
             for (int group = ConsumerWg; group < groups_per_k_head; group += kKktSolveConsumerWgs) {
                 const int value_head = value_head_base + group;
                 const int beta_quad  = value_head / 4;
                 const int beta_coord = beta_quad * 4;
                 if (beta_quad != loaded_beta_quad) {
-                    if (beta_quad != pending_beta_quad) {
-                        if (role_tid == 0) {
-                            cute::set_barrier_transaction_bytes(*beta_ready,
-                                                                k_tma_box_rows * 4 * static_cast<int>(sizeof(float)));
-                            cute::SM90_TMA_LOAD_3D::copy(
-                                beta_desc, beta_ready, kTmaNoCacheHint, beta_stage, beta_coord, token0, 0);
-                        }
-                        pending_beta_quad = beta_quad;
+                    const int beta_row   = role_tid / 4;
+                    const int beta_lane  = role_tid % 4;
+                    float     beta_value = 0.0f;
+                    if (beta_row < valid && beta_coord + beta_lane < hv) {
+                        const int64_t beta_offset =
+                            static_cast<int64_t>(physical_batch) * beta_batch_stride
+                            + static_cast<int64_t>(local_seq_start + token0 + beta_row) * beta_stride + beta_coord
+                            + beta_lane;
+                        beta_value = beta[beta_offset];
                     }
-                    cute::wait_barrier(*beta_ready, beta_phase);
-                    beta_phase ^= 1;
+                    beta_stage[beta_row * 4 + beta_lane] = beta_value;
+                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
                     loaded_beta_quad = beta_quad;
                 }
                 const int beta_lane = value_head & 3;
@@ -444,10 +441,7 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
                 }
             }
             static_cast<void>(finished);
-            static_cast<void>(total_tokens);
             static_cast<void>(hq);
-            static_cast<void>(hv);
-            static_cast<void>(gate_batch_stride);
             static_cast<void>(batch_id);
             if (role_tid == 0) {
                 cute::tma_store_wait<0>();
@@ -457,7 +451,7 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
 }
 
 template<class K, int ConsumerThreads = kKktSolveRoleThreads, int ConsumerRegisters = kConsumerRegisters>
-void LaunchKktSolveTyped(const float*        g_cumsum_ptr,
+void LaunchKktSolveTyped(const float*        beta_ptr,
                          const core::Tensor& q_offsets,
                          const core::Tensor& finished,
                          void*               tma_desc_workspace,
@@ -484,18 +478,20 @@ void LaunchKktSolveTyped(const float*        g_cumsum_ptr,
     Sm120KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>
         <<<grid, kKktSolveConsumerWgs * ConsumerThreads, shared_bytes, stream>>>(offsets_ptr,
                                                                                  finished_ptr,
+                                                                                 beta_ptr,
                                                                                  desc_workspace,
                                                                                  problem.token_num,
                                                                                  problem.sequence_num,
                                                                                  problem.hq,
                                                                                  problem.hv,
-                                                                                 problem.gate_batch_stride,
+                                                                                 problem.beta_stride,
+                                                                                 problem.beta_batch_stride,
                                                                                  groups_per_k_head);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void LaunchSm120KktSolveImpl(const core::Tensor&,
-                             const core::Tensor&,
+                             const core::Tensor& beta,
                              const core::Tensor& q_offsets,
                              const core::Tensor* g_cumsum,
                              const core::Tensor& finished,
@@ -504,8 +500,9 @@ void LaunchSm120KktSolveImpl(const core::Tensor&,
                              void*          tma_desc_workspace,
                              cudaStream_t   stream)
 {
-    const auto* g_cumsum_ptr = g_cumsum->data<float>();
-    LaunchKktSolveTyped<__nv_bfloat16>(g_cumsum_ptr, q_offsets, finished, tma_desc_workspace, problem, stream);
+    const auto* beta_ptr = beta.data<float>();
+    static_cast<void>(g_cumsum);
+    LaunchKktSolveTyped<__nv_bfloat16>(beta_ptr, q_offsets, finished, tma_desc_workspace, problem, stream);
 }
 
 }  // namespace

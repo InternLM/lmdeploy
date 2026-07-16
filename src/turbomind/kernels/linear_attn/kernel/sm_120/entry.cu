@@ -93,46 +93,51 @@ void RunSm120RecurrentEntry(const Arguments& args, const Plan& plan, cudaStream_
 
 void RunSm120Chunk32Entry(const Arguments& args, const Plan& plan, cudaStream_t stream)
 {
-    auto workspace = PartitionSm120DirectChunkWorkspace(args, plan);
+    auto        workspace               = PartitionSm120DirectChunkWorkspace(args, plan);
+    const auto& beta                    = args.beta;
+    auto        execution_problem       = plan.problem;
+    execution_problem.gate_stride       = workspace.g_cumsum.stride(1);
+    execution_problem.gate_batch_stride = workspace.g_cumsum.stride(0);
+    execution_problem.beta_stride       = beta.stride(1);
+    execution_problem.beta_batch_stride = beta.stride(0);
     PrepareSm120GdrTmaDescriptors(args.q,
                                   args.k,
                                   args.v,
                                   workspace.g_cumsum,
-                                  args.beta,
                                   workspace.resolvent,
                                   args.state_ptrs,
                                   args.q_offsets,
                                   args.finished,
                                   args.out,
                                   *args.workspace,
-                                  plan.problem,
+                                  execution_problem,
                                   plan.cp,
                                   Sm120GdrTmaMode::kAllDirectFused,
                                   workspace.layout,
                                   args.state_layer_offset,
                                   plan.problem.state_dtype,
                                   stream);
-    LaunchChunk32LocalCumsum(args.g, args.q_offsets, workspace.g_cumsum, plan.problem, stream);
+    LaunchChunk32LocalCumsum(args.g, args.q_offsets, workspace.g_cumsum, execution_problem, stream);
     LaunchSm120KktSolve(args.k,
-                        args.beta,
+                        beta,
                         args.q_offsets,
                         &workspace.g_cumsum,
                         args.finished,
                         workspace.resolvent,
-                        plan.problem,
+                        execution_problem,
                         workspace.kkt_tma_desc,
                         stream);
     LaunchSm120FusedChunk(args.q,
                           args.k,
                           args.v,
                           workspace.g_cumsum,
-                          args.beta,
+                          beta,
                           workspace.resolvent,
                           args.state_ptrs,
                           args.q_offsets,
                           args.finished,
                           *args.out,
-                          plan.problem,
+                          execution_problem,
                           args.state_layer_offset,
                           plan.problem.state_dtype,
                           nullptr,
