@@ -27,8 +27,8 @@ RUN --mount=type=cache,target=/root/.cache \
 COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
-# The Jetson AI Lab index may lag xgrammar releases, while CUDA/Torch wheels
-# should still come from the Jetson index. Preinstall only xgrammar from PyPI.
+# The Jetson AI Lab index may lag xgrammar releases. Force xgrammar from PyPI,
+# while keeping the LMDeploy wheel and its CUDA/Torch dependencies on the Jetson index.
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/opt/pytorch \
     pip install build change-wheel-version && \
