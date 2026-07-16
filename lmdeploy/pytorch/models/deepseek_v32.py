@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
 from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
@@ -102,6 +103,16 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     return hadamard_transform(x, scale=hidden_size**-0.5)
 
 
+def _dequantize_blocked_fp8(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Dequantize a 2D block-FP8 checkpoint tensor."""
+    dim_w0, dim_w1 = weight.shape
+    dim_s0, dim_s1 = scale.shape
+    assert dim_w0 % dim_s0 == 0 and dim_w1 % dim_s1 == 0
+    weight = weight.reshape(dim_s0, dim_w0 // dim_s0, dim_s1, dim_w1 // dim_s1)
+    weight = weight.float() * scale.reshape(dim_s0, 1, dim_s1, 1)
+    return weight.to(dtype).reshape(dim_w0, dim_w1)
+
+
 class LayerNorm(nn.Module):
     """Layer Normalization."""
 
@@ -122,10 +133,6 @@ class Indexer(nn.Module):
 
     def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        try:
-            import fast_hadamard_transform  # noqa: F401
-        except ImportError:
-            raise ImportError('Please install fast_hadamard_transform package.')
         quant_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         # self.dim: int = 2048
@@ -144,20 +151,30 @@ class Indexer(nn.Module):
                                          device=device,
                                          is_tp=False,
                                          quant_config=quant_config)
-        self.wk = build_colwise_linear(self.dim,
-                                       self.head_dim,
-                                       bias=False,
-                                       dtype=dtype,
-                                       device=device,
-                                       is_tp=False,
-                                       quant_config=quant_config)
+        self.use_fusion = not _envs.disable_dsa_indexer_fusion
+        if self.use_fusion:
+            # Merge K and head-gate projections into one BF16 GEMM.
+            self.wk_weights_proj = build_colwise_linear(self.dim,
+                                                        self.head_dim + self.n_heads,
+                                                        bias=False,
+                                                        dtype=torch.bfloat16,
+                                                        device=device,
+                                                        is_tp=False)
+        else:
+            self.wk = build_colwise_linear(self.dim,
+                                           self.head_dim,
+                                           bias=False,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=False,
+                                           quant_config=quant_config)
+            self.weights_proj = build_colwise_linear(self.dim,
+                                                     self.n_heads,
+                                                     bias=False,
+                                                     dtype=dtype,
+                                                     device=device,
+                                                     is_tp=False)
         self.k_norm = LayerNorm(self.head_dim, device=device)
-        self.weights_proj = build_colwise_linear(self.dim,
-                                                 self.n_heads,
-                                                 bias=False,
-                                                 dtype=dtype,
-                                                 device=device,
-                                                 is_tp=False)
         self.softmax_scale = self.head_dim**-0.5
         self.apply_rotary_pos_emb = ApplyRotaryEmb(interleaved=self.rope_interleave)
         self.indexer_topk = IndexerTopKFP8(self.index_topk, self.softmax_scale, block_size=128, fill=-1)
@@ -183,6 +200,25 @@ class Indexer(nn.Module):
                 attn_metadata: Any = None):
         q = self.wq_b(qr)
         q = q.unflatten(-1, (-1, self.head_dim))
+        if self.use_fusion:
+            # Fused kernels consume these projections without rotated BF16 Q/K temporaries.
+            kw = self.wk_weights_proj(x)
+            k, weights = kw.split([self.head_dim, self.n_heads], dim=-1)
+            cos, sin = freqs_cis
+            return self.indexer_topk.forward_fused(q[0],
+                                                   k[0],
+                                                   weights[0],
+                                                   self.k_norm.weight,
+                                                   self.k_norm.bias,
+                                                   cos,
+                                                   sin,
+                                                   index_cache[0],
+                                                   index_cache[1],
+                                                   norm_eps=self.k_norm.eps,
+                                                   head_gate_scale=self.n_heads**-0.5,
+                                                   rope_interleaved=self.rope_interleave,
+                                                   attn_metadata=attn_metadata)
+
         q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         k = self.wk(x)
         k = self.k_norm(k)
@@ -636,6 +672,8 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
         all_routed_experts = None
         if self.enable_return_routed_experts:
+            # Dense layers do not produce routed expert IDs. Keep their slots at an out-of-range sentinel;
+            # MoE layers overwrite their own slots below.
             all_routed_experts = position_ids.new_full(
                 (num_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok),
                 torch.iinfo(torch.uint16).max,
@@ -668,9 +706,53 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):
         """Load attention weights."""
+        if self._load_fused_indexer_weight(name, loaded_weight, params_dict):
+            return
         if '.self_attn.indexer.' in name and name not in params_dict:
             layer_idx = get_layer_idx_from_weight_name(name)
             # Shared DSA layers reuse cached top-k indices and have no local indexer.
             if get_layer_indexer_type(self.config, layer_idx) == 'shared':
                 return
         return super()._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
+
+    def _load_fused_indexer_weight(self, name: str, loaded_weight: torch.Tensor,
+                                   params_dict: dict[str, nn.Parameter]) -> bool:
+        """Load separate checkpoint projections into one fused BF16 weight."""
+        is_wk = '.self_attn.indexer.wk.' in name
+        is_gate = '.self_attn.indexer.weights_proj.' in name
+        if not (is_wk or is_gate):
+            return False
+
+        indexer_prefix = name.rsplit('.indexer.', 1)[0] + '.indexer'
+        fused_name = f'{indexer_prefix}.wk_weights_proj.weight'
+        fused_param = params_dict.get(fused_name)
+        if fused_param is None:
+            return False
+
+        # The fused output layout is [K, head gates].
+        if is_gate:
+            if not name.endswith('.weight'):
+                return False
+            gate = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+            fused_param.data[-gate.size(0):].copy_(gate)
+            return True
+
+        if name.endswith('.weight') and loaded_weight.dtype != torch.float8_e4m3fn:
+            wk = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+            fused_param.data[:wk.size(0)].copy_(wk)
+            return True
+
+        is_weight = name.endswith('.weight')
+        is_scale = name.endswith('.weight_scale_inv')
+        if not (is_weight or is_scale):
+            return False
+
+        # Dequantize K once at load time; the runtime projection stays fused.
+        buffer_key = f'{indexer_prefix}.wk'
+        buffer = self._load_buffers.setdefault(buffer_key, {})
+        buffer['weight' if is_weight else 'scale'] = loaded_weight.to(fused_param.device)
+        if 'weight' in buffer and 'scale' in buffer:
+            wk = _dequantize_blocked_fp8(buffer['weight'], buffer['scale'], fused_param.dtype)
+            fused_param.data[:wk.size(0)].copy_(wk)
+            self._load_buffers.pop(buffer_key)
+        return True

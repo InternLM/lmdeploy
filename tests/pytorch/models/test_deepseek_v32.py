@@ -11,6 +11,7 @@ from lmdeploy.pytorch.models.deepseek_v32 import (
     DeepseekV32ForCausalLM,
     DSATopKIndicesBuffer,
     Indexer,
+    _dequantize_blocked_fp8,
     get_layer_indexer_type,
 )
 
@@ -111,21 +112,49 @@ def test_global_fp8_loads_kv_b_proj_after_weight_scale():
     assert model._load_buffers == {}
 
 
-def test_default_interleaved_rotary_uses_pairwise_layout_with_half_split_freqs():
-    query = torch.tensor([[[[1.0, 2.0, 3.0, 4.0]]]])
-    key = torch.tensor([[[[5.0, 6.0, 7.0, 8.0]]]])
-    cos = torch.tensor([[10.0, 20.0, 10.0, 20.0]])
-    sin = torch.tensor([[1.0, 2.0, 1.0, 2.0]])
+@pytest.mark.parametrize('n_heads', [32, 64])
+@pytest.mark.parametrize('load_scale_first', [False, True])
+def test_fp8_indexer_wk_loads_into_fused_bf16_projection(load_scale_first, n_heads):
+    model = DeepseekV32ForCausalLM.__new__(DeepseekV32ForCausalLM)
+    nn.Module.__init__(model)
+    model._load_buffers = {}
+    prefix = 'model.layers.0.self_attn.indexer'
+    fused = nn.Parameter(torch.zeros(128 + n_heads, 256, dtype=torch.bfloat16))
+    params = {f'{prefix}.wk_weights_proj.weight': fused}
 
-    rotary = DefaultApplyRotaryEmbImpl(interleaved=True)
-    query_out, key_out = rotary.forward(query, key, cos, sin, inplace=False)
+    wk = (torch.arange(128 * 256).reshape(128, 256) % 31 - 15).float().to(torch.float8_e4m3fn)
+    scale = torch.tensor([[0.25, 0.5]], dtype=torch.float32)
+    gate = torch.arange(n_heads * 256, dtype=torch.float32).reshape(n_heads, 256).to(torch.bfloat16)
+    wk_tensors = [
+        (f'{prefix}.wk.weight', wk),
+        (f'{prefix}.wk.weight_scale_inv', scale),
+    ]
+    if load_scale_first:
+        wk_tensors.reverse()
 
-    interleaved_cos = torch.tensor([[[10.0, 10.0, 20.0, 20.0]]])
-    interleaved_sin = torch.tensor([[[1.0, 1.0, 2.0, 2.0]]])
-    expected_query = query * interleaved_cos + rotate_interleaved(query) * interleaved_sin
-    expected_key = key * interleaved_cos + rotate_interleaved(key) * interleaved_sin
-    assert torch.equal(query_out, expected_query)
-    assert torch.equal(key_out, expected_key)
+    for name, tensor in wk_tensors:
+        model._load_weight_attention(name, tensor, params, update_pe_mapping=[])
+    model._load_weight_attention(f'{prefix}.weights_proj.weight', gate, params, update_pe_mapping=[])
+
+    expected_wk = _dequantize_blocked_fp8(wk, scale, torch.bfloat16)
+    assert torch.equal(fused[:128], expected_wk)
+    assert torch.equal(fused[128:], gate)
+    assert model._load_buffers == {}
+
+
+def test_bf16_indexer_wk_loads_directly_into_fused_projection():
+    model = DeepseekV32ForCausalLM.__new__(DeepseekV32ForCausalLM)
+    nn.Module.__init__(model)
+    model._load_buffers = {}
+    prefix = 'model.layers.0.self_attn.indexer'
+    fused = nn.Parameter(torch.zeros(160, 8, dtype=torch.bfloat16))
+    params = {f'{prefix}.wk_weights_proj.weight': fused}
+    wk = torch.arange(128 * 8, dtype=torch.float32).reshape(128, 8).to(torch.bfloat16)
+
+    model._load_weight_attention(f'{prefix}.wk.weight', wk, params, update_pe_mapping=[])
+
+    assert torch.equal(fused[:128], wk)
+    assert model._load_buffers == {}
 
 
 def test_indexer_rope_interleave_uses_interleaved_layout():
@@ -146,22 +175,6 @@ def test_indexer_rope_interleave_uses_interleaved_layout():
     expected_key = key * interleaved_cos + rotate_interleaved(key) * interleaved_sin
     assert torch.equal(query_out, expected_query)
     assert torch.equal(key_out, expected_key)
-
-
-def test_indexer_rope_interleave_can_fall_back_to_half_split_layout():
-    indexer = Indexer.__new__(Indexer)
-    indexer.apply_rotary_pos_emb = lambda q, k, cos, sin, inplace=False: ('half-split', q, k, cos, sin, inplace)
-
-    query = torch.zeros(1, 1, 4)
-    key = torch.zeros(1, 4)
-    cos = torch.zeros(1, 4)
-    sin = torch.zeros(1, 4)
-
-    out = indexer._apply_rotary_pos_emb(query, key, (cos, sin))
-
-    assert out[0] == 'half-split'
-    assert out[2].shape == (1, 1, 4)
-    assert out[-1] is False
 
 
 def test_full_indexer_layer_writes_shared_topk_buffer(monkeypatch):
