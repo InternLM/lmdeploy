@@ -52,7 +52,7 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/work \
             -w /work \
-            openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }} \
+            openmmlab/lmdeploy-builder:manylinux_2_28-cuda${{ matrix.cudaver }} \
             bash -c "
               git config --global --add safe.directory /work && \
               source /opt/conda/bin/activate && \
