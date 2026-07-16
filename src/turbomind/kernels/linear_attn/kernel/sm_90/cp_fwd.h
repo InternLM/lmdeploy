@@ -1,4 +1,5 @@
-// Inspired by https://github.com/QwenLM/FlashQLA/blob/60f81453143e724bcaf3fc7921e71e7328f6ebcd/flash_qla/ops/gated_delta_rule/chunk/hopper/cp_fwd.py
+// Inspired by
+// https://github.com/QwenLM/FlashQLA/blob/60f81453143e724bcaf3fc7921e71e7328f6ebcd/flash_qla/ops/gated_delta_rule/chunk/hopper/cp_fwd.py
 
 #pragma once
 
@@ -89,10 +90,8 @@ struct Sm90CorrectInitialStates {
     static_assert(SharedStateTileLayout<float>()(cute::Int<1>{}, cute::Int<0>{}) == 36);
 
     template<class StateFragment, class SmemTensor, class ThrMma>
-    static __device__ __forceinline__ void LoadBf16FragmentShared(StateFragment&     tCrState,
-                                                                  SmemTensor const& s_state,
-                                                                  ThrMma const&     thr_mma,
-                                                                  int               role_tid)
+    static __device__ __forceinline__ void
+    LoadBf16FragmentShared(StateFragment& tCrState, SmemTensor const& s_state, ThrMma const& thr_mma, int role_tid)
     {
         using Element = typename SmemTensor::value_type;
         static_assert(std::is_same_v<Element, cute::bfloat16_t>);
@@ -100,9 +99,8 @@ struct Sm90CorrectInitialStates {
         // h_stage is a 128x32 bf16 TMA tile, so its legal TMA swizzle is SW64.
         // Use x1 LDSM: x2/x4 would span 16/32 row starts and repeat bank groups
         // under SW64, while x1 only consumes one 8-row matrix per instruction.
-        auto s_pack = cute::as_position_independent_swizzle_tensor(s_state);
-        auto smem_tiled_copy_C = cute::make_tiled_copy_C(cute::Copy_Atom<cute::SM75_U32x1_LDSM_N, Element>{},
-                                                         thr_mma);
+        auto s_pack            = cute::as_position_independent_swizzle_tensor(s_state);
+        auto smem_tiled_copy_C = cute::make_tiled_copy_C(cute::Copy_Atom<cute::SM75_U32x1_LDSM_N, Element>{}, thr_mma);
         auto smem_thr_copy_C   = smem_tiled_copy_C.get_thread_slice(role_tid);
         auto tCsState          = smem_thr_copy_C.partition_S(s_pack);
         auto tCrPacked         = cute::make_fragment_like<Element>(tCrState);
@@ -112,13 +110,10 @@ struct Sm90CorrectInitialStates {
     }
 
     template<class StateFragment, class SmemTensor, class ThrMma>
-    static __device__ __forceinline__ void StoreFloatFragmentShared(StateFragment const& tCrState,
-                                                                    SmemTensor&         s_state,
-                                                                    ThrMma const&       thr_mma,
-                                                                    int                 role_tid)
+    static __device__ __forceinline__ void
+    StoreFloatFragmentShared(StateFragment const& tCrState, SmemTensor& s_state, ThrMma const& thr_mma, int role_tid)
     {
-        auto smem_tiled_copy_C = cute::make_tiled_copy_C(cute::Copy_Atom<cute::AutoVectorizingCopy, float>{},
-                                                         thr_mma);
+        auto smem_tiled_copy_C = cute::make_tiled_copy_C(cute::Copy_Atom<cute::AutoVectorizingCopy, float>{}, thr_mma);
         auto smem_thr_copy_C   = smem_tiled_copy_C.get_thread_slice(role_tid);
         auto tCsState          = smem_thr_copy_C.partition_D(s_state);
         auto tCrStateView      = smem_thr_copy_C.retile_S(tCrState);
@@ -141,10 +136,10 @@ struct Sm90CorrectInitialStates {
                                                const __nv_bfloat16* __restrict__ segment_state,
                                                const __nv_bfloat16* __restrict__ segment_m,
                                                float* __restrict__ cp_state_base,
-                                               int64_t state_layer_offset,
-                                               int num_head_groups,
-                                               int heads_per_block,
-                                               int sequence_num,
+                                               int64_t        state_layer_offset,
+                                               int            num_head_groups,
+                                               int            heads_per_block,
+                                               int            sequence_num,
                                                unsigned char* smem_raw)
     {
         static_assert(BlockDv == kCorrectInitialStatesF32BlockDv || BlockDv == kCorrectInitialStatesBf16BlockDv);
@@ -167,305 +162,295 @@ struct Sm90CorrectInitialStates {
         const int     hv              = static_cast<int>(gridDim.x) / kDvTilesPerHead;
         if (sequence_id >= sequence_num) {
             return;
-    }
-    const int first_segment_id = cp_sequence_starts[sequence_id];
-    const int last_segment_id  = cp_sequence_starts[sequence_id + 1];
-    if (first_segment_id == last_segment_id) {
-        return;
-    }
-
-    const auto  slices                 = MakeCorrectInitialStatesTmaDescriptorSlices(tma_desc_workspace);
-    const auto* cp_state_tma_desc      = slices.cp_state;
-    const auto* segment_state_tma_desc = slices.segment_state;
-    const auto* segment_m_tma_desc     = slices.segment_m;
-    if (tid == 0) {
-        cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(cp_state_tma_desc));
-        cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(segment_state_tma_desc));
-        cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(segment_m_tma_desc));
-        cute::prefetch_tma_descriptor(cp_state_tma_desc);
-        cute::prefetch_tma_descriptor(segment_state_tma_desc);
-        cute::prefetch_tma_descriptor(segment_m_tma_desc);
-        #pragma unroll
-        for (int stage = 0; stage < 2; ++stage) {
-            cute::initialize_barrier(h_ready_mbar[stage], 1);
-            cute::initialize_barrier(m_ready_mbar[stage], 1);
-            cute::initialize_barrier(h_free_bar[stage], kCorrectInitialStatesConsumerThreads);
-            cute::initialize_barrier(m_free_bar[stage], kCorrectInitialStatesConsumerThreads);
         }
-        // Release barrier initialization to the CTA; the following CTA sync is
-        // the acquire that publishes all eight initialized barrier objects.
-        cutlass::arch::fence_barrier_init();
-    }
-    __syncthreads();
-
-    constexpr int kPrefixHBytes = kHeadDim * BlockDv * static_cast<int>(sizeof(__nv_bfloat16));
-    constexpr int kPrefixMBytes = kHeadDim * kCorrectInitialStatesKTile * static_cast<int>(sizeof(__nv_bfloat16));
-    static_assert(kCorrectInitialStatesMRowsPerTma == 64);
-
-    if (tid >= kCorrectInitialStatesProducerTid0) {
-        // Register deallocation is WG1-collective, while the h_free/m_free
-        // ownership-release parity waits must remain leader-only. Only thread
-        // 128 may observe them, so lagging producer lanes cannot see the same
-        // phase after two barrier generations (the ABA hazard).
-        cutlass::arch::warpgroup_reg_dealloc<kCorrectInitialStatesProducerRegisters>();
-        if (tid != kCorrectInitialStatesProducerTid0) {
+        const int first_segment_id = cp_sequence_starts[sequence_id];
+        const int last_segment_id  = cp_sequence_starts[sequence_id + 1];
+        if (first_segment_id == last_segment_id) {
             return;
         }
-        for (int segment_id = first_segment_id; segment_id + 1 < last_segment_id; ++segment_id) {
-            const int iter  = segment_id - first_segment_id;
-            const int stage = iter & 1;
-            const int phase = (iter >> 1) & 1;
-            const int free_phase = phase ^ 1;
-            // Acquire: thread 128 receives this H stage after all 128 consumers
-            // release it; first use succeeds through complementary free parity.
-            cute::wait_barrier(h_free_bar[stage], free_phase);
-            // Release: arm a kPrefixHBytes transaction. TMA completion releases the
-            // BF16 state tile through h_ready_mbar to consumer WG0.
-            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
-                &h_ready_mbar[stage], kPrefixHBytes);
-            cute::SM90_TMA_LOAD_4D::copy(segment_state_tma_desc,
-                                         &h_ready_mbar[stage],
-                                         kTmaNoCacheHint,
-                                         &smem.h_stage[stage][0][0],
-                                         dv0,
-                                         0,
-                                         value_head,
-                                         segment_id);
 
-            // Acquire: thread 128 receives this M stage after all 128 consumers
-            // release it; first use also uses complementary free parity.
-            cute::wait_barrier(m_free_bar[stage], free_phase);
-            // Release: arm a kPrefixMBytes transaction. Completion of both 64-row TMA
-            // boxes releases the full BF16 M tile through m_ready_mbar.
-            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
-                &m_ready_mbar[stage], kPrefixMBytes);
-            auto* m_stage = &smem.m_stage[stage][0][0];
-            #pragma unroll
-            for (int col = 0; col < kHeadDim; col += kCorrectInitialStatesMRowsPerTma) {
-                cute::SM90_TMA_LOAD_4D::copy(segment_m_tma_desc,
-                                             &m_ready_mbar[stage],
+        const auto  slices                 = MakeCorrectInitialStatesTmaDescriptorSlices(tma_desc_workspace);
+        const auto* cp_state_tma_desc      = slices.cp_state;
+        const auto* segment_state_tma_desc = slices.segment_state;
+        const auto* segment_m_tma_desc     = slices.segment_m;
+        if (tid == 0) {
+            cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(cp_state_tma_desc));
+            cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(segment_state_tma_desc));
+            cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(segment_m_tma_desc));
+            cute::prefetch_tma_descriptor(cp_state_tma_desc);
+            cute::prefetch_tma_descriptor(segment_state_tma_desc);
+            cute::prefetch_tma_descriptor(segment_m_tma_desc);
+#pragma unroll
+            for (int stage = 0; stage < 2; ++stage) {
+                cute::initialize_barrier(h_ready_mbar[stage], 1);
+                cute::initialize_barrier(m_ready_mbar[stage], 1);
+                cute::initialize_barrier(h_free_bar[stage], kCorrectInitialStatesConsumerThreads);
+                cute::initialize_barrier(m_free_bar[stage], kCorrectInitialStatesConsumerThreads);
+            }
+            // Release barrier initialization to the CTA; the following CTA sync is
+            // the acquire that publishes all eight initialized barrier objects.
+            cutlass::arch::fence_barrier_init();
+        }
+        __syncthreads();
+
+        constexpr int kPrefixHBytes = kHeadDim * BlockDv * static_cast<int>(sizeof(__nv_bfloat16));
+        constexpr int kPrefixMBytes = kHeadDim * kCorrectInitialStatesKTile * static_cast<int>(sizeof(__nv_bfloat16));
+        static_assert(kCorrectInitialStatesMRowsPerTma == 64);
+
+        if (tid >= kCorrectInitialStatesProducerTid0) {
+            // Register deallocation is WG1-collective, while the h_free/m_free
+            // ownership-release parity waits must remain leader-only. Only thread
+            // 128 may observe them, so lagging producer lanes cannot see the same
+            // phase after two barrier generations (the ABA hazard).
+            cutlass::arch::warpgroup_reg_dealloc<kCorrectInitialStatesProducerRegisters>();
+            if (tid != kCorrectInitialStatesProducerTid0) {
+                return;
+            }
+            for (int segment_id = first_segment_id; segment_id + 1 < last_segment_id; ++segment_id) {
+                const int iter       = segment_id - first_segment_id;
+                const int stage      = iter & 1;
+                const int phase      = (iter >> 1) & 1;
+                const int free_phase = phase ^ 1;
+                // Acquire: thread 128 receives this H stage after all 128 consumers
+                // release it; first use succeeds through complementary free parity.
+                cute::wait_barrier(h_free_bar[stage], free_phase);
+                // Release: arm a kPrefixHBytes transaction. TMA completion releases the
+                // BF16 state tile through h_ready_mbar to consumer WG0.
+                cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&h_ready_mbar[stage], kPrefixHBytes);
+                cute::SM90_TMA_LOAD_4D::copy(segment_state_tma_desc,
+                                             &h_ready_mbar[stage],
                                              kTmaNoCacheHint,
-                                             m_stage + col * kHeadDim,
-                                             col,
+                                             &smem.h_stage[stage][0][0],
+                                             dv0,
                                              0,
                                              value_head,
                                              segment_id);
+
+                // Acquire: thread 128 receives this M stage after all 128 consumers
+                // release it; first use also uses complementary free parity.
+                cute::wait_barrier(m_free_bar[stage], free_phase);
+                // Release: arm a kPrefixMBytes transaction. Completion of both 64-row TMA
+                // boxes releases the full BF16 M tile through m_ready_mbar.
+                cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&m_ready_mbar[stage], kPrefixMBytes);
+                auto* m_stage = &smem.m_stage[stage][0][0];
+#pragma unroll
+                for (int col = 0; col < kHeadDim; col += kCorrectInitialStatesMRowsPerTma) {
+                    cute::SM90_TMA_LOAD_4D::copy(segment_m_tma_desc,
+                                                 &m_ready_mbar[stage],
+                                                 kTmaNoCacheHint,
+                                                 m_stage + col * kHeadDim,
+                                                 col,
+                                                 0,
+                                                 value_head,
+                                                 segment_id);
+                }
             }
+            return;
         }
-        return;
-    }
 
-    cutlass::arch::warpgroup_reg_alloc<kCorrectInitialStatesConsumerRegisters>();
+        cutlass::arch::warpgroup_reg_alloc<kCorrectInitialStatesConsumerRegisters>();
 
-    using Element = typename FusedGdrMmaTraits<__nv_bfloat16>::Element;
-    using FallbackTileShape = cute::Shape<cute::Int<64>, cute::Int<BlockDv>, cute::Int<64>>;
-    using FallbackGmmaAtom  = decltype(cute::SM90::GMMA::ss_op_selector<Element,
-                                                                       Element,
-                                                                       float,
-                                                                       FallbackTileShape,
-                                                                       cute::SM90::GMMA::Major::MN,
-                                                                       cute::SM90::GMMA::Major::MN>());
-    auto fallback_mma = cute::make_tiled_mma(FallbackGmmaAtom{});
-    auto fallback_thr_mma = fallback_mma.get_thread_slice(tid);
-    float h_fragment[BlockDv];
-    auto tCrH = cute::make_tensor(
-        cute::make_rmem_ptr(h_fragment),
-        cute::partition_shape_C(fallback_mma, cute::Shape<cute::Int<kHeadDim>, cute::Int<BlockDv>>{}));
-    auto* initial_state_base = GroupedStateBase<StateT>(state_ptrs,
-                                                        sequence_id,
-                                                        value_head,
-                                                        num_head_groups,
-                                                        heads_per_block,
-                                                        state_layer_offset) + dv0;
-    auto g_initial_state = cute::make_tensor(cute::make_gmem_ptr(initial_state_base),
-                                             GlobalStateTileLayout());
-    FusedGdrLoadStateFragmentGlobal<StateT>(tCrH, g_initial_state, fallback_thr_mma, tid);
+        using Element           = typename FusedGdrMmaTraits<__nv_bfloat16>::Element;
+        using FallbackTileShape = cute::Shape<cute::Int<64>, cute::Int<BlockDv>, cute::Int<64>>;
+        using FallbackGmmaAtom  = decltype(cute::SM90::GMMA::ss_op_selector<Element,
+                                                                           Element,
+                                                                           float,
+                                                                           FallbackTileShape,
+                                                                           cute::SM90::GMMA::Major::MN,
+                                                                           cute::SM90::GMMA::Major::MN>());
+        auto  fallback_mma      = cute::make_tiled_mma(FallbackGmmaAtom{});
+        auto  fallback_thr_mma  = fallback_mma.get_thread_slice(tid);
+        float h_fragment[BlockDv];
+        auto  tCrH = cute::make_tensor(
+            cute::make_rmem_ptr(h_fragment),
+            cute::partition_shape_C(fallback_mma, cute::Shape<cute::Int<kHeadDim>, cute::Int<BlockDv>>{}));
+        auto* initial_state_base =
+            GroupedStateBase<StateT>(
+                state_ptrs, sequence_id, value_head, num_head_groups, heads_per_block, state_layer_offset)
+            + dv0;
+        auto g_initial_state = cute::make_tensor(cute::make_gmem_ptr(initial_state_base), GlobalStateTileLayout());
+        FusedGdrLoadStateFragmentGlobal<StateT>(tCrH, g_initial_state, fallback_thr_mma, tid);
 
-    const auto store_cp_state = [&](int segment_id, int store_iter) {
-        const int store_stage = store_iter % kCorrectInitialStatesStoreStages;
-        if (store_iter >= kCorrectInitialStatesStoreStages) {
-            if (tid == 0) {
-                // Acquire: throttle until at most one committed TMA store is
-                // pending, which releases this recycled h_store stage.
-                cute::tma_store_wait<kCorrectInitialStatesStoreStages - 1>();
+        const auto store_cp_state = [&](int segment_id, int store_iter) {
+            const int store_stage = store_iter % kCorrectInitialStatesStoreStages;
+            if (store_iter >= kCorrectInitialStatesStoreStages) {
+                if (tid == 0) {
+                    // Acquire: throttle until at most one committed TMA store is
+                    // pending, which releases this recycled h_store stage.
+                    cute::tma_store_wait<kCorrectInitialStatesStoreStages - 1>();
+                }
+                // Rendezvous: the leader's wait<1> releases recycled h_store
+                // ownership to all peer writers before they overwrite the stage.
+                ConsumerSync();
             }
-            // Rendezvous: the leader's wait<1> releases recycled h_store
-            // ownership to all peer writers before they overwrite the stage.
+
+            auto s_store = cute::make_tensor(cute::make_smem_ptr(&smem.h_store[store_stage][0][0]),
+                                             SharedStateTileLayout<float>());
+            StoreFloatFragmentShared(tCrH, s_store, fallback_thr_mma, tid);
+            // Rendezvous: all peer writes release the complete h_store tile to the
+            // TMA-store leader before it exposes the tile to the async proxy.
             ConsumerSync();
-        }
 
-        auto s_store = cute::make_tensor(cute::make_smem_ptr(&smem.h_store[store_stage][0][0]),
-                                         SharedStateTileLayout<float>());
-        StoreFloatFragmentShared(tCrH, s_store, fallback_thr_mma, tid);
-        // Rendezvous: all peer writes release the complete h_store tile to the
-        // TMA-store leader before it exposes the tile to the async proxy.
-        ConsumerSync();
+            if (tid == 0) {
+                // Release prior h_store SMEM writes from the generic proxy to the
+                // async proxy before the TMA engine reads them.
+                cute::tma_store_fence();
+                cute::SM90_TMA_STORE_4D::copy(
+                    cp_state_tma_desc, &smem.h_store[store_stage][0][0], dv0, 0, value_head, segment_id);
+                // Release the issued TMA store into a committed async store group;
+                // wait<1> throttles these groups and the final wait<0> drains them.
+                cute::tma_store_arrive();
+            }
+        };
+
+        for (int segment_id = first_segment_id; segment_id < last_segment_id; ++segment_id) {
+            const int store_iter = segment_id - first_segment_id;
+            store_cp_state(segment_id, store_iter);
+
+            if (segment_id + 1 == last_segment_id) {
+                break;
+            }
+
+            const int  iter     = segment_id - first_segment_id;
+            const int  stage    = iter & 1;
+            const int  phase    = (iter >> 1) & 1;
+            const bool fallback = cp_fallback[segment_id * hv + value_head];
+
+            if (fallback) {
+                // Rendezvous: any prior fallback GMMA releases h_prev to all peer
+                // writers before they overwrite the aliased snapshot.
+                ConsumerSync();
+                auto s_h_prev_store =
+                    cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.h_prev[0][0])),
+                                      FusedGdrGmmaStateRowLayout<Element, BlockDv>());
+                FusedGdrStoreFragmentBf16Stsm<__nv_bfloat16, Element>(tCrH, s_h_prev_store, fallback_thr_mma, tid);
+            }
+
+            // Acquire this H stage from the TMA producer; kPrefixHBytes of BF16
+            // state are visible before consumer WG0 loads its fragments.
+            cute::wait_barrier(h_ready_mbar[stage], phase);
+            // Rendezvous: h_prev writers release the complete snapshot to the
+            // fallback GMMA; non-fallback iterations remain generation-aligned.
+            ConsumerSync();
+            auto s_h_stage =
+                cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.h_stage[stage][0][0])),
+                                  FusedGdrGmmaStateRowLayout<Element, BlockDv>());
+            LoadBf16FragmentShared(tCrH, s_h_stage, fallback_thr_mma, tid);
+            // Release H-stage ownership from all 128 consumers to thread 128 for reuse.
+            cute::arrive_barrier(h_free_bar[stage]);
+
+            // Acquire this M stage from the TMA producer; kPrefixMBytes of BF16 M
+            // are visible before the optional fallback GMMA consumes the tile.
+            cute::wait_barrier(m_ready_mbar[stage], phase);
+            if (fallback) {
+                auto s_m =
+                    cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.m_stage[stage][0][0])),
+                                      FusedGdrGmmaStateTLayout<Element, kWideGdrBlockDv>());
+                auto s_h_prev = cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.h_prev[0][0])),
+                                                  FusedGdrGmmaStateTLayout<Element, BlockDv>());
+                FusedGdrGmmaSs(fallback_mma, tid, s_m, s_h_prev, tCrH, cute::SM90::GMMA::ScaleOut::One);
+            }
+            // Release M-stage ownership from all 128 consumers after optional GMMA
+            // consumption to thread 128 for reuse.
+            cute::arrive_barrier(m_free_bar[stage]);
+        }
 
         if (tid == 0) {
-            // Release prior h_store SMEM writes from the generic proxy to the
-            // async proxy before the TMA engine reads them.
-            cute::tma_store_fence();
-            cute::SM90_TMA_STORE_4D::copy(cp_state_tma_desc,
-                                          &smem.h_store[store_stage][0][0],
-                                          dv0,
-                                          0,
-                                          value_head,
-                                          segment_id);
-            // Release the issued TMA store into a committed async store group;
-            // wait<1> throttles these groups and the final wait<0> drains them.
-            cute::tma_store_arrive();
+            // Acquire: drain every committed TMA store before the CTA can exit.
+            cute::tma_store_wait<0>();
         }
-    };
-
-    for (int segment_id = first_segment_id; segment_id < last_segment_id; ++segment_id) {
-        const int store_iter = segment_id - first_segment_id;
-        store_cp_state(segment_id, store_iter);
-
-        if (segment_id + 1 == last_segment_id) {
-            break;
-        }
-
-        const int  iter     = segment_id - first_segment_id;
-        const int  stage    = iter & 1;
-        const int  phase    = (iter >> 1) & 1;
-        const bool fallback = cp_fallback[segment_id * hv + value_head];
-
-        if (fallback) {
-            // Rendezvous: any prior fallback GMMA releases h_prev to all peer
-            // writers before they overwrite the aliased snapshot.
-            ConsumerSync();
-            auto s_h_prev_store =
-                cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.h_prev[0][0])),
-                                  FusedGdrGmmaStateRowLayout<Element, BlockDv>());
-            FusedGdrStoreFragmentBf16Stsm<__nv_bfloat16, Element>(
-                tCrH, s_h_prev_store, fallback_thr_mma, tid);
-        }
-
-        // Acquire this H stage from the TMA producer; kPrefixHBytes of BF16
-        // state are visible before consumer WG0 loads its fragments.
-        cute::wait_barrier(h_ready_mbar[stage], phase);
-        // Rendezvous: h_prev writers release the complete snapshot to the
-        // fallback GMMA; non-fallback iterations remain generation-aligned.
+        // Rendezvous: the leader's final wait<0> releases all store completion to
+        // the consumer WG before any lane exits the kernel.
         ConsumerSync();
-        auto s_h_stage = cute::make_tensor(
-            cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.h_stage[stage][0][0])),
-            FusedGdrGmmaStateRowLayout<Element, BlockDv>());
-        LoadBf16FragmentShared(tCrH, s_h_stage, fallback_thr_mma, tid);
-        // Release H-stage ownership from all 128 consumers to thread 128 for reuse.
-        cute::arrive_barrier(h_free_bar[stage]);
 
-        // Acquire this M stage from the TMA producer; kPrefixMBytes of BF16 M
-        // are visible before the optional fallback GMMA consumes the tile.
-        cute::wait_barrier(m_ready_mbar[stage], phase);
-        if (fallback) {
-            auto s_m = cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.m_stage[stage][0][0])),
-                                         FusedGdrGmmaStateTLayout<Element, kWideGdrBlockDv>());
-            auto s_h_prev =
-                cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.h_prev[0][0])),
-                                  FusedGdrGmmaStateTLayout<Element, BlockDv>());
-            FusedGdrGmmaSs(fallback_mma, tid, s_m, s_h_prev, tCrH, cute::SM90::GMMA::ScaleOut::One);
-        }
-        // Release M-stage ownership from all 128 consumers after optional GMMA
-        // consumption to thread 128 for reuse.
-        cute::arrive_barrier(m_free_bar[stage]);
-    }
-
-    if (tid == 0) {
-        // Acquire: drain every committed TMA store before the CTA can exit.
-        cute::tma_store_wait<0>();
-    }
-    // Rendezvous: the leader's final wait<0> releases all store completion to
-    // the consumer WG before any lane exits the kernel.
-    ConsumerSync();
-
-    static_cast<void>(cp_state_base);
-    static_cast<void>(segment_state);
-    static_cast<void>(segment_m);
-    static_cast<void>(finished);
+        static_cast<void>(cp_state_base);
+        static_cast<void>(segment_state);
+        static_cast<void>(segment_m);
+        static_cast<void>(finished);
     }
 };
 
 template<class StateT, int BlockDv>
-__global__ __launch_bounds__(Sm90CorrectInitialStates<StateT, BlockDv>::kThreads,
-                             Sm90CorrectInitialStates<StateT, BlockDv>::kMinBlocks) void Sm90CorrectInitialStatesKernel(
-    const CUtensorMap* __restrict__ tma_desc_workspace,
-    const int64_t* __restrict__ state_ptrs,
-    const int32_t* __restrict__ cp_sequence_starts,
-    const bool* __restrict__ finished,
-    const bool* __restrict__ cp_fallback,
-    const __nv_bfloat16* __restrict__ segment_state,
-    const __nv_bfloat16* __restrict__ segment_m,
-    float* __restrict__ cp_state_base,
-    int64_t state_layer_offset,
-    int num_head_groups,
-    int heads_per_block,
-    int sequence_num)
+__global__ __launch_bounds__(
+    Sm90CorrectInitialStates<StateT, BlockDv>::kThreads,
+    Sm90CorrectInitialStates<StateT, BlockDv>::
+        kMinBlocks) void Sm90CorrectInitialStatesKernel(const CUtensorMap* __restrict__ tma_desc_workspace,
+                                                        const int64_t* __restrict__ state_ptrs,
+                                                        const int32_t* __restrict__ cp_sequence_starts,
+                                                        const bool* __restrict__ finished,
+                                                        const bool* __restrict__ cp_fallback,
+                                                        const __nv_bfloat16* __restrict__ segment_state,
+                                                        const __nv_bfloat16* __restrict__ segment_m,
+                                                        float* __restrict__ cp_state_base,
+                                                        int64_t state_layer_offset,
+                                                        int     num_head_groups,
+                                                        int     heads_per_block,
+                                                        int     sequence_num)
 {
     extern __shared__ __align__(1024) unsigned char smem_raw[];
     Sm90CorrectInitialStates<StateT, BlockDv>::Run(tma_desc_workspace,
-                                                 state_ptrs,
-                                                 cp_sequence_starts,
-                                                 finished,
-                                                 cp_fallback,
-                                                 segment_state,
-                                                 segment_m,
-                                                 cp_state_base,
-                                                 state_layer_offset,
-                                                 num_head_groups,
-                                                 heads_per_block,
-                                                 sequence_num,
-                                                 smem_raw);
+                                                   state_ptrs,
+                                                   cp_sequence_starts,
+                                                   finished,
+                                                   cp_fallback,
+                                                   segment_state,
+                                                   segment_m,
+                                                   cp_state_base,
+                                                   state_layer_offset,
+                                                   num_head_groups,
+                                                   heads_per_block,
+                                                   sequence_num,
+                                                   smem_raw);
 }
 
 template<class StateT, int BlockDv>
 void SetCorrectInitialStatesSharedMemoryLimit(size_t smem_bytes)
 {
     static_assert(kFusedGdrValidStateT<StateT>, "fused chunk GDR StateT must be float or bfloat16");
-    static const cudaError_t status =
-        cudaFuncSetAttribute(Sm90CorrectInitialStatesKernel<StateT, BlockDv>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(smem_bytes));
+    static const cudaError_t status = cudaFuncSetAttribute(Sm90CorrectInitialStatesKernel<StateT, BlockDv>,
+                                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                           static_cast<int>(smem_bytes));
     TM_CUDA_CHECK(status);
 }
 
 template<class StateT>
-void LaunchSm90CorrectInitialStatesTyped(core::Tensor&       cp_state,
-                                              const core::Tensor& state_ptrs,
-                                              const core::Tensor& finished,
-                                              const core::Tensor& cp_sequence_starts,
-                                              const core::Tensor& segment_state,
-                                              const core::Tensor& segment_m,
-                                              const core::Tensor& cp_fallback,
-                                              const Problem& problem,
-                                              const ContextParallelPlan& cp,
-                                              int64_t state_layer_offset,
-                                              void* tma_desc_workspace,
-                                              cudaStream_t stream)
+void LaunchSm90CorrectInitialStatesTyped(core::Tensor&              cp_state,
+                                         const core::Tensor&        state_ptrs,
+                                         const core::Tensor&        finished,
+                                         const core::Tensor&        cp_sequence_starts,
+                                         const core::Tensor&        segment_state,
+                                         const core::Tensor&        segment_m,
+                                         const core::Tensor&        cp_fallback,
+                                         const Problem&             problem,
+                                         const ContextParallelPlan& cp,
+                                         int64_t                    state_layer_offset,
+                                         void*                      tma_desc_workspace,
+                                         cudaStream_t               stream)
 {
     static_assert(kFusedGdrValidStateT<StateT>, "fused chunk GDR StateT must be float or bfloat16");
     constexpr int block_dv =
         std::is_same_v<StateT, __nv_bfloat16> ? kCorrectInitialStatesBf16BlockDv : kCorrectInitialStatesF32BlockDv;
-    const int     dv_tiles = CeilDiv(kHeadDim, block_dv);
-    const dim3    grid(problem.hv * dv_tiles, 1, problem.sequence_num);
+    const int  dv_tiles = CeilDiv(kHeadDim, block_dv);
+    const dim3 grid(problem.hv * dv_tiles, 1, problem.sequence_num);
     using Kernel = Sm90CorrectInitialStates<StateT, block_dv>;
-    const dim3    block(Kernel::kThreads);
-    const size_t  smem_bytes = Kernel::SharedBytes();
+    const dim3   block(Kernel::kThreads);
+    const size_t smem_bytes = Kernel::SharedBytes();
     static_cast<void>(cp);
     SetCorrectInitialStatesSharedMemoryLimit<StateT, block_dv>(smem_bytes);
 
-    Sm90CorrectInitialStatesKernel<StateT, block_dv><<<grid, block, smem_bytes, stream>>>(
-        reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
-        reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
-        cp_sequence_starts.data<int32_t>(),
-        finished.data<bool>(),
-        cp_fallback.data<bool>(),
-        segment_state.data<__nv_bfloat16>(),
-        segment_m.data<__nv_bfloat16>(),
-        cp_state.data<float>(),
-        state_layer_offset,
-        problem.num_head_groups,
-        problem.heads_per_block,
-        problem.sequence_num);
+    Sm90CorrectInitialStatesKernel<StateT, block_dv>
+        <<<grid, block, smem_bytes, stream>>>(reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
+                                              reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
+                                              cp_sequence_starts.data<int32_t>(),
+                                              finished.data<bool>(),
+                                              cp_fallback.data<bool>(),
+                                              segment_state.data<__nv_bfloat16>(),
+                                              segment_m.data<__nv_bfloat16>(),
+                                              cp_state.data<float>(),
+                                              state_layer_offset,
+                                              problem.num_head_groups,
+                                              problem.heads_per_block,
+                                              problem.sequence_num);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

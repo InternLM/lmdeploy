@@ -1,4 +1,5 @@
-// Inspired by https://github.com/QwenLM/FlashQLA/blob/60f81453143e724bcaf3fc7921e71e7328f6ebcd/flash_qla/ops/gated_delta_rule/chunk/hopper/kkt_solve.py
+// Inspired by
+// https://github.com/QwenLM/FlashQLA/blob/60f81453143e724bcaf3fc7921e71e7328f6ebcd/flash_qla/ops/gated_delta_rule/chunk/hopper/kkt_solve.py
 
 #include "src/turbomind/kernels/linear_attn/kernel/sm_120/internal.h"
 
@@ -10,9 +11,6 @@
 
 #include <cstdint>
 
-#include <cute/layout.hpp>
-#include <cute/swizzle_layout.hpp>
-#include <cute/tensor.hpp>
 #include <cute/algorithm/clear.hpp>
 #include <cute/algorithm/cooperative_gemm.hpp>
 #include <cute/arch/copy_sm75.hpp>
@@ -20,6 +18,9 @@
 #include <cute/arch/copy_sm90_tma.hpp>
 #include <cute/arch/mma_sm80.hpp>
 #include <cute/atom/mma_traits_sm80.hpp>
+#include <cute/layout.hpp>
+#include <cute/swizzle_layout.hpp>
+#include <cute/tensor.hpp>
 #include <cute/underscore.hpp>
 #include <cutlass/arch/barrier.h>
 #include <cutlass/arch/reg_reconfig.h>
@@ -27,30 +28,32 @@
 namespace turbomind::linear_attn::delta_rule {
 namespace {
 
-constexpr int kChunkSize       = 32;
-constexpr int kHeadDim         = 128;
-constexpr int kSharedAlign     = 1024;
-constexpr int kConsumerRegisters       = 128;
-constexpr int kKktSolveRoleThreads     = 128;
-constexpr int kKktSolveConsumerWgs     = 1;
-constexpr int kTmaDescriptorBytes      = 128;
+constexpr int kChunkSize           = 32;
+constexpr int kHeadDim             = 128;
+constexpr int kSharedAlign         = 1024;
+constexpr int kConsumerRegisters   = 128;
+constexpr int kKktSolveRoleThreads = 128;
+constexpr int kKktSolveConsumerWgs = 1;
+constexpr int kTmaDescriptorBytes  = 128;
 
-constexpr int kBlock16       = 16;
+constexpr int kBlock16 = 16;
 // Rows per 16x16 fp32 tile including one padding row. Actual rows stay contiguous;
 // the extra row shifts successive tiles away from bank-aligned starts.
 constexpr int kBlock16Stride = 17;
 
 constexpr int kKTileSwizzleDim = 64;
-enum : int {
+enum : int
+{
     kKTileTmaDim = kKTileSwizzleDim,
 };
-constexpr int kKTilePlaneElems  = kChunkSize * kKTileSwizzleDim;
-constexpr int kA16iElems        = 2 * kBlock16Stride * kBlock16;
-constexpr int kA16oElems        = kBlock16Stride * kBlock16;
-constexpr int kOutputTileElems  = kChunkSize * kChunkSize;
-constexpr uint64_t kTmaNoCacheHint = 0;
+constexpr int      kKTilePlaneElems = kChunkSize * kKTileSwizzleDim;
+constexpr int      kA16iElems       = 2 * kBlock16Stride * kBlock16;
+constexpr int      kA16oElems       = kBlock16Stride * kBlock16;
+constexpr int      kOutputTileElems = kChunkSize * kChunkSize;
+constexpr uint64_t kTmaNoCacheHint  = 0;
 
-enum KktTmaDescIndex : int {
+enum KktTmaDescIndex : int
+{
     kKktKDesc = 0,
     kKktBetaDesc,
     kKktResolventDesc,
@@ -72,22 +75,24 @@ struct KktMmaTraits<__nv_bfloat16> {
 };
 
 template<class K>
-struct __align__(16) KktSolveScratch {
+struct __align__(16) KktSolveScratch
+{
     __align__(16) float a16i[kA16iElems];
     __align__(16) float neg_l10[kA16oElems];
 };
 
 template<class K>
-struct __align__(1024) KktSolveSharedStorage {
+struct __align__(1024) KktSolveSharedStorage
+{
     using MmaElement = typename KktMmaTraits<K>::Element;
 
-    __align__(1024) MmaElement k_tile[2 * kKTilePlaneElems];
-    __align__(1024) MmaElement out_tile[kOutputTileElems];
+    __align__(1024) MmaElement       k_tile[2 * kKTilePlaneElems];
+    __align__(1024) MmaElement       out_tile[kOutputTileElems];
     __align__(16) KktSolveScratch<K> scratch[kKktSolveConsumerWgs];
-    __align__(128) float beta_stage[kChunkSize][4];
-    __align__(8) uint64_t k_ready0;
-    __align__(8) uint64_t k_ready1;
-    __align__(8) uint64_t beta_ready;
+    __align__(128) float             beta_stage[kChunkSize][4];
+    __align__(8) uint64_t            k_ready0;
+    __align__(8) uint64_t            k_ready1;
+    __align__(8) uint64_t            beta_ready;
 };
 
 template<class K, int ConsumerThreads>
@@ -128,10 +133,9 @@ __device__ __forceinline__ void ConsumerWgSync()
 template<int Tiles>
 CUTE_HOST_DEVICE constexpr auto KktBlock16Layout()
 {
-    return cute::make_layout(cute::make_shape(cute::Int<Tiles>{}, cute::Int<kBlock16Stride>{}, cute::Int<kBlock16>{}),
-                             cute::make_stride(cute::Int<kBlock16Stride * kBlock16>{},
-                                               cute::Int<kBlock16>{},
-                                               cute::Int<1>{}));
+    return cute::make_layout(
+        cute::make_shape(cute::Int<Tiles>{}, cute::Int<kBlock16Stride>{}, cute::Int<kBlock16>{}),
+        cute::make_stride(cute::Int<kBlock16Stride * kBlock16>{}, cute::Int<kBlock16>{}, cute::Int<1>{}));
 }
 
 CUTE_HOST_DEVICE constexpr auto KktKTileLayout()
@@ -144,8 +148,7 @@ CUTE_HOST_DEVICE constexpr auto KktKTileLayout()
 CUTE_HOST_DEVICE constexpr auto KktOutputTileLayout()
 {
     return cute::composition(cute::Swizzle<2, 3, 3>{},
-                             cute::Layout<cute::Shape<cute::_32, cute::_32>,
-                                          cute::Stride<cute::_32, cute::_1>>{});
+                             cute::Layout<cute::Shape<cute::_32, cute::_32>, cute::Stride<cute::_32, cute::_1>>{});
 }
 
 CUTE_HOST_DEVICE constexpr auto KktDiagSolveThreadLayout()
@@ -168,29 +171,29 @@ __device__ __forceinline__ void StoreBf16(Element* ptr, float value)
 }
 
 template<class K, int ConsumerThreads, int ConsumerRegisters>
-__global__ void __launch_bounds__(kKktSolveConsumerWgs * ConsumerThreads, 1)
+__global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
     Sm120KktSolveKernel(const int32_t* __restrict__ q_offsets,
-                   const bool* __restrict__ finished,
-                   CUtensorMap* tma_desc_workspace,
-                   int total_tokens,
-                   int sequence_num,
-                   int hq,
-                   int hv,
-                   int64_t gate_batch_stride,
-                   int groups_per_k_head)
+                        const bool* __restrict__ finished,
+                        CUtensorMap* tma_desc_workspace,
+                        int          total_tokens,
+                        int          sequence_num,
+                        int          hq,
+                        int          hv,
+                        int64_t      gate_batch_stride,
+                        int          groups_per_k_head)
 {
     static_assert(ConsumerThreads == kKktSolveRoleThreads,
                   "KKT solve MMA and repack layouts currently require 128 consumer threads");
     static_assert(ConsumerThreads >= kChunkSize);
     static_assert(ConsumerThreads % 32 == 0);
 
-    const int tx                = static_cast<int>(threadIdx.x);
-    const int qk_head           = static_cast<int>(blockIdx.x);
-    int       local_chunk_id    = static_cast<int>(blockIdx.y);
-    constexpr int batch_id      = 0;
-    const int value_head_base   = qk_head * groups_per_k_head;
-    const int wg_idx            = cutlass::canonical_warp_group_idx();
-    const int role_tid          = tx % ConsumerThreads;
+    const int     tx              = static_cast<int>(threadIdx.x);
+    const int     qk_head         = static_cast<int>(blockIdx.x);
+    int           local_chunk_id  = static_cast<int>(blockIdx.y);
+    constexpr int batch_id        = 0;
+    const int     value_head_base = qk_head * groups_per_k_head;
+    const int     wg_idx          = cutlass::canonical_warp_group_idx();
+    const int     role_tid        = tx % ConsumerThreads;
 
     int sequence_id = -1;
     for (int b = 0; b < sequence_num; ++b) {
@@ -209,20 +212,20 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs * ConsumerThreads, 1)
     const int token0 = local_chunk_id * kChunkSize;
 
     extern __shared__ __align__(1024) unsigned char shared_raw[];
-    auto& smem = *reinterpret_cast<KktSolveSharedStorage<K>*>(shared_raw);
-    uint64_t* k_ready0 = &smem.k_ready0;
-    uint64_t* k_ready1 = &smem.k_ready1;
-    uint64_t* beta_ready = &smem.beta_ready;
+    auto&                                           smem     = *reinterpret_cast<KktSolveSharedStorage<K>*>(shared_raw);
+    uint64_t*                                       k_ready0 = &smem.k_ready0;
+    uint64_t*                                       k_ready1 = &smem.k_ready1;
+    uint64_t*                                       beta_ready = &smem.beta_ready;
 
-    using MmaElement = typename KktMmaTraits<K>::Element;
-    MmaElement* k_tile0 = smem.k_tile;
-    MmaElement* k_tile1 = smem.k_tile + kKTilePlaneElems;
-    MmaElement* out_tile = smem.out_tile;
+    using MmaElement       = typename KktMmaTraits<K>::Element;
+    MmaElement* k_tile0    = smem.k_tile;
+    MmaElement* k_tile1    = smem.k_tile + kKTilePlaneElems;
+    MmaElement* out_tile   = smem.out_tile;
     float*      beta_stage = &smem.beta_stage[0][0];
-    const auto* gmem_desc = tma_desc_workspace + sequence_id * kKktTmaDescCount;
+    const auto* gmem_desc  = tma_desc_workspace + sequence_id * kKktTmaDescCount;
     KktAcquireAndPrefetchTmaDescriptors(gmem_desc, tx);
-    const CUtensorMap* k_desc = &gmem_desc[kKktKDesc];
-    const CUtensorMap* beta_desc = &gmem_desc[kKktBetaDesc];
+    const CUtensorMap* k_desc         = &gmem_desc[kKktKDesc];
+    const CUtensorMap* beta_desc      = &gmem_desc[kKktBetaDesc];
     const CUtensorMap* resolvent_desc = &gmem_desc[kKktResolventDesc];
 
     if (tx == 0) {
@@ -240,17 +243,17 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs * ConsumerThreads, 1)
         static_assert(ConsumerWg < kKktSolveConsumerWgs);
 
         if (ConsumerWg < groups_per_k_head) {
-            auto& scratch = smem.scratch[ConsumerWg];
-            auto  s_k0    = cute::make_tensor(cute::make_smem_ptr(k_tile0), KktKTileLayout());
-            auto  s_k1    = cute::make_tensor(cute::make_smem_ptr(k_tile1), KktKTileLayout());
-            auto  s_a16i  = cute::make_tensor(cute::make_smem_ptr(scratch.a16i), KktBlock16Layout<2>());
+            auto& scratch   = smem.scratch[ConsumerWg];
+            auto  s_k0      = cute::make_tensor(cute::make_smem_ptr(k_tile0), KktKTileLayout());
+            auto  s_k1      = cute::make_tensor(cute::make_smem_ptr(k_tile1), KktKTileLayout());
+            auto  s_a16i    = cute::make_tensor(cute::make_smem_ptr(scratch.a16i), KktBlock16Layout<2>());
             auto  s_neg_l10 = cute::make_tensor(cute::make_smem_ptr(scratch.neg_l10), KktBlock16Layout<1>());
-            auto  s_out   = cute::make_tensor(cute::make_smem_ptr(out_tile), KktOutputTileLayout());
+            auto  s_out     = cute::make_tensor(cute::make_smem_ptr(out_tile), KktOutputTileLayout());
 
             float gram_fragment[32];
 
             using MmaAtom = typename KktMmaTraits<K>::Atom;
-            using Mma32 = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
+            using Mma32   = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
                                          cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
                                          cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
 
@@ -258,19 +261,17 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs * ConsumerThreads, 1)
             auto  t_gram_fragment =
                 cute::make_tensor(cute::make_rmem_ptr(gram_fragment),
                                   cute::partition_shape_C(mma32, cute::Shape<cute::_32, cute::_32>{}));
-            auto  c_a32       = cute::make_identity_tensor(cute::Shape<cute::_32, cute::_32>{});
-            auto  t_a32_coord = mma32.get_thread_slice(role_tid).partition_C(c_a32);
+            auto c_a32       = cute::make_identity_tensor(cute::Shape<cute::_32, cute::_32>{});
+            auto t_a32_coord = mma32.get_thread_slice(role_tid).partition_C(c_a32);
 
-            constexpr int k_tma_box_rows = kChunkSize;
-            const int     first_beta_quad = value_head_base / 4;
+            constexpr int k_tma_box_rows   = kChunkSize;
+            const int     first_beta_quad  = value_head_base / 4;
             const int     first_beta_coord = first_beta_quad * 4;
             if (role_tid == 0) {
                 cute::set_barrier_transaction_bytes(*k_ready0, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
-                cute::SM90_TMA_LOAD_5D::copy(
-                    k_desc, k_ready0, kTmaNoCacheHint, k_tile0, 0, 0, qk_head, token0, 0);
+                cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready0, kTmaNoCacheHint, k_tile0, 0, 0, qk_head, token0, 0);
                 cute::set_barrier_transaction_bytes(*k_ready1, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
-                cute::SM90_TMA_LOAD_5D::copy(
-                    k_desc, k_ready1, kTmaNoCacheHint, k_tile1, 0, 1, qk_head, token0, 0);
+                cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready1, kTmaNoCacheHint, k_tile1, 0, 1, qk_head, token0, 0);
                 cute::set_barrier_transaction_bytes(*beta_ready, k_tma_box_rows * 4 * static_cast<int>(sizeof(float)));
                 cute::SM90_TMA_LOAD_3D::copy(
                     beta_desc, beta_ready, kTmaNoCacheHint, beta_stage, first_beta_coord, token0, 0);
@@ -310,8 +311,8 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs * ConsumerThreads, 1)
                 if (beta_quad != loaded_beta_quad) {
                     if (beta_quad != pending_beta_quad) {
                         if (role_tid == 0) {
-                            cute::set_barrier_transaction_bytes(
-                                *beta_ready, k_tma_box_rows * 4 * static_cast<int>(sizeof(float)));
+                            cute::set_barrier_transaction_bytes(*beta_ready,
+                                                                k_tma_box_rows * 4 * static_cast<int>(sizeof(float)));
                             cute::SM90_TMA_LOAD_3D::copy(
                                 beta_desc, beta_ready, kTmaNoCacheHint, beta_stage, beta_coord, token0, 0);
                         }
@@ -435,8 +436,7 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs * ConsumerThreads, 1)
                 cute::tma_store_fence();
                 ConsumerWgSync<ConsumerThreads, ConsumerWg>();
                 if (role_tid == 0) {
-                    cute::SM90_TMA_STORE_4D::copy(
-                        resolvent_desc, out_tile, 0, value_head, token0, 0);
+                    cute::SM90_TMA_STORE_4D::copy(resolvent_desc, out_tile, 0, value_head, token0, 0);
                     cute::tma_store_arrive();
                 }
                 if (group + kKktSolveConsumerWgs < groups_per_k_head) {
@@ -457,19 +457,19 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs * ConsumerThreads, 1)
 }
 
 template<class K, int ConsumerThreads = kKktSolveRoleThreads, int ConsumerRegisters = kConsumerRegisters>
-void LaunchKktSolveTyped(const float* g_cumsum_ptr,
+void LaunchKktSolveTyped(const float*        g_cumsum_ptr,
                          const core::Tensor& q_offsets,
                          const core::Tensor& finished,
-                         void* tma_desc_workspace,
-                         const Problem& problem,
-                         cudaStream_t stream)
+                         void*               tma_desc_workspace,
+                         const Problem&      problem,
+                         cudaStream_t        stream)
 {
     if (problem.total_chunks == 0) {
         return;
     }
 
-    const int groups_per_k_head = problem.hv / problem.hq;
-    const dim3 grid(problem.hq, problem.total_chunks, 1);
+    const int    groups_per_k_head = problem.hv / problem.hq;
+    const dim3   grid(problem.hq, problem.total_chunks, 1);
     const size_t shared_bytes = KktSolveSharedBytes<K, ConsumerThreads>();
 
     static const cudaError_t smem_attribute_status =
@@ -478,20 +478,19 @@ void LaunchKktSolveTyped(const float* g_cumsum_ptr,
                              static_cast<int>(shared_bytes));
     TM_CUDA_CHECK(smem_attribute_status);
 
-    const int32_t* offsets_ptr = q_offsets.data<int32_t>();
-    const bool*    finished_ptr = finished.data<bool>();
-    auto* desc_workspace = reinterpret_cast<CUtensorMap*>(tma_desc_workspace);
+    const int32_t* offsets_ptr    = q_offsets.data<int32_t>();
+    const bool*    finished_ptr   = finished.data<bool>();
+    auto*          desc_workspace = reinterpret_cast<CUtensorMap*>(tma_desc_workspace);
     Sm120KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>
-        <<<grid, kKktSolveConsumerWgs * ConsumerThreads, shared_bytes, stream>>>(
-        offsets_ptr,
-        finished_ptr,
-        desc_workspace,
-        problem.token_num,
-        problem.sequence_num,
-        problem.hq,
-        problem.hv,
-        problem.gate_batch_stride,
-        groups_per_k_head);
+        <<<grid, kKktSolveConsumerWgs * ConsumerThreads, shared_bytes, stream>>>(offsets_ptr,
+                                                                                 finished_ptr,
+                                                                                 desc_workspace,
+                                                                                 problem.token_num,
+                                                                                 problem.sequence_num,
+                                                                                 problem.hq,
+                                                                                 problem.hv,
+                                                                                 problem.gate_batch_stride,
+                                                                                 groups_per_k_head);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -502,8 +501,8 @@ void LaunchSm120KktSolveImpl(const core::Tensor&,
                              const core::Tensor& finished,
                              core::Tensor&,
                              const Problem& problem,
-                             void* tma_desc_workspace,
-                             cudaStream_t stream)
+                             void*          tma_desc_workspace,
+                             cudaStream_t   stream)
 {
     const auto* g_cumsum_ptr = g_cumsum->data<float>();
     LaunchKktSolveTyped<__nv_bfloat16>(g_cumsum_ptr, q_offsets, finished, tma_desc_workspace, problem, stream);
@@ -518,13 +517,12 @@ void LaunchSm120KktSolve(const core::Tensor& k,
                          const core::Tensor& q_offsets,
                          const core::Tensor* g_cumsum,
                          const core::Tensor& finished,
-                         core::Tensor& resolvent,
-                         const Problem& problem,
-                         void* tma_desc_workspace,
-                         cudaStream_t stream)
+                         core::Tensor&       resolvent,
+                         const Problem&      problem,
+                         void*               tma_desc_workspace,
+                         cudaStream_t        stream)
 {
-    LaunchSm120KktSolveImpl(
-        k, beta, q_offsets, g_cumsum, finished, resolvent, problem, tma_desc_workspace, stream);
+    LaunchSm120KktSolveImpl(k, beta, q_offsets, g_cumsum, finished, resolvent, problem, tma_desc_workspace, stream);
 }
 
 }  // namespace detail

@@ -37,8 +37,8 @@ __global__ __launch_bounds__(BlockDim, 2) void RecurrentGdrKernel(T*            
     constexpr int k_threads = HeadDim / tile_k;
     constexpr int v_threads = BlockDim / k_threads;
     constexpr int v_iters   = (HeadDim / tile_v + v_threads - 1) / v_threads;
-    const int     offset_k   = threadIdx.x % k_threads;
-    const int     offset_v   = threadIdx.x / k_threads;
+    const int     offset_k  = threadIdx.x % k_threads;
+    const int     offset_v  = threadIdx.x / k_threads;
 
     for (int work_idx = int(blockIdx.x); work_idx < total_work; work_idx += int(gridDim.x)) {
         const int sequence   = work_idx / hv;
@@ -50,9 +50,9 @@ __global__ __launch_bounds__(BlockDim, 2) void RecurrentGdrKernel(T*            
         T*        out_ptr    = out + int64_t(sequence) * out_batch_stride + int64_t(value_head) * HeadDim;
         const int head_group = value_head / heads_per_block;
         const int local_head = value_head % heads_per_block;
-        auto* state = reinterpret_cast<StateT*>(
-                          static_cast<uintptr_t>(state_ptrs[sequence * num_head_groups + head_group]))
-                      + state_layer_offset + int64_t(local_head) * HeadDim * HeadDim;
+        auto*     state =
+            reinterpret_cast<StateT*>(static_cast<uintptr_t>(state_ptrs[sequence * num_head_groups + head_group]))
+            + state_layer_offset + int64_t(local_head) * HeadDim * HeadDim;
 
         Array<float, tile_v> vec_S[v_iters][tile_k];
         PRAGMA_UNROLL
@@ -60,9 +60,7 @@ __global__ __launch_bounds__(BlockDim, 2) void RecurrentGdrKernel(T*            
             PRAGMA_UNROLL
             for (int k_idx = 0; k_idx < tile_k; ++k_idx) {
                 Array<StateT, tile_v> tmp;
-                Load(tmp,
-                     &state[(offset_k * tile_k + k_idx) * HeadDim
-                            + (offset_v + v_iter * v_threads) * tile_v]);
+                Load(tmp, &state[(offset_k * tile_k + k_idx) * HeadDim + (offset_v + v_iter * v_threads) * tile_v]);
                 vec_S[v_iter][k_idx] = cast<float>(tmp);
             }
         }
@@ -104,7 +102,7 @@ __global__ __launch_bounds__(BlockDim, 2) void RecurrentGdrKernel(T*            
                 float sq        = 0.f;
                 PRAGMA_UNROLL
                 for (int k_idx = 0; k_idx < tile_k; ++k_idx) {
-                    const float s_decayed = vec_S[v_iter][k_idx][v_idx] * decay;
+                    const float s_decayed       = vec_S[v_iter][k_idx][v_idx] * decay;
                     vec_S[v_iter][k_idx][v_idx] = s_decayed;
                     kv_memory += s_decayed * vec_k[k_idx];
                     sq += s_decayed * vec_q[k_idx];
@@ -132,8 +130,7 @@ __global__ __launch_bounds__(BlockDim, 2) void RecurrentGdrKernel(T*            
                 PRAGMA_UNROLL
                 for (int k_idx = 0; k_idx < tile_k; ++k_idx) {
                     auto tmp = cast<StateT>(vec_S[v_iter][k_idx]);
-                    Store(&state[(offset_k * tile_k + k_idx) * HeadDim
-                                 + (offset_v + v_iter * v_threads) * tile_v],
+                    Store(&state[(offset_k * tile_k + k_idx) * HeadDim + (offset_v + v_iter * v_threads) * tile_v],
                           tmp);
                 }
             }
@@ -144,36 +141,36 @@ __global__ __launch_bounds__(BlockDim, 2) void RecurrentGdrKernel(T*            
 template<class T, class StateT>
 void RunPreSm90Recurrent(const Arguments& args, const Plan& plan, cudaStream_t stream)
 {
-    constexpr int kBlockDim = 256;
-    const int total_work = plan.problem.sequence_num * plan.problem.hv;
-    const int grid = std::min(total_work, std::max(plan.problem.sm_count, 1) * 4);
-    RecurrentGdrKernel<128, kBlockDim, T, StateT><<<grid, kBlockDim, 0, stream>>>(
-        args.out->data<T>(),
-        args.out->stride(0),
-        args.q.data<T>(),
-        args.q.stride(0),
-        args.k.data<T>(),
-        args.k.stride(0),
-        args.v.data<T>(),
-        args.v.stride(0),
-        args.beta.data<float>(),
-        args.beta.stride(0),
-        args.g.data<float>(),
-        reinterpret_cast<const int64_t*>(args.state_ptrs.raw_data()),
-        args.finished.data<bool>(),
-        total_work,
-        plan.problem.hq,
-        plan.problem.hv,
-        args.state_layer_offset,
-        plan.problem.num_head_groups,
-        plan.problem.heads_per_block);
+    constexpr int kBlockDim  = 256;
+    const int     total_work = plan.problem.sequence_num * plan.problem.hv;
+    const int     grid       = std::min(total_work, std::max(plan.problem.sm_count, 1) * 4);
+    RecurrentGdrKernel<128, kBlockDim, T, StateT>
+        <<<grid, kBlockDim, 0, stream>>>(args.out->data<T>(),
+                                         args.out->stride(0),
+                                         args.q.data<T>(),
+                                         args.q.stride(0),
+                                         args.k.data<T>(),
+                                         args.k.stride(0),
+                                         args.v.data<T>(),
+                                         args.v.stride(0),
+                                         args.beta.data<float>(),
+                                         args.beta.stride(0),
+                                         args.g.data<float>(),
+                                         reinterpret_cast<const int64_t*>(args.state_ptrs.raw_data()),
+                                         args.finished.data<bool>(),
+                                         total_work,
+                                         plan.problem.hq,
+                                         plan.problem.hv,
+                                         args.state_layer_offset,
+                                         plan.problem.num_head_groups,
+                                         plan.problem.heads_per_block);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define DEFINE_PRE_SM90_CALLBACK(name, implementation, InputT, StateT)                                                 \
     void name(const Arguments& args, const Plan& plan, cudaStream_t stream)                                            \
     {                                                                                                                  \
-        implementation<InputT, StateT>(args, plan, stream);                                                           \
+        implementation<InputT, StateT>(args, plan, stream);                                                            \
     }
 
 DEFINE_PRE_SM90_CALLBACK(RunPreSm90RecurrentF16F16, RunPreSm90Recurrent, half, half)

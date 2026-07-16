@@ -4,7 +4,8 @@
 
 namespace turbomind::linear_attn::delta_rule {
 
-enum class Sm120GdrTmaMode : int {
+enum class Sm120GdrTmaMode : int
+{
     kSolveKkt,
     kFusedOnly,
     kAllDirectFused,
@@ -30,21 +31,17 @@ struct Sm120GdrTmaLayout {
 namespace detail {
 
 struct Sm120DirectChunkWorkspace {
-    core::Tensor g_cumsum;
-    core::Tensor resolvent;
+    core::Tensor      g_cumsum;
+    core::Tensor      resolvent;
     Sm120GdrTmaLayout layout;
-    void* kkt_tma_desc{};
-    void* fused_tma_desc{};
+    void*             kkt_tma_desc{};
+    void*             fused_tma_desc{};
 };
 
-bool PlanSm120Operation(const GdrKernelSpec&, const PlanningContext&, Plan*);
+bool                      PlanSm120Operation(const GdrKernelSpec&, const PlanningContext&, Plan*);
 Sm120DirectChunkWorkspace PartitionSm120DirectChunkWorkspace(const Arguments&, const Plan&);
 
-void LaunchChunk32LocalCumsum(const core::Tensor&,
-                              const core::Tensor&,
-                              core::Tensor&,
-                              const Problem&,
-                              cudaStream_t);
+void LaunchChunk32LocalCumsum(const core::Tensor&, const core::Tensor&, core::Tensor&, const Problem&, cudaStream_t);
 void LaunchSm120Recurrent(const core::Tensor&,
                           const core::Tensor&,
                           const core::Tensor&,
@@ -57,12 +54,7 @@ void LaunchSm120Recurrent(const core::Tensor&,
                           int64_t,
                           DataType,
                           cudaStream_t);
-void PrepareSm120RecurrentStateTmaDescriptors(const core::Tensor&,
-                                              core::Tensor&,
-                                              int,
-                                              int,
-                                              const Plan&,
-                                              cudaStream_t);
+void PrepareSm120RecurrentStateTmaDescriptors(const core::Tensor&, core::Tensor&, int, int, const Plan&, cudaStream_t);
 void LaunchSm120KktSolve(const core::Tensor&,
                          const core::Tensor&,
                          const core::Tensor&,

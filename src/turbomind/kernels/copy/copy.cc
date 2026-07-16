@@ -9,13 +9,11 @@
 namespace turbomind::core {
 
 // Forward declarations — defined in copy.cu and transpose.cu
-void VectorizedCopy(const void* data_a, void* data_b,
-                    const Layout& a, const Layout& b,
-                    int rank, DataType dtype, cudaStream_t stream);
+void VectorizedCopy(
+    const void* data_a, void* data_b, const Layout& a, const Layout& b, int rank, DataType dtype, cudaStream_t stream);
 
-void TransposeCopy(const void* data_a, void* data_b,
-                   const Layout& a, const Layout& b,
-                   DataType dtype, cudaStream_t stream);
+void TransposeCopy(
+    const void* data_a, void* data_b, const Layout& a, const Layout& b, DataType dtype, cudaStream_t stream);
 
 // Merge adjacent batch dims (positions ≥ 2) of (a, b) when their strides are
 // proportional in BOTH a and b. Single forward pass over positions 3..rank-1.
@@ -36,31 +34,33 @@ void TransposeCopy(const void* data_a, void* data_b,
 // is dotted into both layouts, that proportionality must hold in BOTH a
 // and b; otherwise the merged single-dim decode would land at different
 // positions in src vs dst and produce wrong results.
-static std::pair<Layout, Layout>
-coalesce_batch_dims(const Layout& a, const Layout& b)
+static std::pair<Layout, Layout> coalesce_batch_dims(const Layout& a, const Layout& b)
 {
     const int rank = a.rank();
-    if (rank < 4) return {a, b};  // need ≥ 2 batch dims to merge
+    if (rank < 4)
+        return {a, b};  // need ≥ 2 batch dims to merge
 
-    std::vector<ssize_t> ash(a.shape().begin(),  a.shape().begin()  + 3);
+    std::vector<ssize_t> ash(a.shape().begin(), a.shape().begin() + 3);
     std::vector<ssize_t> ast(a.stride().begin(), a.stride().begin() + 3);
-    std::vector<ssize_t> bsh(b.shape().begin(),  b.shape().begin()  + 3);
+    std::vector<ssize_t> bsh(b.shape().begin(), b.shape().begin() + 3);
     std::vector<ssize_t> bst(b.stride().begin(), b.stride().begin() + 3);
 
     for (int i = 3; i < rank; ++i) {
-        const ssize_t ai_sh = a.shape(i),  ai_st = a.stride(i);
-        const ssize_t bi_sh = b.shape(i),  bi_st = b.stride(i);
+        const ssize_t ai_sh = a.shape(i), ai_st = a.stride(i);
+        const ssize_t bi_sh = b.shape(i), bi_st = b.stride(i);
 
         // Merge with the previously accumulated batch dim if its stride equals
         // shape * stride of that dim, in BOTH a and b.
-        if (ai_st == ash.back() * ast.back() &&
-            bi_st == bsh.back() * bst.back()) {
+        if (ai_st == ash.back() * ast.back() && bi_st == bsh.back() * bst.back()) {
             ash.back() *= ai_sh;
             bsh.back() *= bi_sh;
             // strides at the back stay unchanged (they remain the inner stride)
-        } else {
-            ash.push_back(ai_sh); ast.push_back(ai_st);
-            bsh.push_back(bi_sh); bst.push_back(bi_st);
+        }
+        else {
+            ash.push_back(ai_sh);
+            ast.push_back(ai_st);
+            bsh.push_back(bi_sh);
+            bst.push_back(bi_st);
         }
     }
 
@@ -80,9 +80,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     // Sort strides ascending so innermost (fastest-varying) dim is first
     std::vector<int> idxs(a.rank());
     std::iota(idxs.begin(), idxs.end(), 0);
-    std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {
-        return a.stride()[i] < a.stride()[j];
-    });
+    std::sort(idxs.begin(), idxs.end(), [&](int i, int j) { return a.stride()[i] < a.stride()[j]; });
 
     a = a.permute(idxs);
     b = b.permute(idxs);
@@ -113,22 +111,26 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
 
     int J = -1;
     for (int i = 1; i < rank; ++i) {
-        if (b.stride(i) == 1) { J = i; break; }
+        if (b.stride(i) == 1) {
+            J = i;
+            break;
+        }
     }
 
-    bool is_transpose =
-        (J >= 1) &&
-        (a.stride(0) == 1) && (a.stride(J) > 1) && (b.stride(0) > 1) &&
-        (a.shape(0) % kTileDim == 0) &&
-        (a.shape(J) % kTileDim == 0);
+    bool is_transpose = (J >= 1) && (a.stride(0) == 1) && (a.stride(J) > 1) && (b.stride(0) > 1)
+                        && (a.shape(0) % kTileDim == 0) && (a.shape(J) % kTileDim == 0);
 
     if (is_transpose) {
-        if (J != 1) { a = a.transpose(1, J); b = b.transpose(1, J); }
+        if (J != 1) {
+            a = a.transpose(1, J);
+            b = b.transpose(1, J);
+        }
         std::tie(a, b) = coalesce_batch_dims(a, b);
 
         // Compute total batch (product of post-coalesce batch dims, positions ≥ 2).
         int64_t total_batch = 1;
-        for (int i = 2; i < a.rank(); ++i) total_batch *= a.shape(i);
+        for (int i = 2; i < a.rank(); ++i)
+            total_batch *= a.shape(i);
 
         // Dispatch only when the kernel can handle it:
         //   1. post-coalesce rank ≤ 4 (only 2/3/4 are instantiated in TransposeCopy host),

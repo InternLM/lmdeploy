@@ -13,54 +13,59 @@ namespace turbomind::linear_attn::delta_rule {
 
 class GdrKernel;
 
-enum class GdrMode { kRecurrent, kChunked };
+enum class GdrMode
+{
+    kRecurrent,
+    kChunked
+};
 
 constexpr int kAutoGdrChunkSize      = 0;
 constexpr int kRecurrentGdrChunkSize = 1;
 
-enum class ContextParallelMode : int {
+enum class ContextParallelMode : int
+{
     kAuto = 0,
     kOff  = 1,
 };
 
 struct GdrKernelSpec {
     const char* architecture{};
-    GdrMode      mode{};
-    DataType     input_dtype{kNull};
-    DataType     state_dtype{kNull};
-    int          head_dim{};
-    int          chunk_size{};
+    GdrMode     mode{};
+    DataType    input_dtype{kNull};
+    DataType    state_dtype{kNull};
+    int         head_dim{};
+    int         chunk_size{};
 };
 
 struct Operation {
-    GdrMode            mode{GdrMode::kChunked};
-    int                chunk_size{kAutoGdrChunkSize};
+    GdrMode             mode{GdrMode::kChunked};
+    int                 chunk_size{kAutoGdrChunkSize};
     ContextParallelMode cp_mode{ContextParallelMode::kAuto};
 };
 
 struct PlanningContext {
-    int      arch{};
-    int      sm_count{};
-    DataType input_dtype{kNull};
-    DataType state_dtype{kNull};
-    int      physical_batch{};
-    int      token_slots{};
-    int      hq{};
-    int      hv{};
-    int      head_dim{128};
-    int64_t  gate_stride{};
-    int64_t  gate_batch_stride{};
-    int      num_head_groups{1};
-    int      heads_per_block{};
+    int                  arch{};
+    int                  sm_count{};
+    DataType             input_dtype{kNull};
+    DataType             state_dtype{kNull};
+    int                  physical_batch{};
+    int                  token_slots{};
+    int                  hq{};
+    int                  hv{};
+    int                  head_dim{128};
+    int64_t              gate_stride{};
+    int64_t              gate_batch_stride{};
+    int                  num_head_groups{1};
+    int                  heads_per_block{};
     std::vector<int32_t> q_offsets;
 };
 
 struct Arguments {
-    core::Tensor q, k, v, g, beta;
-    core::Tensor state_ptrs, state_tma_descs, q_offsets, finished;
+    core::Tensor  q, k, v, g, beta;
+    core::Tensor  state_ptrs, state_tma_descs, q_offsets, finished;
     core::Tensor* out{};
     core::Tensor* workspace{};
-    int64_t state_layer_offset{};
+    int64_t       state_layer_offset{};
 };
 
 struct Problem {
@@ -99,11 +104,11 @@ struct TensorPlan {
 };
 
 struct ContextParallelPlan {
-    bool enabled{};
-    int  segment_tokens{};
-    int  segment_chunks{};
-    int  total_segments{};
-    int  total_chunks{};
+    bool   enabled{};
+    int    segment_tokens{};
+    int    segment_chunks{};
+    int    total_segments{};
+    int    total_chunks{};
     size_t workspace_bytes{};
 
     TensorPlan cp_q_offsets;
@@ -115,21 +120,21 @@ struct ContextParallelPlan {
 };
 
 struct Plan {
-    const GdrKernel* kernel{};
-    Problem problem;
+    const GdrKernel*    kernel{};
+    Problem             problem;
     ContextParallelPlan cp;
-    TensorPlan out, g_cumsum, resolvent, workspace;
-    size_t workspace_bytes{};
-    size_t state_tma_desc_bytes_per_layer_group{};
+    TensorPlan          out, g_cumsum, resolvent, workspace;
+    size_t              workspace_bytes{};
+    size_t              state_tma_desc_bytes_per_layer_group{};
 };
 
 class GatedDeltaRule {
 public:
     bool Plan(const Operation&, const PlanningContext&, delta_rule::Plan*) const;
     void PrepareState(const core::Tensor& state_ptrs,
-                      core::Tensor& state_tma_descs,
-                      int layer_groups,
-                      int layers_per_block,
+                      core::Tensor&       state_tma_descs,
+                      int                 layer_groups,
+                      int                 layers_per_block,
                       const delta_rule::Plan&,
                       cudaStream_t) const;
     void Run(const Arguments&, const delta_rule::Plan&, cudaStream_t) const;

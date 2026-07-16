@@ -244,7 +244,7 @@ std::shared_ptr<Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
     assert(dl_tensor.ndim > 0);
     std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
 
-    auto* data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
     std::shared_ptr<void> ptr{data, [tensor](void* p) {
                                   if (tensor->deleter) {
                                       tensor->deleter(tensor);
@@ -306,16 +306,16 @@ std::shared_ptr<Tensor> DLManagedTensorToTritonTensorWithStrides(DLManagedTensor
 
     ft::core::Layout layout(std::move(shape), std::move(strides));
 
-    auto* data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
     std::shared_ptr<void> ptr{data, [tensor](void* p) {
                                   if (tensor->deleter) {
                                       tensor->deleter(tensor);
                                   }
                               }};
 
-    const auto capacity = layout.is_contiguous() ? layout.cosize()
-                                                 : TorchStorageCapacityElements(source, dtype, layout.cosize());
-    auto       buffer   = ft::core::Buffer{ptr, capacity, dtype, where};
+    const auto capacity =
+        layout.is_contiguous() ? layout.cosize() : TorchStorageCapacityElements(source, dtype, layout.cosize());
+    auto buffer = ft::core::Buffer{ptr, capacity, dtype, where};
     return std::make_shared<Tensor>(std::move(buffer), std::move(layout), Tensor::PreserveBufferCapacity{});
 }
 

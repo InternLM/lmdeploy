@@ -8,7 +8,8 @@ namespace {
 
 constexpr int kChunkedKktTileDim = kHeadDim / 2;
 
-enum ChunkedKktTmaDescIndex : int {
+enum ChunkedKktTmaDescIndex : int
+{
     kChunkedKktKDesc = 0,
     kChunkedKktBetaDesc,
     kChunkedKktResolventDesc,
@@ -28,20 +29,20 @@ __device__ void BuildContextParallelMetadata(const int32_t* q_offsets,
                                              int            hv,
                                              int            segment_tokens)
 {
-    int segment_id = 0;
+    int segment_id        = 0;
     cp_sequence_starts[0] = 0;
     for (int sequence_id = 0; sequence_id < sequence_num; ++sequence_id) {
-        const int sequence_begin = q_offsets[sequence_id];
-        const int sequence_end = q_offsets[sequence_id + 1];
+        const int sequence_begin        = q_offsets[sequence_id];
+        const int sequence_end          = q_offsets[sequence_id + 1];
         cp_sequence_starts[sequence_id] = segment_id;
         for (int segment_begin = sequence_begin; segment_begin < sequence_end; segment_begin += segment_tokens) {
-            const int segment_limit = segment_begin + segment_tokens;
-            const int segment_end = segment_limit < sequence_end ? segment_limit : sequence_end;
-            cp_q_offsets[segment_id] = segment_begin;
-            cp_q_offsets[segment_id + 1] = segment_end;
+            const int segment_limit       = segment_begin + segment_tokens;
+            const int segment_end         = segment_limit < sequence_end ? segment_limit : sequence_end;
+            cp_q_offsets[segment_id]      = segment_begin;
+            cp_q_offsets[segment_id + 1]  = segment_end;
             cp_source_indices[segment_id] = sequence_id;
-            cp_state_ptrs[segment_id] = static_cast<int64_t>(reinterpret_cast<uintptr_t>(
-                cp_state + static_cast<int64_t>(segment_id) * hv * kHeadDim * kHeadDim));
+            cp_state_ptrs[segment_id]     = static_cast<int64_t>(
+                reinterpret_cast<uintptr_t>(cp_state + static_cast<int64_t>(segment_id) * hv * kHeadDim * kHeadDim));
             cp_finished[segment_id] = finished[sequence_id];
             ++segment_id;
         }
@@ -102,8 +103,7 @@ CUtensorMap MakeChunkedKktResolventTmaDesc(const core::Tensor& resolvent)
         static_cast<uint64_t>(resolvent.stride(1)) * sizeof(__nv_bfloat16),
         static_cast<uint64_t>(resolvent.stride(0)) * sizeof(__nv_bfloat16),
     };
-    const uint32_t box_dims[4] = {
-        static_cast<uint32_t>(ChunkSize), 1u, static_cast<uint32_t>(ChunkSize), 1u};
+    const uint32_t box_dims[4] = {static_cast<uint32_t>(ChunkSize), 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeTmaDesc(const_cast<__nv_bfloat16*>(resolvent.data<__nv_bfloat16>()),
                        ChunkedKktTmaDataType<__nv_bfloat16>(),
                        4,
@@ -114,18 +114,18 @@ CUtensorMap MakeChunkedKktResolventTmaDesc(const core::Tensor& resolvent)
 }
 
 template<int ChunkSize, class K>
-__device__ __forceinline__ void ChunkedKktBuildTmaDescriptors(CUtensorMap*       gmem_desc,
-                                                              CUtensorMap*       smem_desc,
-                                                              const CUtensorMap& k_tma_desc,
-                                                              const CUtensorMap& beta_tma_desc,
-                                                              const CUtensorMap& resolvent_tma_desc,
-                                                              StridedTensorBase<const K> k,
+__device__ __forceinline__ void ChunkedKktBuildTmaDescriptors(CUtensorMap*                   gmem_desc,
+                                                              CUtensorMap*                   smem_desc,
+                                                              const CUtensorMap&             k_tma_desc,
+                                                              const CUtensorMap&             beta_tma_desc,
+                                                              const CUtensorMap&             resolvent_tma_desc,
+                                                              StridedTensorBase<const K>     k,
                                                               StridedTensorBase<const float> beta,
-                                                              StridedTensorBase<K> resolvent,
-                                                              int                tid,
-                                                              int                local_seq_start,
-                                                              int                physical_batch,
-                                                              int                seq_len)
+                                                              StridedTensorBase<K>           resolvent,
+                                                              int                            tid,
+                                                              int                            local_seq_start,
+                                                              int                            physical_batch,
+                                                              int                            seq_len)
 {
     static_assert(kSupportedGdrChunkSize<ChunkSize>);
     const int lane_id = tid & 31;
@@ -223,8 +223,8 @@ __device__ __forceinline__ void FusedGdrHBuildSequenceDataTmaDescriptors(CUtenso
     __syncthreads();
 }
 
-__device__ __forceinline__ void CopySingleTmaDescriptor(
-    CUtensorMap* gmem_desc, CUtensorMap* smem_desc, const CUtensorMap& src_desc, int tid)
+__device__ __forceinline__ void
+CopySingleTmaDescriptor(CUtensorMap* gmem_desc, CUtensorMap* smem_desc, const CUtensorMap& src_desc, int tid)
 {
     const int lane_id = tid & 31;
     if (tid < 32) {
@@ -296,12 +296,8 @@ CorrectInitialStatesBuildExternalStateTmaDescriptor(CUtensorMap*       gmem_desc
         __syncwarp();
 
         if (lane_id == 0) {
-            auto* state_base = GroupedStateBase<StateT>(state_ptrs,
-                                                        sequence_id,
-                                                        value_head,
-                                                        num_head_groups,
-                                                        heads_per_block,
-                                                        state_layer_offset);
+            auto* state_base = GroupedStateBase<StateT>(
+                state_ptrs, sequence_id, value_head, num_head_groups, heads_per_block, state_layer_offset);
             ReplaceTmaAddress(smem_desc, state_base);
         }
         __syncwarp();
@@ -313,8 +309,8 @@ CorrectInitialStatesBuildExternalStateTmaDescriptor(CUtensorMap*       gmem_desc
 
 template<class StateT, int ChunkSize>
 __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
-    Sm120GdrTmaMode                      mode,
-    Sm120GdrTmaLayout                    layout,
+    Sm120GdrTmaMode                        mode,
+    Sm120GdrTmaLayout                      layout,
     const __grid_constant__ CUtensorMap    kkt_k_desc,
     const __grid_constant__ CUtensorMap    kkt_beta_desc,
     const __grid_constant__ CUtensorMap    kkt_resolvent_desc,
@@ -361,24 +357,24 @@ __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
     static_assert(kFusedGdrValidStateT<StateT>, "chunked descriptor prep StateT must be float or bfloat16");
     __shared__ __align__(128) CUtensorMap smem_desc[kFusedGdrTmaDescCount];
 
-    auto* base = static_cast<char*>(workspace);
-    auto* kkt_desc = reinterpret_cast<CUtensorMap*>(base + layout.kkt_desc_offset);
+    auto* base              = static_cast<char*>(workspace);
+    auto* kkt_desc          = reinterpret_cast<CUtensorMap*>(base + layout.kkt_desc_offset);
     auto* direct_fused_desc = reinterpret_cast<CUtensorMap*>(base + layout.direct_fused_desc_offset);
     auto* fused_gdr_h_desc  = reinterpret_cast<CUtensorMap*>(base + layout.fused_gdr_h_desc_offset);
     auto* correct_initial_states_desc =
         reinterpret_cast<CUtensorMap*>(base + layout.correct_initial_states_desc_offset);
     auto* context_parallel_fused_gdr_desc =
         reinterpret_cast<CUtensorMap*>(base + layout.context_parallel_fused_gdr_desc_offset);
-    auto* cp_q_offsets = reinterpret_cast<int32_t*>(base + layout.cp_q_offsets_offset);
-    auto* cp_source_indices = reinterpret_cast<int32_t*>(base + layout.cp_source_indices_offset);
+    auto* cp_q_offsets       = reinterpret_cast<int32_t*>(base + layout.cp_q_offsets_offset);
+    auto* cp_source_indices  = reinterpret_cast<int32_t*>(base + layout.cp_source_indices_offset);
     auto* cp_sequence_starts = reinterpret_cast<int32_t*>(base + layout.cp_sequence_starts_offset);
-    auto* cp_state_ptrs = reinterpret_cast<int64_t*>(base + layout.cp_state_ptrs_offset);
-    auto* cp_finished = reinterpret_cast<bool*>(base + layout.cp_finished_offset);
-    auto* cp_state = reinterpret_cast<float*>(base + layout.cp_state_offset);
+    auto* cp_state_ptrs      = reinterpret_cast<int64_t*>(base + layout.cp_state_ptrs_offset);
+    auto* cp_finished        = reinterpret_cast<bool*>(base + layout.cp_finished_offset);
+    auto* cp_state           = reinterpret_cast<float*>(base + layout.cp_state_offset);
     const StridedTensorBase<const __nv_bfloat16> resolvent_read{
         resolvent.ptr, resolvent.batch_stride, resolvent.token_stride};
 
-    const int tid = static_cast<int>(threadIdx.x);
+    const int tid  = static_cast<int>(threadIdx.x);
     const int task = static_cast<int>(blockIdx.x);
 
     if (mode == Sm120GdrTmaMode::kAllContextParallel && task == 0 && tid == 0) {
@@ -400,12 +396,12 @@ __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
     const int kkt_task_count = needs_kkt_desc ? sequence_num : 0;
     if (needs_kkt_desc && task < kkt_task_count) {
         const int seq_start = q_offsets[task];
-        const int seq_end = q_offsets[task + 1];
-        const int seq_len = seq_end - seq_start;
+        const int seq_end   = q_offsets[task + 1];
+        const int seq_len   = seq_end - seq_start;
         if (seq_len <= 0) {
             return;
         }
-        const int physical_batch = seq_start / token_num;
+        const int physical_batch  = seq_start / token_num;
         const int local_seq_start = seq_start - physical_batch * token_num;
 
         ChunkedKktBuildTmaDescriptors<ChunkSize>(&kkt_desc[task * kKktTmaDescCount],
@@ -423,76 +419,70 @@ __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
         return;
     }
 
-    const int direct_task_base = kkt_task_count;
-    auto      direct_slices = MakeFusedGdrTmaDescriptorSlices(direct_fused_desc, sequence_num);
+    const int direct_task_base              = kkt_task_count;
+    auto      direct_slices                 = MakeFusedGdrTmaDescriptorSlices(direct_fused_desc, sequence_num);
     auto      fused_gdr_h_slices            = MakeFusedGdrHTmaDescriptorSlices(fused_gdr_h_desc, sequence_num);
     auto      correct_initial_states_slices = MakeCorrectInitialStatesTmaDescriptorSlices(correct_initial_states_desc);
     auto      context_parallel_fused_gdr_slices =
         MakeContextParallelFusedGdrTmaDescriptorSlices(context_parallel_fused_gdr_desc, sequence_num);
 
-    const bool needs_direct_desc =
-        mode == Sm120GdrTmaMode::kAllDirectFused || mode == Sm120GdrTmaMode::kFusedOnly;
-    const int direct_data_desc_count = needs_direct_desc ? sequence_num : 0;
-    const int direct_state_desc_count = needs_direct_desc ? sequence_num * hv : 0;
-    const int direct_desc_tasks = direct_data_desc_count + direct_state_desc_count;
+    const bool needs_direct_desc      = mode == Sm120GdrTmaMode::kAllDirectFused || mode == Sm120GdrTmaMode::kFusedOnly;
+    const int  direct_data_desc_count = needs_direct_desc ? sequence_num : 0;
+    const int  direct_state_desc_count = needs_direct_desc ? sequence_num * hv : 0;
+    const int  direct_desc_tasks       = direct_data_desc_count + direct_state_desc_count;
     if (needs_direct_desc && task >= direct_task_base && task < direct_task_base + direct_data_desc_count) {
-        const int local = task - direct_task_base;
-        const int sequence = local;
+        const int local     = task - direct_task_base;
+        const int sequence  = local;
         const int seq_start = q_offsets[sequence];
-        const int seq_end = q_offsets[sequence + 1];
-        const int seq_len = seq_end - seq_start;
+        const int seq_end   = q_offsets[sequence + 1];
+        const int seq_len   = seq_end - seq_start;
         if (seq_len <= 0) {
             return;
         }
-        const int physical_batch = seq_start / token_num;
+        const int physical_batch  = seq_start / token_num;
         const int local_seq_start = seq_start - physical_batch * token_num;
 
-        FusedGdrBuildSequenceDataTmaDescriptors<ChunkSize>(
-            &direct_slices.data[sequence * kFusedGdrDataDescCount],
-            smem_desc,
-            fused_q_desc,
-            fused_k_desc,
-            fused_v_desc,
-            fused_g_desc,
-            fused_beta_desc,
-            fused_resolvent_desc,
-            fused_out_desc,
-            q,
-            k,
-            v,
-            g_cumsum,
-            beta,
-            resolvent_read,
-            out,
-            tid,
-            seq_start,
-            local_seq_start,
-            physical_batch,
-            seq_len,
-            hq,
-            hv,
-            gate_stride,
-            gate_batch_stride);
+        FusedGdrBuildSequenceDataTmaDescriptors<ChunkSize>(&direct_slices.data[sequence * kFusedGdrDataDescCount],
+                                                           smem_desc,
+                                                           fused_q_desc,
+                                                           fused_k_desc,
+                                                           fused_v_desc,
+                                                           fused_g_desc,
+                                                           fused_beta_desc,
+                                                           fused_resolvent_desc,
+                                                           fused_out_desc,
+                                                           q,
+                                                           k,
+                                                           v,
+                                                           g_cumsum,
+                                                           beta,
+                                                           resolvent_read,
+                                                           out,
+                                                           tid,
+                                                           seq_start,
+                                                           local_seq_start,
+                                                           physical_batch,
+                                                           seq_len,
+                                                           hq,
+                                                           hv,
+                                                           gate_stride,
+                                                           gate_batch_stride);
         return;
     }
     if (needs_direct_desc && task >= direct_task_base && task < direct_task_base + direct_desc_tasks) {
-        const int local = task - direct_task_base;
+        const int local       = task - direct_task_base;
         const int state_local = local - direct_data_desc_count;
-        const int sequence = state_local / hv;
-        const int value_head = state_local - sequence * hv;
-        const int seq_start = q_offsets[sequence];
-        const int seq_end = q_offsets[sequence + 1];
-        const int seq_len = seq_end - seq_start;
+        const int sequence    = state_local / hv;
+        const int value_head  = state_local - sequence * hv;
+        const int seq_start   = q_offsets[sequence];
+        const int seq_end     = q_offsets[sequence + 1];
+        const int seq_len     = seq_end - seq_start;
         if (seq_len <= 0) {
             return;
         }
 
-        const auto* state_ptr = GroupedStateBase<StateT>(state_ptrs,
-                                                         sequence,
-                                                         value_head,
-                                                         num_head_groups,
-                                                         heads_per_block,
-                                                         state_layer_offset);
+        const auto* state_ptr = GroupedStateBase<StateT>(
+            state_ptrs, sequence, value_head, num_head_groups, heads_per_block, state_layer_offset);
         FusedGdrBuildStateTmaDescriptor(&direct_slices.state[state_local * kFusedGdrStateDescCount],
                                         &smem_desc[kFusedGdrStateDesc],
                                         fused_state_desc,
@@ -508,12 +498,12 @@ __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
     if (task >= fused_gdr_h_task_base && task < fused_gdr_h_task_base + fused_gdr_h_data_tasks) {
         const int sequence_id    = task - fused_gdr_h_task_base;
         const int sequence_begin = q_offsets[sequence_id];
-        const int sequence_end = q_offsets[sequence_id + 1];
-        const int sequence_len = sequence_end - sequence_begin;
+        const int sequence_end   = q_offsets[sequence_id + 1];
+        const int sequence_len   = sequence_end - sequence_begin;
         if (sequence_len <= 0) {
             return;
         }
-        const int physical_batch = sequence_begin / token_num;
+        const int physical_batch       = sequence_begin / token_num;
         const int local_sequence_begin = sequence_begin - physical_batch * token_num;
 
         FusedGdrHBuildSequenceDataTmaDescriptors<ChunkSize>(
@@ -566,8 +556,8 @@ __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
                       + correct_initial_states_external_tasks) {
         const int local          = task - correct_initial_states_task_base;
         const int external_local = local - correct_initial_states_tensor_tasks;
-        const int sequence_id = external_local / hv;
-        const int value_head = external_local - sequence_id * hv;
+        const int sequence_id    = external_local / hv;
+        const int value_head     = external_local - sequence_id * hv;
         CorrectInitialStatesBuildExternalStateTmaDescriptor<StateT>(
             &correct_initial_states_slices.external_state[external_local * kCorrectInitialStatesExternalDescCount],
             smem_desc,
@@ -582,7 +572,7 @@ __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
         return;
     }
 
-    const int context_parallel_fused_gdr_data_tasks = mode == Sm120GdrTmaMode::kAllContextParallel ? sequence_num : 0;
+    const int context_parallel_fused_gdr_data_tasks   = mode == Sm120GdrTmaMode::kAllContextParallel ? sequence_num : 0;
     const int context_parallel_fused_gdr_tensor_tasks = mode == Sm120GdrTmaMode::kAllContextParallel ? 1 : 0;
     const int context_parallel_fused_gdr_task_base =
         correct_initial_states_task_base + correct_initial_states_desc_tasks;
@@ -590,12 +580,12 @@ __global__ __launch_bounds__(32, 1) void Sm120GdrTmaDescPrepareKernel(
         && task < context_parallel_fused_gdr_task_base + context_parallel_fused_gdr_data_tasks) {
         const int sequence_id    = task - context_parallel_fused_gdr_task_base;
         const int sequence_begin = q_offsets[sequence_id];
-        const int sequence_end = q_offsets[sequence_id + 1];
-        const int sequence_len = sequence_end - sequence_begin;
+        const int sequence_end   = q_offsets[sequence_id + 1];
+        const int sequence_len   = sequence_end - sequence_begin;
         if (sequence_len <= 0) {
             return;
         }
-        const int physical_batch = sequence_begin / token_num;
+        const int physical_batch       = sequence_begin / token_num;
         const int local_sequence_begin = sequence_begin - physical_batch * token_num;
 
         FusedGdrBuildSequenceDataTmaDescriptors<ChunkSize>(

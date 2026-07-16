@@ -49,20 +49,20 @@ private:
 
     // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
     struct Data {
-        std::vector<int> input_lens;
-        int batch_size{};
-        std::vector<std::pair<uint8_t*, size_t>> reset_ptrs;
-        Buffer_<int> q_offsets;
-        Buffer_<int> k_offsets;
-        Buffer_<bool> finished;
-        Buffer_<void*> conv_state_ptrs;
-        Buffer_<void*> recurrent_state_ptrs;
-        int decode_count{};
-        int prefill_count{};
+        std::vector<int>                             input_lens;
+        int                                          batch_size{};
+        std::vector<std::pair<uint8_t*, size_t>>     reset_ptrs;
+        Buffer_<int>                                 q_offsets;
+        Buffer_<int>                                 k_offsets;
+        Buffer_<bool>                                finished;
+        Buffer_<void*>                               conv_state_ptrs;
+        Buffer_<void*>                               recurrent_state_ptrs;
+        int                                          decode_count{};
+        int                                          prefill_count{};
         std::optional<linear_attn::delta_rule::Plan> recurrent_plan;
         std::optional<linear_attn::delta_rule::Plan> chunked_plan;
-        core::Tensor chunked_workspace;
-        Buffer_<uint8_t> recurrent_state_tma_descs;
+        core::Tensor                                 chunked_workspace;
+        Buffer_<uint8_t>                             recurrent_state_tma_descs;
     };
     std::vector<Data> data_;
 
@@ -82,12 +82,12 @@ private:
     Buffer_<void*> conv_state_ptrs_buf_;
     Buffer_<void*> recurrent_state_ptrs_buf_;
 
-    DataType input_dtype_{kNull};
-    int      arch_{};
-    int      num_k_heads_{};
-    int      num_v_heads_{};
-    int      head_dim_{};
-    int      gate_stride_{};
+    DataType                                input_dtype_{kNull};
+    int                                     arch_{};
+    int                                     num_k_heads_{};
+    int                                     num_v_heads_{};
+    int                                     head_dim_{};
+    int                                     gate_stride_{};
     linear_attn::delta_rule::GatedDeltaRule delta_rule_;
 
     int          sm_count_{};

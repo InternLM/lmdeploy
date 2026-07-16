@@ -10,7 +10,7 @@
 
 namespace turbomind::linear_attn::delta_rule {
 
-CUtensorMap MakeTmaDesc(void*              global_address,
+CUtensorMap MakeTmaDesc(void*               global_address,
                         CUtensorMapDataType data_type,
                         uint32_t            rank,
                         const uint64_t*     global_dim,
@@ -20,9 +20,9 @@ CUtensorMap MakeTmaDesc(void*              global_address,
 
 __device__ __forceinline__ void CopyTmaDescriptor(CUtensorMap* dst, const CUtensorMap* src, int lane, int lanes)
 {
-    constexpr int kWords = sizeof(CUtensorMap) / sizeof(uint2);
-    auto*       dst_words = reinterpret_cast<uint2*>(dst);
-    const auto* src_words = reinterpret_cast<const uint2*>(src);
+    constexpr int kWords    = sizeof(CUtensorMap) / sizeof(uint2);
+    auto*         dst_words = reinterpret_cast<uint2*>(dst);
+    const auto*   src_words = reinterpret_cast<const uint2*>(src);
     for (int word = lane; word < kWords; word += lanes) {
         dst_words[word] = src_words[word];
     }

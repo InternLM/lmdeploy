@@ -1,8 +1,8 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/smem.h"
-#include "src/turbomind/kernels/linear_attn/registry.h"
 #include "src/turbomind/kernels/linear_attn/kernel/tma_desc.h"
+#include "src/turbomind/kernels/linear_attn/registry.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include <cuda.h>
@@ -15,10 +15,9 @@
 #include <string>
 #include <type_traits>
 
-#include <cute/tensor.hpp>
 #include <cute/algorithm/clear.hpp>
-#include <cute/algorithm/copy.hpp>
 #include <cute/algorithm/cooperative_gemm.hpp>
+#include <cute/algorithm/copy.hpp>
 #include <cute/algorithm/gemm.hpp>
 #include <cute/arch/copy_sm75.hpp>
 #include <cute/arch/copy_sm90.hpp>
@@ -29,6 +28,7 @@
 #include <cute/atom/mma_traits_sm80.hpp>
 #include <cute/pointer_flagged.hpp>
 #include <cute/swizzle_layout.hpp>
+#include <cute/tensor.hpp>
 #include <cute/underscore.hpp>
 #include <cutlass/arch/barrier.h>
 #include <cutlass/arch/reg_reconfig.h>
@@ -36,42 +36,39 @@
 namespace turbomind::linear_attn::delta_rule {
 namespace {
 
+constexpr int   kChunkSize = 64;
+constexpr int   kHeadDim   = 128;
+constexpr float kHeadScale = 0.08838834764831845f;
 
-constexpr int kChunkSize    = 64;
-constexpr int kHeadDim      = 128;
-constexpr float kHeadScale  = 0.08838834764831845f;
-
-constexpr int kFusedGdrBlockDv         = 64;
-constexpr int kContextParallelGdrBlockDv                  = 32;
-constexpr int kCorrectInitialStatesF32BlockDv             = 4;
-constexpr int kCorrectInitialStatesBf16BlockDv            = kCorrectInitialStatesF32BlockDv;
-constexpr int kCorrectInitialStatesBf16ExternalTmaBlockDv = 8;
-constexpr int kCorrectInitialStatesKTile                  = 128;
-constexpr int kCorrectInitialStatesMRowsPerTma            = 32;
-constexpr int kFusedGdrTmaDescCount = 8;
-constexpr int kKktTmaDescCount = 3;
-constexpr int kFusedGdrHTmaDescCount                      = 7;
-constexpr int kCorrectInitialStatesTmaDescCount           = 4;
-constexpr int kTmaDescriptorBytes      = 128;
-constexpr int kFusedGdrMmaThreads      = 128;
-constexpr int kFusedGdrRoleThreads     = 128;
-constexpr int kFusedGdrConsumerThreads = 3 * kFusedGdrRoleThreads;
-constexpr int kFusedGdrProducerThreads = kFusedGdrRoleThreads;
-constexpr int kFusedGdrThreads         = kFusedGdrConsumerThreads + kFusedGdrProducerThreads;
-constexpr int kCudaWarpThreads         = 32;
-constexpr int kFusedGdrGateRowsPerWarp = 8;
-constexpr int kFusedGdrGateWriterThreads =
-    (kFusedGdrRoleThreads / kCudaWarpThreads) * kFusedGdrGateRowsPerWarp;
-constexpr int kFusedGdrGatePasses      = kChunkSize / kFusedGdrGateWriterThreads;
-constexpr int kFusedGdrStateRegisters  = 144;
-constexpr int kFusedGdrValueRegisters  = 144;
-constexpr int kFusedGdrOutputRegisters = 160;
-constexpr int kFusedGdrProducerRegisters = 24;
-constexpr size_t kFusedGdrSm120SharedBytes          = 102400;
-constexpr size_t kFusedGdrStaticSharedReserveBytes  = 1024;
-constexpr size_t kFusedGdrMaxDynamicSharedBytes     =
-    kFusedGdrSm120SharedBytes - kFusedGdrStaticSharedReserveBytes;
-constexpr uint64_t kTmaNoCacheHint = 0;
+constexpr int      kFusedGdrBlockDv                            = 64;
+constexpr int      kContextParallelGdrBlockDv                  = 32;
+constexpr int      kCorrectInitialStatesF32BlockDv             = 4;
+constexpr int      kCorrectInitialStatesBf16BlockDv            = kCorrectInitialStatesF32BlockDv;
+constexpr int      kCorrectInitialStatesBf16ExternalTmaBlockDv = 8;
+constexpr int      kCorrectInitialStatesKTile                  = 128;
+constexpr int      kCorrectInitialStatesMRowsPerTma            = 32;
+constexpr int      kFusedGdrTmaDescCount                       = 8;
+constexpr int      kKktTmaDescCount                            = 3;
+constexpr int      kFusedGdrHTmaDescCount                      = 7;
+constexpr int      kCorrectInitialStatesTmaDescCount           = 4;
+constexpr int      kTmaDescriptorBytes                         = 128;
+constexpr int      kFusedGdrMmaThreads                         = 128;
+constexpr int      kFusedGdrRoleThreads                        = 128;
+constexpr int      kFusedGdrConsumerThreads                    = 3 * kFusedGdrRoleThreads;
+constexpr int      kFusedGdrProducerThreads                    = kFusedGdrRoleThreads;
+constexpr int      kFusedGdrThreads                            = kFusedGdrConsumerThreads + kFusedGdrProducerThreads;
+constexpr int      kCudaWarpThreads                            = 32;
+constexpr int      kFusedGdrGateRowsPerWarp                    = 8;
+constexpr int      kFusedGdrGateWriterThreads = (kFusedGdrRoleThreads / kCudaWarpThreads) * kFusedGdrGateRowsPerWarp;
+constexpr int      kFusedGdrGatePasses        = kChunkSize / kFusedGdrGateWriterThreads;
+constexpr int      kFusedGdrStateRegisters    = 144;
+constexpr int      kFusedGdrValueRegisters    = 144;
+constexpr int      kFusedGdrOutputRegisters   = 160;
+constexpr int      kFusedGdrProducerRegisters = 24;
+constexpr size_t   kFusedGdrSm120SharedBytes  = 102400;
+constexpr size_t   kFusedGdrStaticSharedReserveBytes = 1024;
+constexpr size_t   kFusedGdrMaxDynamicSharedBytes    = kFusedGdrSm120SharedBytes - kFusedGdrStaticSharedReserveBytes;
+constexpr uint64_t kTmaNoCacheHint                   = 0;
 
 static_assert(kFusedGdrBlockDv == 64);
 static_assert(kContextParallelGdrBlockDv == 32);
@@ -129,8 +126,7 @@ static_assert(cute::cosize_v<decltype(FusedGdrQkTransposedLayout())> == kChunkSi
 CUTE_HOST_DEVICE constexpr auto FusedGdrSwizzledA64Layout()
 {
     return cute::composition(cute::Swizzle<3, 3, 3>{},
-                             cute::Layout<cute::Shape<cute::_64, cute::_64>,
-                                          cute::Stride<cute::_64, cute::_1>>{});
+                             cute::Layout<cute::Shape<cute::_64, cute::_64>, cute::Stride<cute::_64, cute::_1>>{});
 }
 static_assert(cute::cosize_v<decltype(FusedGdrSwizzledA64Layout())> == kChunkSize * kChunkSize);
 
@@ -169,8 +165,7 @@ static_assert(cute::cosize_v<decltype(FusedGdrSwizzledV32TLayout())> == kContext
 CUTE_HOST_DEVICE constexpr auto FusedGdrSwizzledV32RowLayout()
 {
     return cute::composition(cute::Swizzle<2, 3, 3>{},
-                             cute::Layout<cute::Shape<cute::_64, cute::_32>,
-                                          cute::Stride<cute::_32, cute::_1>>{});
+                             cute::Layout<cute::Shape<cute::_64, cute::_32>, cute::Stride<cute::_32, cute::_1>>{});
 }
 static_assert(cute::cosize_v<decltype(FusedGdrSwizzledV32RowLayout())> == kContextParallelGdrBlockDv * kChunkSize);
 
@@ -238,15 +233,15 @@ CUTE_HOST_DEVICE constexpr auto FusedGdrSwizzledStateCLayout()
     }
 }
 
-constexpr int kFusedGdrBarrierConsumer    = 0;
-constexpr int kFusedGdrBarrierStateUpdate = 1;
-constexpr int kFusedGdrBarrierValueU      = 2;
-constexpr int kFusedGdrBarrierOutputState = 3;
-constexpr int kFusedGdrBarrierOutputP     = 4;
-constexpr int kFusedGdrBarrierOutputLocal = 5;
-constexpr int kFusedGdrBarrierHStateReadDone = 6;
+constexpr int kFusedGdrBarrierConsumer           = 0;
+constexpr int kFusedGdrBarrierStateUpdate        = 1;
+constexpr int kFusedGdrBarrierValueU             = 2;
+constexpr int kFusedGdrBarrierOutputState        = 3;
+constexpr int kFusedGdrBarrierOutputP            = 4;
+constexpr int kFusedGdrBarrierOutputLocal        = 5;
+constexpr int kFusedGdrBarrierHStateReadDone     = 6;
 constexpr int kFusedGdrBarrierHVdReady           = 5;  // FusedGdrH does not use OutputLocal.
-constexpr int kFusedGdrBarrierMVdReady       = 7;
+constexpr int kFusedGdrBarrierMVdReady           = 7;
 constexpr int kFusedGdrBarrierProducerStatePack  = 6;  // FusedGdrFwd does not use HStateReadDone.
 constexpr int kFusedGdrBarrierProducerStateStore = 7;  // FusedGdrFwd does not use MVdReady.
 constexpr int kSm120FusedGdrBarrierAgReady       = kFusedGdrBarrierOutputState;
@@ -358,7 +353,8 @@ __device__ int CeilDivDevice(int value, int divisor)
     return (value + divisor - 1) / divisor;
 }
 
-enum FusedGdrTmaDescIndex : int {
+enum FusedGdrTmaDescIndex : int
+{
     kFusedGdrQDesc = 0,
     kFusedGdrKDesc,
     kFusedGdrVDesc,
@@ -388,8 +384,8 @@ enum CorrectInitialStatesTmaDescIndex : int
     kCorrectInitialStatesExternalStateDesc,
 };
 
-constexpr int kDirectFusedDvTiles  = kHeadDim / kFusedGdrBlockDv;
-constexpr int kFusedGdrHDvTiles    = kHeadDim / kContextParallelGdrBlockDv;
+constexpr int kDirectFusedDvTiles = kHeadDim / kFusedGdrBlockDv;
+constexpr int kFusedGdrHDvTiles   = kHeadDim / kContextParallelGdrBlockDv;
 
 constexpr int kFusedGdrDataDescCount  = kFusedGdrStateDesc;
 constexpr int kFusedGdrStateDescCount = kFusedGdrTmaDescCount - kFusedGdrDataDescCount;
@@ -425,8 +421,8 @@ struct FusedGdrTmaDescriptorSlices {
 };
 
 template<class TensorMapPtr>
-CUTE_HOST_DEVICE FusedGdrTmaDescriptorSlices<TensorMapPtr>
-MakeFusedGdrTmaDescriptorSlices(TensorMapPtr base, int sequence_num)
+CUTE_HOST_DEVICE FusedGdrTmaDescriptorSlices<TensorMapPtr> MakeFusedGdrTmaDescriptorSlices(TensorMapPtr base,
+                                                                                           int          sequence_num)
 {
     FusedGdrTmaDescriptorSlices<TensorMapPtr> out{};
     out.data  = base;
@@ -508,8 +504,7 @@ StridedTensorBase<const T> MakeStridedTensorBase(const core::Tensor& tensor)
 }
 
 template<int Dim>
-__device__ __forceinline__ void FusedGdrReplaceTmaAddressAndDim(
-    CUtensorMap* desc, const void* global_address, int dim)
+__device__ __forceinline__ void FusedGdrReplaceTmaAddressAndDim(CUtensorMap* desc, const void* global_address, int dim)
 {
     const uint32_t smem_ptr = cast_smem_ptr_to_uint(desc);
     uint64_t       smem_ptr64;
@@ -523,22 +518,21 @@ __device__ __forceinline__ void FusedGdrReplaceTmaAddressAndDim(
 }
 
 template<int TokenAxis, class T>
-static __device__ __forceinline__ void RebaseSequenceDescriptor(CUtensorMap* output,
-                                                                CUtensorMap* scratch,
-                                                                const CUtensorMap& base_descriptor,
+static __device__ __forceinline__ void RebaseSequenceDescriptor(CUtensorMap*         output,
+                                                                CUtensorMap*         scratch,
+                                                                const CUtensorMap&   base_descriptor,
                                                                 StridedTensorBase<T> tensor,
-                                                                int physical_batch,
-                                                                int local_token,
-                                                                int sequence_len,
-                                                                int lane)
+                                                                int                  physical_batch,
+                                                                int                  local_token,
+                                                                int                  sequence_len,
+                                                                int                  lane)
 {
     CopyTmaDescriptor(scratch, &base_descriptor, lane, 32);
     __syncwarp();
     if (lane == 0) {
         const int64_t element_offset = static_cast<int64_t>(physical_batch) * tensor.batch_stride
                                        + static_cast<int64_t>(local_token) * tensor.token_stride;
-        FusedGdrReplaceTmaAddressAndDim<TokenAxis>(
-            scratch, tensor.ptr + element_offset, sequence_len);
+        FusedGdrReplaceTmaAddressAndDim<TokenAxis>(scratch, tensor.ptr + element_offset, sequence_len);
     }
     __syncwarp();
     PublishTmaDescriptor(output, scratch);
@@ -546,32 +540,31 @@ static __device__ __forceinline__ void RebaseSequenceDescriptor(CUtensorMap* out
 }
 
 template<int ChunkSize, class T>
-__device__ __forceinline__ void FusedGdrBuildSequenceDataTmaDescriptors(
-    CUtensorMap*                 gmem_desc,
-    CUtensorMap*                 smem_desc,
-    const CUtensorMap&           q_tma_desc,
-    const CUtensorMap&           k_tma_desc,
-    const CUtensorMap&           v_tma_desc,
-    const CUtensorMap&           g_tma_desc,
-    const CUtensorMap&           beta_tma_desc,
-    const CUtensorMap&           resolvent_tma_desc,
-    const CUtensorMap&           out_tma_desc,
-    StridedTensorBase<const T>   q,
-    StridedTensorBase<const T>   k,
-    StridedTensorBase<const T>   v,
-    StridedTensorBase<const float> g_cumsum,
-    StridedTensorBase<const float> beta,
-    StridedTensorBase<const T>   resolvent,
-    StridedTensorBase<T>         out,
-    int                          tid,
-    int                          seq_start,
-    int                          local_seq_start,
-    int                          physical_batch,
-    int                          seq_len,
-    int                          hq,
-    int                          hv,
-    int64_t                      gate_stride,
-    int64_t                      gate_batch_stride)
+__device__ __forceinline__ void FusedGdrBuildSequenceDataTmaDescriptors(CUtensorMap*               gmem_desc,
+                                                                        CUtensorMap*               smem_desc,
+                                                                        const CUtensorMap&         q_tma_desc,
+                                                                        const CUtensorMap&         k_tma_desc,
+                                                                        const CUtensorMap&         v_tma_desc,
+                                                                        const CUtensorMap&         g_tma_desc,
+                                                                        const CUtensorMap&         beta_tma_desc,
+                                                                        const CUtensorMap&         resolvent_tma_desc,
+                                                                        const CUtensorMap&         out_tma_desc,
+                                                                        StridedTensorBase<const T> q,
+                                                                        StridedTensorBase<const T> k,
+                                                                        StridedTensorBase<const T> v,
+                                                                        StridedTensorBase<const float> g_cumsum,
+                                                                        StridedTensorBase<const float> beta,
+                                                                        StridedTensorBase<const T>     resolvent,
+                                                                        StridedTensorBase<T>           out,
+                                                                        int                            tid,
+                                                                        int                            seq_start,
+                                                                        int                            local_seq_start,
+                                                                        int                            physical_batch,
+                                                                        int                            seq_len,
+                                                                        int                            hq,
+                                                                        int                            hv,
+                                                                        int64_t                        gate_stride,
+                                                                        int64_t gate_batch_stride)
 {
     static_assert(kSupportedGdrChunkSize<ChunkSize>);
     const int lane_id = tid & 31;
@@ -642,11 +635,8 @@ __device__ __forceinline__ void FusedGdrBuildSequenceDataTmaDescriptors(
 }
 
 template<class StateT>
-__device__ __forceinline__ void FusedGdrBuildStateTmaDescriptor(CUtensorMap*       gmem_desc,
-                                                                CUtensorMap*       smem_desc,
-                                                                const CUtensorMap& state_tma_desc,
-                                                                const StateT*      state,
-                                                                int                tid)
+__device__ __forceinline__ void FusedGdrBuildStateTmaDescriptor(
+    CUtensorMap* gmem_desc, CUtensorMap* smem_desc, const CUtensorMap& state_tma_desc, const StateT* state, int tid)
 {
     const int lane_id = tid & 31;
     if (tid < 32) {
@@ -704,19 +694,17 @@ __device__ __forceinline__ int FusedGdrGateTmaCoord(int value_head)
 }
 
 template<class StateT>
-__device__ __forceinline__ StateT*
-GroupedStateBase(const int64_t* state_ptrs,
-                 int sequence,
-                 int value_head,
-                 int num_head_groups,
-                 int heads_per_block,
-                 int64_t state_layer_offset)
+__device__ __forceinline__ StateT* GroupedStateBase(const int64_t* state_ptrs,
+                                                    int            sequence,
+                                                    int            value_head,
+                                                    int            num_head_groups,
+                                                    int            heads_per_block,
+                                                    int64_t        state_layer_offset)
 {
-    const int head_group = value_head / heads_per_block;
-    const int local_head = value_head % heads_per_block;
-    const int64_t address = state_ptrs[sequence * num_head_groups + head_group];
-    return reinterpret_cast<StateT*>(static_cast<uintptr_t>(address))
-           + state_layer_offset
+    const int     head_group = value_head / heads_per_block;
+    const int     local_head = value_head % heads_per_block;
+    const int64_t address    = state_ptrs[sequence * num_head_groups + head_group];
+    return reinterpret_cast<StateT*>(static_cast<uintptr_t>(address)) + state_layer_offset
            + static_cast<int64_t>(local_head) * kHeadDim * kHeadDim;
 }
 
@@ -751,8 +739,7 @@ __device__ __forceinline__ constexpr int FusedGdrStateTmaBytes()
 }
 
 template<class StateT, int BlockDv>
-__device__ __forceinline__ void
-FusedGdrUnpackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)
+__device__ __forceinline__ void FusedGdrUnpackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)
 {
     if constexpr (!std::is_same_v<StateT, float>) {
         static_assert(std::is_same_v<StateT, __nv_bfloat16>);
@@ -760,15 +747,15 @@ FusedGdrUnpackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int thr
         constexpr int kPairs = kHeadDim * BlockDv / 2;
         static_assert((kPairs & (kPairs - 1)) == 0);
         static_assert(alignof(decltype(state_stage)) >= alignof(__nv_bfloat162));
-        auto*         overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
+        auto* overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
         // The compact bf16 TMA payload aliases the low half of the float tile;
         // expand high-to-low so each phase overwrites only pairs already read.
         for (int begin = kPairs / 2; begin > 0; begin >>= 1) {
             for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
-                const int element = 2 * linear;
-                const int dk      = element / BlockDv;
-                const int dv      = element - dk * BlockDv;
-                const float2 pair = __bfloat1622float2(overlay[linear]);
+                const int    element    = 2 * linear;
+                const int    dk         = element / BlockDv;
+                const int    dv         = element - dk * BlockDv;
+                const float2 pair       = __bfloat1622float2(overlay[linear]);
                 state_stage[dk][dv]     = pair.x;
                 state_stage[dk][dv + 1] = pair.y;
             }
@@ -792,13 +779,13 @@ __device__ __forceinline__ void FusedGdrUnpackStateTma(float* state_stage, int t
         constexpr int kPairs = kHeadDim * BlockDv / 2;
         static_assert((kPairs & (kPairs - 1)) == 0);
         static_assert(alignof(float) >= alignof(__nv_bfloat162));
-        auto*         overlay = reinterpret_cast<__nv_bfloat162*>(state_stage);
+        auto* overlay = reinterpret_cast<__nv_bfloat162*>(state_stage);
         // The compact bf16 TMA payload aliases the low half of the float tile;
         // expand high-to-low so each phase overwrites only pairs already read.
         for (int begin = kPairs / 2; begin > 0; begin >>= 1) {
             for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
-                const int element = 2 * linear;
-                const float2 pair = __bfloat1622float2(overlay[linear]);
+                const int    element     = 2 * linear;
+                const float2 pair        = __bfloat1622float2(overlay[linear]);
                 state_stage[element]     = pair.x;
                 state_stage[element + 1] = pair.y;
             }
@@ -806,16 +793,15 @@ __device__ __forceinline__ void FusedGdrUnpackStateTma(float* state_stage, int t
         }
         if (tid == 0) {
             const float2 pair = __bfloat1622float2(overlay[0]);
-            state_stage[0] = pair.x;
-            state_stage[1] = pair.y;
+            state_stage[0]    = pair.x;
+            state_stage[1]    = pair.y;
         }
         cutlass::arch::NamedBarrier::sync(threads, kFusedGdrBarrierProducerStatePack);
     }
 }
 
 template<class StateT, int BlockDv>
-__device__ __forceinline__ void
-FusedGdrPackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)
+__device__ __forceinline__ void FusedGdrPackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)
 {
     if constexpr (!std::is_same_v<StateT, float>) {
         static_assert(std::is_same_v<StateT, __nv_bfloat16>);
@@ -823,7 +809,7 @@ FusedGdrPackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threa
         constexpr int kPairs = kHeadDim * BlockDv / 2;
         static_assert((kPairs & (kPairs - 1)) == 0);
         static_assert(alignof(decltype(state_stage)) >= alignof(__nv_bfloat162));
-        auto*         overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
+        auto* overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
         // Packing has the inverse dependency: write low-to-high so compact pairs
         // only overwrite float elements that earlier phases already consumed.
         if (tid == 0) {
@@ -835,7 +821,7 @@ FusedGdrPackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threa
                 const int element = 2 * linear;
                 const int dk      = element / BlockDv;
                 const int dv      = element - dk * BlockDv;
-                overlay[linear] = __float22bfloat162_rn(make_float2(state_stage[dk][dv], state_stage[dk][dv + 1]));
+                overlay[linear]   = __float22bfloat162_rn(make_float2(state_stage[dk][dv], state_stage[dk][dv + 1]));
             }
             cutlass::arch::NamedBarrier::sync(threads, kFusedGdrBarrierProducerStatePack);
         }
@@ -851,7 +837,7 @@ __device__ __forceinline__ void FusedGdrPackStateTma(float* state_stage, int tid
         constexpr int kPairs = kHeadDim * BlockDv / 2;
         static_assert((kPairs & (kPairs - 1)) == 0);
         static_assert(alignof(float) >= alignof(__nv_bfloat162));
-        auto*         overlay = reinterpret_cast<__nv_bfloat162*>(state_stage);
+        auto* overlay = reinterpret_cast<__nv_bfloat162*>(state_stage);
         // Packing has the inverse dependency: write low-to-high so compact pairs
         // only overwrite float elements that earlier phases already consumed.
         if (tid == 0) {
@@ -861,7 +847,7 @@ __device__ __forceinline__ void FusedGdrPackStateTma(float* state_stage, int tid
         for (int begin = 1; begin < kPairs; begin <<= 1) {
             for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
                 const int element = 2 * linear;
-                overlay[linear] = __float22bfloat162_rn(make_float2(state_stage[element], state_stage[element + 1]));
+                overlay[linear]   = __float22bfloat162_rn(make_float2(state_stage[element], state_stage[element + 1]));
             }
             cutlass::arch::NamedBarrier::sync(threads, kFusedGdrBarrierProducerStatePack);
         }
@@ -898,24 +884,17 @@ __device__ __forceinline__ void FusedGdrStoreBf16Pair(Element* ptr, float2 value
     static_assert(std::is_same_v<Element, cute::bfloat16_t>);
     uint32_t pack;
     reinterpret_cast<__nv_bfloat162*>(&pack)[0] = __float22bfloat162_rn(values);
-    *reinterpret_cast<uint32_t*>(ptr) = pack;
+    *reinterpret_cast<uint32_t*>(ptr)           = pack;
 }
 
-template<class T,
-         class... MmaArgs,
-         class TA,
-         class ALayout,
-         class TB,
-         class BLayout,
-         class StateFragment>
-__device__ __forceinline__ void FusedGdrStateUpdateFragmentFromVd(
-    uint32_t                         thread_idx,
-    cute::TiledMMA<MmaArgs...> const& tiled_mma,
-    cute::Tensor<TA, ALayout> const&  sA,
-    cute::Tensor<TB, BLayout> const&  sB,
-    StateFragment&                    tCrState,
-    const float*                      g,
-    float                             last_g_exp)
+template<class T, class... MmaArgs, class TA, class ALayout, class TB, class BLayout, class StateFragment>
+__device__ __forceinline__ void FusedGdrStateUpdateFragmentFromVd(uint32_t                          thread_idx,
+                                                                  cute::TiledMMA<MmaArgs...> const& tiled_mma,
+                                                                  cute::Tensor<TA, ALayout> const&  sA,
+                                                                  cute::Tensor<TB, BLayout> const&  sB,
+                                                                  StateFragment&                    tCrState,
+                                                                  const float*                      g,
+                                                                  float                             last_g_exp)
 {
     static_assert(std::is_same_v<T, __nv_bfloat16>);
     using InputTypeA   = typename TA::value_type;
@@ -942,34 +921,28 @@ __device__ __forceinline__ void FusedGdrStateUpdateFragmentFromVd(
     auto cB   = cute::make_identity_tensor(cute::shape(sB));
     auto tCcB = thr_mma.partition_B(cB);
 
-    cute::copy(smem_tiled_copy_A,
-               tCsA(cute::_, cute::_, cute::Int<0>{}),
-               tCrAi_copy_view(cute::_, cute::_, cute::Int<0>{}));
-    cute::copy(smem_tiled_copy_B,
-               tCsB(cute::_, cute::_, cute::Int<0>{}),
-               tCrBi_copy_view(cute::_, cute::_, cute::Int<0>{}));
+    cute::copy(
+        smem_tiled_copy_A, tCsA(cute::_, cute::_, cute::Int<0>{}), tCrAi_copy_view(cute::_, cute::_, cute::Int<0>{}));
+    cute::copy(
+        smem_tiled_copy_B, tCsB(cute::_, cute::_, cute::Int<0>{}), tCrBi_copy_view(cute::_, cute::_, cute::Int<0>{}));
 
     constexpr int K_BLOCK_MAX = cute::size<2>(decltype(tCrA){});
-    #pragma unroll
+#pragma unroll
     for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block) {
         if (k_block < K_BLOCK_MAX - 1) {
             const int k_next = k_block + 1;
-            cute::copy(smem_tiled_copy_A,
-                       tCsA(cute::_, cute::_, k_next),
-                       tCrAi_copy_view(cute::_, cute::_, k_next));
-            cute::copy(smem_tiled_copy_B,
-                       tCsB(cute::_, cute::_, k_next),
-                       tCrBi_copy_view(cute::_, cute::_, k_next));
+            cute::copy(smem_tiled_copy_A, tCsA(cute::_, cute::_, k_next), tCrAi_copy_view(cute::_, cute::_, k_next));
+            cute::copy(smem_tiled_copy_B, tCsB(cute::_, cute::_, k_next), tCrBi_copy_view(cute::_, cute::_, k_next));
         }
 
-        #pragma unroll
+#pragma unroll
         for (int n = 0; n < cute::size<1>(tCrB); ++n) {
-            #pragma unroll
+#pragma unroll
             for (int i = 0; i < cute::size<0>(tCrB); ++i) {
-                auto        coord = tCcB(i, n, k_block);
-                const int   row   = cute::get<1>(coord);
-                const float gate  = last_g_exp * g[row];
-                const float value = gate * static_cast<float>(tCrBi(i, n, k_block));
+                auto        coord   = tCcB(i, n, k_block);
+                const int   row     = cute::get<1>(coord);
+                const float gate    = last_g_exp * g[row];
+                const float value   = gate * static_cast<float>(tCrBi(i, n, k_block));
                 tCrB(i, n, k_block) = ComputeTypeB(CastFromFloat<T>(value));
             }
         }
@@ -979,21 +952,14 @@ __device__ __forceinline__ void FusedGdrStateUpdateFragmentFromVd(
     }
 }
 
-template<class T,
-         class... MmaArgs,
-         class TA,
-         class ALayout,
-         class TB,
-         class BLayout,
-         class StateFragment>
-__device__ __forceinline__ void FusedGdrStateUpdateFragmentFromBf16Vd(
-    uint32_t                         thread_idx,
-    cute::TiledMMA<MmaArgs...> const& tiled_mma,
-    cute::Tensor<TA, ALayout> const&  sA,
-    cute::Tensor<TB, BLayout> const&  sB,
-    StateFragment&                    tCrState,
-    const float*                      g,
-    float                             last_g_exp)
+template<class T, class... MmaArgs, class TA, class ALayout, class TB, class BLayout, class StateFragment>
+__device__ __forceinline__ void FusedGdrStateUpdateFragmentFromBf16Vd(uint32_t                          thread_idx,
+                                                                      cute::TiledMMA<MmaArgs...> const& tiled_mma,
+                                                                      cute::Tensor<TA, ALayout> const&  sA,
+                                                                      cute::Tensor<TB, BLayout> const&  sB,
+                                                                      StateFragment&                    tCrState,
+                                                                      const float*                      g,
+                                                                      float                             last_g_exp)
 {
     static_assert(std::is_same_v<T, __nv_bfloat16>);
     using Element      = typename FusedGdrMmaTraits<T>::Element;
@@ -1022,34 +988,28 @@ __device__ __forceinline__ void FusedGdrStateUpdateFragmentFromBf16Vd(
     auto cB   = cute::make_identity_tensor(cute::shape(sB));
     auto tCcB = thr_mma.partition_B(cB);
 
-    cute::copy(smem_tiled_copy_A,
-               tCsA(cute::_, cute::_, cute::Int<0>{}),
-               tCrAi_copy_view(cute::_, cute::_, cute::Int<0>{}));
-    cute::copy(smem_tiled_copy_B,
-               tCsB(cute::_, cute::_, cute::Int<0>{}),
-               tCrBi_copy_view(cute::_, cute::_, cute::Int<0>{}));
+    cute::copy(
+        smem_tiled_copy_A, tCsA(cute::_, cute::_, cute::Int<0>{}), tCrAi_copy_view(cute::_, cute::_, cute::Int<0>{}));
+    cute::copy(
+        smem_tiled_copy_B, tCsB(cute::_, cute::_, cute::Int<0>{}), tCrBi_copy_view(cute::_, cute::_, cute::Int<0>{}));
 
     constexpr int K_BLOCK_MAX = cute::size<2>(decltype(tCrA){});
-    #pragma unroll
+#pragma unroll
     for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block) {
         if (k_block < K_BLOCK_MAX - 1) {
             const int k_next = k_block + 1;
-            cute::copy(smem_tiled_copy_A,
-                       tCsA(cute::_, cute::_, k_next),
-                       tCrAi_copy_view(cute::_, cute::_, k_next));
-            cute::copy(smem_tiled_copy_B,
-                       tCsB(cute::_, cute::_, k_next),
-                       tCrBi_copy_view(cute::_, cute::_, k_next));
+            cute::copy(smem_tiled_copy_A, tCsA(cute::_, cute::_, k_next), tCrAi_copy_view(cute::_, cute::_, k_next));
+            cute::copy(smem_tiled_copy_B, tCsB(cute::_, cute::_, k_next), tCrBi_copy_view(cute::_, cute::_, k_next));
         }
 
-        #pragma unroll
+#pragma unroll
         for (int n = 0; n < cute::size<1>(tCrB); ++n) {
-            #pragma unroll
+#pragma unroll
             for (int i = 0; i < cute::size<0>(tCrB); ++i) {
-                auto        coord = tCcB(i, n, k_block);
-                const int   row   = cute::get<1>(coord);
-                const float gate  = last_g_exp * g[row];
-                const float value = gate * static_cast<float>(tCrBi(i, n, k_block));
+                auto        coord   = tCcB(i, n, k_block);
+                const int   row     = cute::get<1>(coord);
+                const float gate    = last_g_exp * g[row];
+                const float value   = gate * static_cast<float>(tCrBi(i, n, k_block));
                 tCrB(i, n, k_block) = ComputeTypeB(CastFromFloat<T>(value));
             }
         }
@@ -1060,12 +1020,11 @@ __device__ __forceinline__ void FusedGdrStateUpdateFragmentFromBf16Vd(
 }
 
 template<class T, class... MmaArgs, class TA, class ALayout, class TB, class BLayout, class StateFragment>
-__device__ __forceinline__ void FusedGdrStateUpdateFragmentFromScaledVd(
-    uint32_t                         thread_idx,
-    cute::TiledMMA<MmaArgs...> const& tiled_mma,
-    cute::Tensor<TA, ALayout> const&  sA,
-    cute::Tensor<TB, BLayout> const&  sB,
-    StateFragment&                    tCrState)
+__device__ __forceinline__ void FusedGdrStateUpdateFragmentFromScaledVd(uint32_t                          thread_idx,
+                                                                        cute::TiledMMA<MmaArgs...> const& tiled_mma,
+                                                                        cute::Tensor<TA, ALayout> const&  sA,
+                                                                        cute::Tensor<TB, BLayout> const&  sB,
+                                                                        StateFragment&                    tCrState)
 {
     static_assert(std::is_same_v<T, __nv_bfloat16>);
     using Element    = typename FusedGdrMmaTraits<T>::Element;
@@ -1090,24 +1049,18 @@ __device__ __forceinline__ void FusedGdrStateUpdateFragmentFromScaledVd(
     auto tCsB              = smem_thr_copy_B.partition_S(sB);
     auto tCrBi_copy_view   = smem_thr_copy_B.retile_D(tCrBi);
 
-    cute::copy(smem_tiled_copy_A,
-               tCsA(cute::_, cute::_, cute::Int<0>{}),
-               tCrAi_copy_view(cute::_, cute::_, cute::Int<0>{}));
-    cute::copy(smem_tiled_copy_B,
-               tCsB(cute::_, cute::_, cute::Int<0>{}),
-               tCrBi_copy_view(cute::_, cute::_, cute::Int<0>{}));
+    cute::copy(
+        smem_tiled_copy_A, tCsA(cute::_, cute::_, cute::Int<0>{}), tCrAi_copy_view(cute::_, cute::_, cute::Int<0>{}));
+    cute::copy(
+        smem_tiled_copy_B, tCsB(cute::_, cute::_, cute::Int<0>{}), tCrBi_copy_view(cute::_, cute::_, cute::Int<0>{}));
 
     constexpr int K_BLOCK_MAX = cute::size<2>(decltype(tCrA){});
-    #pragma unroll
+#pragma unroll
     for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block) {
         if (k_block < K_BLOCK_MAX - 1) {
             const int k_next = k_block + 1;
-            cute::copy(smem_tiled_copy_A,
-                       tCsA(cute::_, cute::_, k_next),
-                       tCrAi_copy_view(cute::_, cute::_, k_next));
-            cute::copy(smem_tiled_copy_B,
-                       tCsB(cute::_, cute::_, k_next),
-                       tCrBi_copy_view(cute::_, cute::_, k_next));
+            cute::copy(smem_tiled_copy_A, tCsA(cute::_, cute::_, k_next), tCrAi_copy_view(cute::_, cute::_, k_next));
+            cute::copy(smem_tiled_copy_B, tCsB(cute::_, cute::_, k_next), tCrBi_copy_view(cute::_, cute::_, k_next));
         }
 
         cute::transform(tCrAi(cute::_, cute::_, k_block), tCrA(cute::_, cute::_, k_block), cute::identity{});
@@ -1117,11 +1070,10 @@ __device__ __forceinline__ void FusedGdrStateUpdateFragmentFromScaledVd(
 }
 
 template<class StateFragment, class CoordTensor, class StageTensor>
-__device__ __forceinline__ void FusedGdrLoadStateFragment(StateFragment& tCrState,
-                                                          CoordTensor const& tCcState,
-                                                          StageTensor const& s_state_stage)
+__device__ __forceinline__ void
+FusedGdrLoadStateFragment(StateFragment& tCrState, CoordTensor const& tCcState, StageTensor const& s_state_stage)
 {
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(tCrState); ++i) {
         auto      coord = tCcState(i);
         const int dk    = cute::get<0>(coord);
@@ -1133,49 +1085,48 @@ __device__ __forceinline__ void FusedGdrLoadStateFragment(StateFragment& tCrStat
 template<class StateFragment>
 __device__ __forceinline__ void FusedGdrDecayStateFragment(StateFragment& tCrState, float decay)
 {
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(tCrState); ++i) {
         tCrState(i) *= decay;
     }
 }
 
 template<class StateFragment, class CoordTensor, class StageTensor>
-__device__ __forceinline__ void FusedGdrStoreStateFragmentFloat(StateFragment const& tCrState,
-                                                               CoordTensor const&    tCcState,
-                                                               StageTensor&          s_state_stage)
+__device__ __forceinline__ void
+FusedGdrStoreStateFragmentFloat(StateFragment const& tCrState, CoordTensor const& tCcState, StageTensor& s_state_stage)
 {
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(tCrState); ++i) {
-        auto      coord = tCcState(i);
-        const int dk    = cute::get<0>(coord);
-        const int dv    = cute::get<1>(coord);
+        auto      coord       = tCcState(i);
+        const int dk          = cute::get<0>(coord);
+        const int dv          = cute::get<1>(coord);
         s_state_stage(dk, dv) = tCrState(i);
     }
 }
 
 template<int BlockDv, class StateFragment, class CoordTensor>
 __device__ __forceinline__ void FusedGdrStoreStateFragmentBf16Tma(StateFragment const& tCrState,
-                                                                 CoordTensor const&    tCcState,
-                                                                 __nv_bfloat16*        state_stage)
+                                                                  CoordTensor const&   tCcState,
+                                                                  __nv_bfloat16*       state_stage)
 {
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(tCrState); ++i) {
-        auto      coord = tCcState(i);
-        const int dk    = cute::get<0>(coord);
-        const int dv    = cute::get<1>(coord);
+        auto      coord                = tCcState(i);
+        const int dk                   = cute::get<0>(coord);
+        const int dv                   = cute::get<1>(coord);
         state_stage[dk * BlockDv + dv] = __float2bfloat16(static_cast<float>(tCrState(i)));
     }
 }
 
 template<class T, int BlockDv, class StateFragment, class CoordTensor>
-__device__ __forceinline__ void FusedGdrStoreStateFragmentBf16(StateFragment const& tCrState,
-                                                              CoordTensor const&    tCcState,
-                                                              typename FusedGdrMmaTraits<T>::Element* state_pack)
+__device__ __forceinline__ void FusedGdrStoreStateFragmentBf16(StateFragment const&                    tCrState,
+                                                               CoordTensor const&                      tCcState,
+                                                               typename FusedGdrMmaTraits<T>::Element* state_pack)
 {
-    using Element = typename FusedGdrMmaTraits<T>::Element;
+    using Element     = typename FusedGdrMmaTraits<T>::Element;
     auto s_state_pack = cute::make_tensor(cute::make_smem_ptr(state_pack), FusedGdrSwizzledStateTLayout<BlockDv>());
 
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(tCrState); ++i) {
         auto      coord = tCcState(i);
         const int dk    = cute::get<0>(coord);
@@ -1186,11 +1137,10 @@ __device__ __forceinline__ void FusedGdrStoreStateFragmentBf16(StateFragment con
 }
 
 template<class T, int BlockDv, class StateFragment, class ThrMma>
-__device__ __forceinline__ void FusedGdrStoreStateFragmentBf16Stsm(
-    StateFragment const& tCrState,
-    typename FusedGdrMmaTraits<T>::Element* state_pack,
-    ThrMma const&       thr_mma,
-    int                 role_tid)
+__device__ __forceinline__ void FusedGdrStoreStateFragmentBf16Stsm(StateFragment const&                    tCrState,
+                                                                   typename FusedGdrMmaTraits<T>::Element* state_pack,
+                                                                   ThrMma const&                           thr_mma,
+                                                                   int                                     role_tid)
 {
     using Element = typename FusedGdrMmaTraits<T>::Element;
     static_assert(std::is_same_v<T, __nv_bfloat16>);
@@ -1200,13 +1150,12 @@ __device__ __forceinline__ void FusedGdrStoreStateFragmentBf16Stsm(
     auto s_state_pack = cute::as_position_independent_swizzle_tensor(
         cute::make_tensor(cute::make_smem_ptr(state_pack), FusedGdrSwizzledStateCLayout<BlockDv>()));
     auto tCrPack = cute::make_fragment_like<Element>(tCrState);
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(tCrState); ++i) {
         tCrPack(i) = Element(CastFromFloat<T>(static_cast<float>(tCrState(i))));
     }
 
-    auto smem_tiled_copy_C = cute::make_tiled_copy_C_atom(
-        cute::Copy_Atom<cute::SM90_U32x2_STSM_N, Element>{}, thr_mma);
+    auto smem_tiled_copy_C = cute::make_tiled_copy_C_atom(cute::Copy_Atom<cute::SM90_U32x2_STSM_N, Element>{}, thr_mma);
     auto smem_thr_copy_C   = smem_tiled_copy_C.get_thread_slice(role_tid);
     auto tCsPack           = smem_thr_copy_C.partition_D(s_state_pack);
     auto tCrPackView       = smem_thr_copy_C.retile_S(tCrPack);
@@ -1214,9 +1163,7 @@ __device__ __forceinline__ void FusedGdrStoreStateFragmentBf16Stsm(
 }
 
 template<class T>
-CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor,
-                          const uint32_t (&box_dims)[5],
-                          CUtensorMapSwizzle swizzle)
+CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor, const uint32_t (&box_dims)[5], CUtensorMapSwizzle swizzle)
 {
     const uint64_t global_dims[5] = {
         64u,
@@ -1231,13 +1178,8 @@ CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor,
         static_cast<uint64_t>(tensor.stride(1)) * sizeof(T),
         static_cast<uint64_t>(tensor.stride(0)) * sizeof(T),
     };
-    return MakeTmaDesc(const_cast<T*>(tensor.data<T>()),
-                       FusedGdrTmaDataType<T>(),
-                       5,
-                       global_dims,
-                       global_strides,
-                       box_dims,
-                       swizzle);
+    return MakeTmaDesc(
+        const_cast<T*>(tensor.data<T>()), FusedGdrTmaDataType<T>(), 5, global_dims, global_strides, box_dims, swizzle);
 }
 
 template<int ChunkSize>
@@ -1263,8 +1205,7 @@ CUtensorMap MakeFusedGdrValueTmaDesc(const core::Tensor& tensor, int block_dv)
         static_cast<uint64_t>(tensor.stride(1)) * sizeof(__nv_bfloat16),
         static_cast<uint64_t>(tensor.stride(0)) * sizeof(__nv_bfloat16),
     };
-    const uint32_t box_dims[4] = {
-        static_cast<uint32_t>(block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
+    const uint32_t box_dims[4] = {static_cast<uint32_t>(block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeTmaDesc(const_cast<__nv_bfloat16*>(tensor.data<__nv_bfloat16>()),
                        FusedGdrTmaDataType<__nv_bfloat16>(),
                        4,
@@ -1289,8 +1230,7 @@ CUtensorMap MakeFusedGdrOutputTmaDesc(core::Tensor& tensor, int block_dv)
         static_cast<uint64_t>(tensor.stride(1)) * sizeof(__nv_bfloat16),
         static_cast<uint64_t>(tensor.stride(0)) * sizeof(__nv_bfloat16),
     };
-    const uint32_t box_dims[4] = {
-        static_cast<uint32_t>(block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
+    const uint32_t box_dims[4] = {static_cast<uint32_t>(block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeTmaDesc(tensor.data<__nv_bfloat16>(),
                        FusedGdrTmaDataType<__nv_bfloat16>(),
                        4,
@@ -1315,8 +1255,7 @@ CUtensorMap MakeFusedGdrResolventTmaDesc(const core::Tensor& tensor)
         static_cast<uint64_t>(tensor.stride(1)) * sizeof(__nv_bfloat16),
         static_cast<uint64_t>(tensor.stride(0)) * sizeof(__nv_bfloat16),
     };
-    const uint32_t box_dims[4] = {
-        static_cast<uint32_t>(ChunkSize), 1u, static_cast<uint32_t>(ChunkSize), 1u};
+    const uint32_t box_dims[4] = {static_cast<uint32_t>(ChunkSize), 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeTmaDesc(const_cast<__nv_bfloat16*>(tensor.data<__nv_bfloat16>()),
                        FusedGdrTmaDataType<__nv_bfloat16>(),
                        4,
@@ -1352,11 +1291,11 @@ inline CUtensorMap MakeFusedGdrGateTmaDesc(const core::Tensor& tensor)
 template<class StateT>
 CUtensorMap MakeFusedGdrStateTmaDesc(StateT* ptr, int batch, int hv, int block_dv)
 {
-    const uint64_t global_dim[2] = {
-        static_cast<uint64_t>(kHeadDim),
-        static_cast<uint64_t>(batch) * static_cast<uint64_t>(hv) * static_cast<uint64_t>(kHeadDim)};
+    const uint64_t global_dim[2]    = {static_cast<uint64_t>(kHeadDim),
+                                    static_cast<uint64_t>(batch) * static_cast<uint64_t>(hv)
+                                        * static_cast<uint64_t>(kHeadDim)};
     const uint64_t global_stride[1] = {static_cast<uint64_t>(kHeadDim * sizeof(StateT))};
-    const uint32_t box_dim[2] = {static_cast<uint32_t>(block_dv), static_cast<uint32_t>(kHeadDim)};
+    const uint32_t box_dim[2]       = {static_cast<uint32_t>(block_dv), static_cast<uint32_t>(kHeadDim)};
     return MakeTmaDesc(
         ptr, FusedGdrTmaDataType<StateT>(), 2, global_dim, global_stride, box_dim, CU_TENSOR_MAP_SWIZZLE_NONE);
 }
@@ -1434,11 +1373,9 @@ inline CUtensorMap MakeFusedGdrHSegmentMatrixTmaDesc(float* ptr, int total_segme
 template<class StateT>
 CUtensorMap MakeFusedGdrStateHeadTmaDesc(StateT* ptr, int block_dv)
 {
-    const uint64_t global_dim[2] = {
-        static_cast<uint64_t>(kHeadDim),
-        static_cast<uint64_t>(kHeadDim)};
+    const uint64_t global_dim[2]    = {static_cast<uint64_t>(kHeadDim), static_cast<uint64_t>(kHeadDim)};
     const uint64_t global_stride[1] = {static_cast<uint64_t>(kHeadDim * sizeof(StateT))};
-    const uint32_t box_dim[2] = {static_cast<uint32_t>(block_dv), static_cast<uint32_t>(kHeadDim)};
+    const uint32_t box_dim[2]       = {static_cast<uint32_t>(block_dv), static_cast<uint32_t>(kHeadDim)};
     return MakeTmaDesc(
         ptr, FusedGdrTmaDataType<StateT>(), 2, global_dim, global_stride, box_dim, CU_TENSOR_MAP_SWIZZLE_NONE);
 }
@@ -1446,18 +1383,19 @@ CUtensorMap MakeFusedGdrStateHeadTmaDesc(StateT* ptr, int block_dv)
 template<class StateT>
 CUtensorMap MakeFusedGdrStateTileTmaDesc(StateT* ptr, int batch, int hv, int block_dv, int rows)
 {
-    const uint64_t global_dim[2] = {
-        static_cast<uint64_t>(kHeadDim),
-        static_cast<uint64_t>(batch) * static_cast<uint64_t>(hv) * static_cast<uint64_t>(kHeadDim)};
+    const uint64_t global_dim[2]    = {static_cast<uint64_t>(kHeadDim),
+                                    static_cast<uint64_t>(batch) * static_cast<uint64_t>(hv)
+                                        * static_cast<uint64_t>(kHeadDim)};
     const uint64_t global_stride[1] = {static_cast<uint64_t>(kHeadDim * sizeof(StateT))};
-    const uint32_t box_dim[2] = {static_cast<uint32_t>(block_dv), static_cast<uint32_t>(rows)};
+    const uint32_t box_dim[2]       = {static_cast<uint32_t>(block_dv), static_cast<uint32_t>(rows)};
     return MakeTmaDesc(
         ptr, FusedGdrTmaDataType<StateT>(), 2, global_dim, global_stride, box_dim, CU_TENSOR_MAP_SWIZZLE_NONE);
 }
 
 template<class T, int BlockDv>
 struct FusedGdrFwdSharedStorage {
-    // Fused-forward lifetime arena: q becomes P/local, p becomes A/W then q_state, and vd becomes state-pack/K@state/Vd/Vn.
+    // Fused-forward lifetime arena: q becomes P/local, p becomes A/W then q_state, and vd becomes
+    // state-pack/K@state/Vd/Vn.
     alignas(1024) T q[kChunkSize][kHeadDim];
     T     k[kChunkSize][kHeadDim];
     float gate_stage[2][kChunkSize][4];
@@ -1552,10 +1490,9 @@ static_assert((kChunkSize * kChunkSize * sizeof(cute::bfloat16_t)) % alignof(__n
 
 inline bool CanUseFusedGdrFwd(const Problem& problem)
 {
-    return problem.arch == 1200 && problem.input_dtype == kBfloat16
-           && problem.batch == problem.sequence_num && problem.gate_stride % 4 == 0
-           && problem.gate_batch_stride % 4 == 0 && problem.hv % problem.hq == 0 && problem.head_dim == kHeadDim
-           && problem.chunk_size == kChunkSize;
+    return problem.arch == 1200 && problem.input_dtype == kBfloat16 && problem.batch == problem.sequence_num
+           && problem.gate_stride % 4 == 0 && problem.gate_batch_stride % 4 == 0 && problem.hv % problem.hq == 0
+           && problem.head_dim == kHeadDim && problem.chunk_size == kChunkSize;
 }
 
 template<int BlockDv>
@@ -1580,9 +1517,9 @@ static_assert(offsetof(CorrectInitialStatesSharedStorage<kCorrectInitialStatesBf
                   % alignof(cute::uint64_t)
               == 0);
 
-constexpr int kChunk32Size       = 32;
-constexpr int kSm120FusedGdrGatePasses = kChunk32Size / kFusedGdrGateWriterThreads;
-constexpr int kSm120FusedGdrProducerRegisters = 32;
+constexpr int kChunk32Size                     = 32;
+constexpr int kSm120FusedGdrGatePasses         = kChunk32Size / kFusedGdrGateWriterThreads;
+constexpr int kSm120FusedGdrProducerRegisters  = 32;
 constexpr int kSm120FusedGdrHProducerRegisters = 24;
 constexpr int kSm120FusedGdrHStateRegisters    = 144;
 constexpr int kSm120FusedGdrHValueRegisters    = 144;
@@ -1593,32 +1530,28 @@ static_assert(kSm120FusedGdrGatePasses == 1);
 CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrQkLayout()
 {
     return cute::composition(cute::Swizzle<3, 3, 3>{},
-                             cute::Layout<cute::Shape<cute::_32, cute::_128>,
-                                          cute::Stride<cute::_128, cute::_1>>{});
+                             cute::Layout<cute::Shape<cute::_32, cute::_128>, cute::Stride<cute::_128, cute::_1>>{});
 }
 static_assert(cute::cosize_v<decltype(Sm120FusedGdrQkLayout())> == kChunk32Size * kHeadDim);
 
 CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrQkTransposedLayout()
 {
     return cute::composition(cute::Swizzle<3, 3, 3>{},
-                             cute::Layout<cute::Shape<cute::_128, cute::_32>,
-                                          cute::Stride<cute::_1, cute::_128>>{});
+                             cute::Layout<cute::Shape<cute::_128, cute::_32>, cute::Stride<cute::_1, cute::_128>>{});
 }
 static_assert(cute::cosize_v<decltype(Sm120FusedGdrQkTransposedLayout())> == kChunk32Size * kHeadDim);
 
 CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrSquareLayout()
 {
     return cute::composition(cute::Swizzle<2, 3, 3>{},
-                             cute::Layout<cute::Shape<cute::_32, cute::_32>,
-                                          cute::Stride<cute::_32, cute::_1>>{});
+                             cute::Layout<cute::Shape<cute::_32, cute::_32>, cute::Stride<cute::_32, cute::_1>>{});
 }
 static_assert(cute::cosize_v<decltype(Sm120FusedGdrSquareLayout())> == kChunk32Size * kChunk32Size);
 
 CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrPackedP128BRowLayout()
 {
     return cute::composition(cute::Swizzle<3, 3, 3>{},
-                             cute::Layout<cute::Shape<cute::_32, cute::_32>,
-                                          cute::Stride<cute::_64, cute::_1>>{});
+                             cute::Layout<cute::Shape<cute::_32, cute::_32>, cute::Stride<cute::_64, cute::_1>>{});
 }
 
 static constexpr int kChunk32PackedPOffset   = 0;
@@ -1644,8 +1577,7 @@ CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrVRowLayout()
     }
     else {
         return cute::composition(cute::Swizzle<3, 3, 3>{},
-                                 cute::Layout<cute::Shape<cute::_32, cute::_64>,
-                                              cute::Stride<cute::_64, cute::_1>>{});
+                                 cute::Layout<cute::Shape<cute::_32, cute::_64>, cute::Stride<cute::_64, cute::_1>>{});
     }
 }
 
@@ -1655,13 +1587,11 @@ CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrVTLayout()
     static_assert(BlockDv == kContextParallelGdrBlockDv || BlockDv == kFusedGdrBlockDv);
     if constexpr (BlockDv == kContextParallelGdrBlockDv) {
         return cute::composition(cute::Swizzle<2, 3, 3>{},
-                                 cute::Layout<cute::Shape<cute::_32, cute::_32>,
-                                              cute::Stride<cute::_1, cute::_32>>{});
+                                 cute::Layout<cute::Shape<cute::_32, cute::_32>, cute::Stride<cute::_1, cute::_32>>{});
     }
     else {
         return cute::composition(cute::Swizzle<3, 3, 3>{},
-                                 cute::Layout<cute::Shape<cute::_64, cute::_32>,
-                                              cute::Stride<cute::_1, cute::_64>>{});
+                                 cute::Layout<cute::Shape<cute::_64, cute::_32>, cute::Stride<cute::_1, cute::_64>>{});
     }
 }
 
@@ -1682,8 +1612,7 @@ CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrStateTLayout()
 }
 static_assert(cute::cosize_v<decltype(
                   Sm120FusedGdrStateTLayout<kContextParallelGdrBlockDv>())> == kContextParallelGdrBlockDv * kHeadDim);
-static_assert(cute::cosize_v<decltype(Sm120FusedGdrStateTLayout<kFusedGdrBlockDv>())>
-              == kFusedGdrBlockDv * kHeadDim);
+static_assert(cute::cosize_v<decltype(Sm120FusedGdrStateTLayout<kFusedGdrBlockDv>())> == kFusedGdrBlockDv * kHeadDim);
 
 template<int BlockDv>
 CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrStateCLayout()
@@ -1702,8 +1631,7 @@ CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrStateCLayout()
 }
 static_assert(cute::cosize_v<decltype(
                   Sm120FusedGdrStateCLayout<kContextParallelGdrBlockDv>())> == kContextParallelGdrBlockDv * kHeadDim);
-static_assert(cute::cosize_v<decltype(Sm120FusedGdrStateCLayout<kFusedGdrBlockDv>())>
-              == kFusedGdrBlockDv * kHeadDim);
+static_assert(cute::cosize_v<decltype(Sm120FusedGdrStateCLayout<kFusedGdrBlockDv>())> == kFusedGdrBlockDv * kHeadDim);
 
 template<class T, int BlockDv>
 struct Sm120FusedGdrSharedStorage {
@@ -1776,36 +1704,32 @@ static_assert(Sm120FusedGdrVdOffset<__nv_bfloat16, kContextParallelGdrBlockDv>()
 
 template<class T, int BlockDv, class Fragment, class ThrMma>
 __device__ __forceinline__ void Sm120FusedGdrStoreValueFragmentBf16Stsm(
-    Fragment const& fragment,
-    typename FusedGdrMmaTraits<T>::Element* value_pack,
-    ThrMma const& thr_mma,
-    int role_tid)
+    Fragment const& fragment, typename FusedGdrMmaTraits<T>::Element* value_pack, ThrMma const& thr_mma, int role_tid)
 {
     using Element = typename FusedGdrMmaTraits<T>::Element;
     static_assert(std::is_same_v<T, __nv_bfloat16>);
 
     auto tCrPack = cute::make_fragment_like<Element>(fragment);
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(fragment); ++i) {
         tCrPack(i) = Element(CastFromFloat<T>(static_cast<float>(fragment(i))));
     }
 
     auto s_value_pack = cute::as_position_independent_swizzle_tensor(
         cute::make_tensor(cute::make_smem_ptr(value_pack), Sm120FusedGdrVRowLayout<BlockDv>()));
-    auto smem_tiled_copy_C = cute::make_tiled_copy_C_atom(
-        cute::Copy_Atom<cute::SM90_U32x2_STSM_N, Element>{}, thr_mma);
-    auto smem_thr_copy_C = smem_tiled_copy_C.get_thread_slice(role_tid);
-    auto tCsPack = smem_thr_copy_C.partition_D(s_value_pack);
-    auto tCrPackView = smem_thr_copy_C.retile_S(tCrPack);
+    auto smem_tiled_copy_C = cute::make_tiled_copy_C_atom(cute::Copy_Atom<cute::SM90_U32x2_STSM_N, Element>{}, thr_mma);
+    auto smem_thr_copy_C   = smem_tiled_copy_C.get_thread_slice(role_tid);
+    auto tCsPack           = smem_thr_copy_C.partition_D(s_value_pack);
+    auto tCrPackView       = smem_thr_copy_C.retile_S(tCrPack);
     cute::copy(smem_tiled_copy_C, tCrPackView, tCsPack);
 }
 
 template<class T, int BlockDv, class StateFragment, class ThrMma>
-__device__ __forceinline__ void Sm120FusedGdrStoreStateFragmentBf16Stsm(
-    StateFragment const& tCrState,
-    typename FusedGdrMmaTraits<T>::Element* state_pack,
-    ThrMma const&       thr_mma,
-    int                 role_tid)
+__device__ __forceinline__ void
+Sm120FusedGdrStoreStateFragmentBf16Stsm(StateFragment const&                    tCrState,
+                                        typename FusedGdrMmaTraits<T>::Element* state_pack,
+                                        ThrMma const&                           thr_mma,
+                                        int                                     role_tid)
 {
     using Element = typename FusedGdrMmaTraits<T>::Element;
     static_assert(std::is_same_v<T, __nv_bfloat16>);
@@ -1813,13 +1737,12 @@ __device__ __forceinline__ void Sm120FusedGdrStoreStateFragmentBf16Stsm(
     auto s_state_pack = cute::as_position_independent_swizzle_tensor(
         cute::make_tensor(cute::make_smem_ptr(state_pack), Sm120FusedGdrStateCLayout<BlockDv>()));
     auto tCrPack = cute::make_fragment_like<Element>(tCrState);
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < cute::size(tCrState); ++i) {
         tCrPack(i) = Element(CastFromFloat<T>(static_cast<float>(tCrState(i))));
     }
 
-    auto smem_tiled_copy_C = cute::make_tiled_copy_C_atom(
-        cute::Copy_Atom<cute::SM90_U32x2_STSM_N, Element>{}, thr_mma);
+    auto smem_tiled_copy_C = cute::make_tiled_copy_C_atom(cute::Copy_Atom<cute::SM90_U32x2_STSM_N, Element>{}, thr_mma);
     auto smem_thr_copy_C   = smem_tiled_copy_C.get_thread_slice(role_tid);
     auto tCsPack           = smem_thr_copy_C.partition_D(s_state_pack);
     auto tCrPackView       = smem_thr_copy_C.retile_S(tCrPack);

@@ -33,7 +33,7 @@ CuTensorMapEncodeTiledFn GetCuTensorMapEncodeTiled()
 
 }  // namespace
 
-CUtensorMap MakeTmaDesc(void*              global_address,
+CUtensorMap MakeTmaDesc(void*               global_address,
                         CUtensorMapDataType data_type,
                         uint32_t            rank,
                         const uint64_t*     global_dim,

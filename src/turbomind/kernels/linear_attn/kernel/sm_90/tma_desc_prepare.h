@@ -62,8 +62,9 @@ constexpr CUtensorMapSwizzle FusedGdrSquareTmaSwizzle()
     }
 }
 
-enum ChunkedKktTmaDescIndex : int {
-    kChunkedKktKDesc = 0,
+enum ChunkedKktTmaDescIndex : int
+{
+    kChunkedKktKDesc         = 0,
     kChunkedKktResolventDesc = 3,
 };
 
@@ -78,7 +79,7 @@ constexpr CUtensorMapDataType ChunkedKktTmaDataType()
 
 template<class T>
 struct StridedTensorBase {
-    T* ptr{};
+    T*      ptr{};
     int64_t batch_stride{};
     int64_t token_stride{};
 };
@@ -96,9 +97,7 @@ StridedTensorBase<const T> MakeStridedTensorBase(const core::Tensor& tensor)
 }
 
 template<class T>
-CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor,
-                          const uint32_t (&box_dims)[5],
-                          CUtensorMapSwizzle swizzle)
+CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor, const uint32_t (&box_dims)[5], CUtensorMapSwizzle swizzle)
 {
     const uint64_t global_dims[5] = {
         64u,
@@ -113,13 +112,8 @@ CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor,
         static_cast<uint64_t>(tensor.stride(1)) * sizeof(T),
         static_cast<uint64_t>(tensor.stride(0)) * sizeof(T),
     };
-    return MakeTmaDesc(const_cast<T*>(tensor.data<T>()),
-                       FusedGdrTmaDataType<T>(),
-                       5,
-                       global_dims,
-                       global_strides,
-                       box_dims,
-                       swizzle);
+    return MakeTmaDesc(
+        const_cast<T*>(tensor.data<T>()), FusedGdrTmaDataType<T>(), 5, global_dims, global_strides, box_dims, swizzle);
 }
 
 template<int ChunkSize>
@@ -178,8 +172,7 @@ CUtensorMap MakeChunkedKktResolventTmaDesc(const core::Tensor& resolvent)
         static_cast<uint64_t>(resolvent.stride(1)) * sizeof(__nv_bfloat16),
         static_cast<uint64_t>(resolvent.stride(0)) * sizeof(__nv_bfloat16),
     };
-    const uint32_t box_dims[4] = {
-        static_cast<uint32_t>(ChunkSize), 1u, static_cast<uint32_t>(ChunkSize), 1u};
+    const uint32_t box_dims[4] = {static_cast<uint32_t>(ChunkSize), 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeTmaDesc(const_cast<__nv_bfloat16*>(resolvent.data<__nv_bfloat16>()),
                        ChunkedKktTmaDataType<__nv_bfloat16>(),
                        4,
@@ -211,7 +204,7 @@ template<int ChunkSize>
 CUtensorMap MakeFusedGdrValueTmaDesc(const core::Tensor& v, int block_dv)
 {
     static_assert(kSupportedGdrChunkSize<ChunkSize>);
-    const int      tma_block_dv = block_dv == kWideGdrBlockDv ? kFusedGdrBlockDv : block_dv;
+    const int      tma_block_dv   = block_dv == kWideGdrBlockDv ? kFusedGdrBlockDv : block_dv;
     const uint64_t global_dims[4] = {
         static_cast<uint64_t>(kHeadDim),
         static_cast<uint64_t>(v.shape(2)),
@@ -223,8 +216,7 @@ CUtensorMap MakeFusedGdrValueTmaDesc(const core::Tensor& v, int block_dv)
         static_cast<uint64_t>(v.stride(1)) * sizeof(__nv_bfloat16),
         static_cast<uint64_t>(v.stride(0)) * sizeof(__nv_bfloat16),
     };
-    const uint32_t box_dims[4] = {
-        static_cast<uint32_t>(tma_block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
+    const uint32_t box_dims[4] = {static_cast<uint32_t>(tma_block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeTmaDesc(const_cast<__nv_bfloat16*>(v.data<__nv_bfloat16>()),
                        FusedGdrTmaDataType<__nv_bfloat16>(),
                        4,
@@ -243,7 +235,7 @@ template<int ChunkSize>
 CUtensorMap MakeFusedGdrOutputTmaDesc(core::Tensor& out, int block_dv)
 {
     static_assert(kSupportedGdrChunkSize<ChunkSize>);
-    const int      tma_block_dv = block_dv == kWideGdrBlockDv ? kFusedGdrBlockDv : block_dv;
+    const int      tma_block_dv   = block_dv == kWideGdrBlockDv ? kFusedGdrBlockDv : block_dv;
     const uint64_t global_dims[4] = {
         static_cast<uint64_t>(kHeadDim),
         static_cast<uint64_t>(out.shape(2)),
@@ -255,8 +247,7 @@ CUtensorMap MakeFusedGdrOutputTmaDesc(core::Tensor& out, int block_dv)
         static_cast<uint64_t>(out.stride(1)) * sizeof(__nv_bfloat16),
         static_cast<uint64_t>(out.stride(0)) * sizeof(__nv_bfloat16),
     };
-    const uint32_t box_dims[4] = {
-        static_cast<uint32_t>(tma_block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
+    const uint32_t box_dims[4] = {static_cast<uint32_t>(tma_block_dv), 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeTmaDesc(out.data<__nv_bfloat16>(),
                        FusedGdrTmaDataType<__nv_bfloat16>(),
                        4,
@@ -379,380 +370,381 @@ struct Sm90GdrTmaDescPrepare {
     {
         const int sequence_len = sequence_end - sequence_begin;
         return sequence_len > 0 ? (sequence_len + segment_tokens - 1) / segment_tokens : 0;
-}
-
-static __device__ __forceinline__ int
-ContextParallelSequenceSegmentStart(const int32_t* q_offsets, int sequence_id, int segment_tokens)
-{
-    int segment_start = 0;
-    for (int seq = 0; seq < sequence_id; ++seq) {
-        segment_start += ContextParallelSegmentCount(q_offsets[seq], q_offsets[seq + 1], segment_tokens);
     }
-    return segment_start;
-}
 
-static __device__ __forceinline__ void BuildContextParallelSequenceMetadata(const int32_t* q_offsets,
-                                                                            int32_t*       cp_sequence_starts,
-                                                                            int32_t*       cp_q_offsets,
-                                                                            int            sequence_id,
-                                                                            int            sequence_num,
-                                                                            int            total_segments,
-                                                                            int            segment_tokens,
-                                                                            int            tid)
-{
-    if (tid == 0) {
-        cp_sequence_starts[sequence_id] = ContextParallelSequenceSegmentStart(q_offsets, sequence_id, segment_tokens);
-        if (sequence_id == sequence_num - 1) {
-            cp_sequence_starts[sequence_num] = total_segments;
-            cp_q_offsets[total_segments]     = q_offsets[sequence_num];
+    static __device__ __forceinline__ int
+    ContextParallelSequenceSegmentStart(const int32_t* q_offsets, int sequence_id, int segment_tokens)
+    {
+        int segment_start = 0;
+        for (int seq = 0; seq < sequence_id; ++seq) {
+            segment_start += ContextParallelSegmentCount(q_offsets[seq], q_offsets[seq + 1], segment_tokens);
+        }
+        return segment_start;
+    }
+
+    static __device__ __forceinline__ void BuildContextParallelSequenceMetadata(const int32_t* q_offsets,
+                                                                                int32_t*       cp_sequence_starts,
+                                                                                int32_t*       cp_q_offsets,
+                                                                                int            sequence_id,
+                                                                                int            sequence_num,
+                                                                                int            total_segments,
+                                                                                int            segment_tokens,
+                                                                                int            tid)
+    {
+        if (tid == 0) {
+            cp_sequence_starts[sequence_id] =
+                ContextParallelSequenceSegmentStart(q_offsets, sequence_id, segment_tokens);
+            if (sequence_id == sequence_num - 1) {
+                cp_sequence_starts[sequence_num] = total_segments;
+                cp_q_offsets[total_segments]     = q_offsets[sequence_num];
+            }
         }
     }
-}
 
-
-template<int Dim>
-static __device__ __forceinline__ void FusedGdrReplaceTmaAddressAndDim(
-    CUtensorMap* desc, const void* global_address, int dim)
-{
-    const uint32_t smem_ptr = cast_smem_ptr_to_uint(desc);
-    uint64_t       smem_ptr64;
-    asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;"
-                 :
-                 : "r"(smem_ptr), "l"(global_address));
-    asm volatile("cvt.u64.u32 %0, %1;" : "=l"(smem_ptr64) : "r"(smem_ptr));
-    asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], %1, %2;"
-                 :
-                 : "l"(smem_ptr64), "n"(Dim), "r"(static_cast<uint32_t>(dim)));
-}
-
-template<int TokenAxis, class T>
-static __device__ __forceinline__ void RebaseSequenceDescriptor(CUtensorMap* output,
-                                                                CUtensorMap* scratch,
-                                                                const CUtensorMap& base_descriptor,
-                                                                StridedTensorBase<T> tensor,
-                                                                int physical_batch,
-                                                                int local_token,
-                                                                int sequence_len,
-                                                                int lane)
-{
-    CopyTmaDescriptor(scratch, &base_descriptor, lane, 32);
-    __syncwarp();
-    if (lane == 0) {
-        const int64_t element_offset = static_cast<int64_t>(physical_batch) * tensor.batch_stride
-                                       + static_cast<int64_t>(local_token) * tensor.token_stride;
-        FusedGdrReplaceTmaAddressAndDim<TokenAxis>(
-            scratch, tensor.ptr + element_offset, sequence_len);
+    template<int Dim>
+    static __device__ __forceinline__ void
+    FusedGdrReplaceTmaAddressAndDim(CUtensorMap* desc, const void* global_address, int dim)
+    {
+        const uint32_t smem_ptr = cast_smem_ptr_to_uint(desc);
+        uint64_t       smem_ptr64;
+        asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;"
+                     :
+                     : "r"(smem_ptr), "l"(global_address));
+        asm volatile("cvt.u64.u32 %0, %1;" : "=l"(smem_ptr64) : "r"(smem_ptr));
+        asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], %1, %2;"
+                     :
+                     : "l"(smem_ptr64), "n"(Dim), "r"(static_cast<uint32_t>(dim)));
     }
-    __syncwarp();
-    PublishTmaDescriptor(output, scratch);
-    __syncwarp();
-}
 
-template<int ChunkSize, class T>
-static __device__ __forceinline__ void FusedGdrBuildSequenceDataTmaDescriptors(
-    CUtensorMap*                 gmem_desc,
-    CUtensorMap*                 smem_desc,
-    const CUtensorMap&           q_tma_desc,
-    const CUtensorMap&           k_tma_desc,
-    const CUtensorMap&           v_tma_desc,
-    const CUtensorMap&           resolvent_tma_desc,
-    const CUtensorMap&           out_tma_desc,
-    StridedTensorBase<const T>   q,
-    StridedTensorBase<const T>   k,
-    StridedTensorBase<const T>   v,
-    StridedTensorBase<const T>   resolvent,
-    StridedTensorBase<T>         out,
-    int                          tid,
-    int                          local_seq_start,
-    int                          physical_batch,
-    int                          seq_len)
-{
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
-    const int lane_id = tid & 31;
-    if (tid < 32) {
-        RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrQDesc],
-                                    &smem_desc[kFusedGdrQDesc],
-                                    q_tma_desc,
-                                    q,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrKDesc],
-                                    &smem_desc[kFusedGdrKDesc],
-                                    k_tma_desc,
-                                    k,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrVDesc],
-                                    &smem_desc[kFusedGdrVDesc],
-                                    v_tma_desc,
-                                    v,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrResolventDesc],
-                                    &smem_desc[kFusedGdrResolventDesc],
-                                    resolvent_tma_desc,
-                                    resolvent,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrOutDesc],
-                                    &smem_desc[kFusedGdrOutDesc],
-                                    out_tma_desc,
-                                    out,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-    }
-    __syncwarp();
-}
-
-template<class T>
-static __device__ __forceinline__ void FusedGdrBuildSequenceDataTmaDescriptors(
-    CUtensorMap*                 gmem_desc,
-    CUtensorMap*                 smem_desc,
-    const CUtensorMap&           q_tma_desc,
-    const CUtensorMap&           k_tma_desc,
-    const CUtensorMap&           v_tma_desc,
-    const CUtensorMap&           resolvent_tma_desc,
-    const CUtensorMap&           out_tma_desc,
-    StridedTensorBase<const T>   q,
-    StridedTensorBase<const T>   k,
-    StridedTensorBase<const T>   v,
-    StridedTensorBase<const T>   resolvent,
-    StridedTensorBase<T>         out,
-    int                          tid,
-    int                          local_seq_start,
-    int                          physical_batch,
-    int                          seq_len)
-{
-    FusedGdrBuildSequenceDataTmaDescriptors<kChunkSize>(gmem_desc,
-                                                        smem_desc,
-                                                        q_tma_desc,
-                                                        k_tma_desc,
-                                                        v_tma_desc,
-                                                        resolvent_tma_desc,
-                                                        out_tma_desc,
-                                                        q,
-                                                        k,
-                                                        v,
-                                                        resolvent,
-                                                        out,
-                                                        tid,
-                                                        local_seq_start,
-                                                        physical_batch,
-                                                        seq_len);
-}
-
-template<int ChunkSize, class K>
-static __device__ __forceinline__ void ChunkedKktBuildTmaDescriptors(CUtensorMap*       gmem_desc,
-                                                                     CUtensorMap*       smem_desc,
-                                                                     const CUtensorMap& k_tma_desc,
-                                                                     const CUtensorMap& resolvent_tma_desc,
-                                                                     StridedTensorBase<const K> k,
-                                                                     StridedTensorBase<K> resolvent,
-                                                                     int                tid,
-                                                                     int                local_seq_start,
-                                                                     int                physical_batch,
-                                                                     int                seq_len)
-{
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
-    const int lane_id = tid & 31;
-    if (tid < 32) {
-        RebaseSequenceDescriptor<3>(&gmem_desc[kChunkedKktKDesc],
-                                    &smem_desc[kChunkedKktKDesc],
-                                    k_tma_desc,
-                                    k,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<2>(&gmem_desc[kChunkedKktResolventDesc],
-                                    &smem_desc[kChunkedKktResolventDesc],
-                                    resolvent_tma_desc,
-                                    resolvent,
-                                    physical_batch,
-                                    local_seq_start,
-                                    seq_len,
-                                    lane_id);
-    }
-    __syncwarp();
-}
-
-template<class K>
-static __device__ __forceinline__ void ChunkedKktBuildTmaDescriptors(CUtensorMap*       gmem_desc,
-                                                                     CUtensorMap*       smem_desc,
-                                                                     const CUtensorMap& k_tma_desc,
-                                                                     const CUtensorMap& resolvent_tma_desc,
-                                                                     StridedTensorBase<const K> k,
-                                                                     StridedTensorBase<K> resolvent,
-                                                                     int                tid,
-                                                                     int                local_seq_start,
-                                                                     int                physical_batch,
-                                                                     int                seq_len)
-{
-    ChunkedKktBuildTmaDescriptors<kChunkSize>(gmem_desc,
-                                              smem_desc,
-                                              k_tma_desc,
-                                              resolvent_tma_desc,
-                                              k,
-                                              resolvent,
-                                              tid,
-                                              local_seq_start,
-                                              physical_batch,
-                                              seq_len);
-}
-
-template<int ChunkSize, class T>
-static __device__ __forceinline__ void FusedGdrHBuildSequenceDataTmaDescriptors(CUtensorMap*       gmem_desc,
-                                                                                CUtensorMap*       smem_desc,
-                                                                                const CUtensorMap& k_tma_desc,
-                                                                                const CUtensorMap& v_tma_desc,
-                                                                                const CUtensorMap& g_tma_desc,
-                                                                                const CUtensorMap& beta_tma_desc,
-                                                                                const CUtensorMap& resolvent_tma_desc,
-                                                                                StridedTensorBase<const T>     k,
-                                                                                StridedTensorBase<const T>     v,
-                                                                                StridedTensorBase<const float> g_cumsum,
-                                                                                StridedTensorBase<const float> beta,
-                                                                                StridedTensorBase<const T> resolvent,
-                                                                                int                        tid,
-                                                                                int local_sequence_begin,
-                                                                                int physical_batch,
-                                                                                int sequence_len)
-{
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
-    const int lane_id = tid & 31;
-    if (tid < 32) {
-        RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrHKDesc],
-                                    &smem_desc[kFusedGdrHKDesc],
-                                    k_tma_desc,
-                                    k,
-                                    physical_batch,
-                                    local_sequence_begin,
-                                    sequence_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrHVDesc],
-                                    &smem_desc[kFusedGdrHVDesc],
-                                    v_tma_desc,
-                                    v,
-                                    physical_batch,
-                                    local_sequence_begin,
-                                    sequence_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<1>(&gmem_desc[kFusedGdrHGDesc],
-                                    &smem_desc[kFusedGdrHGDesc],
-                                    g_tma_desc,
-                                    g_cumsum,
-                                    physical_batch,
-                                    local_sequence_begin,
-                                    sequence_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<1>(&gmem_desc[kFusedGdrHBetaDesc],
-                                    &smem_desc[kFusedGdrHBetaDesc],
-                                    beta_tma_desc,
-                                    beta,
-                                    physical_batch,
-                                    local_sequence_begin,
-                                    sequence_len,
-                                    lane_id);
-        RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrHResolventDesc],
-                                    &smem_desc[kFusedGdrHResolventDesc],
-                                    resolvent_tma_desc,
-                                    resolvent,
-                                    physical_batch,
-                                    local_sequence_begin,
-                                    sequence_len,
-                                    lane_id);
-    }
-    __syncwarp();
-}
-
-template<class T>
-static __device__ __forceinline__ void FusedGdrHBuildSequenceDataTmaDescriptors(CUtensorMap*       gmem_desc,
-                                                                                CUtensorMap*       smem_desc,
-                                                                                const CUtensorMap& k_tma_desc,
-                                                                                const CUtensorMap& v_tma_desc,
-                                                                                const CUtensorMap& g_tma_desc,
-                                                                                const CUtensorMap& beta_tma_desc,
-                                                                                const CUtensorMap& resolvent_tma_desc,
-                                                                                StridedTensorBase<const T>     k,
-                                                                                StridedTensorBase<const T>     v,
-                                                                                StridedTensorBase<const float> g_cumsum,
-                                                                                StridedTensorBase<const float> beta,
-                                                                                StridedTensorBase<const T> resolvent,
-                                                                                int                        tid,
-                                                                                int local_sequence_begin,
-                                                                                int physical_batch,
-                                                                                int sequence_len)
-{
-    FusedGdrHBuildSequenceDataTmaDescriptors<kChunkSize>(gmem_desc,
-                                                         smem_desc,
-                                                         k_tma_desc,
-                                                         v_tma_desc,
-                                                         g_tma_desc,
-                                                         beta_tma_desc,
-                                                         resolvent_tma_desc,
-                                                         k,
-                                                         v,
-                                                         g_cumsum,
-                                                         beta,
-                                                         resolvent,
-                                                         tid,
-                                                         local_sequence_begin,
-                                                         physical_batch,
-                                                         sequence_len);
-}
-
-static __device__ __forceinline__ void FusedGdrHBuildTmaDescriptors(CUtensorMap*       gmem_desc,
-                                                                    CUtensorMap*       smem_desc,
-                                                                    const CUtensorMap& segment_state_tma_desc,
-                                                                    const CUtensorMap& segment_m_tma_desc,
-                                                                    int                tid)
-{
-    const int lane_id = tid & 31;
-    if (tid < 32) {
-        CopyTmaDescriptor(
-            &smem_desc[kFusedGdrHSegmentStateDesc - kFusedGdrHDataDescCount], &segment_state_tma_desc, lane_id, 32);
-        CopyTmaDescriptor(
-            &smem_desc[kFusedGdrHSegmentMDesc - kFusedGdrHDataDescCount], &segment_m_tma_desc, lane_id, 32);
+    template<int TokenAxis, class T>
+    static __device__ __forceinline__ void RebaseSequenceDescriptor(CUtensorMap*         output,
+                                                                    CUtensorMap*         scratch,
+                                                                    const CUtensorMap&   base_descriptor,
+                                                                    StridedTensorBase<T> tensor,
+                                                                    int                  physical_batch,
+                                                                    int                  local_token,
+                                                                    int                  sequence_len,
+                                                                    int                  lane)
+    {
+        CopyTmaDescriptor(scratch, &base_descriptor, lane, 32);
         __syncwarp();
-
-        for (int idx = 0; idx < kFusedGdrHTensorDescCount; ++idx) {
-            PublishTmaDescriptor(&gmem_desc[idx], &smem_desc[idx]);
+        if (lane == 0) {
+            const int64_t element_offset = static_cast<int64_t>(physical_batch) * tensor.batch_stride
+                                           + static_cast<int64_t>(local_token) * tensor.token_stride;
+            FusedGdrReplaceTmaAddressAndDim<TokenAxis>(scratch, tensor.ptr + element_offset, sequence_len);
         }
-    }
-    __syncwarp();
-}
-
-static __device__ __forceinline__ void
-CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
-                                        CUtensorMap*       smem_desc,
-                                        const CUtensorMap& cp_state_tma_desc,
-                                        const CUtensorMap& segment_state_tma_desc,
-                                        const CUtensorMap& segment_m_tma_desc,
-                                        int                tid)
-{
-    const int lane_id = tid & 31;
-    if (tid < 32) {
-        CopyTmaDescriptor(&smem_desc[kCorrectInitialStatesCpStateDesc], &cp_state_tma_desc, lane_id, 32);
-        CopyTmaDescriptor(&smem_desc[kCorrectInitialStatesSegmentStateDesc], &segment_state_tma_desc, lane_id, 32);
-        CopyTmaDescriptor(&smem_desc[kCorrectInitialStatesSegmentMDesc], &segment_m_tma_desc, lane_id, 32);
         __syncwarp();
-
-        for (int idx = 0; idx < kCorrectInitialStatesExternalStateDesc; ++idx) {
-            PublishTmaDescriptor(&gmem_desc[idx], &smem_desc[idx]);
-        }
+        PublishTmaDescriptor(output, scratch);
+        __syncwarp();
     }
-    __syncwarp();
-}
+
+    template<int ChunkSize, class T>
+    static __device__ __forceinline__ void
+    FusedGdrBuildSequenceDataTmaDescriptors(CUtensorMap*               gmem_desc,
+                                            CUtensorMap*               smem_desc,
+                                            const CUtensorMap&         q_tma_desc,
+                                            const CUtensorMap&         k_tma_desc,
+                                            const CUtensorMap&         v_tma_desc,
+                                            const CUtensorMap&         resolvent_tma_desc,
+                                            const CUtensorMap&         out_tma_desc,
+                                            StridedTensorBase<const T> q,
+                                            StridedTensorBase<const T> k,
+                                            StridedTensorBase<const T> v,
+                                            StridedTensorBase<const T> resolvent,
+                                            StridedTensorBase<T>       out,
+                                            int                        tid,
+                                            int                        local_seq_start,
+                                            int                        physical_batch,
+                                            int                        seq_len)
+    {
+        static_assert(kSupportedGdrChunkSize<ChunkSize>);
+        const int lane_id = tid & 31;
+        if (tid < 32) {
+            RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrQDesc],
+                                        &smem_desc[kFusedGdrQDesc],
+                                        q_tma_desc,
+                                        q,
+                                        physical_batch,
+                                        local_seq_start,
+                                        seq_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrKDesc],
+                                        &smem_desc[kFusedGdrKDesc],
+                                        k_tma_desc,
+                                        k,
+                                        physical_batch,
+                                        local_seq_start,
+                                        seq_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrVDesc],
+                                        &smem_desc[kFusedGdrVDesc],
+                                        v_tma_desc,
+                                        v,
+                                        physical_batch,
+                                        local_seq_start,
+                                        seq_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrResolventDesc],
+                                        &smem_desc[kFusedGdrResolventDesc],
+                                        resolvent_tma_desc,
+                                        resolvent,
+                                        physical_batch,
+                                        local_seq_start,
+                                        seq_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrOutDesc],
+                                        &smem_desc[kFusedGdrOutDesc],
+                                        out_tma_desc,
+                                        out,
+                                        physical_batch,
+                                        local_seq_start,
+                                        seq_len,
+                                        lane_id);
+        }
+        __syncwarp();
+    }
+
+    template<class T>
+    static __device__ __forceinline__ void
+    FusedGdrBuildSequenceDataTmaDescriptors(CUtensorMap*               gmem_desc,
+                                            CUtensorMap*               smem_desc,
+                                            const CUtensorMap&         q_tma_desc,
+                                            const CUtensorMap&         k_tma_desc,
+                                            const CUtensorMap&         v_tma_desc,
+                                            const CUtensorMap&         resolvent_tma_desc,
+                                            const CUtensorMap&         out_tma_desc,
+                                            StridedTensorBase<const T> q,
+                                            StridedTensorBase<const T> k,
+                                            StridedTensorBase<const T> v,
+                                            StridedTensorBase<const T> resolvent,
+                                            StridedTensorBase<T>       out,
+                                            int                        tid,
+                                            int                        local_seq_start,
+                                            int                        physical_batch,
+                                            int                        seq_len)
+    {
+        FusedGdrBuildSequenceDataTmaDescriptors<kChunkSize>(gmem_desc,
+                                                            smem_desc,
+                                                            q_tma_desc,
+                                                            k_tma_desc,
+                                                            v_tma_desc,
+                                                            resolvent_tma_desc,
+                                                            out_tma_desc,
+                                                            q,
+                                                            k,
+                                                            v,
+                                                            resolvent,
+                                                            out,
+                                                            tid,
+                                                            local_seq_start,
+                                                            physical_batch,
+                                                            seq_len);
+    }
+
+    template<int ChunkSize, class K>
+    static __device__ __forceinline__ void ChunkedKktBuildTmaDescriptors(CUtensorMap*               gmem_desc,
+                                                                         CUtensorMap*               smem_desc,
+                                                                         const CUtensorMap&         k_tma_desc,
+                                                                         const CUtensorMap&         resolvent_tma_desc,
+                                                                         StridedTensorBase<const K> k,
+                                                                         StridedTensorBase<K>       resolvent,
+                                                                         int                        tid,
+                                                                         int                        local_seq_start,
+                                                                         int                        physical_batch,
+                                                                         int                        seq_len)
+    {
+        static_assert(kSupportedGdrChunkSize<ChunkSize>);
+        const int lane_id = tid & 31;
+        if (tid < 32) {
+            RebaseSequenceDescriptor<3>(&gmem_desc[kChunkedKktKDesc],
+                                        &smem_desc[kChunkedKktKDesc],
+                                        k_tma_desc,
+                                        k,
+                                        physical_batch,
+                                        local_seq_start,
+                                        seq_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<2>(&gmem_desc[kChunkedKktResolventDesc],
+                                        &smem_desc[kChunkedKktResolventDesc],
+                                        resolvent_tma_desc,
+                                        resolvent,
+                                        physical_batch,
+                                        local_seq_start,
+                                        seq_len,
+                                        lane_id);
+        }
+        __syncwarp();
+    }
+
+    template<class K>
+    static __device__ __forceinline__ void ChunkedKktBuildTmaDescriptors(CUtensorMap*               gmem_desc,
+                                                                         CUtensorMap*               smem_desc,
+                                                                         const CUtensorMap&         k_tma_desc,
+                                                                         const CUtensorMap&         resolvent_tma_desc,
+                                                                         StridedTensorBase<const K> k,
+                                                                         StridedTensorBase<K>       resolvent,
+                                                                         int                        tid,
+                                                                         int                        local_seq_start,
+                                                                         int                        physical_batch,
+                                                                         int                        seq_len)
+    {
+        ChunkedKktBuildTmaDescriptors<kChunkSize>(gmem_desc,
+                                                  smem_desc,
+                                                  k_tma_desc,
+                                                  resolvent_tma_desc,
+                                                  k,
+                                                  resolvent,
+                                                  tid,
+                                                  local_seq_start,
+                                                  physical_batch,
+                                                  seq_len);
+    }
+
+    template<int ChunkSize, class T>
+    static __device__ __forceinline__ void
+    FusedGdrHBuildSequenceDataTmaDescriptors(CUtensorMap*                   gmem_desc,
+                                             CUtensorMap*                   smem_desc,
+                                             const CUtensorMap&             k_tma_desc,
+                                             const CUtensorMap&             v_tma_desc,
+                                             const CUtensorMap&             g_tma_desc,
+                                             const CUtensorMap&             beta_tma_desc,
+                                             const CUtensorMap&             resolvent_tma_desc,
+                                             StridedTensorBase<const T>     k,
+                                             StridedTensorBase<const T>     v,
+                                             StridedTensorBase<const float> g_cumsum,
+                                             StridedTensorBase<const float> beta,
+                                             StridedTensorBase<const T>     resolvent,
+                                             int                            tid,
+                                             int                            local_sequence_begin,
+                                             int                            physical_batch,
+                                             int                            sequence_len)
+    {
+        static_assert(kSupportedGdrChunkSize<ChunkSize>);
+        const int lane_id = tid & 31;
+        if (tid < 32) {
+            RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrHKDesc],
+                                        &smem_desc[kFusedGdrHKDesc],
+                                        k_tma_desc,
+                                        k,
+                                        physical_batch,
+                                        local_sequence_begin,
+                                        sequence_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrHVDesc],
+                                        &smem_desc[kFusedGdrHVDesc],
+                                        v_tma_desc,
+                                        v,
+                                        physical_batch,
+                                        local_sequence_begin,
+                                        sequence_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<1>(&gmem_desc[kFusedGdrHGDesc],
+                                        &smem_desc[kFusedGdrHGDesc],
+                                        g_tma_desc,
+                                        g_cumsum,
+                                        physical_batch,
+                                        local_sequence_begin,
+                                        sequence_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<1>(&gmem_desc[kFusedGdrHBetaDesc],
+                                        &smem_desc[kFusedGdrHBetaDesc],
+                                        beta_tma_desc,
+                                        beta,
+                                        physical_batch,
+                                        local_sequence_begin,
+                                        sequence_len,
+                                        lane_id);
+            RebaseSequenceDescriptor<2>(&gmem_desc[kFusedGdrHResolventDesc],
+                                        &smem_desc[kFusedGdrHResolventDesc],
+                                        resolvent_tma_desc,
+                                        resolvent,
+                                        physical_batch,
+                                        local_sequence_begin,
+                                        sequence_len,
+                                        lane_id);
+        }
+        __syncwarp();
+    }
+
+    template<class T>
+    static __device__ __forceinline__ void
+    FusedGdrHBuildSequenceDataTmaDescriptors(CUtensorMap*                   gmem_desc,
+                                             CUtensorMap*                   smem_desc,
+                                             const CUtensorMap&             k_tma_desc,
+                                             const CUtensorMap&             v_tma_desc,
+                                             const CUtensorMap&             g_tma_desc,
+                                             const CUtensorMap&             beta_tma_desc,
+                                             const CUtensorMap&             resolvent_tma_desc,
+                                             StridedTensorBase<const T>     k,
+                                             StridedTensorBase<const T>     v,
+                                             StridedTensorBase<const float> g_cumsum,
+                                             StridedTensorBase<const float> beta,
+                                             StridedTensorBase<const T>     resolvent,
+                                             int                            tid,
+                                             int                            local_sequence_begin,
+                                             int                            physical_batch,
+                                             int                            sequence_len)
+    {
+        FusedGdrHBuildSequenceDataTmaDescriptors<kChunkSize>(gmem_desc,
+                                                             smem_desc,
+                                                             k_tma_desc,
+                                                             v_tma_desc,
+                                                             g_tma_desc,
+                                                             beta_tma_desc,
+                                                             resolvent_tma_desc,
+                                                             k,
+                                                             v,
+                                                             g_cumsum,
+                                                             beta,
+                                                             resolvent,
+                                                             tid,
+                                                             local_sequence_begin,
+                                                             physical_batch,
+                                                             sequence_len);
+    }
+
+    static __device__ __forceinline__ void FusedGdrHBuildTmaDescriptors(CUtensorMap*       gmem_desc,
+                                                                        CUtensorMap*       smem_desc,
+                                                                        const CUtensorMap& segment_state_tma_desc,
+                                                                        const CUtensorMap& segment_m_tma_desc,
+                                                                        int                tid)
+    {
+        const int lane_id = tid & 31;
+        if (tid < 32) {
+            CopyTmaDescriptor(
+                &smem_desc[kFusedGdrHSegmentStateDesc - kFusedGdrHDataDescCount], &segment_state_tma_desc, lane_id, 32);
+            CopyTmaDescriptor(
+                &smem_desc[kFusedGdrHSegmentMDesc - kFusedGdrHDataDescCount], &segment_m_tma_desc, lane_id, 32);
+            __syncwarp();
+
+            for (int idx = 0; idx < kFusedGdrHTensorDescCount; ++idx) {
+                PublishTmaDescriptor(&gmem_desc[idx], &smem_desc[idx]);
+            }
+        }
+        __syncwarp();
+    }
+
+    static __device__ __forceinline__ void
+    CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
+                                            CUtensorMap*       smem_desc,
+                                            const CUtensorMap& cp_state_tma_desc,
+                                            const CUtensorMap& segment_state_tma_desc,
+                                            const CUtensorMap& segment_m_tma_desc,
+                                            int                tid)
+    {
+        const int lane_id = tid & 31;
+        if (tid < 32) {
+            CopyTmaDescriptor(&smem_desc[kCorrectInitialStatesCpStateDesc], &cp_state_tma_desc, lane_id, 32);
+            CopyTmaDescriptor(&smem_desc[kCorrectInitialStatesSegmentStateDesc], &segment_state_tma_desc, lane_id, 32);
+            CopyTmaDescriptor(&smem_desc[kCorrectInitialStatesSegmentMDesc], &segment_m_tma_desc, lane_id, 32);
+            __syncwarp();
+
+            for (int idx = 0; idx < kCorrectInitialStatesExternalStateDesc; ++idx) {
+                PublishTmaDescriptor(&gmem_desc[idx], &smem_desc[idx]);
+            }
+        }
+        __syncwarp();
+    }
 
     static constexpr int kSetupWarps               = 4;
     static constexpr int kSetupThreads             = kSetupWarps * 32;
@@ -766,8 +758,8 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
 
     CUTE_HOST_DEVICE static constexpr int DescriptorTaskCount(bool context_parallel, int sequence_num)
     {
-        return context_parallel ? ContextParallelFusedTaskBegin(sequence_num) + sequence_num
-                                : DirectFusedTaskBegin(sequence_num) + sequence_num;
+        return context_parallel ? ContextParallelFusedTaskBegin(sequence_num) + sequence_num :
+                                  DirectFusedTaskBegin(sequence_num) + sequence_num;
     }
 
     CUTE_HOST_DEVICE static constexpr int DirectFusedTaskBegin(int sequence_num)
@@ -802,31 +794,30 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
 
     static_assert(sizeof(SetupSharedStorage) == 1408);
 
-    static __device__ __forceinline__ void ScanGateQuad(
-        const float* __restrict__ g,
-        float* __restrict__ g_cumsum,
-        int flat_token0,
-        int valid_token_end,
-        int token_num,
-        int head0,
-        int hv,
-        int64_t gate_stride,
-        int64_t gate_batch_stride,
-        SetupSharedStorage& smem)
+    static __device__ __forceinline__ void ScanGateQuad(const float* __restrict__ g,
+                                                        float* __restrict__ g_cumsum,
+                                                        int                 flat_token0,
+                                                        int                 valid_token_end,
+                                                        int                 token_num,
+                                                        int                 head0,
+                                                        int                 hv,
+                                                        int64_t             gate_stride,
+                                                        int64_t             gate_batch_stride,
+                                                        SetupSharedStorage& smem)
     {
-        const int scan_tid = static_cast<int>(threadIdx.x);
-        const int warp     = scan_tid / 32;
-        const int lane     = scan_tid & 31;
-        const int flat_token = flat_token0 + scan_tid;
-        const bool valid_token = flat_token < valid_token_end;
+        const int  scan_tid       = static_cast<int>(threadIdx.x);
+        const int  warp           = scan_tid / 32;
+        const int  lane           = scan_tid & 31;
+        const int  flat_token     = flat_token0 + scan_tid;
+        const bool valid_token    = flat_token < valid_token_end;
         const bool full_head_quad = head0 + kSetupHeadsPerScan <= hv;
 
-        float4 prefix = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        float4  prefix      = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         int64_t gate_offset = 0;
         if (valid_token) {
             const int physical_batch = flat_token / token_num;
             const int physical_token = flat_token - physical_batch * token_num;
-            gate_offset = static_cast<int64_t>(physical_batch) * gate_batch_stride
+            gate_offset              = static_cast<int64_t>(physical_batch) * gate_batch_stride
                           + static_cast<int64_t>(physical_token) * gate_stride + head0;
             if (full_head_quad) {
                 prefix = *reinterpret_cast<const float4*>(g + gate_offset);
@@ -839,7 +830,7 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
             }
         }
 
-        #pragma unroll
+#pragma unroll
         for (int step = 1; step < 32; step <<= 1) {
             const float4 addend = make_float4(__shfl_up_sync(0xffffffffu, prefix.x, step),
                                               __shfl_up_sync(0xffffffffu, prefix.y, step),
@@ -882,69 +873,67 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
                 }
             }
         }
-
     }
 
-    static __device__ __forceinline__ void RunSetup(
-        bool context_parallel,
-        Sm90GdrTmaLayout layout,
-        const CUtensorMap* kkt_k_desc_ptr,
-        const CUtensorMap* kkt_resolvent_desc_ptr,
-        const CUtensorMap* fused_gdr_h_beta_desc_ptr,
-        const CUtensorMap* fused_gdr_h_g_desc_ptr,
-        const CUtensorMap* fused_q_desc_ptr,
-        const CUtensorMap* fused_k_desc_ptr,
-        const CUtensorMap* fused_v_desc_ptr,
-        const CUtensorMap* fused_resolvent_desc_ptr,
-        const CUtensorMap* fused_out_desc_ptr,
-        const CUtensorMap* fused_gdr_h_v_desc_ptr,
-        const CUtensorMap* fused_gdr_h_resolvent_desc_ptr,
-        const CUtensorMap* context_parallel_segment_state_desc_ptr,
-        const CUtensorMap* context_parallel_segment_m_desc_ptr,
-        const CUtensorMap* correct_initial_states_cp_state_desc_ptr,
-        const CUtensorMap* correct_initial_states_segment_state_desc_ptr,
-        const CUtensorMap* correct_initial_states_segment_m_desc_ptr,
-        StridedTensorBase<const __nv_bfloat16> q,
-        StridedTensorBase<const __nv_bfloat16> k,
-        StridedTensorBase<const __nv_bfloat16> v,
-        StridedTensorBase<const float> beta,
-        StridedTensorBase<__nv_bfloat16> resolvent,
-        StridedTensorBase<__nv_bfloat16> out,
-        const float* __restrict__ g,
-        float* __restrict__ g_cumsum,
-        const int32_t* __restrict__ q_offsets,
-        const bool* __restrict__ finished,
-        void* __restrict__ workspace,
-        int total_chunks,
-        int sequence_num,
-        int token_num,
-        int hv,
-        int total_segments,
-        int segment_chunks,
-        int segment_tokens,
-        int64_t gate_stride,
-        int64_t gate_batch_stride,
-        SetupSharedStorage& smem)
+    static __device__ __forceinline__ void RunSetup(bool               context_parallel,
+                                                    Sm90GdrTmaLayout   layout,
+                                                    const CUtensorMap* kkt_k_desc_ptr,
+                                                    const CUtensorMap* kkt_resolvent_desc_ptr,
+                                                    const CUtensorMap* fused_gdr_h_beta_desc_ptr,
+                                                    const CUtensorMap* fused_gdr_h_g_desc_ptr,
+                                                    const CUtensorMap* fused_q_desc_ptr,
+                                                    const CUtensorMap* fused_k_desc_ptr,
+                                                    const CUtensorMap* fused_v_desc_ptr,
+                                                    const CUtensorMap* fused_resolvent_desc_ptr,
+                                                    const CUtensorMap* fused_out_desc_ptr,
+                                                    const CUtensorMap* fused_gdr_h_v_desc_ptr,
+                                                    const CUtensorMap* fused_gdr_h_resolvent_desc_ptr,
+                                                    const CUtensorMap* context_parallel_segment_state_desc_ptr,
+                                                    const CUtensorMap* context_parallel_segment_m_desc_ptr,
+                                                    const CUtensorMap* correct_initial_states_cp_state_desc_ptr,
+                                                    const CUtensorMap* correct_initial_states_segment_state_desc_ptr,
+                                                    const CUtensorMap* correct_initial_states_segment_m_desc_ptr,
+                                                    StridedTensorBase<const __nv_bfloat16> q,
+                                                    StridedTensorBase<const __nv_bfloat16> k,
+                                                    StridedTensorBase<const __nv_bfloat16> v,
+                                                    StridedTensorBase<const float>         beta,
+                                                    StridedTensorBase<__nv_bfloat16>       resolvent,
+                                                    StridedTensorBase<__nv_bfloat16>       out,
+                                                    const float* __restrict__ g,
+                                                    float* __restrict__ g_cumsum,
+                                                    const int32_t* __restrict__ q_offsets,
+                                                    const bool* __restrict__ finished,
+                                                    void* __restrict__ workspace,
+                                                    int                 total_chunks,
+                                                    int                 sequence_num,
+                                                    int                 token_num,
+                                                    int                 hv,
+                                                    int                 total_segments,
+                                                    int                 segment_chunks,
+                                                    int                 segment_tokens,
+                                                    int64_t             gate_stride,
+                                                    int64_t             gate_batch_stride,
+                                                    SetupSharedStorage& smem)
     {
         static_assert(kDescriptorChunkSize == 64, "the unified setup kernel is specialized for chunk64");
 
-        const int warp        = static_cast<int>(threadIdx.x) / 32;
-        const int lane        = static_cast<int>(threadIdx.x) & 31;
-        const int linear_task = static_cast<int>(blockIdx.x);
-        const int head_quads  = (hv + kSetupHeadsPerScan - 1) / kSetupHeadsPerScan;
-        const int cumsum_tasks = total_chunks * head_quads;
-        const bool has_cumsum = linear_task < cumsum_tasks;
+        const int  warp         = static_cast<int>(threadIdx.x) / 32;
+        const int  lane         = static_cast<int>(threadIdx.x) & 31;
+        const int  linear_task  = static_cast<int>(blockIdx.x);
+        const int  head_quads   = (hv + kSetupHeadsPerScan - 1) / kSetupHeadsPerScan;
+        const int  cumsum_tasks = total_chunks * head_quads;
+        const bool has_cumsum   = linear_task < cumsum_tasks;
 
         if (warp < kSetupScanWarps) {
             if (!has_cumsum) {
                 return;
             }
 
-            const int global_chunk = linear_task / head_quads;
-            const int head0 = kSetupHeadsPerScan * (linear_task % head_quads);
-            int sequence_id = 0;
-            int local_chunk_id = global_chunk;
-            int sequence_segment_start = 0;
+            const int global_chunk           = linear_task / head_quads;
+            const int head0                  = kSetupHeadsPerScan * (linear_task % head_quads);
+            int       sequence_id            = 0;
+            int       local_chunk_id         = global_chunk;
+            int       sequence_segment_start = 0;
             if (lane == 0) {
                 for (int sequence = 0; sequence < sequence_num; ++sequence) {
                     const int sequence_begin = q_offsets[sequence];
@@ -962,23 +951,15 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
                     }
                 }
             }
-            sequence_id = __shfl_sync(0xffffffffu, sequence_id, 0);
-            local_chunk_id = __shfl_sync(0xffffffffu, local_chunk_id, 0);
+            sequence_id            = __shfl_sync(0xffffffffu, sequence_id, 0);
+            local_chunk_id         = __shfl_sync(0xffffffffu, local_chunk_id, 0);
             sequence_segment_start = __shfl_sync(0xffffffffu, sequence_segment_start, 0);
 
             const int sequence_begin = q_offsets[sequence_id];
             const int sequence_end   = q_offsets[sequence_id + 1];
-            const int chunk_begin = sequence_begin + local_chunk_id * kDescriptorChunkSize;
-            ScanGateQuad(g,
-                         g_cumsum,
-                         chunk_begin,
-                         sequence_end,
-                         token_num,
-                         head0,
-                         hv,
-                         gate_stride,
-                         gate_batch_stride,
-                         smem);
+            const int chunk_begin    = sequence_begin + local_chunk_id * kDescriptorChunkSize;
+            ScanGateQuad(
+                g, g_cumsum, chunk_begin, sequence_end, token_num, head0, hv, gate_stride, gate_batch_stride, smem);
 
             bool owns_segment_metadata = false;
             if (context_parallel) {
@@ -989,35 +970,35 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
             }
 
             const int local_segment = local_chunk_id / segment_chunks;
-            const int segment_id = sequence_segment_start + local_segment;
+            const int segment_id    = sequence_segment_start + local_segment;
             const int segment_begin = sequence_begin + local_segment * segment_tokens;
 
             if (head0 == 0 && static_cast<int>(threadIdx.x) == 0) {
-                auto* base = static_cast<char*>(workspace);
-                auto* cp_state = reinterpret_cast<float*>(base + layout.cp_state_offset);
-                auto* cp_state_ptrs = reinterpret_cast<int64_t*>(base + layout.cp_state_ptrs_offset);
-                auto* cp_q_offsets = reinterpret_cast<int32_t*>(base + layout.cp_q_offsets_offset);
-                auto* cp_source_indices = reinterpret_cast<int32_t*>(base + layout.cp_source_indices_offset);
-                auto* cp_finished = reinterpret_cast<bool*>(base + layout.cp_finished_offset);
+                auto* base                    = static_cast<char*>(workspace);
+                auto* cp_state                = reinterpret_cast<float*>(base + layout.cp_state_offset);
+                auto* cp_state_ptrs           = reinterpret_cast<int64_t*>(base + layout.cp_state_ptrs_offset);
+                auto* cp_q_offsets            = reinterpret_cast<int32_t*>(base + layout.cp_q_offsets_offset);
+                auto* cp_source_indices       = reinterpret_cast<int32_t*>(base + layout.cp_source_indices_offset);
+                auto* cp_finished             = reinterpret_cast<bool*>(base + layout.cp_finished_offset);
                 cp_q_offsets[segment_id]      = segment_begin;
                 cp_source_indices[segment_id] = sequence_id;
-                cp_state_ptrs[segment_id] = static_cast<int64_t>(reinterpret_cast<uintptr_t>(
+                cp_state_ptrs[segment_id]     = static_cast<int64_t>(reinterpret_cast<uintptr_t>(
                     cp_state + static_cast<int64_t>(segment_id) * hv * kHeadDim * kHeadDim));
-                cp_finished[segment_id] = finished[sequence_id];
+                cp_finished[segment_id]       = finished[sequence_id];
             }
             return;
         }
 
-        const int descriptor_warp = warp - kSetupScanWarps;
-        const int descriptor_task = linear_task * kSetupDescriptorsPerBlock + descriptor_warp;
+        const int descriptor_warp  = warp - kSetupScanWarps;
+        const int descriptor_task  = linear_task * kSetupDescriptorsPerBlock + descriptor_warp;
         const int descriptor_tasks = DescriptorTaskCount(context_parallel, sequence_num);
         if (descriptor_task >= descriptor_tasks) {
             return;
         }
 
-        auto* workspace_base = static_cast<char*>(workspace);
-        auto* kkt_desc = reinterpret_cast<CUtensorMap*>(workspace_base + layout.kkt_desc_offset);
-        CUtensorMap* scratch = smem.desc[descriptor_warp];
+        auto*        workspace_base = static_cast<char*>(workspace);
+        auto*        kkt_desc       = reinterpret_cast<CUtensorMap*>(workspace_base + layout.kkt_desc_offset);
+        CUtensorMap* scratch        = smem.desc[descriptor_warp];
         const StridedTensorBase<const __nv_bfloat16> resolvent_read{
             resolvent.ptr, resolvent.batch_stride, resolvent.token_stride};
         if (descriptor_task < sequence_num) {
@@ -1038,32 +1019,31 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
             const int sequence_end   = q_offsets[descriptor_task + 1];
             const int sequence_len   = sequence_end - sequence_begin;
             if (sequence_len > 0) {
-                const int physical_batch = sequence_begin / token_num;
+                const int physical_batch       = sequence_begin / token_num;
                 const int local_sequence_begin = sequence_begin - physical_batch * token_num;
-                ChunkedKktBuildTmaDescriptors<kDescriptorChunkSize>(
-                    &kkt_desc[descriptor_task * kKktTmaDescCount],
-                    scratch,
-                    *kkt_k_desc_ptr,
-                    *kkt_resolvent_desc_ptr,
-                    k,
-                    resolvent,
-                    lane,
-                    local_sequence_begin,
-                    physical_batch,
-                    sequence_len);
+                ChunkedKktBuildTmaDescriptors<kDescriptorChunkSize>(&kkt_desc[descriptor_task * kKktTmaDescCount],
+                                                                    scratch,
+                                                                    *kkt_k_desc_ptr,
+                                                                    *kkt_resolvent_desc_ptr,
+                                                                    k,
+                                                                    resolvent,
+                                                                    lane,
+                                                                    local_sequence_begin,
+                                                                    physical_batch,
+                                                                    sequence_len);
             }
             return;
         }
 
         if (!context_parallel) {
-            const int sequence = descriptor_task - DirectFusedTaskBegin(sequence_num);
+            const int sequence       = descriptor_task - DirectFusedTaskBegin(sequence_num);
             const int sequence_begin = q_offsets[sequence];
             const int sequence_end   = q_offsets[sequence + 1];
             const int sequence_len   = sequence_end - sequence_begin;
             if (sequence_len > 0) {
-                const int physical_batch = sequence_begin / token_num;
+                const int physical_batch       = sequence_begin / token_num;
                 const int local_sequence_begin = sequence_begin - physical_batch * token_num;
-                auto* direct_fused_desc =
+                auto*     direct_fused_desc =
                     reinterpret_cast<CUtensorMap*>(workspace_base + layout.direct_fused_desc_offset);
                 const auto direct_slices = MakeFusedGdrTmaDescriptorSlices(direct_fused_desc, sequence_num);
                 FusedGdrBuildSequenceDataTmaDescriptors<kDescriptorChunkSize>(
@@ -1087,8 +1067,7 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
             return;
         }
 
-        auto* fused_gdr_h_desc =
-            reinterpret_cast<CUtensorMap*>(workspace_base + layout.fused_gdr_h_desc_offset);
+        auto* fused_gdr_h_desc = reinterpret_cast<CUtensorMap*>(workspace_base + layout.fused_gdr_h_desc_offset);
         auto* correct_initial_states_desc =
             reinterpret_cast<CUtensorMap*>(workspace_base + layout.correct_initial_states_desc_offset);
         auto* context_parallel_fused_gdr_desc =
@@ -1102,12 +1081,12 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
 
         const int fused_gdr_h_tensor_task_begin = FusedGdrHTensorTaskBegin(sequence_num);
         if (descriptor_task < fused_gdr_h_tensor_task_begin) {
-            const int sequence = descriptor_task - FusedGdrHTaskBegin(sequence_num);
+            const int sequence       = descriptor_task - FusedGdrHTaskBegin(sequence_num);
             const int sequence_begin = q_offsets[sequence];
             const int sequence_end   = q_offsets[sequence + 1];
             const int sequence_len   = sequence_end - sequence_begin;
             if (sequence_len > 0) {
-                const int physical_batch = sequence_begin / token_num;
+                const int physical_batch       = sequence_begin / token_num;
                 const int local_sequence_begin = sequence_begin - physical_batch * token_num;
                 FusedGdrHBuildSequenceDataTmaDescriptors<kDescriptorChunkSize>(
                     &fused_gdr_h_slices.data[sequence * kFusedGdrHDataDescCount],
@@ -1149,12 +1128,12 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
             return;
         }
 
-        const int sequence = descriptor_task - ContextParallelFusedTaskBegin(sequence_num);
+        const int sequence       = descriptor_task - ContextParallelFusedTaskBegin(sequence_num);
         const int sequence_begin = q_offsets[sequence];
         const int sequence_end   = q_offsets[sequence + 1];
         const int sequence_len   = sequence_end - sequence_begin;
         if (sequence_len > 0) {
-            const int physical_batch = sequence_begin / token_num;
+            const int physical_batch       = sequence_begin / token_num;
             const int local_sequence_begin = sequence_begin - physical_batch * token_num;
             FusedGdrBuildSequenceDataTmaDescriptors<kDescriptorChunkSize>(
                 &context_parallel_fused_gdr_slices.data[sequence * kFusedGdrDataDescCount],
@@ -1175,51 +1154,56 @@ CorrectInitialStatesBuildTmaDescriptors(CUtensorMap*       gmem_desc,
                 sequence_len);
         }
     }
-
 };
 
 template<int ChunkSize = kChunkSize>
-__global__ __launch_bounds__(Sm90GdrTmaDescPrepare<ChunkSize>::kSetupThreads,
-                             Sm90GdrTmaDescPrepare<ChunkSize>::kSetupMinBlocks) void
-Sm90GdrPrepareAndCumsumKernel(
-    bool context_parallel,
-    Sm90GdrTmaLayout layout,
-    const __grid_constant__ CUtensorMap kkt_k_desc,
-    const __grid_constant__ CUtensorMap kkt_resolvent_desc,
-    const __grid_constant__ CUtensorMap fused_gdr_h_beta_desc,
-    const __grid_constant__ CUtensorMap fused_gdr_h_g_desc,
-    const __grid_constant__ CUtensorMap fused_q_desc,
-    const __grid_constant__ CUtensorMap fused_k_desc,
-    const __grid_constant__ CUtensorMap fused_v_desc,
-    const __grid_constant__ CUtensorMap fused_resolvent_desc,
-    const __grid_constant__ CUtensorMap fused_out_desc,
-    const __grid_constant__ CUtensorMap fused_gdr_h_v_desc,
-    const __grid_constant__ CUtensorMap fused_gdr_h_resolvent_desc,
-    const __grid_constant__ CUtensorMap context_parallel_segment_state_desc,
-    const __grid_constant__ CUtensorMap context_parallel_segment_m_desc,
-    const __grid_constant__ CUtensorMap correct_initial_states_cp_state_desc,
-    const __grid_constant__ CUtensorMap correct_initial_states_segment_state_desc,
-    const __grid_constant__ CUtensorMap correct_initial_states_segment_m_desc,
-    StridedTensorBase<const __nv_bfloat16> q,
-    StridedTensorBase<const __nv_bfloat16> k,
-    StridedTensorBase<const __nv_bfloat16> v,
-    StridedTensorBase<const float> beta,
-    StridedTensorBase<__nv_bfloat16> resolvent,
-    StridedTensorBase<__nv_bfloat16> out,
-    const float* __restrict__ g,
-    float* __restrict__ g_cumsum,
-    const int32_t* __restrict__ q_offsets,
-    const bool* __restrict__ finished,
-    void* __restrict__ workspace,
-    int total_chunks,
-    int sequence_num,
-    int token_num,
-    int hv,
-    int total_segments,
-    int segment_chunks,
-    int segment_tokens,
-    int64_t gate_stride,
-    int64_t gate_batch_stride)
+__global__ __launch_bounds__(
+    Sm90GdrTmaDescPrepare<ChunkSize>::kSetupThreads,
+    Sm90GdrTmaDescPrepare<ChunkSize>::
+        kSetupMinBlocks) void Sm90GdrPrepareAndCumsumKernel(bool                                context_parallel,
+                                                            Sm90GdrTmaLayout                    layout,
+                                                            const __grid_constant__ CUtensorMap kkt_k_desc,
+                                                            const __grid_constant__ CUtensorMap kkt_resolvent_desc,
+                                                            const __grid_constant__ CUtensorMap fused_gdr_h_beta_desc,
+                                                            const __grid_constant__ CUtensorMap fused_gdr_h_g_desc,
+                                                            const __grid_constant__ CUtensorMap fused_q_desc,
+                                                            const __grid_constant__ CUtensorMap fused_k_desc,
+                                                            const __grid_constant__ CUtensorMap fused_v_desc,
+                                                            const __grid_constant__ CUtensorMap fused_resolvent_desc,
+                                                            const __grid_constant__ CUtensorMap fused_out_desc,
+                                                            const __grid_constant__ CUtensorMap fused_gdr_h_v_desc,
+                                                            const __grid_constant__ CUtensorMap
+                                                                fused_gdr_h_resolvent_desc,
+                                                            const __grid_constant__ CUtensorMap
+                                                                context_parallel_segment_state_desc,
+                                                            const __grid_constant__ CUtensorMap
+                                                                context_parallel_segment_m_desc,
+                                                            const __grid_constant__ CUtensorMap
+                                                                correct_initial_states_cp_state_desc,
+                                                            const __grid_constant__ CUtensorMap
+                                                                correct_initial_states_segment_state_desc,
+                                                            const __grid_constant__ CUtensorMap
+                                                                correct_initial_states_segment_m_desc,
+                                                            StridedTensorBase<const __nv_bfloat16> q,
+                                                            StridedTensorBase<const __nv_bfloat16> k,
+                                                            StridedTensorBase<const __nv_bfloat16> v,
+                                                            StridedTensorBase<const float>         beta,
+                                                            StridedTensorBase<__nv_bfloat16>       resolvent,
+                                                            StridedTensorBase<__nv_bfloat16>       out,
+                                                            const float* __restrict__ g,
+                                                            float* __restrict__ g_cumsum,
+                                                            const int32_t* __restrict__ q_offsets,
+                                                            const bool* __restrict__ finished,
+                                                            void* __restrict__ workspace,
+                                                            int     total_chunks,
+                                                            int     sequence_num,
+                                                            int     token_num,
+                                                            int     hv,
+                                                            int     total_segments,
+                                                            int     segment_chunks,
+                                                            int     segment_tokens,
+                                                            int64_t gate_stride,
+                                                            int64_t gate_batch_stride)
 {
     using Kernel = Sm90GdrTmaDescPrepare<ChunkSize>;
     __shared__ typename Kernel::SetupSharedStorage smem;

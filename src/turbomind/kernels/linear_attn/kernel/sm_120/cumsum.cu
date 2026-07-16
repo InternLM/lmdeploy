@@ -36,9 +36,9 @@ template<int ChunkSize, int HeadsPerBlock>
 __global__ void ParallelChunkLocalCumsumKernel(const float* __restrict__ g,
                                                const int32_t* __restrict__ q_offsets,
                                                float* __restrict__ g_cumsum,
-                                               int sequence_num,
-                                               int token_num,
-                                               int hv,
+                                               int     sequence_num,
+                                               int     token_num,
+                                               int     hv,
                                                int64_t gate_stride,
                                                int64_t gate_batch_stride)
 {
@@ -75,9 +75,9 @@ __global__ void ParallelChunkLocalCumsumKernel(const float* __restrict__ g,
     const int remaining   = seq_end - token0;
     const int token_count = remaining < ChunkSize ? remaining : ChunkSize;
 
-    float value = 0.0f;
-    int64_t offset = 0;
-    const bool valid = hv_id < hv && token_lane < token_count;
+    float      value  = 0.0f;
+    int64_t    offset = 0;
+    const bool valid  = hv_id < hv && token_lane < token_count;
     if (valid) {
         const int flat_token = token0 + token_lane;
         const int batch_id   = flat_token / token_num;
@@ -109,25 +109,24 @@ void LaunchChunkCumsum(const core::Tensor& g,
 {
     static_assert(ChunkSize == 32);
 
-    const float* g_ptr = g.data<float>();
-    float* out_ptr     = g_cumsum.data<float>();
+    const float* g_ptr   = g.data<float>();
+    float*       out_ptr = g_cumsum.data<float>();
 
     if (problem.total_chunks == 0) {
         return;
     }
 
     constexpr int kHeadsPerBlock = ChunkCumsumPolicy<ChunkSize>::kHeadsPerBlock;
-    constexpr int kThreads = ChunkSize * kHeadsPerBlock;
-    dim3 grid(problem.total_chunks, cdiv(problem.hv, kHeadsPerBlock));
-    ParallelChunkLocalCumsumKernel<ChunkSize, kHeadsPerBlock><<<grid, kThreads, 0, stream>>>(
-        g_ptr,
-        q_offsets.data<int32_t>(),
-        out_ptr,
-        problem.sequence_num,
-        problem.token_num,
-        problem.hv,
-        problem.gate_stride,
-        problem.gate_batch_stride);
+    constexpr int kThreads       = ChunkSize * kHeadsPerBlock;
+    dim3          grid(problem.total_chunks, cdiv(problem.hv, kHeadsPerBlock));
+    ParallelChunkLocalCumsumKernel<ChunkSize, kHeadsPerBlock><<<grid, kThreads, 0, stream>>>(g_ptr,
+                                                                                             q_offsets.data<int32_t>(),
+                                                                                             out_ptr,
+                                                                                             problem.sequence_num,
+                                                                                             problem.token_num,
+                                                                                             problem.hv,
+                                                                                             problem.gate_stride,
+                                                                                             problem.gate_batch_stride);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -137,9 +136,9 @@ namespace detail {
 
 void LaunchChunk32LocalCumsum(const core::Tensor& g,
                               const core::Tensor& q_offsets,
-                              core::Tensor& g_cumsum,
-                              const Problem& problem,
-                              cudaStream_t stream)
+                              core::Tensor&       g_cumsum,
+                              const Problem&      problem,
+                              cudaStream_t        stream)
 {
     LaunchChunkCumsum<32>(g, q_offsets, g_cumsum, problem, stream);
 }

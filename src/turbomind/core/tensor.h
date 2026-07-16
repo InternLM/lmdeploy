@@ -13,7 +13,8 @@ namespace turbomind::core {
 
 class Tensor {
 public:
-    struct PreserveBufferCapacity {};
+    struct PreserveBufferCapacity {
+    };
 
     Tensor() = default;
 

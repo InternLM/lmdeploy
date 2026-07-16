@@ -6,7 +6,6 @@ from itertools import product
 import torch
 import torch.nn.functional as F
 
-
 HEAD_DIM = 128
 CHUNK_SIZE = 64
 
@@ -380,8 +379,10 @@ def run_cases(
 
 
 def input_work(case: InputCase) -> int:
-    return case.total_tokens * case.heads.hv if case.varlen else case.real_batch_size * case.total_tokens * case.heads.hv
-
+    if case.varlen:
+        return case.total_tokens * case.heads.hv
+    else:
+        return case.real_batch_size * case.total_tokens * case.heads.hv
 
 def case_chunks(run: RunCase) -> int:
     layout = run.input.layout

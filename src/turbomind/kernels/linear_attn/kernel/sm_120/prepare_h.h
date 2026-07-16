@@ -1,4 +1,5 @@
-// Inspired by https://github.com/QwenLM/FlashQLA/blob/60f81453143e724bcaf3fc7921e71e7328f6ebcd/flash_qla/ops/gated_delta_rule/chunk/hopper/prepare_h.py
+// Inspired by
+// https://github.com/QwenLM/FlashQLA/blob/60f81453143e724bcaf3fc7921e71e7328f6ebcd/flash_qla/ops/gated_delta_rule/chunk/hopper/prepare_h.py
 
 #pragma once
 
@@ -43,19 +44,18 @@ constexpr size_t Sm120FusedGdrHSharedBytes()
     return sizeof(Sm120FusedGdrHSharedStorage<T, BlockDv>);
 }
 
-static_assert(Sm120FusedGdrHSharedBytes<__nv_bfloat16, kContextParallelGdrBlockDv>()
-              <= kFusedGdrMaxDynamicSharedBytes);
+static_assert(Sm120FusedGdrHSharedBytes<__nv_bfloat16, kContextParallelGdrBlockDv>() <= kFusedGdrMaxDynamicSharedBytes);
 
 template<class T, int BlockDv>
 __global__ __launch_bounds__(kFusedGdrThreads,
                              1) void Sm120FusedGdrHKernel(const CUtensorMap* __restrict__ tma_desc_workspace,
-                                                            const int32_t* __restrict__ q_offsets,
-                                                            const int32_t* __restrict__ cp_source_indices,
-                                                            const int32_t* __restrict__ cp_q_offsets,
-                                                            const bool* __restrict__ cp_finished,
-                                                            int sequence_num,
-                                                            int hq,
-                                                            int hv)
+                                                          const int32_t* __restrict__ q_offsets,
+                                                          const int32_t* __restrict__ cp_source_indices,
+                                                          const int32_t* __restrict__ cp_q_offsets,
+                                                          const bool* __restrict__ cp_finished,
+                                                          int sequence_num,
+                                                          int hq,
+                                                          int hv)
 {
     static_assert(BlockDv == kContextParallelGdrBlockDv);
     extern __shared__ __align__(1024) unsigned char smem_raw[];
@@ -78,25 +78,25 @@ __global__ __launch_bounds__(kFusedGdrThreads,
     if (seq_len <= 0 || cp_finished[segment_id]) {
         return;
     }
-    const int token_base = segment_begin - sequence_begin;
-    constexpr int kDvTilesPerHead = kHeadDim / BlockDv;
-    const int     head_tile       = static_cast<int>(blockIdx.y);
-    const int     value_head      = head_tile / kDvTilesPerHead;
-    const int     dv_tile         = head_tile - value_head * kDvTilesPerHead;
-    const int     dv0             = dv_tile * BlockDv;
-    const int     qk_head         = value_head / (hv / hq);
-    const int     value_tma_coord     = FusedGdrValueTmaCoord(value_head, dv0);
-    const int     resolvent_tma_coord = FusedGdrResolventTmaCoord<kChunk32Size>(value_head);
-    const int     gate_tma_coord      = FusedGdrGateTmaCoord(value_head);
-    const int     qk_tma_head_coord  = qk_head;
-    const int     chunks             = CeilDivDevice(seq_len, kChunk32Size);
-    const auto    slices             = MakeFusedGdrHTmaDescriptorSlices(tma_desc_workspace, sequence_num);
-    const auto*   data_desc          = slices.data + sequence_id * kFusedGdrHDataDescCount;
-    const auto*   k_tma_desc         = &data_desc[kFusedGdrHKDesc];
-    const auto*   v_tma_desc         = &data_desc[kFusedGdrHVDesc];
-    const auto*   g_tma_desc         = &data_desc[kFusedGdrHGDesc];
-    const auto*   beta_tma_desc      = &data_desc[kFusedGdrHBetaDesc];
-    const auto*   resolvent_tma_desc = &data_desc[kFusedGdrHResolventDesc];
+    const int     token_base             = segment_begin - sequence_begin;
+    constexpr int kDvTilesPerHead        = kHeadDim / BlockDv;
+    const int     head_tile              = static_cast<int>(blockIdx.y);
+    const int     value_head             = head_tile / kDvTilesPerHead;
+    const int     dv_tile                = head_tile - value_head * kDvTilesPerHead;
+    const int     dv0                    = dv_tile * BlockDv;
+    const int     qk_head                = value_head / (hv / hq);
+    const int     value_tma_coord        = FusedGdrValueTmaCoord(value_head, dv0);
+    const int     resolvent_tma_coord    = FusedGdrResolventTmaCoord<kChunk32Size>(value_head);
+    const int     gate_tma_coord         = FusedGdrGateTmaCoord(value_head);
+    const int     qk_tma_head_coord      = qk_head;
+    const int     chunks                 = CeilDivDevice(seq_len, kChunk32Size);
+    const auto    slices                 = MakeFusedGdrHTmaDescriptorSlices(tma_desc_workspace, sequence_num);
+    const auto*   data_desc              = slices.data + sequence_id * kFusedGdrHDataDescCount;
+    const auto*   k_tma_desc             = &data_desc[kFusedGdrHKDesc];
+    const auto*   v_tma_desc             = &data_desc[kFusedGdrHVDesc];
+    const auto*   g_tma_desc             = &data_desc[kFusedGdrHGDesc];
+    const auto*   beta_tma_desc          = &data_desc[kFusedGdrHBetaDesc];
+    const auto*   resolvent_tma_desc     = &data_desc[kFusedGdrHResolventDesc];
     const auto*   segment_state_tma_desc = slices.segment_state;
     const auto*   segment_m_tma_desc     = slices.segment_m;
 
@@ -142,8 +142,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
             const int     token0            = token_base;
             auto&         early0            = smem.early[0];
 
-            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
-                &smem.early_ready_mbar[0], kChunk32Size * kEarlyBytesPerRow);
+            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.early_ready_mbar[0],
+                                                                           kChunk32Size * kEarlyBytesPerRow);
             cute::SM90_TMA_LOAD_2D::copy(
                 v_tma_desc, &smem.early_ready_mbar[0], kTmaNoCacheHint, &early0.v[0][0], value_tma_coord, token0);
             cute::SM90_TMA_LOAD_2D::copy(resolvent_tma_desc,
@@ -165,8 +165,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
                                          gate_tma_coord,
                                          token0);
 
-            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
-                &smem.k_ready_mbar[0], kChunk32Size * kQkTmaBytesPerRow);
+            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.k_ready_mbar[0],
+                                                                           kChunk32Size * kQkTmaBytesPerRow);
             cute::SM90_TMA_LOAD_4D::copy(k_tma_desc,
                                          &smem.k_ready_mbar[0],
                                          kTmaNoCacheHint,
@@ -205,8 +205,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
                             early_free_phase1 ^= 1;
                         }
                     }
-                    cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
-                        &smem.early_ready_mbar[next_buf], kChunk32Size * kEarlyBytesPerRow);
+                    cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.early_ready_mbar[next_buf],
+                                                                                   kChunk32Size * kEarlyBytesPerRow);
                     cute::SM90_TMA_LOAD_2D::copy(v_tma_desc,
                                                  &smem.early_ready_mbar[next_buf],
                                                  kTmaNoCacheHint,
@@ -242,8 +242,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
                             k_free_phase1 ^= 1;
                         }
                     }
-                    cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(
-                        &smem.k_ready_mbar[next_buf], kChunk32Size * kQkTmaBytesPerRow);
+                    cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.k_ready_mbar[next_buf],
+                                                                                   kChunk32Size * kQkTmaBytesPerRow);
                     cute::SM90_TMA_LOAD_4D::copy(k_tma_desc,
                                                  &smem.k_ready_mbar[next_buf],
                                                  kTmaNoCacheHint,
@@ -278,15 +278,15 @@ __global__ __launch_bounds__(kFusedGdrThreads,
 
         using MmaAtom = typename FusedGdrMmaTraits<T>::Atom;
         using Mma     = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
-                                       cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
-                                       cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
+                                   cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
+                                   cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
 
-        Mma mma;
+        Mma  mma;
         auto thr_mma = mma.get_thread_slice(role_tid);
-        auto s_state_stage = cute::make_tensor(
-            cute::make_smem_ptr(&smem.vd[0][0]),
-            cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
-                              cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
+        auto s_state_stage =
+            cute::make_tensor(cute::make_smem_ptr(&smem.vd[0][0]),
+                              cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
+                                                cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
         auto c_state  = cute::make_identity_tensor(cute::shape(s_state_stage));
         auto tCsState = thr_mma.partition_C(s_state_stage);
         auto tCcState = thr_mma.partition_C(c_state);
@@ -310,9 +310,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
             if (gate_warp_tid < kFusedGdrGateRowsPerWarp) {
 #pragma unroll
                 for (int pass = 0; pass < kSm120FusedGdrGatePasses; ++pass) {
-                    const int row = pass * kFusedGdrGateWriterThreads
-                                    + gate_warp * kFusedGdrGateRowsPerWarp
-                                    + gate_warp_tid;
+                    const int row =
+                        pass * kFusedGdrGateWriterThreads + gate_warp * kFusedGdrGateRowsPerWarp + gate_warp_tid;
                     const float g_value = early.gate_stage[0][row][gate_lane];
                     const float g_exp   = FastExp(g_value);
                     early.g_exp[row]    = g_exp;
@@ -338,8 +337,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
             cutlass::arch::NamedBarrier::sync(2 * kFusedGdrRoleThreads, kFusedGdrBarrierHVdReady);
             Element* k_stage  = reinterpret_cast<Element*>(&smem.k_stage[data_phase][0][0]);
             Element* vd_stage = reinterpret_cast<Element*>(&early.v[0][0]);
-            auto s_k_t  = cute::make_tensor(cute::make_smem_ptr(k_stage), Sm120FusedGdrQkTransposedLayout());
-            auto s_vd_t = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVTLayout<BlockDv>());
+            auto     s_k_t    = cute::make_tensor(cute::make_smem_ptr(k_stage), Sm120FusedGdrQkTransposedLayout());
+            auto     s_vd_t   = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVTLayout<BlockDv>());
 
             FusedGdrStateUpdateFragmentFromScaledVd<T>(role_tid, mma, s_k_t, s_vd_t, tCrState);
             cute::arrive_barrier(smem.early_free_bar[data_phase]);
@@ -352,10 +351,10 @@ __global__ __launch_bounds__(kFusedGdrThreads,
             cute::wait_barrier(smem.k_free_bar[final_data_phase], final_k_phase);
         }
         auto* state_stage_ptr = &smem.vd[0][0];
-        auto s_final_stage = cute::make_tensor(
-            cute::make_smem_ptr(state_stage_ptr),
-            cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
-                              cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
+        auto  s_final_stage =
+            cute::make_tensor(cute::make_smem_ptr(state_stage_ptr),
+                              cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
+                                                cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
         FusedGdrStoreStateFragmentFloat(tCrState, tCcState, s_final_stage);
         FusedGdrMmaSyncNamed<kFusedGdrBarrierStateUpdate>();
         cute::arrive_barrier(smem.h_final_ready_bar);
@@ -367,15 +366,15 @@ __global__ __launch_bounds__(kFusedGdrThreads,
 
         using MmaAtom = typename FusedGdrMmaTraits<T>::Atom;
         using Mma     = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
-                                       cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
-                                       cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
+                                   cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
+                                   cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
 
-        Mma mma;
+        Mma  mma;
         auto thr_mma = mma.get_thread_slice(role_tid);
-        auto s_state_stage = cute::make_tensor(
-            cute::make_smem_ptr(&smem.vd[0][0]),
-            cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
-                              cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
+        auto s_state_stage =
+            cute::make_tensor(cute::make_smem_ptr(&smem.vd[0][0]),
+                              cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
+                                                cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
         auto c_state  = cute::make_identity_tensor(cute::shape(s_state_stage));
         auto tCsState = thr_mma.partition_C(s_state_stage);
         auto tCcState = thr_mma.partition_C(c_state);
@@ -412,8 +411,8 @@ __global__ __launch_bounds__(kFusedGdrThreads,
             cutlass::arch::NamedBarrier::sync(2 * kFusedGdrRoleThreads, kFusedGdrBarrierMVdReady);
             Element* k_stage  = reinterpret_cast<Element*>(&smem.k_stage[data_phase][0][0]);
             Element* vd_stage = reinterpret_cast<Element*>(&early.a[0][0]);
-            auto s_k_t  = cute::make_tensor(cute::make_smem_ptr(k_stage), Sm120FusedGdrQkTransposedLayout());
-            auto s_vd_t = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVTLayout<BlockDv>());
+            auto     s_k_t    = cute::make_tensor(cute::make_smem_ptr(k_stage), Sm120FusedGdrQkTransposedLayout());
+            auto     s_vd_t   = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVTLayout<BlockDv>());
 
             FusedGdrStateUpdateFragmentFromScaledVd<T>(role_tid, mma, s_k_t, s_vd_t, tCrState);
             cute::arrive_barrier(smem.early_free_bar[data_phase]);
@@ -426,10 +425,10 @@ __global__ __launch_bounds__(kFusedGdrThreads,
             cute::wait_barrier(smem.k_free_bar[final_data_phase], final_k_phase);
         }
         auto* state_stage_ptr = reinterpret_cast<float*>(&smem.k_stage[0][0][0]);
-        auto s_final_stage = cute::make_tensor(
-            cute::make_smem_ptr(state_stage_ptr),
-            cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
-                              cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
+        auto  s_final_stage =
+            cute::make_tensor(cute::make_smem_ptr(state_stage_ptr),
+                              cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
+                                                cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{})));
         FusedGdrStoreStateFragmentFloat(tCrState, tCcState, s_final_stage);
         FusedGdrMmaSyncNamed<kFusedGdrBarrierOutputState>();
         cute::arrive_barrier(smem.m_final_ready_bar);
@@ -448,32 +447,33 @@ __global__ __launch_bounds__(kFusedGdrThreads,
             const int stage_phase    = (chunk >> 1) & 1;
             auto&     early          = smem.early[data_phase];
             Element*  k_stage        = reinterpret_cast<Element*>(&smem.k_stage[data_phase][0][0]);
-            auto s_k_smem = cute::make_tensor(cute::make_smem_ptr(k_stage), Sm120FusedGdrQkLayout());
-            auto s_a_smem = cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&early.a[0][0])),
+            auto      s_k_smem       = cute::make_tensor(cute::make_smem_ptr(k_stage), Sm120FusedGdrQkLayout());
+            auto      s_a_smem = cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&early.a[0][0])),
                                               Sm120FusedGdrSquareLayout());
-            Element* w_pack = reinterpret_cast<Element*>(&early.v[0][0]);
+            Element*  w_pack   = reinterpret_cast<Element*>(&early.v[0][0]);
 
             cute::wait_barrier(smem.early_ready_mbar[data_phase], stage_phase);
             cute::wait_barrier(smem.state_ready_mbar, chunk & 1);
 
             const int gate_lane = value_head & 3;
-            using MmaAtom = typename FusedGdrMmaTraits<T>::Atom;
-            using Mma     = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
-                                           cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
-                                           cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
+            using MmaAtom       = typename FusedGdrMmaTraits<T>::Atom;
+            using Mma           = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
+                                       cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
+                                       cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
 
             cute::wait_barrier(smem.k_ready_mbar[data_phase], stage_phase);
 
 #pragma unroll
             for (int pass = 0; pass < 2; ++pass) {
-                Mma  mma;
-                auto thr_mma = mma.get_thread_slice(role_tid);
+                Mma      mma;
+                auto     thr_mma     = mma.get_thread_slice(role_tid);
                 Element* state_stage = reinterpret_cast<Element*>(&smem.vd[0][0]);
                 Element* w_stage     = pass == 0 ? w_pack : state_stage;
                 Element* vd_stage =
                     pass == 0 ? reinterpret_cast<Element*>(&early.v[0][0]) : reinterpret_cast<Element*>(&early.a[0][0]);
                 auto s_w_row = cute::make_tensor(cute::make_smem_ptr(w_stage), Sm120FusedGdrVRowLayout<BlockDv>());
-                auto s_state = cute::make_tensor(cute::make_smem_ptr(state_stage), Sm120FusedGdrStateTLayout<BlockDv>());
+                auto s_state =
+                    cute::make_tensor(cute::make_smem_ptr(state_stage), Sm120FusedGdrStateTLayout<BlockDv>());
                 auto s_k_state = cute::make_tensor(
                     cute::make_smem_ptr(&smem.vd[0][0]),
                     cute::make_layout(cute::make_shape(cute::Int<kChunk32Size>{}, cute::Int<BlockDv>{}),
@@ -486,12 +486,12 @@ __global__ __launch_bounds__(kFusedGdrThreads,
                 auto tCrW = cute::make_fragment_like<Element>(tCrC);
                 auto smem_tiled_copy_C =
                     cute::make_tiled_copy_C(cute::Copy_Atom<cute::DefaultCopy, Element>{}, thr_mma);
-                auto smem_thr_copy_C = smem_tiled_copy_C.get_thread_slice(role_tid);
-                auto tCsWStore       = smem_thr_copy_C.partition_D(s_w_row);
-                auto tCrWStoreView   = smem_thr_copy_C.retile_S(tCrW);
-                auto s_w             = cute::make_tensor(cute::make_smem_ptr(w_stage), Sm120FusedGdrVTLayout<BlockDv>());
-                auto s_vd            = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVRowLayout<BlockDv>());
-                auto tCsVdStore      = smem_thr_copy_C.partition_D(s_vd);
+                auto        smem_thr_copy_C = smem_tiled_copy_C.get_thread_slice(role_tid);
+                auto        tCsWStore       = smem_thr_copy_C.partition_D(s_w_row);
+                auto        tCrWStoreView   = smem_thr_copy_C.retile_S(tCrW);
+                auto        s_w  = cute::make_tensor(cute::make_smem_ptr(w_stage), Sm120FusedGdrVTLayout<BlockDv>());
+                auto        s_vd = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVRowLayout<BlockDv>());
+                auto        tCsVdStore = smem_thr_copy_C.partition_D(s_vd);
                 const float last_g_exp = early.g_exp[last_row];
 
                 if (pass == 0) {
@@ -575,7 +575,7 @@ __global__ __launch_bounds__(kFusedGdrThreads,
                     const float state_v     = early.g_exp[row] * tCrC(i);
                     const float input_v     = pass == 0 ? static_cast<float>(tCrW(i)) : 0.0f;
                     const float input_scale = early.g[row] * early.gate_stage[1][row][gate_lane];
-                    tCrW(i) = Element(CastFromFloat<T>((input_v - state_v) * input_scale));
+                    tCrW(i)                 = Element(CastFromFloat<T>((input_v - state_v) * input_scale));
                 }
                 cute::copy(smem_tiled_copy_C, tCrWStoreView, tCsWStore);
                 FusedGdrMmaSyncNamed<kFusedGdrBarrierValueU>();
@@ -629,21 +629,21 @@ void SetFusedGdrHSharedMemoryLimit(size_t smem_bytes)
 
 template<int BlockDv>
 void LaunchSm120FusedGdrHTyped(const core::Tensor&        k,
-                                 const core::Tensor&        v,
-                                 const core::Tensor&        g_cumsum,
-                                 const core::Tensor&        beta,
-                                 const core::Tensor&        resolvent,
-                                 core::Tensor&              segment_state,
-                                 core::Tensor&              segment_m,
-                                 const Problem&             problem,
-                                 const ContextParallelPlan& cp,
-                                 const core::Tensor&        q_offsets,
-                                 const core::Tensor&        cp_source_indices,
-                                 const core::Tensor&        cp_q_offsets,
-                                 const core::Tensor&        cp_finished,
-                                 const core::Tensor&        cp_fallback,
-                                 void*                      tma_desc_workspace,
-                                 cudaStream_t               stream)
+                               const core::Tensor&        v,
+                               const core::Tensor&        g_cumsum,
+                               const core::Tensor&        beta,
+                               const core::Tensor&        resolvent,
+                               core::Tensor&              segment_state,
+                               core::Tensor&              segment_m,
+                               const Problem&             problem,
+                               const ContextParallelPlan& cp,
+                               const core::Tensor&        q_offsets,
+                               const core::Tensor&        cp_source_indices,
+                               const core::Tensor&        cp_q_offsets,
+                               const core::Tensor&        cp_finished,
+                               const core::Tensor&        cp_fallback,
+                               void*                      tma_desc_workspace,
+                               cudaStream_t               stream)
 {
     static_assert(BlockDv == kContextParallelGdrBlockDv);
     static_cast<void>(k);

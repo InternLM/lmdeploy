@@ -16,17 +16,17 @@
 namespace turbomind {
 
 template<class T>
-__global__ void ComputeBetaGKernel(float*       beta,
-                                   float*       g,
-                                   int64_t      gate_token_stride,
-                                   const T*     b,
-                                   int64_t      b_token_stride,
-                                   const T*     a,
-                                   int64_t      a_token_stride,
-                                   const T*     A_log,
-                                   const T*     dt_bias,
-                                   int          token_num,
-                                   int          hv)
+__global__ void ComputeBetaGKernel(float*   beta,
+                                   float*   g,
+                                   int64_t  gate_token_stride,
+                                   const T* b,
+                                   int64_t  b_token_stride,
+                                   const T* a,
+                                   int64_t  a_token_stride,
+                                   const T* A_log,
+                                   const T* dt_bias,
+                                   int      token_num,
+                                   int      hv)
 {
     const int64_t index = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
     const int64_t total = int64_t(token_num) * gate_token_stride;
@@ -40,9 +40,9 @@ __global__ void ComputeBetaGKernel(float*       beta,
         g[index]    = 0.f;
         return;
     }
-    const float b_value = static_cast<float>(b[token * b_token_stride + head]);
-    const float a_value = static_cast<float>(a[token * a_token_stride + head]);
-    beta[index] = 1.f / (1.f + expf(-b_value));
+    const float b_value  = static_cast<float>(b[token * b_token_stride + head]);
+    const float a_value  = static_cast<float>(a[token * a_token_stride + head]);
+    beta[index]          = 1.f / (1.f + expf(-b_value));
     const float x        = a_value + static_cast<float>(dt_bias[head]);
     const float softplus = x > 20.f ? x : log1pf(expf(x));
     g[index]             = -expf(static_cast<float>(A_log[head])) * softplus;
@@ -56,11 +56,11 @@ void ComputeBetaG(core::Tensor&       beta,
                   const core::Tensor& dt_bias,
                   cudaStream_t        stream)
 {
-    const int token_num = static_cast<int>(b.shape(0));
-    const int hv        = static_cast<int>(A_log.size());
+    const int     token_num     = static_cast<int>(b.shape(0));
+    const int     hv            = static_cast<int>(A_log.size());
     constexpr int kBlockThreads = 256;
     const int64_t gate_capacity = int64_t(token_num) * beta.stride(1);
-    const int gate_blocks = static_cast<int>((gate_capacity + kBlockThreads - 1) / kBlockThreads);
+    const int     gate_blocks   = static_cast<int>((gate_capacity + kBlockThreads - 1) / kBlockThreads);
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
@@ -91,17 +91,15 @@ __global__ void L2NormalizeQKKernel(T*      q,
                                     int     hq,
                                     float   epsilon)
 {
-    constexpr int kHeadDim = 128;
-    const int lane = threadIdx.x;
-    const int work = int(blockIdx.x);
-    const int batch = work / (token_num * hq);
-    const int token_head = work % (token_num * hq);
-    const int token = token_head / hq;
-    const int head  = token_head % hq;
-    T* q_ptr = q + int64_t(batch) * q_batch_stride + int64_t(token) * q_token_stride
-               + int64_t(head) * kHeadDim;
-    T* k_ptr = k + int64_t(batch) * k_batch_stride + int64_t(token) * k_token_stride
-               + int64_t(head) * kHeadDim;
+    constexpr int kHeadDim   = 128;
+    const int     lane       = threadIdx.x;
+    const int     work       = int(blockIdx.x);
+    const int     batch      = work / (token_num * hq);
+    const int     token_head = work % (token_num * hq);
+    const int     token      = token_head / hq;
+    const int     head       = token_head % hq;
+    T* q_ptr = q + int64_t(batch) * q_batch_stride + int64_t(token) * q_token_stride + int64_t(head) * kHeadDim;
+    T* k_ptr = k + int64_t(batch) * k_batch_stride + int64_t(token) * k_token_stride + int64_t(head) * kHeadDim;
 
     float q_values[4];
     float k_values[4];
@@ -125,16 +123,16 @@ __global__ void L2NormalizeQKKernel(T*      q,
     PRAGMA_UNROLL
     for (int i = 0; i < 4; ++i) {
         const int d = lane + i * WARP_SIZE;
-        q_ptr[d] = T(q_values[i] * q_inv);
-        k_ptr[d] = T(k_values[i] * k_inv);
+        q_ptr[d]    = T(q_values[i] * q_inv);
+        k_ptr[d]    = T(k_values[i] * k_inv);
     }
 }
 
 void invokeL2NormalizeQK(core::Tensor& q, core::Tensor& k, float epsilon, cudaStream_t stream)
 {
     constexpr int kWarpThreads = WARP_SIZE;
-    const int work = static_cast<int>(q.shape(0) * q.shape(1) * q.shape(2));
-    auto invoke = [&](auto t) {
+    const int     work         = static_cast<int>(q.shape(0) * q.shape(1) * q.shape(2));
+    auto          invoke       = [&](auto t) {
         using T = decltype(t);
         L2NormalizeQKKernel<T><<<work, kWarpThreads, 0, stream>>>(q.data<T>(),
                                                                   q.stride(0),

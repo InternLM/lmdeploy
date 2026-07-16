@@ -13,16 +13,11 @@ class GdrKernel {
 public:
     virtual ~GdrKernel() = default;
 
-    virtual const GdrKernelSpec& spec() const noexcept = 0;
-    virtual const char* name() const noexcept = 0;
-    virtual bool Match(const Operation&, const PlanningContext&) const = 0;
-    virtual bool Plan(const Operation&, const PlanningContext&, delta_rule::Plan*) const = 0;
-    virtual void PrepareState(const core::Tensor&,
-                              core::Tensor&,
-                              int,
-                              int,
-                              const delta_rule::Plan&,
-                              cudaStream_t) const
+    virtual const GdrKernelSpec& spec() const noexcept                                                   = 0;
+    virtual const char*          name() const noexcept                                                   = 0;
+    virtual bool                 Match(const Operation&, const PlanningContext&) const                   = 0;
+    virtual bool                 Plan(const Operation&, const PlanningContext&, delta_rule::Plan*) const = 0;
+    virtual void PrepareState(const core::Tensor&, core::Tensor&, int, int, const delta_rule::Plan&, cudaStream_t) const
     {
     }
     virtual void Run(const Arguments&, const delta_rule::Plan&, cudaStream_t) const = 0;
@@ -30,8 +25,8 @@ public:
 
 class GdrKernelRegistry {
 public:
-    bool Add(std::unique_ptr<GdrKernel> kernel);
-    const GdrKernel* Find(const Operation&, const PlanningContext&) const;
+    bool                      Add(std::unique_ptr<GdrKernel> kernel);
+    const GdrKernel*          Find(const Operation&, const PlanningContext&) const;
     static GdrKernelRegistry& instance();
 
 private:

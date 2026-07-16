@@ -36,7 +36,7 @@ inline int Sm90GdrTargetCtas(const Problem& problem)
 
 inline int Sm90DirectFusedBlockDv(const Problem& problem)
 {
-    const int grid_size = problem.sequence_num * problem.hv;
+    const int grid_size   = problem.sequence_num * problem.hv;
     const int target_ctas = Sm90GdrTargetCtas(problem);
     if (grid_size >= target_ctas) {
         return 128;
@@ -64,42 +64,42 @@ inline int FusedChunkGdrBlockDv(const Problem& problem, bool context_parallel)
 }
 
 struct Sm90DirectChunkWorkspace {
-    core::Tensor g_cumsum;
-    core::Tensor resolvent;
+    core::Tensor     g_cumsum;
+    core::Tensor     resolvent;
     Sm90GdrTmaLayout layout;
-    void* kkt_tma_desc{};
-    void* fused_tma_desc{};
+    void*            kkt_tma_desc{};
+    void*            fused_tma_desc{};
 };
 
 struct Sm90ContextParallelWorkspace {
-    core::Tensor g_cumsum;
-    core::Tensor resolvent;
-    core::Tensor cp_state;
-    core::Tensor segment_state;
-    core::Tensor segment_m;
-    core::Tensor cp_q_offsets;
-    core::Tensor cp_source_indices;
-    core::Tensor cp_sequence_starts;
-    core::Tensor cp_state_ptrs;
-    core::Tensor cp_finished;
-    core::Tensor cp_fallback;
+    core::Tensor     g_cumsum;
+    core::Tensor     resolvent;
+    core::Tensor     cp_state;
+    core::Tensor     segment_state;
+    core::Tensor     segment_m;
+    core::Tensor     cp_q_offsets;
+    core::Tensor     cp_source_indices;
+    core::Tensor     cp_sequence_starts;
+    core::Tensor     cp_state_ptrs;
+    core::Tensor     cp_finished;
+    core::Tensor     cp_fallback;
     Sm90GdrTmaLayout layout;
-    void* kkt_tma_desc{};
-    void* fused_gdr_h_tma_desc{};
-    void* correct_initial_states_tma_desc{};
-    void* context_parallel_fused_gdr_tma_desc{};
+    void*            kkt_tma_desc{};
+    void*            fused_gdr_h_tma_desc{};
+    void*            correct_initial_states_tma_desc{};
+    void*            context_parallel_fused_gdr_tma_desc{};
 };
 
 inline Problem MakeContextParallelProblem(const Problem& problem, const ContextParallelPlan& cp)
 {
-    Problem result = problem;
+    Problem result      = problem;
     result.sequence_num = cp.total_segments;
     result.total_chunks = cp.total_chunks;
     return result;
 }
 
-bool PlanSm90Operation(const GdrKernelSpec&, const Operation&, const PlanningContext&, Plan*);
-Sm90DirectChunkWorkspace PartitionSm90DirectChunkWorkspace(const Arguments&, const Plan&);
+bool                         PlanSm90Operation(const GdrKernelSpec&, const Operation&, const PlanningContext&, Plan*);
+Sm90DirectChunkWorkspace     PartitionSm90DirectChunkWorkspace(const Arguments&, const Plan&);
 Sm90ContextParallelWorkspace PartitionSm90ContextParallelWorkspace(const Arguments&, const Plan&);
 
 void LaunchSm90Recurrent(const core::Tensor&,
@@ -115,12 +115,7 @@ void LaunchSm90Recurrent(const core::Tensor&,
                          int64_t,
                          DataType,
                          cudaStream_t);
-void PrepareSm90RecurrentStateTmaDescriptors(const core::Tensor&,
-                                             core::Tensor&,
-                                             int,
-                                             int,
-                                             const Plan&,
-                                             cudaStream_t);
+void PrepareSm90RecurrentStateTmaDescriptors(const core::Tensor&, core::Tensor&, int, int, const Plan&, cudaStream_t);
 void LaunchSm90KktSolve(const core::Tensor&,
                         const core::Tensor&,
                         const core::Tensor&,

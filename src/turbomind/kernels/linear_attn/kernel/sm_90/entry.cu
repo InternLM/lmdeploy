@@ -22,19 +22,19 @@ void LaunchSm90FusedChunk(const core::Tensor& q,
                           const core::Tensor& state_ptrs,
                           const core::Tensor& q_offsets,
                           const core::Tensor& finished,
-                          core::Tensor& out,
-                          const Problem& problem,
-                          int64_t state_layer_offset,
-                          DataType state_dtype,
+                          core::Tensor&       out,
+                          const Problem&      problem,
+                          int64_t             state_layer_offset,
+                          DataType            state_dtype,
                           const core::Tensor* data_q_offsets,
                           const core::Tensor* cp_source_indices,
                           const core::Tensor* cp_state_ptrs,
-                          int data_sequence_num,
-                          void* tma_desc_workspace,
-                          cudaStream_t stream)
+                          int                 data_sequence_num,
+                          void*               tma_desc_workspace,
+                          cudaStream_t        stream)
 {
     const bool context_parallel = cp_source_indices != nullptr;
-    const int block_dv = FusedChunkGdrBlockDv(problem, context_parallel);
+    const int  block_dv         = FusedChunkGdrBlockDv(problem, context_parallel);
     if (state_dtype == kFloat32) {
         if (block_dv == 32) {
             LaunchSm90FusedGdrFwdRegistered<float, 32>(q,
@@ -159,54 +159,54 @@ void LaunchSm90FusedChunk(const core::Tensor& q,
     }
 }
 
-void LaunchSm90FusedGdrH(const core::Tensor& k,
-                         const core::Tensor& v,
-                         const core::Tensor& g_cumsum,
-                         const core::Tensor& beta,
-                         const core::Tensor& resolvent,
-                         core::Tensor& segment_state,
-                         core::Tensor& segment_m,
-                         const Problem& problem,
+void LaunchSm90FusedGdrH(const core::Tensor&        k,
+                         const core::Tensor&        v,
+                         const core::Tensor&        g_cumsum,
+                         const core::Tensor&        beta,
+                         const core::Tensor&        resolvent,
+                         core::Tensor&              segment_state,
+                         core::Tensor&              segment_m,
+                         const Problem&             problem,
                          const ContextParallelPlan& cp,
-                         const core::Tensor& q_offsets,
-                         const core::Tensor& cp_source_indices,
-                         const core::Tensor& cp_q_offsets,
-                         const core::Tensor& cp_finished,
-                         core::Tensor&       cp_fallback,
-                         void* tma_desc_workspace,
-                         cudaStream_t stream)
+                         const core::Tensor&        q_offsets,
+                         const core::Tensor&        cp_source_indices,
+                         const core::Tensor&        cp_q_offsets,
+                         const core::Tensor&        cp_finished,
+                         core::Tensor&              cp_fallback,
+                         void*                      tma_desc_workspace,
+                         cudaStream_t               stream)
 {
     LaunchSm90FusedGdrHTyped<kFusedGdrHBlockDv>(k,
-                                                 v,
-                                                 g_cumsum,
-                                                 beta,
-                                                 resolvent,
-                                                 segment_state,
-                                                 segment_m,
-                                                 problem,
-                                                 cp,
-                                                 q_offsets,
-                                                 cp_source_indices,
-                                                 cp_q_offsets,
-                                                 cp_finished,
-                                                 cp_fallback,
-                                                 tma_desc_workspace,
-                                                 stream);
+                                                v,
+                                                g_cumsum,
+                                                beta,
+                                                resolvent,
+                                                segment_state,
+                                                segment_m,
+                                                problem,
+                                                cp,
+                                                q_offsets,
+                                                cp_source_indices,
+                                                cp_q_offsets,
+                                                cp_finished,
+                                                cp_fallback,
+                                                tma_desc_workspace,
+                                                stream);
 }
 
-void LaunchSm90CorrectInitialStates(core::Tensor& cp_state,
-                                    const core::Tensor& state_ptrs,
-                                    const core::Tensor& finished,
-                                    const core::Tensor& cp_sequence_starts,
-                                    const core::Tensor& segment_state,
-                                    const core::Tensor& segment_m,
-                                    const core::Tensor& cp_fallback,
-                                    const Problem& problem,
+void LaunchSm90CorrectInitialStates(core::Tensor&              cp_state,
+                                    const core::Tensor&        state_ptrs,
+                                    const core::Tensor&        finished,
+                                    const core::Tensor&        cp_sequence_starts,
+                                    const core::Tensor&        segment_state,
+                                    const core::Tensor&        segment_m,
+                                    const core::Tensor&        cp_fallback,
+                                    const Problem&             problem,
                                     const ContextParallelPlan& cp,
-                                    int64_t state_layer_offset,
-                                    DataType state_dtype,
-                                    void* tma_desc_workspace,
-                                    cudaStream_t stream)
+                                    int64_t                    state_layer_offset,
+                                    DataType                   state_dtype,
+                                    void*                      tma_desc_workspace,
+                                    cudaStream_t               stream)
 {
     if (state_dtype == kFloat32) {
         LaunchSm90CorrectInitialStatesTyped<float>(cp_state,
@@ -426,19 +426,17 @@ public:
         return context.arch == 900 && detail::MatchesGdrSpec(spec(), operation, context);
     }
 
-    bool Plan(const Operation& operation,
-              const PlanningContext& context,
-              delta_rule::Plan* plan) const override
+    bool Plan(const Operation& operation, const PlanningContext& context, delta_rule::Plan* plan) const override
     {
         return detail::PlanSm90Operation(spec(), operation, context, plan);
     }
 
-    void PrepareState(const core::Tensor& state_ptrs,
-                      core::Tensor& state_tma_descs,
-                      int layer_groups,
-                      int layers_per_block,
+    void PrepareState(const core::Tensor&     state_ptrs,
+                      core::Tensor&           state_tma_descs,
+                      int                     layer_groups,
+                      int                     layers_per_block,
                       const delta_rule::Plan& plan,
-                      cudaStream_t stream) const override
+                      cudaStream_t            stream) const override
     {
         if constexpr (Mode == GdrMode::kRecurrent) {
             detail::PrepareSm90RecurrentStateTmaDescriptors(
