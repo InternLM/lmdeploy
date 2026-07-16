@@ -356,3 +356,91 @@ class TestFusedMoeBlockedFP8:
         norm_out = output / out_max
         norm_gt = gt / gt_max
         torch.testing.assert_close(norm_out, norm_gt, atol=0.05, rtol=1e-3)
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
+@torch.inference_mode()
+def test_fused_moe_blocked_fp8_compact_down_matches_fused_moe_with_local_experts():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
+        _should_use_compact_blocked_fp8_moe_down,
+        fused_moe_blocked_fp8,
+    )
+    from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
+
+    torch.manual_seed(0)
+    device = torch.device('cuda')
+    dtype = torch.float16
+    quant_dtype = torch.float8_e4m3fn
+    group_size = 128
+
+    seq_len = 4096
+    in_size = 128
+    hidden_size = 256
+    out_size = 128
+    num_experts = 512
+    local_experts = 256
+    expert_offset = 128
+    top_k = 10
+    renormalize = True
+
+    hidden_states, states_quanted, states_scale = _make_A(seq_len,
+                                                          in_size,
+                                                          group_size=group_size,
+                                                          out_dtype=quant_dtype,
+                                                          device=device)
+    w1, w1_quanted, w1_scale, _ = _make_B(local_experts,
+                                          in_size,
+                                          hidden_size,
+                                          group_size=group_size,
+                                          out_dtype=quant_dtype,
+                                          device=device)
+    w2, w2_quanted, w2_scale, _ = _make_B(local_experts,
+                                          hidden_size // 2,
+                                          out_size,
+                                          group_size=group_size,
+                                          out_dtype=quant_dtype,
+                                          device=device)
+
+    router_logits = torch.rand(seq_len, num_experts, dtype=dtype, device=device)
+    routing_weights = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
+    topk_weights, topk_ids = torch.topk(routing_weights, top_k, dim=-1)
+
+    assert _should_use_compact_blocked_fp8_moe_down(states_quanted,
+                                                   states_scale,
+                                                   w1_quanted,
+                                                   w1_scale,
+                                                   w2_quanted,
+                                                   w2_scale,
+                                                   topk_ids,
+                                                   num_experts,
+                                                   expert_offset)
+
+    gt = fused_moe(hidden_states.to(dtype),
+                   w1.to(dtype),
+                   w2.to(dtype),
+                   topk_weights,
+                   topk_ids,
+                   topk=top_k,
+                   expert_offset=expert_offset,
+                   num_experts=num_experts,
+                   renormalize=renormalize)
+    output = fused_moe_blocked_fp8(states_quanted,
+                                   states_scale,
+                                   w1_quanted,
+                                   w1_scale,
+                                   w2_quanted,
+                                   w2_scale,
+                                   topk_weights,
+                                   topk_ids,
+                                   topk=top_k,
+                                   expert_offset=expert_offset,
+                                   num_experts=num_experts,
+                                   renormalize=renormalize)
+
+    out_max = output.abs().max()
+    gt_max = gt.abs().max()
+    assert (out_max - gt_max).abs() / out_max < 0.05
+
+    norm_out = output / out_max
+    norm_gt = gt / gt_max
+    torch.testing.assert_close(norm_out, norm_gt, atol=0.05, rtol=1e-3)

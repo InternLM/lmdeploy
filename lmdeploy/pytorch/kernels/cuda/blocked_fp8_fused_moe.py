@@ -533,7 +533,7 @@ def _compact_blocked_fp8_moe_down_min_cta_ratio(local_experts: int, out_features
 
 def _supports_compact_blocked_fp8_moe(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
                                       w1_scale: torch.Tensor, w2: torch.Tensor, w2_scale: torch.Tensor,
-                                      topk_ids: torch.Tensor, num_experts: int):
+                                      topk_ids: torch.Tensor, num_experts: int, expert_offset: int = 0):
     """Return whether this blocked-FP8 MoE call can use compact scheduling."""
     fp8_dtypes = (torch.float8_e4m3fn, )
     if hasattr(torch, 'float8_e5m2'):
@@ -559,7 +559,11 @@ def _supports_compact_blocked_fp8_moe(input: torch.Tensor, input_scale: torch.Te
         return False
     if w1.size(0) != w2.size(0):
         return False
-    if w1.size(0) != num_experts:
+    if expert_offset < 0:
+        return False
+    if w1.size(0) > num_experts:
+        return False
+    if expert_offset + w1.size(0) > num_experts:
         return False
     if torch.cuda.get_device_capability(input.device)[0] < 9:
         return False
@@ -582,12 +586,13 @@ def _should_use_compact_blocked_fp8_moe_down_by_shape(num_tokens: int, num_route
 
 def _should_use_compact_blocked_fp8_moe_down(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
                                              w1_scale: torch.Tensor, w2: torch.Tensor, w2_scale: torch.Tensor,
-                                             topk_ids: torch.Tensor, num_experts: int):
+                                             topk_ids: torch.Tensor, num_experts: int, expert_offset: int = 0):
     """Return whether blocked-FP8 MoE down projection should use compact
     scheduling."""
     if w1.size(0) < 256:
         return False
-    if not _supports_compact_blocked_fp8_moe(input, input_scale, w1, w1_scale, w2, w2_scale, topk_ids, num_experts):
+    if not _supports_compact_blocked_fp8_moe(input, input_scale, w1, w1_scale, w2, w2_scale, topk_ids, num_experts,
+                                             expert_offset):
         return False
     return _should_use_compact_blocked_fp8_moe_down_by_shape(input.size(0), topk_ids.numel(), num_experts, w1.size(0),
                                                              w2.size(1))
@@ -621,7 +626,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     topk_weights = _renormalize(topk_weights, renormalize)
     gate_moe_cfg, down_moe_cfg = _origin_blocked_fp8_moe_configs(M, topk_ids.numel(), num_experts, E)
     use_compact_down = _should_use_compact_blocked_fp8_moe_down(input, input_scale, w1, w1_scale, w2, w2_scale,
-                                                                topk_ids, num_experts)
+                                                                topk_ids, num_experts, expert_offset)
     if use_compact_down:
         compact_down_cfg = _compact_blocked_fp8_moe_config(topk_ids.numel(), num_experts)
         sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets = _get_sorted_idx_blocks(
