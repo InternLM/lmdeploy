@@ -179,16 +179,6 @@ endif()
 
 
 set(CXX_STD "17" CACHE STRING "C++ standard")
-# enable gold linker for binary and .so
-if(NOT MSVC)
-  find_program(GOLD_PATH ld.gold REQUIRED)
-  if(NOT GOLD_PATH)
-    message(FATAL_ERROR "GNU gold linker is required but not found. "
-                         "Please install binutils-gold package.")
-  endif()
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold")
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=gold")
-endif()
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
 set(CUSPARSELT_PATH "" CACHE STRING "cuSPARSELt path")

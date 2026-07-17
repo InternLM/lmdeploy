@@ -62,8 +62,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
-      PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.8
+      PLAT_NAME: manylinux_2_28_x86_64
+      DOCKER_TAG: manylinux_2_28-cuda12.8
       OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
     steps:
       - name: Free disk space
