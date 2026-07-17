@@ -327,6 +327,32 @@ def fused_moe_kernel_launcher(
     )
 
 
+@triton.jit
+def _fill_block_meta_kernel(
+    ExpStart,
+    Counts,
+    BlockEnd,
+    BlockExpertIds,
+    BlockOffsets,
+    expert_offset: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_B: tl.constexpr,
+):
+    """Build compact routed-block metadata from per-expert token counts."""
+    local_exp = tl.program_id(0)
+    actual_exp = local_exp + expert_offset
+    count = tl.load(Counts + actual_exp)
+    n_blocks = tl.cdiv(count, BLOCK_SIZE_M)
+    block_end = tl.load(BlockEnd + local_exp)
+    block_base = block_end - n_blocks
+    exp_start = tl.load(ExpStart + actual_exp)
+
+    offs = tl.arange(0, BLOCK_B)
+    mask = offs < n_blocks
+    tl.store(BlockExpertIds + block_base + offs, local_exp, mask=mask)
+    tl.store(BlockOffsets + block_base + offs, exp_start + offs * BLOCK_SIZE_M, mask=mask)
+
+
 
 def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
     """Get sorted idx with 2-phase Triton kernels (4 kernel launches total)."""
@@ -363,6 +389,63 @@ def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
     )
 
     return sorted_idx, exp_start, exp_end
+
+
+def _get_sorted_idx_blocks(topk_ids: torch.Tensor,
+                           num_experts: int,
+                           local_num_experts: int,
+                           expert_offset: int,
+                           block_m: int):
+    """Get sorted route indices plus compact routed-block metadata."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+
+    flatten_topk_ids = topk_ids.flatten()
+    num_routes = flatten_topk_ids.numel()
+
+    BLOCK_SIZE = triton.next_power_of_2(min(num_experts, 256))
+    grid = (triton.cdiv(num_routes, BLOCK_SIZE),)
+
+    counts = torch.zeros(num_experts, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    local_pos = torch.empty(num_routes, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    _sorted_idx_phase1_kernel[grid](flatten_topk_ids, counts, local_pos, num_routes, BLOCK_SIZE=BLOCK_SIZE)
+
+    exp_end = torch.cumsum(counts, dim=0)
+
+    sorted_idx = torch.empty(num_routes, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    exp_start = torch.empty(num_experts, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    BLOCK_E = triton.next_power_of_2(num_experts)
+    _sorted_idx_phase2_kernel[grid](
+        flatten_topk_ids, local_pos, exp_end, counts,
+        sorted_idx, exp_start, num_routes, num_experts,
+        BLOCK_SIZE=BLOCK_SIZE, BLOCK_E=BLOCK_E,
+    )
+
+    local_counts = counts[expert_offset:expert_offset + local_num_experts]
+    local_block_counts = torch.div(local_counts + block_m - 1, block_m, rounding_mode='floor')
+    block_end = torch.cumsum(local_block_counts, dim=0)
+
+    max_blocks = triton.cdiv(num_routes, block_m) + local_num_experts
+    block_expert_ids = torch.empty(max_blocks, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    block_offsets = torch.empty(max_blocks, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    block_b = triton.next_power_of_2(max(1, triton.cdiv(num_routes, block_m)))
+    _fill_block_meta_kernel[(local_num_experts,)](
+        exp_start,
+        counts,
+        block_end,
+        block_expert_ids,
+        block_offsets,
+        expert_offset=expert_offset,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_B=block_b,
+    )
+
+    return sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets
+
 
 _get_sorted_idx = _get_sorted_idx_triton
 

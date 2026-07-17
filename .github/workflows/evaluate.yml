@@ -62,7 +62,7 @@ jobs:
       OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
     steps:
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
