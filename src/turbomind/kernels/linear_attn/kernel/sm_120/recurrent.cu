@@ -487,16 +487,16 @@ struct Sm120GdrRecurrent {
                                                const float* __restrict__ beta,
                                                const bool* __restrict__ finished,
                                                const CUtensorMap* __restrict__ state_tma_descs,
-                                               int     total_tiles,
-                                               int     batch_count,
-                                               int     hq,
-                                               int     hv,
-                                               int64_t gate_batch_stride,
-                                               int64_t out_batch_stride,
-                                               int64_t out_head_stride,
-                                               int     num_head_groups,
-                                               int     heads_per_block,
-                                               int     state_layer,
+                                               int            total_tiles,
+                                               int            batch_count,
+                                               int            hq,
+                                               int            hv,
+                                               int64_t        gate_batch_stride,
+                                               int64_t        out_batch_stride,
+                                               int64_t        out_head_stride,
+                                               int            num_head_groups,
+                                               int            heads_per_block,
+                                               int            state_layer,
                                                unsigned char* smem_raw)
     {
         static_assert(BlockDv == kRecurrentBlockDv);
@@ -639,26 +639,27 @@ struct Sm120GdrRecurrent {
 };
 
 template<int BlockDv, class StateT>
-__global__ __launch_bounds__(Sm120GdrRecurrent<BlockDv, StateT>::kThreads,
-                             Sm120GdrRecurrent<BlockDv, StateT>::kMinBlocks)
-    void Sm120GdrRecurrentKernel(const __grid_constant__ CUtensorMap q_tma_desc,
-                            const __grid_constant__ CUtensorMap k_tma_desc,
-                            const __grid_constant__ CUtensorMap v_tma_desc,
-                            __nv_bfloat16* __restrict__ out,
-                            const float* __restrict__ g,
-                            const float* __restrict__ beta,
-                            const bool* __restrict__ finished,
-                            const CUtensorMap* __restrict__ state_tma_descs,
-                            int     total_tiles,
-                            int     batch_count,
-                            int     hq,
-                            int     hv,
-                            int64_t gate_batch_stride,
-                            int64_t out_batch_stride,
-                            int64_t out_head_stride,
-                            int     num_head_groups,
-                            int     heads_per_block,
-                            int     state_layer)
+__global__ __launch_bounds__(
+    Sm120GdrRecurrent<BlockDv, StateT>::kThreads,
+    Sm120GdrRecurrent<BlockDv,
+                      StateT>::kMinBlocks) void Sm120GdrRecurrentKernel(const __grid_constant__ CUtensorMap q_tma_desc,
+                                                                        const __grid_constant__ CUtensorMap k_tma_desc,
+                                                                        const __grid_constant__ CUtensorMap v_tma_desc,
+                                                                        __nv_bfloat16* __restrict__ out,
+                                                                        const float* __restrict__ g,
+                                                                        const float* __restrict__ beta,
+                                                                        const bool* __restrict__ finished,
+                                                                        const CUtensorMap* __restrict__ state_tma_descs,
+                                                                        int     total_tiles,
+                                                                        int     batch_count,
+                                                                        int     hq,
+                                                                        int     hv,
+                                                                        int64_t gate_batch_stride,
+                                                                        int64_t out_batch_stride,
+                                                                        int64_t out_head_stride,
+                                                                        int     num_head_groups,
+                                                                        int     heads_per_block,
+                                                                        int     state_layer)
 {
     extern __shared__ __align__(1024) unsigned char smem_raw[];
     Sm120GdrRecurrent<BlockDv, StateT>::Run(q_tma_desc,
@@ -685,12 +686,10 @@ __global__ __launch_bounds__(Sm120GdrRecurrent<BlockDv, StateT>::kThreads,
 template<int BlockDv, class StateT>
 void SetRecurrentGdrSharedMemoryLimit()
 {
-    using Kernel = Sm120GdrRecurrent<BlockDv, StateT>;
-    auto kernel = Sm120GdrRecurrentKernel<BlockDv, StateT>;
-    static const cudaError_t status =
-        cudaFuncSetAttribute(kernel,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(Kernel::kSharedBytes));
+    using Kernel                    = Sm120GdrRecurrent<BlockDv, StateT>;
+    auto                     kernel = Sm120GdrRecurrentKernel<BlockDv, StateT>;
+    static const cudaError_t status = cudaFuncSetAttribute(
+        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(Kernel::kSharedBytes));
     TM_CUDA_CHECK(status);
 }
 
@@ -709,12 +708,12 @@ struct Sm120GroupedStateDescPrepare {
                                                int                num_head_groups,
                                                CUtensorMap*       smem_descriptor)
     {
-        const int                             linear        = static_cast<int>(blockIdx.x);
-        const int                             lane          = static_cast<int>(threadIdx.x);
-        const int                             head_group    = linear % num_head_groups;
-        const int                             sequence      = (linear / num_head_groups) % sequence_count;
-        const int                             layer_group   = linear / (sequence_count * num_head_groups);
-        const int64_t                         pointer_index = static_cast<int64_t>(layer_group) * layer_group_stride
+        const int     linear        = static_cast<int>(blockIdx.x);
+        const int     lane          = static_cast<int>(threadIdx.x);
+        const int     head_group    = linear % num_head_groups;
+        const int     sequence      = (linear / num_head_groups) % sequence_count;
+        const int     layer_group   = linear / (sequence_count * num_head_groups);
+        const int64_t pointer_index = static_cast<int64_t>(layer_group) * layer_group_stride
                                       + static_cast<int64_t>(sequence) * sequence_stride
                                       + static_cast<int64_t>(head_group) * head_group_stride;
         CopyTmaDescriptor(smem_descriptor, &state_tma_desc, lane, kThreads);
@@ -731,27 +730,29 @@ struct Sm120GroupedStateDescPrepare {
 };
 
 template<class StateT>
-__global__ __launch_bounds__(Sm120GroupedStateDescPrepare<StateT>::kThreads,
-                             Sm120GroupedStateDescPrepare<StateT>::kMinBlocks)
-    void PrepareGroupedStateDescriptors(const __grid_constant__ CUtensorMap state_tma_desc,
-                                   const int64_t*                      addresses,
-                                   int64_t      layer_group_stride,
-                                   int64_t      sequence_stride,
-                                   int64_t      head_group_stride,
-                                   CUtensorMap* descriptors,
-                                   int          sequence_count,
-                                   int          num_head_groups)
+__global__ __launch_bounds__(
+    Sm120GroupedStateDescPrepare<StateT>::kThreads,
+    Sm120GroupedStateDescPrepare<StateT>::kMinBlocks) void PrepareGroupedStateDescriptors(const __grid_constant__
+                                                                                              CUtensorMap
+                                                                                                         state_tma_desc,
+                                                                                          const int64_t* addresses,
+                                                                                          int64_t layer_group_stride,
+                                                                                          int64_t sequence_stride,
+                                                                                          int64_t head_group_stride,
+                                                                                          CUtensorMap* descriptors,
+                                                                                          int          sequence_count,
+                                                                                          int          num_head_groups)
 {
     __shared__ __align__(128) CUtensorMap smem_descriptor;
     Sm120GroupedStateDescPrepare<StateT>::Run(state_tma_desc,
-                                               addresses,
-                                               layer_group_stride,
-                                               sequence_stride,
-                                               head_group_stride,
-                                               descriptors,
-                                               sequence_count,
-                                               num_head_groups,
-                                               &smem_descriptor);
+                                              addresses,
+                                              layer_group_stride,
+                                              sequence_stride,
+                                              head_group_stride,
+                                              descriptors,
+                                              sequence_count,
+                                              num_head_groups,
+                                              &smem_descriptor);
 }
 
 template<class StateT>
@@ -773,13 +774,13 @@ void PrepareSm120RecurrentStateTmaDescriptorsTyped(const core::Tensor& state_ptr
     auto*       descriptors = reinterpret_cast<CUtensorMap*>(state_tma_descs.raw_data());
     const int   work        = layer_groups * sequence_count * num_head_groups;
     PrepareGroupedStateDescriptors<StateT><<<work, Kernel::kThreads, 0, stream>>>(state_tma_desc,
-                                                                    addresses,
-                                                                    state_ptrs.stride(0),
-                                                                    state_ptrs.stride(1),
-                                                                    state_ptrs.stride(2),
-                                                                    descriptors,
-                                                                    sequence_count,
-                                                                    num_head_groups);
+                                                                                  addresses,
+                                                                                  state_ptrs.stride(0),
+                                                                                  state_ptrs.stride(1),
+                                                                                  state_ptrs.stride(2),
+                                                                                  descriptors,
+                                                                                  sequence_count,
+                                                                                  num_head_groups);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -826,29 +827,29 @@ void LaunchSm120GdrRecurrentTyped(const core::Tensor& q,
         std::max(1, std::min(std::min(total_work_tiles, target_grid_blocks), kRecurrentMaxDescriptorCtas));
     using Kernel = Sm120GdrRecurrent<block_dv, StateT>;
 
-    const auto   q_tma_desc = MakeRecurrentQkTmaDesc<__nv_bfloat16>(q);
-    const auto   k_tma_desc = MakeRecurrentQkTmaDesc<__nv_bfloat16>(k);
-    const auto   v_tma_desc = MakeRecurrentValueTmaDesc<__nv_bfloat16>(v, block_dv);
+    const auto q_tma_desc = MakeRecurrentQkTmaDesc<__nv_bfloat16>(q);
+    const auto k_tma_desc = MakeRecurrentQkTmaDesc<__nv_bfloat16>(k);
+    const auto v_tma_desc = MakeRecurrentValueTmaDesc<__nv_bfloat16>(v, block_dv);
     SetRecurrentGdrSharedMemoryLimit<block_dv, StateT>();
     Sm120GdrRecurrentKernel<block_dv, StateT>
         <<<grid_blocks, Kernel::kThreads, Kernel::kSharedBytes, stream>>>(q_tma_desc,
-                                                                 k_tma_desc,
-                                                                 v_tma_desc,
-                                                                 out_ptr,
-                                                                 g_ptr,
-                                                                 beta_ptr,
-                                                                 finished_ptr,
-                                                                 state_tma_descs_ptr,
-                                                                 total_tiles,
-                                                                 problem.sequence_num,
-                                                                 problem.hq,
-                                                                 problem.hv,
-                                                                 problem.gate_batch_stride,
-                                                                 out.stride(0),
-                                                                 out.stride(2),
-                                                                 problem.num_head_groups,
-                                                                 problem.heads_per_block,
-                                                                 state_layer);
+                                                                          k_tma_desc,
+                                                                          v_tma_desc,
+                                                                          out_ptr,
+                                                                          g_ptr,
+                                                                          beta_ptr,
+                                                                          finished_ptr,
+                                                                          state_tma_descs_ptr,
+                                                                          total_tiles,
+                                                                          problem.sequence_num,
+                                                                          problem.hq,
+                                                                          problem.hv,
+                                                                          problem.gate_batch_stride,
+                                                                          out.stride(0),
+                                                                          out.stride(2),
+                                                                          problem.num_head_groups,
+                                                                          problem.heads_per_block,
+                                                                          state_layer);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

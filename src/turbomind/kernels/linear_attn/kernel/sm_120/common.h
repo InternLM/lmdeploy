@@ -1502,8 +1502,8 @@ static_assert(offsetof(CorrectInitialStatesSharedStorage<kCorrectInitialStatesBf
                   % alignof(cute::uint64_t)
               == 0);
 
-constexpr int kChunk32Size                     = 32;
-constexpr int kSm120FusedGdrGatePasses         = kChunk32Size / kFusedGdrGateWriterThreads;
+constexpr int kChunk32Size             = 32;
+constexpr int kSm120FusedGdrGatePasses = kChunk32Size / kFusedGdrGateWriterThreads;
 
 static_assert(kFusedGdrGateWriterThreads == kChunk32Size);
 static_assert(kSm120FusedGdrGatePasses == 1);

@@ -146,15 +146,15 @@ void LaunchChunkCumsum(const core::Tensor& g,
     using Kernel = Sm120ChunkLocalCumsum<ChunkSize>;
     dim3 grid(problem.total_chunks, cdiv(problem.hv, Kernel::kHeadsPerBlock));
     ParallelChunkLocalCumsumKernel<ChunkSize><<<grid, Kernel::kThreads, 0, stream>>>(g_ptr,
-                                                                                   q_offsets.data<int32_t>(),
-                                                                                   out_ptr,
-                                                                                   problem.sequence_num,
-                                                                                   problem.token_num,
-                                                                                   problem.hv,
-                                                                                   g.stride(1),
-                                                                                   g.stride(0),
-                                                                                   g_cumsum.stride(1),
-                                                                                   g_cumsum.stride(0));
+                                                                                     q_offsets.data<int32_t>(),
+                                                                                     out_ptr,
+                                                                                     problem.sequence_num,
+                                                                                     problem.token_num,
+                                                                                     problem.hv,
+                                                                                     g.stride(1),
+                                                                                     g.stride(0),
+                                                                                     g_cumsum.stride(1),
+                                                                                     g_cumsum.stride(0));
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

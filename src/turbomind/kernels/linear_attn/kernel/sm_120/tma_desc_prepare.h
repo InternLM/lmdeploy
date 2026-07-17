@@ -268,48 +268,47 @@ struct Sm120GdrTmaDescPrepare {
     static constexpr int kThreads   = 32;
     static constexpr int kMinBlocks = 1;
 
-    static __device__ __forceinline__ void Run(
-        Sm120GdrTmaMode                        mode,
-        Sm120GdrTmaLayout                      layout,
-        const CUtensorMap&                     kkt_k_desc,
-        const CUtensorMap&                     kkt_resolvent_desc,
-        const CUtensorMap&                     fused_q_desc,
-        const CUtensorMap&                     fused_k_desc,
-        const CUtensorMap&                     fused_v_desc,
-        const CUtensorMap&                     fused_g_desc,
-        const CUtensorMap&                     fused_resolvent_desc,
-        const CUtensorMap&                     fused_state_desc,
-        const CUtensorMap&                     fused_out_desc,
-        const CUtensorMap&                     fused_gdr_h_v_desc,
-        const CUtensorMap&                     context_parallel_segment_state_desc,
-        const CUtensorMap&                     context_parallel_segment_m_desc,
-        const CUtensorMap&                     correct_initial_states_cp_state_desc,
-        const CUtensorMap&                     correct_initial_states_segment_state_desc,
-        const CUtensorMap&                     correct_initial_states_segment_m_desc,
-        const CUtensorMap&                     correct_initial_states_external_state_desc,
-        const CUtensorMap&                     context_parallel_fused_gdr_state_desc,
-        StridedTensorBase<const __nv_bfloat16> q,
-        StridedTensorBase<const __nv_bfloat16> k,
-        StridedTensorBase<const __nv_bfloat16> v,
-        StridedTensorBase<const float>         g_cumsum,
-        StridedTensorBase<__nv_bfloat16>       resolvent,
-        StridedTensorBase<__nv_bfloat16>       out,
-        const int64_t* __restrict__ state_ptrs,
-        const int32_t* __restrict__ q_offsets,
-        const bool* __restrict__ finished,
-        void* __restrict__ workspace,
-        int     sequence_num,
-        int     hq,
-        int     hv,
-        int     num_head_groups,
-        int     heads_per_block,
-        int     token_num,
-        int     total_segments,
-        int     segment_tokens,
-        int64_t gate_stride,
-        int64_t gate_batch_stride,
-        int64_t state_layer_offset,
-        CUtensorMap* smem_desc)
+    static __device__ __forceinline__ void Run(Sm120GdrTmaMode    mode,
+                                               Sm120GdrTmaLayout  layout,
+                                               const CUtensorMap& kkt_k_desc,
+                                               const CUtensorMap& kkt_resolvent_desc,
+                                               const CUtensorMap& fused_q_desc,
+                                               const CUtensorMap& fused_k_desc,
+                                               const CUtensorMap& fused_v_desc,
+                                               const CUtensorMap& fused_g_desc,
+                                               const CUtensorMap& fused_resolvent_desc,
+                                               const CUtensorMap& fused_state_desc,
+                                               const CUtensorMap& fused_out_desc,
+                                               const CUtensorMap& fused_gdr_h_v_desc,
+                                               const CUtensorMap& context_parallel_segment_state_desc,
+                                               const CUtensorMap& context_parallel_segment_m_desc,
+                                               const CUtensorMap& correct_initial_states_cp_state_desc,
+                                               const CUtensorMap& correct_initial_states_segment_state_desc,
+                                               const CUtensorMap& correct_initial_states_segment_m_desc,
+                                               const CUtensorMap& correct_initial_states_external_state_desc,
+                                               const CUtensorMap& context_parallel_fused_gdr_state_desc,
+                                               StridedTensorBase<const __nv_bfloat16> q,
+                                               StridedTensorBase<const __nv_bfloat16> k,
+                                               StridedTensorBase<const __nv_bfloat16> v,
+                                               StridedTensorBase<const float>         g_cumsum,
+                                               StridedTensorBase<__nv_bfloat16>       resolvent,
+                                               StridedTensorBase<__nv_bfloat16>       out,
+                                               const int64_t* __restrict__ state_ptrs,
+                                               const int32_t* __restrict__ q_offsets,
+                                               const bool* __restrict__ finished,
+                                               void* __restrict__ workspace,
+                                               int          sequence_num,
+                                               int          hq,
+                                               int          hv,
+                                               int          num_head_groups,
+                                               int          heads_per_block,
+                                               int          token_num,
+                                               int          total_segments,
+                                               int          segment_tokens,
+                                               int64_t      gate_stride,
+                                               int64_t      gate_batch_stride,
+                                               int64_t      state_layer_offset,
+                                               CUtensorMap* smem_desc)
     {
         static_assert(kSupportedGdrChunkSize<ChunkSize>);
         static_assert(kFusedGdrValidStateT<StateT>, "chunked descriptor prep StateT must be float or bfloat16");
@@ -373,15 +372,15 @@ struct Sm120GdrTmaDescPrepare {
             return;
         }
 
-        const int direct_task_base              = kkt_task_count;
-        auto      direct_slices                 = MakeFusedGdrTmaDescriptorSlices(direct_fused_desc, sequence_num);
-        auto      fused_gdr_h_slices            = MakeFusedGdrHTmaDescriptorSlices(fused_gdr_h_desc, sequence_num);
-        auto      correct_initial_states_slices = MakeCorrectInitialStatesTmaDescriptorSlices(correct_initial_states_desc);
-        auto      context_parallel_fused_gdr_slices =
+        const int direct_task_base         = kkt_task_count;
+        auto      direct_slices            = MakeFusedGdrTmaDescriptorSlices(direct_fused_desc, sequence_num);
+        auto      fused_gdr_h_slices       = MakeFusedGdrHTmaDescriptorSlices(fused_gdr_h_desc, sequence_num);
+        auto correct_initial_states_slices = MakeCorrectInitialStatesTmaDescriptorSlices(correct_initial_states_desc);
+        auto context_parallel_fused_gdr_slices =
             MakeContextParallelFusedGdrTmaDescriptorSlices(context_parallel_fused_gdr_desc, sequence_num);
 
-        const bool needs_direct_desc      = mode == Sm120GdrTmaMode::kAllDirectFused || mode == Sm120GdrTmaMode::kFusedOnly;
-        const int  direct_data_desc_count = needs_direct_desc ? sequence_num : 0;
+        const bool needs_direct_desc = mode == Sm120GdrTmaMode::kAllDirectFused || mode == Sm120GdrTmaMode::kFusedOnly;
+        const int  direct_data_desc_count  = needs_direct_desc ? sequence_num : 0;
         const int  direct_state_desc_count = needs_direct_desc ? sequence_num * hv : 0;
         const int  direct_desc_tasks       = direct_data_desc_count + direct_state_desc_count;
         if (needs_direct_desc && task >= direct_task_base && task < direct_task_base + direct_data_desc_count) {
@@ -522,7 +521,8 @@ struct Sm120GdrTmaDescPrepare {
             return;
         }
 
-        const int context_parallel_fused_gdr_data_tasks   = mode == Sm120GdrTmaMode::kAllContextParallel ? sequence_num : 0;
+        const int context_parallel_fused_gdr_data_tasks =
+            mode == Sm120GdrTmaMode::kAllContextParallel ? sequence_num : 0;
         const int context_parallel_fused_gdr_tensor_tasks = mode == Sm120GdrTmaMode::kAllContextParallel ? 1 : 0;
         const int context_parallel_fused_gdr_task_base =
             correct_initial_states_task_base + correct_initial_states_desc_tasks;
@@ -579,49 +579,56 @@ struct Sm120GdrTmaDescPrepare {
 };
 
 template<class StateT, int ChunkSize>
-__global__ __launch_bounds__(Sm120GdrTmaDescPrepare<StateT, ChunkSize>::kThreads,
-                             Sm120GdrTmaDescPrepare<StateT, ChunkSize>::kMinBlocks)
-    void Sm120GdrTmaDescPrepareKernel(
-        Sm120GdrTmaMode                        mode,
-        Sm120GdrTmaLayout                      layout,
-        const __grid_constant__ CUtensorMap    kkt_k_desc,
-        const __grid_constant__ CUtensorMap    kkt_resolvent_desc,
-        const __grid_constant__ CUtensorMap    fused_q_desc,
-        const __grid_constant__ CUtensorMap    fused_k_desc,
-        const __grid_constant__ CUtensorMap    fused_v_desc,
-        const __grid_constant__ CUtensorMap    fused_g_desc,
-        const __grid_constant__ CUtensorMap    fused_resolvent_desc,
-        const __grid_constant__ CUtensorMap    fused_state_desc,
-        const __grid_constant__ CUtensorMap    fused_out_desc,
-        const __grid_constant__ CUtensorMap    fused_gdr_h_v_desc,
-        const __grid_constant__ CUtensorMap    context_parallel_segment_state_desc,
-        const __grid_constant__ CUtensorMap    context_parallel_segment_m_desc,
-        const __grid_constant__ CUtensorMap    correct_initial_states_cp_state_desc,
-        const __grid_constant__ CUtensorMap    correct_initial_states_segment_state_desc,
-        const __grid_constant__ CUtensorMap    correct_initial_states_segment_m_desc,
-        const __grid_constant__ CUtensorMap    correct_initial_states_external_state_desc,
-        const __grid_constant__ CUtensorMap    context_parallel_fused_gdr_state_desc,
-        StridedTensorBase<const __nv_bfloat16> q,
-        StridedTensorBase<const __nv_bfloat16> k,
-        StridedTensorBase<const __nv_bfloat16> v,
-        StridedTensorBase<const float>         g_cumsum,
-        StridedTensorBase<__nv_bfloat16>       resolvent,
-        StridedTensorBase<__nv_bfloat16>       out,
-        const int64_t* __restrict__ state_ptrs,
-        const int32_t* __restrict__ q_offsets,
-        const bool* __restrict__ finished,
-        void* __restrict__ workspace,
-        int     sequence_num,
-        int     hq,
-        int     hv,
-        int     num_head_groups,
-        int     heads_per_block,
-        int     token_num,
-        int     total_segments,
-        int     segment_tokens,
-        int64_t gate_stride,
-        int64_t gate_batch_stride,
-        int64_t state_layer_offset)
+__global__ __launch_bounds__(
+    Sm120GdrTmaDescPrepare<StateT, ChunkSize>::kThreads,
+    Sm120GdrTmaDescPrepare<StateT, ChunkSize>::
+        kMinBlocks) void Sm120GdrTmaDescPrepareKernel(Sm120GdrTmaMode                     mode,
+                                                      Sm120GdrTmaLayout                   layout,
+                                                      const __grid_constant__ CUtensorMap kkt_k_desc,
+                                                      const __grid_constant__ CUtensorMap kkt_resolvent_desc,
+                                                      const __grid_constant__ CUtensorMap fused_q_desc,
+                                                      const __grid_constant__ CUtensorMap fused_k_desc,
+                                                      const __grid_constant__ CUtensorMap fused_v_desc,
+                                                      const __grid_constant__ CUtensorMap fused_g_desc,
+                                                      const __grid_constant__ CUtensorMap fused_resolvent_desc,
+                                                      const __grid_constant__ CUtensorMap fused_state_desc,
+                                                      const __grid_constant__ CUtensorMap fused_out_desc,
+                                                      const __grid_constant__ CUtensorMap fused_gdr_h_v_desc,
+                                                      const __grid_constant__ CUtensorMap
+                                                          context_parallel_segment_state_desc,
+                                                      const __grid_constant__ CUtensorMap
+                                                          context_parallel_segment_m_desc,
+                                                      const __grid_constant__ CUtensorMap
+                                                          correct_initial_states_cp_state_desc,
+                                                      const __grid_constant__ CUtensorMap
+                                                          correct_initial_states_segment_state_desc,
+                                                      const __grid_constant__ CUtensorMap
+                                                          correct_initial_states_segment_m_desc,
+                                                      const __grid_constant__ CUtensorMap
+                                                          correct_initial_states_external_state_desc,
+                                                      const __grid_constant__ CUtensorMap
+                                                          context_parallel_fused_gdr_state_desc,
+                                                      StridedTensorBase<const __nv_bfloat16> q,
+                                                      StridedTensorBase<const __nv_bfloat16> k,
+                                                      StridedTensorBase<const __nv_bfloat16> v,
+                                                      StridedTensorBase<const float>         g_cumsum,
+                                                      StridedTensorBase<__nv_bfloat16>       resolvent,
+                                                      StridedTensorBase<__nv_bfloat16>       out,
+                                                      const int64_t* __restrict__ state_ptrs,
+                                                      const int32_t* __restrict__ q_offsets,
+                                                      const bool* __restrict__ finished,
+                                                      void* __restrict__ workspace,
+                                                      int     sequence_num,
+                                                      int     hq,
+                                                      int     hv,
+                                                      int     num_head_groups,
+                                                      int     heads_per_block,
+                                                      int     token_num,
+                                                      int     total_segments,
+                                                      int     segment_tokens,
+                                                      int64_t gate_stride,
+                                                      int64_t gate_batch_stride,
+                                                      int64_t state_layer_offset)
 {
     __shared__ __align__(128) CUtensorMap smem_desc[kFusedGdrTmaDescCount];
     Sm120GdrTmaDescPrepare<StateT, ChunkSize>::Run(mode,

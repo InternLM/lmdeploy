@@ -179,14 +179,14 @@ struct Sm120KktSolve {
     static __device__ __forceinline__ void Run(const int32_t* __restrict__ q_offsets,
                                                const bool* __restrict__ finished,
                                                const float* __restrict__ beta,
-                                               CUtensorMap* tma_desc_workspace,
-                                               int          token_num,
-                                               int          sequence_num,
-                                               int          hq,
-                                               int          hv,
-                                               int64_t      beta_stride,
-                                               int64_t      beta_batch_stride,
-                                               int          groups_per_k_head,
+                                               CUtensorMap*   tma_desc_workspace,
+                                               int            token_num,
+                                               int            sequence_num,
+                                               int            hq,
+                                               int            hv,
+                                               int64_t        beta_stride,
+                                               int64_t        beta_batch_stride,
+                                               int            groups_per_k_head,
                                                unsigned char* shared_raw)
     {
         static_assert(ConsumerThreads == kKktSolveRoleThreads,
@@ -515,16 +515,16 @@ void LaunchKktSolveTyped(const float*        beta_ptr,
     auto*          desc_workspace = reinterpret_cast<CUtensorMap*>(tma_desc_workspace);
     Sm120KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>
         <<<grid, Kernel::kThreads, Kernel::kSharedBytes, stream>>>(offsets_ptr,
-                                                                                 finished_ptr,
-                                                                                 beta_ptr,
-                                                                                 desc_workspace,
-                                                                                 problem.token_num,
-                                                                                 problem.sequence_num,
-                                                                                 problem.hq,
-                                                                                 problem.hv,
-                                                                                 problem.beta_stride,
-                                                                                 problem.beta_batch_stride,
-                                                                                 groups_per_k_head);
+                                                                   finished_ptr,
+                                                                   beta_ptr,
+                                                                   desc_workspace,
+                                                                   problem.token_num,
+                                                                   problem.sequence_num,
+                                                                   problem.hq,
+                                                                   problem.hv,
+                                                                   problem.beta_stride,
+                                                                   problem.beta_batch_stride,
+                                                                   groups_per_k_head);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

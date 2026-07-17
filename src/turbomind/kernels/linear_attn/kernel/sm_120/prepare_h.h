@@ -50,12 +50,12 @@ struct Sm120FusedGdrH {
                                                const int32_t* __restrict__ cp_source_indices,
                                                const int32_t* __restrict__ cp_q_offsets,
                                                const bool* __restrict__ cp_finished,
-                                               int     sequence_num,
-                                               int     token_num,
-                                               int     hq,
-                                               int     hv,
-                                               int64_t beta_stride,
-                                               int64_t beta_batch_stride,
+                                               int            sequence_num,
+                                               int            token_num,
+                                               int            hq,
+                                               int            hv,
+                                               int64_t        beta_stride,
+                                               int64_t        beta_batch_stride,
                                                unsigned char* smem_raw)
     {
         static_assert(BlockDv == kContextParallelGdrBlockDv);
@@ -157,8 +157,12 @@ struct Sm120FusedGdrH {
                 if (producer_leader) {
                     cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.early_ready_mbar[0],
                                                                                    kChunk32Size * kEarlyBytesPerRow);
-                    cute::SM90_TMA_LOAD_2D::copy(
-                        v_tma_desc, &smem.early_ready_mbar[0], kTmaNoCacheHint, &early0.v[0][0], value_tma_coord, token0);
+                    cute::SM90_TMA_LOAD_2D::copy(v_tma_desc,
+                                                 &smem.early_ready_mbar[0],
+                                                 kTmaNoCacheHint,
+                                                 &early0.v[0][0],
+                                                 value_tma_coord,
+                                                 token0);
                     cute::SM90_TMA_LOAD_2D::copy(resolvent_tma_desc,
                                                  &smem.early_ready_mbar[0],
                                                  kTmaNoCacheHint,
@@ -276,7 +280,8 @@ struct Sm120FusedGdrH {
                 auto* h_state_stage_ptr = &smem.vd[0][0];
                 cute::wait_barrier(smem.h_final_ready_bar, 0);
                 cute::tma_store_fence();
-                cute::SM90_TMA_STORE_4D::copy(segment_state_tma_desc, h_state_stage_ptr, dv0, 0, value_head, segment_id);
+                cute::SM90_TMA_STORE_4D::copy(
+                    segment_state_tma_desc, h_state_stage_ptr, dv0, 0, value_head, segment_id);
                 cute::tma_store_arrive();
                 cute::tma_store_wait<0>();
 
@@ -486,8 +491,8 @@ struct Sm120FusedGdrH {
                     auto     thr_mma     = mma.get_thread_slice(role_tid);
                     Element* state_stage = reinterpret_cast<Element*>(&smem.vd[0][0]);
                     Element* w_stage     = pass == 0 ? w_pack : state_stage;
-                    Element* vd_stage =
-                        pass == 0 ? reinterpret_cast<Element*>(&early.v[0][0]) : reinterpret_cast<Element*>(&early.a[0][0]);
+                    Element* vd_stage    = pass == 0 ? reinterpret_cast<Element*>(&early.v[0][0]) :
+                                                       reinterpret_cast<Element*>(&early.a[0][0]);
                     auto s_w_row = cute::make_tensor(cute::make_smem_ptr(w_stage), Sm120FusedGdrVRowLayout<BlockDv>());
                     auto s_state =
                         cute::make_tensor(cute::make_smem_ptr(state_stage), Sm120FusedGdrStateTLayout<BlockDv>());
@@ -503,12 +508,12 @@ struct Sm120FusedGdrH {
                     auto tCrW = cute::make_fragment_like<Element>(tCrC);
                     auto smem_tiled_copy_C =
                         cute::make_tiled_copy_C(cute::Copy_Atom<cute::DefaultCopy, Element>{}, thr_mma);
-                    auto        smem_thr_copy_C = smem_tiled_copy_C.get_thread_slice(role_tid);
-                    auto        tCsWStore       = smem_thr_copy_C.partition_D(s_w_row);
-                    auto        tCrWStoreView   = smem_thr_copy_C.retile_S(tCrW);
-                    auto        s_w  = cute::make_tensor(cute::make_smem_ptr(w_stage), Sm120FusedGdrVTLayout<BlockDv>());
-                    auto        s_vd = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVRowLayout<BlockDv>());
-                    auto        tCsVdStore = smem_thr_copy_C.partition_D(s_vd);
+                    auto smem_thr_copy_C = smem_tiled_copy_C.get_thread_slice(role_tid);
+                    auto tCsWStore       = smem_thr_copy_C.partition_D(s_w_row);
+                    auto tCrWStoreView   = smem_thr_copy_C.retile_S(tCrW);
+                    auto s_w  = cute::make_tensor(cute::make_smem_ptr(w_stage), Sm120FusedGdrVTLayout<BlockDv>());
+                    auto s_vd = cute::make_tensor(cute::make_smem_ptr(vd_stage), Sm120FusedGdrVRowLayout<BlockDv>());
+                    auto tCsVdStore        = smem_thr_copy_C.partition_D(s_vd);
                     const float last_g_exp = early.g_exp[last_row];
 
                     if (pass == 0) {
@@ -636,19 +641,21 @@ struct Sm120FusedGdrH {
 };
 
 template<class T, int BlockDv>
-__global__ __launch_bounds__(Sm120FusedGdrH<T, BlockDv>::kThreads, Sm120FusedGdrH<T, BlockDv>::kMinBlocks)
-    void Sm120FusedGdrHKernel(const CUtensorMap* __restrict__ tma_desc_workspace,
-                         const float* __restrict__ beta,
-                         const int32_t* __restrict__ q_offsets,
-                         const int32_t* __restrict__ cp_source_indices,
-                         const int32_t* __restrict__ cp_q_offsets,
-                         const bool* __restrict__ cp_finished,
-                         int     sequence_num,
-                         int     token_num,
-                         int     hq,
-                         int     hv,
-                         int64_t beta_stride,
-                         int64_t beta_batch_stride)
+__global__ __launch_bounds__(
+    Sm120FusedGdrH<T, BlockDv>::kThreads,
+    Sm120FusedGdrH<T,
+                   BlockDv>::kMinBlocks) void Sm120FusedGdrHKernel(const CUtensorMap* __restrict__ tma_desc_workspace,
+                                                                   const float* __restrict__ beta,
+                                                                   const int32_t* __restrict__ q_offsets,
+                                                                   const int32_t* __restrict__ cp_source_indices,
+                                                                   const int32_t* __restrict__ cp_q_offsets,
+                                                                   const bool* __restrict__ cp_finished,
+                                                                   int     sequence_num,
+                                                                   int     token_num,
+                                                                   int     hq,
+                                                                   int     hv,
+                                                                   int64_t beta_stride,
+                                                                   int64_t beta_batch_stride)
 {
     extern __shared__ __align__(1024) unsigned char smem_raw[];
     Sm120FusedGdrH<T, BlockDv>::Run(tma_desc_workspace,
@@ -670,7 +677,7 @@ template<int BlockDv>
 void SetFusedGdrHSharedMemoryLimit()
 {
     static_assert(BlockDv == kContextParallelGdrBlockDv);
-    using Kernel = Sm120FusedGdrH<__nv_bfloat16, BlockDv>;
+    using Kernel                    = Sm120FusedGdrH<__nv_bfloat16, BlockDv>;
     static const cudaError_t status = cudaFuncSetAttribute(Sm120FusedGdrHKernel<__nv_bfloat16, BlockDv>,
                                                            cudaFuncAttributeMaxDynamicSharedMemorySize,
                                                            static_cast<int>(Kernel::kSharedBytes));
@@ -728,22 +735,22 @@ void LaunchSm120FusedGdrHTyped(const core::Tensor&        k,
     constexpr int block_dv = BlockDv;
     const int     dv_tiles = CeilDiv(kHeadDim, block_dv);
     const dim3    grid(cp.total_segments, problem.hv * dv_tiles, 1);
-    const dim3 block(Kernel::kThreads);
+    const dim3    block(Kernel::kThreads);
 
     SetFusedGdrHSharedMemoryLimit<block_dv>();
     Sm120FusedGdrHKernel<__nv_bfloat16, block_dv>
         <<<grid, block, Kernel::kSharedBytes, stream>>>(reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
-                                              beta.data<float>(),
-                                              q_offsets.data<int32_t>(),
-                                              cp_source_indices.data<int32_t>(),
-                                              cp_q_offsets.data<int32_t>(),
-                                              cp_finished.data<bool>(),
-                                              problem.sequence_num,
-                                              problem.token_num,
-                                              problem.hq,
-                                              problem.hv,
-                                              problem.beta_stride,
-                                              problem.beta_batch_stride);
+                                                        beta.data<float>(),
+                                                        q_offsets.data<int32_t>(),
+                                                        cp_source_indices.data<int32_t>(),
+                                                        cp_q_offsets.data<int32_t>(),
+                                                        cp_finished.data<bool>(),
+                                                        problem.sequence_num,
+                                                        problem.token_num,
+                                                        problem.hq,
+                                                        problem.hv,
+                                                        problem.beta_stride,
+                                                        problem.beta_batch_stride);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
