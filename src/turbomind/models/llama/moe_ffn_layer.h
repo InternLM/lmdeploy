@@ -31,6 +31,8 @@ public:
 
     void Combine(ForwardParam& p);
 
+    Tensor GetShardFfnInput(Tensor& global_hidden_states);
+
 private:
     std::unique_ptr<MoeFfnLayerImpl> impl_;
 };

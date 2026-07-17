@@ -32,6 +32,8 @@ public:
 
     virtual void Combine(MoeFfnLayer::ForwardParam& p) = 0;
 
+    virtual Tensor GetShardFfnInput(Tensor& global_hidden_states) = 0;
+
 protected:
     Tensor_<float> Gate(const Tensor& input, const LinearWeight& gate);
 
@@ -59,11 +61,14 @@ public:
 
     void Combine(MoeFfnLayer::ForwardParam& p) override;
 
+    Tensor GetShardFfnInput(Tensor& global_hidden_states) override;
+
 private:
     void Init(MoeFfnLayer::ForwardParam& p);
 
     const int tp_size_;
     const int ep_size_;
+    const int ep_rank_;
     const int max_token_num_;
     int&      is_warm_up_;
 
@@ -87,6 +92,7 @@ MoeFfnDefaultImpl::MoeFfnDefaultImpl(const EngineParam& engine, const Context& c
     MoeFfnLayerImpl(ctx),
     tp_size_(engine.mlp_tp_size),
     ep_size_(engine.ep_size),
+    ep_rank_(engine.ep_rank),
     max_token_num_(engine.max_forward_token_num * engine.attn_dp_size),
     is_warm_up_(*ctx.is_warm_up)
 {
@@ -283,12 +289,36 @@ void MoeFfnDefaultImpl::Combine(MoeFfnLayer::ForwardParam& p)
                      shared_scales_.data_or((float*)nullptr),
                      moe.experts_per_token,
                      1.f / tp_size_,
-                     p.scale / ep_size_,
+                     p.scale,
                      core::Context::stream().handle());
     TM_CUDA_CHECK(cudaGetLastError());
 
     temp_          = {};
     shared_scales_ = {};
+}
+
+Tensor MoeFfnDefaultImpl::GetShardFfnInput(Tensor& global_hidden_states)
+{
+    TM_FUNCTION_SCOPE();
+    if (ep_size_ == 1) {
+        return global_hidden_states;
+    }
+
+    const int token_num         = global_hidden_states.shape(0);
+    const int tokens_per_rank   = token_num / ep_size_;
+    const int remainder         = token_num % ep_size_;
+    const int local_token_num   = tokens_per_rank + (ep_rank_ < remainder);
+    const int local_token_begin = ep_rank_ * tokens_per_rank + std::min(ep_rank_, remainder);
+    const int local_token_end   = local_token_begin + local_token_num;
+
+    if (local_token_begin > 0) {
+        Clear(global_hidden_states.slice(0, local_token_begin));
+    }
+    if (local_token_end < token_num) {
+        Clear(global_hidden_states.slice(local_token_end, token_num - local_token_end));
+    }
+
+    return global_hidden_states.slice(local_token_begin, local_token_num);
 }
 
 MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx)
@@ -311,6 +341,11 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 void MoeFfnLayer::Combine(ForwardParam& p)
 {
     impl_->Combine(p);
+}
+
+Tensor MoeFfnLayer::GetShardFfnInput(Tensor& global_hidden_states)
+{
+    return impl_->GetShardFfnInput(global_hidden_states);
 }
 
 }  // namespace turbomind
