@@ -592,7 +592,7 @@ class HistoryRouterExperts(_HistoryDataBase):
 
 
 class HistoryIndexerTopK(_HistoryDataBase):
-    """History of sparse-attention indexer results."""
+    """History of full-layer sparse-attention indexer results."""
     ALLOC_SIZE = 1
 
     def __init__(self, indexer_topk: np.ndarray = None, dtype: np.dtype = np.int32):

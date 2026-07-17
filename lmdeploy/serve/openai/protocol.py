@@ -228,7 +228,7 @@ class ChatCompletionRequest(BaseModel):
     )
     return_indexer_topk: bool | None = Field(
         default=False,
-        description=('Whether to return sparse-attention indexer top-k indices in the response.'),
+        description=('Whether to return sparse-attention top-k indices for full indexer layers.'),
     )
 
 
@@ -586,7 +586,7 @@ class GenerateReqMetaOutput(BaseModel):
     finish_reason: dict[str, Any] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
     routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
-    indexer_topk: list[list[list[int]]] | str | None = None  # (num_token, num_layer, index_topk)
+    indexer_topk: list[list[list[int]]] | str | None = None  # (num_token, num_full_indexer_layer, index_topk)
 
 
 # /generate output

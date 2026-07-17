@@ -10,6 +10,7 @@ import shortuuid
 from pydantic import BaseModel, ConfigDict, Field
 
 RoutedExperts = list[list[list[int]]] | str | None
+# (num_token, num_full_indexer_layer, index_topk), ordered by physical layer.
 IndexerTopK = list[list[list[int]]] | str | None
 MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
 
@@ -133,7 +134,7 @@ class MessagesRequest(BaseModel):
     )
     return_indexer_topk: bool | None = Field(
         default=False,
-        description=('Whether to return sparse-attention indexer top-k indices in the response.'),
+        description=('Whether to return sparse-attention top-k indices for full indexer layers.'),
     )
     return_token_ids: bool | None = Field(
         default=False,

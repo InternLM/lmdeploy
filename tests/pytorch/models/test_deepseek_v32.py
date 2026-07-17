@@ -12,6 +12,7 @@ from lmdeploy.pytorch.models.deepseek_v32 import (
     DSATopKIndicesBuffer,
     Indexer,
     _dequantize_blocked_fp8,
+    get_full_indexer_layer_ids,
     get_layer_indexer_type,
 )
 
@@ -177,10 +178,11 @@ def test_indexer_rope_interleave_uses_interleaved_layout():
     assert torch.equal(key_out, expected_key)
 
 
-def test_full_indexer_layer_writes_shared_topk_buffer(monkeypatch):
+def test_full_indexer_layer_writes_compact_output_and_shared_buffer(monkeypatch):
     attn = DeepseekV32Attention.__new__(DeepseekV32Attention)
     nn.Module.__init__(attn)
     attn.layer_idx = 0
+    attn.indexer_output_idx = 0
     _patch_minimal_attention(attn, monkeypatch)
     computed_topk = torch.tensor([[4, 2, 1], [3, 2, 0]], dtype=torch.int32)
     attn.indexer = lambda *args, **kwargs: computed_topk
@@ -192,7 +194,7 @@ def test_full_indexer_layer_writes_shared_topk_buffer(monkeypatch):
 
     attn.attn_fwd = fake_attn_fwd
     topk_buffer = DSATopKIndicesBuffer(topk=3)
-    all_indexer_topk = torch.full((2, 4, 3), -1, dtype=torch.int32)
+    all_indexer_topk = torch.full((2, 1, 3), -1, dtype=torch.int32)
 
     output = attn(
         hidden_states=torch.zeros(1, 2, 2),
@@ -206,7 +208,6 @@ def test_full_indexer_layer_writes_shared_topk_buffer(monkeypatch):
     assert torch.equal(topk_buffer.indices[:2], computed_topk)
     assert seen['nsa_indices'].data_ptr() == topk_buffer.indices[:2].data_ptr()
     assert torch.equal(all_indexer_topk[:, 0], computed_topk)
-    assert torch.all(all_indexer_topk[:, 1:] == -1)
 
 
 @pytest.mark.parametrize('dp,attn_tp,expected_num_heads', [(1, 2, 2), (2, 2, 4)])
@@ -253,6 +254,7 @@ def test_shared_indexer_layer_reuses_shared_topk_buffer(monkeypatch):
     nn.Module.__init__(attn)
     attn.layer_idx = 3
     attn.indexer = None
+    attn.indexer_output_idx = None
     _patch_minimal_attention(attn, monkeypatch)
     seen = {}
 
@@ -264,7 +266,7 @@ def test_shared_indexer_layer_reuses_shared_topk_buffer(monkeypatch):
     topk_buffer = DSATopKIndicesBuffer(topk=3)
     shared_topk = torch.tensor([[5, 4, 3]], dtype=torch.int32)
     topk_buffer.write(shared_topk)
-    all_indexer_topk = torch.full((1, 4, 3), -1, dtype=torch.int32)
+    all_indexer_topk = torch.full((1, 1, 3), -1, dtype=torch.int32)
 
     output = attn(
         hidden_states=torch.zeros(1, 1, 2),
@@ -276,8 +278,7 @@ def test_shared_indexer_layer_reuses_shared_topk_buffer(monkeypatch):
 
     assert output.shape == (1, 1, 1)
     assert seen['nsa_indices'].data_ptr() == topk_buffer.indices[:1].data_ptr()
-    assert torch.equal(all_indexer_topk[:, 3], shared_topk)
-    assert torch.all(all_indexer_topk[:, :3] == -1)
+    assert torch.all(all_indexer_topk == -1)
 
 
 def test_shared_indexer_layer_requires_shared_topk_buffer(monkeypatch):
@@ -311,12 +312,14 @@ def test_shared_indexer_layer_requires_shared_topk_buffer(monkeypatch):
 
 
 def test_layer_indexer_type_defaults_to_full_and_reads_shared_entries():
-    config = SimpleNamespace(indexer_types=['full', 'shared'])
+    config = SimpleNamespace(num_hidden_layers=3, indexer_types=['full', 'shared'])
 
     assert get_layer_indexer_type(config, 0) == 'full'
     assert get_layer_indexer_type(config, 1) == 'shared'
     assert get_layer_indexer_type(config, 2) == 'full'
     assert get_layer_indexer_type(SimpleNamespace(indexer_types=None), 1) == 'full'
+    assert get_full_indexer_layer_ids(config) == (0, 2)
+    assert get_full_indexer_layer_ids(SimpleNamespace(num_hidden_layers=3, indexer_types=None)) == (0, 1, 2)
 
 
 def test_moe_gate_captures_logical_experts_before_eplb_mapping(monkeypatch):
@@ -401,9 +404,13 @@ def test_glm52_causal_lm_returns_routed_experts_and_indexer_topk(monkeypatch):
     )
     model = DeepseekV32ForCausalLM.__new__(DeepseekV32ForCausalLM)
     nn.Module.__init__(model)
-    model.config = SimpleNamespace(num_hidden_layers=5, num_experts_per_tok=8, index_topk=3)
+    model.config = SimpleNamespace(num_hidden_layers=5,
+                                   num_experts_per_tok=8,
+                                   index_topk=3,
+                                   indexer_types=['full', 'full', 'full', 'shared', 'shared'])
     model.enable_return_routed_experts = True
     model.enable_return_indexer_topk = True
+    model.num_indexer_layers = 3
     model.model = FakeModel()
 
     outputs = model(
@@ -418,5 +425,5 @@ def test_glm52_causal_lm_returns_routed_experts_and_indexer_topk(monkeypatch):
     assert torch.all(routed_experts[:, :3] == torch.iinfo(torch.uint16).max)
     assert torch.all(routed_experts[:, 3] == 7)
     assert torch.all(routed_experts[:, 4] == 9)
-    assert outputs['all_indexer_topk'].shape == (2, 5, 3)
+    assert outputs['all_indexer_topk'].shape == (2, 3, 3)
     assert torch.all(outputs['all_indexer_topk'] == 5)

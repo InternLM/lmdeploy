@@ -43,6 +43,11 @@ def get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
     return indexer_types[layer_idx]
 
 
+def get_full_indexer_layer_ids(config: Any) -> tuple[int, ...]:
+    """Return the physical layers represented by compact indexer output."""
+    return tuple(idx for idx in range(config.num_hidden_layers) if get_layer_indexer_type(config, idx) == 'full')
+
+
 def get_layer_idx_from_weight_name(name: str) -> int | None:
     """Parse a transformer layer index from a checkpoint parameter name."""
     for marker in ('.layers.', 'layers.'):
@@ -346,7 +351,9 @@ class DeepseekV32Attention(DeepseekV2Attention):
 
         self.indexer_type = get_layer_indexer_type(config, layer_idx)
         self.indexer = None
+        self.indexer_output_idx = None
         if self.indexer_type == 'full':
+            self.indexer_output_idx = get_full_indexer_layer_ids(config).index(layer_idx)
             self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
@@ -435,8 +442,9 @@ class DeepseekV32Attention(DeepseekV2Attention):
             if topk_indices_buffer is not None:
                 topk_indices = topk_indices_buffer.write(topk_indices)
 
-        if all_indexer_topk is not None:
-            all_indexer_topk[:, self.layer_idx, :].copy_(topk_indices)
+        # Shared layers reuse the previous result, so capture only full layers.
+        if all_indexer_topk is not None and self.indexer_output_idx is not None:
+            all_indexer_topk[:, self.indexer_output_idx, :].copy_(topk_indices)
 
         attn_output = self.attn_fwd(
             query_states,
@@ -657,6 +665,7 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
         self.enable_return_indexer_topk = bm_ctx.enable_return_indexer_topk
+        self.num_indexer_layers = len(get_full_indexer_layer_ids(config))
 
     def forward(
         self,
@@ -681,8 +690,9 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
             )
         all_indexer_topk = None
         if self.enable_return_indexer_topk:
+            # Axis 1 follows full indexer layers in physical layer order.
             all_indexer_topk = position_ids.new_empty(
-                (num_tokens, self.config.num_hidden_layers, self.config.index_topk), dtype=torch.int32)
+                (num_tokens, self.num_indexer_layers, self.config.index_topk), dtype=torch.int32)
 
         forward = self.model.forward_microbatch if step_ctx.enable_microbatch else self.model.forward
         hidden_states = forward(
