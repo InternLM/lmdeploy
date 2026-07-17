@@ -176,6 +176,7 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = _engine_config.session_len
+        self.health_executor = ThreadPoolExecutor(max_workers=1)
 
     def _process_weights(self):
         """Process weight."""
@@ -432,7 +433,10 @@ class TurboMind:
 
     async def get_health_status(self) -> dict:
         """Get backend health status without blocking the event loop."""
-        return await asyncio.to_thread(self._get_health_status)
+        # MultimodalProcessor may submit a large number of tasks to the default thread pool, causing
+        # the _get_health_status task to be selected after the DEFAULT_PROBE_TIMEOUT has already elapsed.
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.health_executor, self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):
