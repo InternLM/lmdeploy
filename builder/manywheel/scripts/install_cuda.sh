@@ -168,7 +168,7 @@ do
             ;;
     12.8) install_128
             ;;
-	13.0) install_130
+    13.0) install_130
             ;;
     13.2) install_132
             ;;

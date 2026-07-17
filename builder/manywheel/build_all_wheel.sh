@@ -10,7 +10,7 @@ PLAT_NAME=manylinux_2_28_x86_64
 for cuver in ${CUDA_VER}; do
     DOCKER_TAG=manylinux_2_28-cuda${cuver}
     OUTPUT_FOLDER=cuda${cuver}_dist
-    for pyver in py310 py311 py312 py313; do
+    for pyver in py310 py311 py312 py313 py314; do
         bash ${TOPDIR}/manywheel/build_wheel.sh ${pyver} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER} \
             |& tee ${PLAT_NAME}.${pyver}.cuda${cuver}.log.txt
     done

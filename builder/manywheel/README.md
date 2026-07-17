@@ -2,7 +2,8 @@
 
 ## Building lmdeploy builder images
 
-To build all lmdeploy builder images, such as "lmdeploy-builder:cuda11.8", ""lmdeploy-builder:cuda12.4", execute:
+To build all lmdeploy builder images, such as
+`lmdeploy-builder:manylinux_2_28-cuda12.8`, execute:
 
 ```bash
 ./build_all_lmdeploy_builders.sh
