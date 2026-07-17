@@ -63,7 +63,7 @@ struct LlamaLinear::Impl {
         return {B, desc_B, V, desc_V};
     }
 
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>  //
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>
     GetOperandA(const LinearWeight& weight, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
     {
         auto st = core::Context::stream().handle();
