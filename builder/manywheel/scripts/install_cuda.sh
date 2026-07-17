@@ -108,7 +108,7 @@ function install_128 {
 }
 
 function install_130 {
-    echo "Installing CUDA 13.0 and NCCL 2.30.3"
+    echo "Installing CUDA 13.0 and NCCL 2.28.9"
     rm -rf /usr/local/cuda-13.0 /usr/local/cuda
     # install CUDA 13.0.3 in the same container
     wget -q https://developer.download.nvidia.com/compute/cuda/13.0.3/local_installers/cuda_13.0.3_580.126.20_linux.run
@@ -119,10 +119,10 @@ function install_130 {
 
     # NCCL license: https://docs.nvidia.com/deeplearning/nccl/#licenses
     mkdir tmp_nccl && cd tmp_nccl
-    wget -q https://developer.download.nvidia.com/compute/redist/nccl/v2.30.3/nccl_2.30.3-1+cuda13.2_x86_64.txz
-    tar xf nccl_2.30.3-1+cuda13.2_x86_64.txz
-    cp -a nccl_2.30.3-1+cuda13.2_x86_64/include/* /usr/local/cuda/include/
-    cp -a nccl_2.30.3-1+cuda13.2_x86_64/lib/* /usr/local/cuda/lib64/
+    wget -q https://developer.nvidia.com/w/compute/redist/nccl/v2.28.9/nccl_2.28.9-1+cuda13.0_x86_64.txz
+    tar xf nccl_2.28.9-1+cuda13.0_x86_64.txz
+    cp -a nccl_2.28.9-1+cuda13.0_x86_64/include/* /usr/local/cuda/include/
+    cp -a nccl_2.28.9-1+cuda13.0_x86_64/lib/* /usr/local/cuda/lib64/
     cd ..
     rm -rf tmp_nccl
     ldconfig
