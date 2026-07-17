@@ -9,9 +9,6 @@ add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
         LlamaLinear.cu
-        BlockManager.cc
-        BlockTrie.cc
-        SequenceManager.cc
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc

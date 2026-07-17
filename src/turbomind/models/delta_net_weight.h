@@ -69,6 +69,10 @@ public:
     DataType data_type{};
     int      tp_size{};
     int      tp_rank{};
+
+    // Set at runtime
+    int conv_state_offset{};
+    int linear_state_offset{};
 };
 
 }  // namespace turbomind

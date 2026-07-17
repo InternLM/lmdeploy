@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <future>
+#include <limits>
 #include <random>
 
 #include "src/turbomind/turbomind.h"
@@ -11,6 +12,7 @@
 #include "src/turbomind/core/core.h"
 
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_executor.h"
@@ -22,7 +24,6 @@
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/vision_model.h"
-#include "src/turbomind/models/vision_model_weight.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 
@@ -218,7 +219,7 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& c = ctx->comm;
 
-    c.h_global = group_id_->CreateCommunicator(comm_size_ * p.outer_dp_size, global_rank, p.node_rank);
+    c.h_global = group_id_->CreateCommunicator(comm_size_, global_rank, p.node_rank);
 
     c.h_comm = c.h_global->Split(outer_rank, 0);
 
@@ -275,20 +276,45 @@ void TurboMind::Impl::CreateEngine(int index)
 
     ctx.comm.h_comm->Sync();
 
-    // create model
-    LanguageModel model{param, ctx, *weights_[index]->text_model_ptr(), phases_};
+    const double cache_ratio = param.cache_max_block_count;
+    TM_CHECK_GT(cache_ratio, 0.) << "object-cache path expects 0 < cache_max_block_count < 1";
+    TM_CHECK_LT(cache_ratio, 1.) << "object-cache path no longer accepts cache_max_block_count as a block count";
 
-    // create optional vision model
+    size_t free_bytes{}, total_bytes{};
+    TM_CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
+    free_bytes = AllReduce(ctx.comm.h_tp_group, free_bytes, comm::RedOp::kMin);
+
+    const size_t cache_bytes = static_cast<size_t>(static_cast<double>(free_bytes) * cache_ratio);
+    TM_CHECK_GT(cache_bytes, size_t{0});
+    TM_CHECK_LE(cache_bytes, static_cast<size_t>(std::numeric_limits<core::ssize_t>::max()));
+
+    TM_LOG_INFO("Object cache budget: {:.2f} MB from free {:.2f} MB and ratio {:.3f}",
+                cache_bytes / (1024. * 1024.),
+                free_bytes / (1024. * 1024.),
+                cache_ratio);
+
+    Buffer cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, core::Context::device_alloc()};
+    ObjectAllocator alloc{std::move(cache_region)};
+    CacheRegistry   cache_registry;
+    cache_registry.set_checkpoint_min_interval(param.cache_checkpoint_interval);
+
+    // create model
+    LanguageModel model{cache_registry, param, ctx, *weights_[index]->text_model_ptr(), phases_};
+
+    // create vision model for VLM checkpoints; null for text-only (no vision sub-tree attached)
     std::unique_ptr<VisionModel> vision_model;
     if (auto* vw = weights_[index]->vision_model_ptr()) {
         vision_model = CreateVisionModel(*vw, param, ctx, phases_);
     }
 
+    cache_registry.RegisterObjectIds(alloc);
+
     // create engine
     engines_[index] = Engine{param,
+                             std::move(alloc),
+                             std::move(cache_registry),
                              std::move(model),
                              std::move(vision_model),
-                             *weights_[index]->text_model_ptr(),
                              ctx,
                              *gateway_,
                              engine_param_.devices[index],
@@ -386,8 +412,6 @@ void TurboMind::Impl::WarmUp(int index)
                 TensorMap inputs{{"input_ids", input_ids.slice(0, token_num)}};
 
                 ModelRequest::InputParam param{};
-                param.session.start_flag     = true;
-                param.session.end_flag       = true;
                 param.gen_cfg.max_new_tokens = 1;
                 param.tensors                = std::make_shared<TensorMap>(inputs);
 
