@@ -1,7 +1,6 @@
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/copy/copy.h"
-#include <cute/algorithm/copy.hpp>
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
 

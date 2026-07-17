@@ -17,7 +17,6 @@
 
 #include <cute/algorithm/clear.hpp>
 #include <cute/algorithm/cooperative_gemm.hpp>
-#include <cute/algorithm/copy.hpp>
 #include <cute/algorithm/gemm.hpp>
 #include <cute/arch/copy.hpp>
 #include <cute/arch/copy_sm75.hpp>
@@ -26,7 +25,6 @@
 #include <cute/arch/copy_sm90_tma.hpp>
 #include <cute/arch/mma_sm80.hpp>
 #include <cute/arch/mma_sm90.hpp>
-#include <cute/atom/copy_atom.hpp>
 #include <cute/atom/mma_traits_sm80.hpp>
 #include <cute/layout.hpp>
 #include <cute/swizzle_layout.hpp>

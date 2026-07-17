@@ -3,7 +3,6 @@
 #include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
-#include <cute/algorithm/copy.hpp>
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
 
