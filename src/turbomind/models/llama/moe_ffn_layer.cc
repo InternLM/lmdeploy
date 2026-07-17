@@ -239,7 +239,6 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
     temp_ = Tensor{{tokens * experts_per_token, hidden_dim}, p.input.dtype(), p.input.device()};
 
     // For ep_size > 1, the valid tokens are less than tokens * experts_per_token
-    const bool indices_padded   = ep_size_ > 1 ? true : false;
     const int* num_valid_tokens = ep_size_ > 1 ? offsets_.data() + local_expert_num : nullptr;
 
     auto indices = f2n_.slice(0, temp_.shape(0));
@@ -247,7 +246,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
 
     if (block.w1w3) {
         Tensor inter;
-        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1w3, indices, offsets, inter, indices_padded));
+        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1w3, indices, offsets, inter));
 
         if (!block.is_fused_silu) {
             Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st);
@@ -259,10 +258,10 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
     else {
         // Separate w1/w3 path
         Tensor gating;
-        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1, indices, offsets, gating, indices_padded));
+        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1, indices, offsets, gating));
 
         Tensor up;
-        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w3, indices, offsets, up, indices_padded));
+        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w3, indices, offsets, up));
 
         Activation(gating, up, block.act_type, num_valid_tokens, st);
         TM_CUDA_CHECK(cudaGetLastError());
