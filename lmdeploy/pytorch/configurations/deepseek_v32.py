@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import functools
-
 import torch
 
 from lmdeploy.pytorch import envs as _envs
@@ -8,13 +6,13 @@ from lmdeploy.pytorch import envs as _envs
 from .deepseek_v2 import DeepseekV2ModelConfigBuilder
 
 
-def _check_env_v32(device: str = 'cuda', require_hadamard: bool = True):
+def _check_env_v32(device: str = 'cuda'):
     """Environment check."""
     if device != 'cuda':
         return
 
     # check cuda
-    if require_hadamard:
+    if _envs.disable_dsa_indexer_fusion:
         try:
             import fast_hadamard_transform  # noqa: F401
         except ImportError:
@@ -47,6 +45,5 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
         config.cache_shapes = [index_k_shape, index_k_scale_shape]
         config.use_mla_fp8_cache = True
         config.mla_index_topk = hf_config.index_topk
-        config.check_env_func = functools.partial(_check_env_v32,
-                                                  require_hadamard=_envs.disable_dsa_indexer_fusion)
+        config.check_env_func = _check_env_v32
         return config
