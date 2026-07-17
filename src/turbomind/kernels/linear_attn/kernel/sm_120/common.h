@@ -1505,10 +1505,6 @@ static_assert(offsetof(CorrectInitialStatesSharedStorage<kCorrectInitialStatesBf
 
 constexpr int kChunk32Size                     = 32;
 constexpr int kSm120FusedGdrGatePasses         = kChunk32Size / kFusedGdrGateWriterThreads;
-constexpr int kSm120FusedGdrProducerRegisters  = 32;
-constexpr int kSm120FusedGdrHProducerRegisters = 24;
-constexpr int kSm120FusedGdrHStateRegisters    = 144;
-constexpr int kSm120FusedGdrHValueRegisters    = 144;
 
 static_assert(kFusedGdrGateWriterThreads == kChunk32Size);
 static_assert(kSm120FusedGdrGatePasses == 1);
@@ -1618,75 +1614,6 @@ CUTE_HOST_DEVICE constexpr auto Sm120FusedGdrStateCLayout()
 static_assert(cute::cosize_v<decltype(
                   Sm120FusedGdrStateCLayout<kContextParallelGdrBlockDv>())> == kContextParallelGdrBlockDv * kHeadDim);
 static_assert(cute::cosize_v<decltype(Sm120FusedGdrStateCLayout<kFusedGdrBlockDv>())> == kFusedGdrBlockDv * kHeadDim);
-
-template<class T, int BlockDv>
-struct Sm120FusedGdrSharedStorage {
-    // Chunk32 arena. p_stage holds the 32x32 resolvent plus packed W, while q_stage
-    // is reused after Q@state for the packed-P/Vd handoff and output TMA store.
-    alignas(1024) T q_stage[2][kChunk32Size][kHeadDim];
-    alignas(1024) T k_stage[2][kChunk32Size][kHeadDim];
-    alignas(128) float gate_stage[2][2][kChunk32Size][4];
-    float g[2][kChunk32Size];
-    float g_exp[2][kChunk32Size];
-    float g_rev_exp[2][kChunk32Size];
-    alignas(16) cute::uint64_t state_tma_mbar;
-    alignas(16) cute::uint64_t state_ready_mbar;
-    // Keep per-slot barriers as explicit fields so every mbarrier address remains 16-byte aligned.
-    alignas(16) cute::uint64_t gate_ready_mbar0;
-    alignas(16) cute::uint64_t gate_ready_mbar1;
-    alignas(16) cute::uint64_t early_ready_mbar0;
-    alignas(16) cute::uint64_t early_ready_mbar1;
-    alignas(16) cute::uint64_t q_ready_mbar0;
-    alignas(16) cute::uint64_t q_ready_mbar1;
-    alignas(16) cute::uint64_t k_ready_mbar0;
-    alignas(16) cute::uint64_t k_ready_mbar1;
-    alignas(16) cute::uint64_t q_store_done_bar0;
-    alignas(16) cute::uint64_t q_store_done_bar1;
-    alignas(16) cute::uint64_t out_ready_bar0;
-    alignas(16) cute::uint64_t out_ready_bar1;
-    alignas(16) cute::uint64_t early_free_bar0;
-    alignas(16) cute::uint64_t early_free_bar1;
-    alignas(16) cute::uint64_t compute_done_bar0;
-    alignas(16) cute::uint64_t compute_done_bar1;
-    alignas(16) cute::uint64_t update_ready_bar;
-    alignas(1024) float vd[kChunk32Size][BlockDv];
-    float state_stage[kHeadDim][BlockDv];
-    alignas(1024) float p_stage[2][kChunk32Size][BlockDv];
-};
-
-template<class T, int BlockDv>
-constexpr size_t Sm120FusedGdrSharedBytes()
-{
-    static_assert(BlockDv == kContextParallelGdrBlockDv || BlockDv == kFusedGdrBlockDv);
-    return sizeof(Sm120FusedGdrSharedStorage<T, BlockDv>);
-}
-
-static_assert(Sm120FusedGdrSharedBytes<__nv_bfloat16, kFusedGdrBlockDv>() <= kFusedGdrMaxDynamicSharedBytes);
-static_assert(Sm120FusedGdrSharedBytes<__nv_bfloat16, kContextParallelGdrBlockDv>() <= kFusedGdrMaxDynamicSharedBytes);
-
-template<class T, int BlockDv>
-constexpr size_t Sm120FusedGdrPUpperOffset()
-{
-    using Storage = Sm120FusedGdrSharedStorage<T, BlockDv>;
-    return offsetof(Storage, p_stage) + kChunk32Size * kChunk32Size * sizeof(T);
-}
-
-template<class T, int BlockDv>
-constexpr size_t Sm120FusedGdrVdOffset()
-{
-    using Storage = Sm120FusedGdrSharedStorage<T, BlockDv>;
-    return offsetof(Storage, vd);
-}
-
-static_assert(Sm120FusedGdrPUpperOffset<__nv_bfloat16, kFusedGdrBlockDv>() % alignof(__nv_bfloat162) == 0);
-static_assert(Sm120FusedGdrPUpperOffset<__nv_bfloat16, kContextParallelGdrBlockDv>() % alignof(__nv_bfloat162) == 0);
-static_assert(Sm120FusedGdrVdOffset<__nv_bfloat16, kFusedGdrBlockDv>() % alignof(__nv_bfloat162) == 0);
-static_assert(Sm120FusedGdrVdOffset<__nv_bfloat16, kContextParallelGdrBlockDv>() % alignof(__nv_bfloat162) == 0);
-static_assert((kChunk32Size * kChunk32Size * sizeof(cute::bfloat16_t)) % alignof(__nv_bfloat162) == 0);
-static_assert(Sm120FusedGdrPUpperOffset<__nv_bfloat16, kFusedGdrBlockDv>() % alignof(uint4) == 0);
-static_assert(Sm120FusedGdrPUpperOffset<__nv_bfloat16, kContextParallelGdrBlockDv>() % alignof(uint4) == 0);
-static_assert(Sm120FusedGdrVdOffset<__nv_bfloat16, kFusedGdrBlockDv>() % alignof(uint4) == 0);
-static_assert(Sm120FusedGdrVdOffset<__nv_bfloat16, kContextParallelGdrBlockDv>() % alignof(uint4) == 0);
 
 template<class T, int BlockDv, class Fragment, class ThrMma>
 __device__ __forceinline__ void Sm120FusedGdrStoreValueFragmentBf16Stsm(

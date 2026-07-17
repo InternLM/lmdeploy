@@ -18,6 +18,9 @@ class FlashQlaUnsupported(ValueError):
     pass
 
 
+FLASHQLA_CHUNK_SIZE = 32
+
+
 @dataclass(frozen=True)
 class FlashQlaResult:
     out: torch.Tensor | None
@@ -63,13 +66,13 @@ def all_forward(q: torch.Tensor,
     imports = _imports()
     g_cumsum = imports['chunk_local_cumsum'](
         g,
-        chunk_size=64,
+        chunk_size=FLASHQLA_CHUNK_SIZE,
         cu_seqlens=cu_seqlens,
     )
     a = imports['kkt_solve'](
         k=k,
         b=beta,
-        chunk_size=64,
+        chunk_size=FLASHQLA_CHUNK_SIZE,
         cu_seqlens=cu_seqlens,
     )
     run_initial_state = initial_state
@@ -79,7 +82,9 @@ def all_forward(q: torch.Tensor,
     cp_enabled = False
 
     if cp_mode == 'auto':
-        run_initial_state, run_cu_seqlens, cp_seq_map, raw_cu_seqlens = imports['intra_card_cp_preprocess'](
+        run_initial_state, run_cu_seqlens, cp_seq_map, raw_cu_seqlens, _cp_cache = imports[
+            'intra_card_cp_preprocess'
+        ](
             k=k,
             v=v,
             a=a,
@@ -108,15 +113,14 @@ def all_forward(q: torch.Tensor,
         cu_seqlens=run_cu_seqlens,
         cp_seq_map=cp_seq_map,
         raw_cu_seqlens=raw_cu_seqlens,
-        chunk_size=64,
         state_v_first=False,
     )
     return FlashQlaResult(out=out, final_state=final_state, cp_enabled=cp_enabled)
 
 
 def validate_benchmark_case(run: RunCase, request: BenchmarkRequest) -> None:
-    if run.chunk_size != 64:
-        raise ValueError('flashqla_requires_chunk64')
+    if run.chunk_size != FLASHQLA_CHUNK_SIZE:
+        raise ValueError(f'flashqla_requires_chunk{FLASHQLA_CHUNK_SIZE}')
 
 
 def _cp_pattern_segment_tokens(inputs: InputTensors) -> int:
@@ -132,7 +136,7 @@ def _cp_pattern_segment_tokens(inputs: InputTensors) -> int:
         )
     use_cp, cp_q_offsets, sequence_starts, _, _, _ = _imports()['calc_cp_seqs'](
         raw_q_offsets,
-        64,
+        FLASHQLA_CHUNK_SIZE,
         inputs.v.shape[2],
     )
     if not use_cp:

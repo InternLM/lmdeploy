@@ -126,8 +126,9 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
         out == nullptr ? StridedTensorBase<__nv_bfloat16>{} : MakeStridedTensorBase<__nv_bfloat16>(*out);
 
     if (state_dtype == kBfloat16) {
+        using Kernel = Sm120GdrTmaDescPrepare<__nv_bfloat16, ChunkSize>;
         Sm120GdrTmaDescPrepareKernel<__nv_bfloat16, ChunkSize>
-            <<<blocks, 32, 0, stream>>>(mode,
+            <<<blocks, Kernel::kThreads, 0, stream>>>(mode,
                                         layout,
                                         kkt_k_desc,
                                         kkt_resolvent_desc,
@@ -169,8 +170,9 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
                                         state_layer_offset);
     }
     else {
+        using Kernel = Sm120GdrTmaDescPrepare<float, ChunkSize>;
         Sm120GdrTmaDescPrepareKernel<float, ChunkSize>
-            <<<blocks, 32, 0, stream>>>(mode,
+            <<<blocks, Kernel::kThreads, 0, stream>>>(mode,
                                         layout,
                                         kkt_k_desc,
                                         kkt_resolvent_desc,

@@ -169,7 +169,297 @@ __device__ __forceinline__ void StoreBf16(Element* ptr, float value)
 }
 
 template<class K, int ConsumerThreads, int ConsumerRegisters>
-__global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
+struct Sm120KktSolve {
+    using SharedStorage = KktSolveSharedStorage<K>;
+
+    static constexpr int    kThreads     = kKktSolveConsumerWgs * ConsumerThreads;
+    static constexpr int    kMinBlocks   = 1;
+    static constexpr size_t kSharedBytes = KktSolveSharedBytes<K, ConsumerThreads>();
+
+    static __device__ __forceinline__ void Run(const int32_t* __restrict__ q_offsets,
+                                               const bool* __restrict__ finished,
+                                               const float* __restrict__ beta,
+                                               CUtensorMap* tma_desc_workspace,
+                                               int          token_num,
+                                               int          sequence_num,
+                                               int          hq,
+                                               int          hv,
+                                               int64_t      beta_stride,
+                                               int64_t      beta_batch_stride,
+                                               int          groups_per_k_head,
+                                               unsigned char* shared_raw)
+    {
+        static_assert(ConsumerThreads == kKktSolveRoleThreads,
+                      "KKT solve MMA and repack layouts currently require 128 consumer threads");
+        static_assert(ConsumerThreads >= kChunkSize);
+        static_assert(ConsumerThreads % 32 == 0);
+
+        const int     tx              = static_cast<int>(threadIdx.x);
+        const int     qk_head         = static_cast<int>(blockIdx.x);
+        int           local_chunk_id  = static_cast<int>(blockIdx.y);
+        constexpr int batch_id        = 0;
+        const int     value_head_base = qk_head * groups_per_k_head;
+        const int     wg_idx          = cutlass::canonical_warp_group_idx();
+        const int     role_tid        = tx % ConsumerThreads;
+
+        int sequence_id = -1;
+        for (int b = 0; b < sequence_num; ++b) {
+            const int cur_start  = q_offsets[b];
+            const int cur_end    = q_offsets[b + 1];
+            const int cur_chunks = KktCeilDiv(cur_end - cur_start, kChunkSize);
+            if (local_chunk_id < cur_chunks) {
+                sequence_id = b;
+                break;
+            }
+            local_chunk_id -= cur_chunks;
+        }
+        if (sequence_id < 0) {
+            return;
+        }
+        const int seq_start       = q_offsets[sequence_id];
+        const int seq_end         = q_offsets[sequence_id + 1];
+        const int seq_len         = seq_end - seq_start;
+        const int token0          = local_chunk_id * kChunkSize;
+        const int valid           = min(seq_len - token0, kChunkSize);
+        const int physical_batch  = seq_start / token_num;
+        const int local_seq_start = seq_start - physical_batch * token_num;
+
+        auto&     smem     = *reinterpret_cast<SharedStorage*>(shared_raw);
+        uint64_t* k_ready0 = &smem.k_ready0;
+        uint64_t* k_ready1 = &smem.k_ready1;
+
+        using MmaElement       = typename KktMmaTraits<K>::Element;
+        MmaElement* k_tile0    = smem.k_tile;
+        MmaElement* k_tile1    = smem.k_tile + kKTilePlaneElems;
+        MmaElement* out_tile   = smem.out_tile;
+        float*      beta_stage = &smem.beta_stage[0][0];
+        const auto* gmem_desc  = tma_desc_workspace + sequence_id * kKktTmaDescCount;
+        KktAcquireAndPrefetchTmaDescriptors(gmem_desc, tx);
+        const CUtensorMap* k_desc         = &gmem_desc[kKktKDesc];
+        const CUtensorMap* resolvent_desc = &gmem_desc[kKktResolventDesc];
+
+        if (tx == 0) {
+            cute::initialize_barrier(*k_ready0, 1);
+            cute::initialize_barrier(*k_ready1, 1);
+            cutlass::arch::fence_barrier_init();
+        }
+        __syncthreads();
+
+        if (wg_idx == 0) {
+            cutlass::arch::warpgroup_reg_alloc<ConsumerRegisters>();
+
+            constexpr int ConsumerWg = 0;
+            static_assert(ConsumerWg < kKktSolveConsumerWgs);
+
+            if (ConsumerWg < groups_per_k_head) {
+                auto& scratch   = smem.scratch[ConsumerWg];
+                auto  s_k0      = cute::make_tensor(cute::make_smem_ptr(k_tile0), KktKTileLayout());
+                auto  s_k1      = cute::make_tensor(cute::make_smem_ptr(k_tile1), KktKTileLayout());
+                auto  s_a16i    = cute::make_tensor(cute::make_smem_ptr(scratch.a16i), KktBlock16Layout<2>());
+                auto  s_neg_l10 = cute::make_tensor(cute::make_smem_ptr(scratch.neg_l10), KktBlock16Layout<1>());
+                auto  s_out     = cute::make_tensor(cute::make_smem_ptr(out_tile), KktOutputTileLayout());
+
+                float gram_fragment[32];
+
+                using MmaAtom = typename KktMmaTraits<K>::Atom;
+                using Mma32   = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
+                                             cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
+                                             cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
+
+                Mma32 mma32;
+                auto  t_gram_fragment =
+                    cute::make_tensor(cute::make_rmem_ptr(gram_fragment),
+                                      cute::partition_shape_C(mma32, cute::Shape<cute::_32, cute::_32>{}));
+                auto c_a32       = cute::make_identity_tensor(cute::Shape<cute::_32, cute::_32>{});
+                auto t_a32_coord = mma32.get_thread_slice(role_tid).partition_C(c_a32);
+
+                constexpr int k_tma_box_rows = kChunkSize;
+                if (role_tid == 0) {
+                    cute::set_barrier_transaction_bytes(*k_ready0, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
+                    cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready0, kTmaNoCacheHint, k_tile0, 0, 0, qk_head, token0, 0);
+                    cute::set_barrier_transaction_bytes(*k_ready1, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
+                    cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready1, kTmaNoCacheHint, k_tile1, 0, 1, qk_head, token0, 0);
+                }
+                cute::wait_barrier(*k_ready0, 0);
+
+                using namespace cute;
+                clear(t_gram_fragment);
+                cute::cooperative_gemm(role_tid,
+                                       mma32,
+                                       s_k0,
+                                       s_k0,
+                                       t_gram_fragment,
+                                       identity{},
+                                       identity{},
+                                       SM75_U32x4_LDSM_N{},
+                                       SM75_U32x4_LDSM_N{});
+                ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+                cute::wait_barrier(*k_ready1, 0);
+                cute::cooperative_gemm(role_tid,
+                                       mma32,
+                                       s_k1,
+                                       s_k1,
+                                       t_gram_fragment,
+                                       identity{},
+                                       identity{},
+                                       SM75_U32x4_LDSM_N{},
+                                       SM75_U32x4_LDSM_N{});
+
+                int loaded_beta_quad = -1;
+                for (int group = ConsumerWg; group < groups_per_k_head; group += kKktSolveConsumerWgs) {
+                    const int value_head = value_head_base + group;
+                    const int beta_quad  = value_head / 4;
+                    const int beta_coord = beta_quad * 4;
+                    if (beta_quad != loaded_beta_quad) {
+                        const int beta_row   = role_tid / 4;
+                        const int beta_lane  = role_tid % 4;
+                        float     beta_value = 0.0f;
+                        if (beta_row < valid && beta_coord + beta_lane < hv) {
+                            const int64_t beta_offset =
+                                static_cast<int64_t>(physical_batch) * beta_batch_stride
+                                + static_cast<int64_t>(local_seq_start + token0 + beta_row) * beta_stride + beta_coord
+                                + beta_lane;
+                            beta_value = beta[beta_offset];
+                        }
+                        beta_stage[beta_row * 4 + beta_lane] = beta_value;
+                        ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+                        loaded_beta_quad = beta_quad;
+                    }
+                    const int beta_lane = value_head & 3;
+                    if (group > 0) {
+                        if (role_tid == 0) {
+                            cute::tma_store_wait<0>();
+                        }
+                        ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+                    }
+
+#pragma unroll
+                    for (int idx = 0; idx < cute::size(t_gram_fragment); ++idx) {
+                        const auto coord = t_a32_coord(idx);
+                        const int  row   = cute::get<0>(coord);
+                        const int  col   = cute::get<1>(coord);
+
+                        float value = t_gram_fragment(idx) * beta_stage[row * 4 + beta_lane];
+
+                        if (row < col) {
+                            value = 0.0f;
+                        }
+                        else if (row == col) {
+                            value = 1.0f;
+                        }
+
+                        const int row_block = row / kBlock16;
+                        const int col_block = col / kBlock16;
+                        if (row_block == col_block) {
+                            s_a16i(row_block, row % kBlock16, col % kBlock16) = value;
+                        }
+                        else if (row_block == 1 && col_block == 0) {
+                            s_neg_l10(0, row - kBlock16, col) = -value;
+                        }
+                    }
+                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+
+                    if (role_tid < kChunkSize) {
+                        const auto solve_coord = KktDiagSolveThreadLayout().get_hier_coord(role_tid);
+                        const int  tile_id     = cute::get<0>(solve_coord);
+                        const int  col         = cute::get<1>(solve_coord);
+
+                        float inv_col[kBlock16];
+#pragma unroll
+                        for (int row = 0; row < kBlock16; ++row) {
+                            inv_col[row] = s_a16i(tile_id, row, col);
+                        }
+
+#pragma unroll
+                        for (int row = 1; row < kBlock16; ++row) {
+                            float acc = 0.0f;
+#pragma unroll
+                            for (int mid = 0; mid < row; ++mid) {
+                                const float l_row_mid = __shfl_sync(0xffffffffu, inv_col[row], mid, kBlock16);
+                                acc -= inv_col[mid] * l_row_mid;
+                            }
+
+                            if (col < row) {
+                                inv_col[row] = acc;
+                            }
+                        }
+
+#pragma unroll
+                        for (int row = 0; row < kBlock16; ++row) {
+                            if (col <= row) {
+                                s_a16i(tile_id, row, col) = inv_col[row];
+                            }
+                        }
+                    }
+                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+
+                    // The chunk32 triangular inverse has two 16x16 diagonal blocks. Store inv(L00) and inv(L11)
+                    // directly, then form the lower-left block as inv(L11) * (-L10) * inv(L00).
+                    if (role_tid < 64) {
+                        const auto copy_coord = KktOffdiagVec4ThreadLayout().get_hier_coord(role_tid);
+                        const int  row        = cute::get<0>(copy_coord);
+                        const int  col        = cute::get<1>(copy_coord) * 4;
+
+                        const float4 upper = *reinterpret_cast<const float4*>(&s_a16i(0, row, col));
+                        const float4 lower = *reinterpret_cast<const float4*>(&s_a16i(1, row, col));
+                        StoreBf16(&s_out(row, col + 0), upper.x);
+                        StoreBf16(&s_out(row, col + 1), upper.y);
+                        StoreBf16(&s_out(row, col + 2), upper.z);
+                        StoreBf16(&s_out(row, col + 3), upper.w);
+                        StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 0), lower.x);
+                        StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 1), lower.y);
+                        StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 2), lower.z);
+                        StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 3), lower.w);
+                        StoreBf16(&s_out(row, kBlock16 + col + 0), 0.0f);
+                        StoreBf16(&s_out(row, kBlock16 + col + 1), 0.0f);
+                        StoreBf16(&s_out(row, kBlock16 + col + 2), 0.0f);
+                        StoreBf16(&s_out(row, kBlock16 + col + 3), 0.0f);
+
+                        float4 acc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#pragma unroll
+                        for (int n = 0; n < kBlock16; ++n) {
+                            float mid = 0.0f;
+#pragma unroll
+                            for (int m = 0; m < kBlock16; ++m) {
+                                mid += s_a16i(1, row, m) * s_neg_l10(0, m, n);
+                            }
+                            const float4 rhs = *reinterpret_cast<const float4*>(&s_a16i(0, n, col));
+                            acc.x += mid * rhs.x;
+                            acc.y += mid * rhs.y;
+                            acc.z += mid * rhs.z;
+                            acc.w += mid * rhs.w;
+                        }
+                        StoreBf16(&s_out(kBlock16 + row, col + 0), acc.x);
+                        StoreBf16(&s_out(kBlock16 + row, col + 1), acc.y);
+                        StoreBf16(&s_out(kBlock16 + row, col + 2), acc.z);
+                        StoreBf16(&s_out(kBlock16 + row, col + 3), acc.w);
+                    }
+                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+
+                    cute::tma_store_fence();
+                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+                    if (role_tid == 0) {
+                        cute::SM90_TMA_STORE_4D::copy(resolvent_desc, out_tile, 0, value_head, token0, 0);
+                        cute::tma_store_arrive();
+                    }
+                    if (group + kKktSolveConsumerWgs < groups_per_k_head) {
+                        ConsumerWgSync<ConsumerThreads, ConsumerWg>();
+                    }
+                }
+                static_cast<void>(finished);
+                static_cast<void>(hq);
+                static_cast<void>(batch_id);
+                if (role_tid == 0) {
+                    cute::tma_store_wait<0>();
+                }
+            }
+        }
+    }
+};
+
+template<class K, int ConsumerThreads, int ConsumerRegisters>
+__global__ void __launch_bounds__(Sm120KktSolve<K, ConsumerThreads, ConsumerRegisters>::kThreads,
+                                  Sm120KktSolve<K, ConsumerThreads, ConsumerRegisters>::kMinBlocks)
     Sm120KktSolveKernel(const int32_t* __restrict__ q_offsets,
                         const bool* __restrict__ finished,
                         const float* __restrict__ beta,
@@ -182,272 +472,19 @@ __global__ void __launch_bounds__(kKktSolveConsumerWgs* ConsumerThreads, 1)
                         int64_t      beta_batch_stride,
                         int          groups_per_k_head)
 {
-    static_assert(ConsumerThreads == kKktSolveRoleThreads,
-                  "KKT solve MMA and repack layouts currently require 128 consumer threads");
-    static_assert(ConsumerThreads >= kChunkSize);
-    static_assert(ConsumerThreads % 32 == 0);
-
-    const int     tx              = static_cast<int>(threadIdx.x);
-    const int     qk_head         = static_cast<int>(blockIdx.x);
-    int           local_chunk_id  = static_cast<int>(blockIdx.y);
-    constexpr int batch_id        = 0;
-    const int     value_head_base = qk_head * groups_per_k_head;
-    const int     wg_idx          = cutlass::canonical_warp_group_idx();
-    const int     role_tid        = tx % ConsumerThreads;
-
-    int sequence_id = -1;
-    for (int b = 0; b < sequence_num; ++b) {
-        const int cur_start  = q_offsets[b];
-        const int cur_end    = q_offsets[b + 1];
-        const int cur_chunks = KktCeilDiv(cur_end - cur_start, kChunkSize);
-        if (local_chunk_id < cur_chunks) {
-            sequence_id = b;
-            break;
-        }
-        local_chunk_id -= cur_chunks;
-    }
-    if (sequence_id < 0) {
-        return;
-    }
-    const int seq_start       = q_offsets[sequence_id];
-    const int seq_end         = q_offsets[sequence_id + 1];
-    const int seq_len         = seq_end - seq_start;
-    const int token0          = local_chunk_id * kChunkSize;
-    const int valid           = min(seq_len - token0, kChunkSize);
-    const int physical_batch  = seq_start / token_num;
-    const int local_seq_start = seq_start - physical_batch * token_num;
-
     extern __shared__ __align__(1024) unsigned char shared_raw[];
-    auto&                                           smem     = *reinterpret_cast<KktSolveSharedStorage<K>*>(shared_raw);
-    uint64_t*                                       k_ready0 = &smem.k_ready0;
-    uint64_t*                                       k_ready1 = &smem.k_ready1;
-
-    using MmaElement       = typename KktMmaTraits<K>::Element;
-    MmaElement* k_tile0    = smem.k_tile;
-    MmaElement* k_tile1    = smem.k_tile + kKTilePlaneElems;
-    MmaElement* out_tile   = smem.out_tile;
-    float*      beta_stage = &smem.beta_stage[0][0];
-    const auto* gmem_desc  = tma_desc_workspace + sequence_id * kKktTmaDescCount;
-    KktAcquireAndPrefetchTmaDescriptors(gmem_desc, tx);
-    const CUtensorMap* k_desc         = &gmem_desc[kKktKDesc];
-    const CUtensorMap* resolvent_desc = &gmem_desc[kKktResolventDesc];
-
-    if (tx == 0) {
-        cute::initialize_barrier(*k_ready0, 1);
-        cute::initialize_barrier(*k_ready1, 1);
-        cutlass::arch::fence_barrier_init();
-    }
-    __syncthreads();
-
-    if (wg_idx == 0) {
-        cutlass::arch::warpgroup_reg_alloc<ConsumerRegisters>();
-
-        constexpr int ConsumerWg = 0;
-        static_assert(ConsumerWg < kKktSolveConsumerWgs);
-
-        if (ConsumerWg < groups_per_k_head) {
-            auto& scratch   = smem.scratch[ConsumerWg];
-            auto  s_k0      = cute::make_tensor(cute::make_smem_ptr(k_tile0), KktKTileLayout());
-            auto  s_k1      = cute::make_tensor(cute::make_smem_ptr(k_tile1), KktKTileLayout());
-            auto  s_a16i    = cute::make_tensor(cute::make_smem_ptr(scratch.a16i), KktBlock16Layout<2>());
-            auto  s_neg_l10 = cute::make_tensor(cute::make_smem_ptr(scratch.neg_l10), KktBlock16Layout<1>());
-            auto  s_out     = cute::make_tensor(cute::make_smem_ptr(out_tile), KktOutputTileLayout());
-
-            float gram_fragment[32];
-
-            using MmaAtom = typename KktMmaTraits<K>::Atom;
-            using Mma32   = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
-                                         cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
-                                         cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
-
-            Mma32 mma32;
-            auto  t_gram_fragment =
-                cute::make_tensor(cute::make_rmem_ptr(gram_fragment),
-                                  cute::partition_shape_C(mma32, cute::Shape<cute::_32, cute::_32>{}));
-            auto c_a32       = cute::make_identity_tensor(cute::Shape<cute::_32, cute::_32>{});
-            auto t_a32_coord = mma32.get_thread_slice(role_tid).partition_C(c_a32);
-
-            constexpr int k_tma_box_rows = kChunkSize;
-            if (role_tid == 0) {
-                cute::set_barrier_transaction_bytes(*k_ready0, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
-                cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready0, kTmaNoCacheHint, k_tile0, 0, 0, qk_head, token0, 0);
-                cute::set_barrier_transaction_bytes(*k_ready1, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
-                cute::SM90_TMA_LOAD_5D::copy(k_desc, k_ready1, kTmaNoCacheHint, k_tile1, 0, 1, qk_head, token0, 0);
-            }
-            cute::wait_barrier(*k_ready0, 0);
-
-            using namespace cute;
-            clear(t_gram_fragment);
-            cute::cooperative_gemm(role_tid,
-                                   mma32,
-                                   s_k0,
-                                   s_k0,
-                                   t_gram_fragment,
-                                   identity{},
-                                   identity{},
-                                   SM75_U32x4_LDSM_N{},
-                                   SM75_U32x4_LDSM_N{});
-            ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-            cute::wait_barrier(*k_ready1, 0);
-            cute::cooperative_gemm(role_tid,
-                                   mma32,
-                                   s_k1,
-                                   s_k1,
-                                   t_gram_fragment,
-                                   identity{},
-                                   identity{},
-                                   SM75_U32x4_LDSM_N{},
-                                   SM75_U32x4_LDSM_N{});
-
-            int loaded_beta_quad = -1;
-            for (int group = ConsumerWg; group < groups_per_k_head; group += kKktSolveConsumerWgs) {
-                const int value_head = value_head_base + group;
-                const int beta_quad  = value_head / 4;
-                const int beta_coord = beta_quad * 4;
-                if (beta_quad != loaded_beta_quad) {
-                    const int beta_row   = role_tid / 4;
-                    const int beta_lane  = role_tid % 4;
-                    float     beta_value = 0.0f;
-                    if (beta_row < valid && beta_coord + beta_lane < hv) {
-                        const int64_t beta_offset =
-                            static_cast<int64_t>(physical_batch) * beta_batch_stride
-                            + static_cast<int64_t>(local_seq_start + token0 + beta_row) * beta_stride + beta_coord
-                            + beta_lane;
-                        beta_value = beta[beta_offset];
-                    }
-                    beta_stage[beta_row * 4 + beta_lane] = beta_value;
-                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-                    loaded_beta_quad = beta_quad;
-                }
-                const int beta_lane = value_head & 3;
-                if (group > 0) {
-                    if (role_tid == 0) {
-                        cute::tma_store_wait<0>();
-                    }
-                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-                }
-
-#pragma unroll
-                for (int idx = 0; idx < cute::size(t_gram_fragment); ++idx) {
-                    const auto coord = t_a32_coord(idx);
-                    const int  row   = cute::get<0>(coord);
-                    const int  col   = cute::get<1>(coord);
-
-                    float value = t_gram_fragment(idx) * beta_stage[row * 4 + beta_lane];
-
-                    if (row < col) {
-                        value = 0.0f;
-                    }
-                    else if (row == col) {
-                        value = 1.0f;
-                    }
-
-                    const int row_block = row / kBlock16;
-                    const int col_block = col / kBlock16;
-                    if (row_block == col_block) {
-                        s_a16i(row_block, row % kBlock16, col % kBlock16) = value;
-                    }
-                    else if (row_block == 1 && col_block == 0) {
-                        s_neg_l10(0, row - kBlock16, col) = -value;
-                    }
-                }
-                ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-
-                if (role_tid < kChunkSize) {
-                    const auto solve_coord = KktDiagSolveThreadLayout().get_hier_coord(role_tid);
-                    const int  tile_id     = cute::get<0>(solve_coord);
-                    const int  col         = cute::get<1>(solve_coord);
-
-                    float inv_col[kBlock16];
-#pragma unroll
-                    for (int row = 0; row < kBlock16; ++row) {
-                        inv_col[row] = s_a16i(tile_id, row, col);
-                    }
-
-#pragma unroll
-                    for (int row = 1; row < kBlock16; ++row) {
-                        float acc = 0.0f;
-#pragma unroll
-                        for (int mid = 0; mid < row; ++mid) {
-                            const float l_row_mid = __shfl_sync(0xffffffffu, inv_col[row], mid, kBlock16);
-                            acc -= inv_col[mid] * l_row_mid;
-                        }
-
-                        if (col < row) {
-                            inv_col[row] = acc;
-                        }
-                    }
-
-#pragma unroll
-                    for (int row = 0; row < kBlock16; ++row) {
-                        if (col <= row) {
-                            s_a16i(tile_id, row, col) = inv_col[row];
-                        }
-                    }
-                }
-                ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-
-                // The chunk32 triangular inverse has two 16x16 diagonal blocks. Store inv(L00) and inv(L11)
-                // directly, then form the lower-left block as inv(L11) * (-L10) * inv(L00).
-                if (role_tid < 64) {
-                    const auto copy_coord = KktOffdiagVec4ThreadLayout().get_hier_coord(role_tid);
-                    const int  row        = cute::get<0>(copy_coord);
-                    const int  col        = cute::get<1>(copy_coord) * 4;
-
-                    const float4 upper = *reinterpret_cast<const float4*>(&s_a16i(0, row, col));
-                    const float4 lower = *reinterpret_cast<const float4*>(&s_a16i(1, row, col));
-                    StoreBf16(&s_out(row, col + 0), upper.x);
-                    StoreBf16(&s_out(row, col + 1), upper.y);
-                    StoreBf16(&s_out(row, col + 2), upper.z);
-                    StoreBf16(&s_out(row, col + 3), upper.w);
-                    StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 0), lower.x);
-                    StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 1), lower.y);
-                    StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 2), lower.z);
-                    StoreBf16(&s_out(kBlock16 + row, kBlock16 + col + 3), lower.w);
-                    StoreBf16(&s_out(row, kBlock16 + col + 0), 0.0f);
-                    StoreBf16(&s_out(row, kBlock16 + col + 1), 0.0f);
-                    StoreBf16(&s_out(row, kBlock16 + col + 2), 0.0f);
-                    StoreBf16(&s_out(row, kBlock16 + col + 3), 0.0f);
-
-                    float4 acc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-#pragma unroll
-                    for (int n = 0; n < kBlock16; ++n) {
-                        float mid = 0.0f;
-#pragma unroll
-                        for (int m = 0; m < kBlock16; ++m) {
-                            mid += s_a16i(1, row, m) * s_neg_l10(0, m, n);
-                        }
-                        const float4 rhs = *reinterpret_cast<const float4*>(&s_a16i(0, n, col));
-                        acc.x += mid * rhs.x;
-                        acc.y += mid * rhs.y;
-                        acc.z += mid * rhs.z;
-                        acc.w += mid * rhs.w;
-                    }
-                    StoreBf16(&s_out(kBlock16 + row, col + 0), acc.x);
-                    StoreBf16(&s_out(kBlock16 + row, col + 1), acc.y);
-                    StoreBf16(&s_out(kBlock16 + row, col + 2), acc.z);
-                    StoreBf16(&s_out(kBlock16 + row, col + 3), acc.w);
-                }
-                ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-
-                cute::tma_store_fence();
-                ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-                if (role_tid == 0) {
-                    cute::SM90_TMA_STORE_4D::copy(resolvent_desc, out_tile, 0, value_head, token0, 0);
-                    cute::tma_store_arrive();
-                }
-                if (group + kKktSolveConsumerWgs < groups_per_k_head) {
-                    ConsumerWgSync<ConsumerThreads, ConsumerWg>();
-                }
-            }
-            static_cast<void>(finished);
-            static_cast<void>(hq);
-            static_cast<void>(batch_id);
-            if (role_tid == 0) {
-                cute::tma_store_wait<0>();
-            }
-        }
-    }
+    Sm120KktSolve<K, ConsumerThreads, ConsumerRegisters>::Run(q_offsets,
+                                                              finished,
+                                                              beta,
+                                                              tma_desc_workspace,
+                                                              token_num,
+                                                              sequence_num,
+                                                              hq,
+                                                              hv,
+                                                              beta_stride,
+                                                              beta_batch_stride,
+                                                              groups_per_k_head,
+                                                              shared_raw);
 }
 
 template<class K, int ConsumerThreads = kKktSolveRoleThreads, int ConsumerRegisters = kConsumerRegisters>
@@ -462,21 +499,22 @@ void LaunchKktSolveTyped(const float*        beta_ptr,
         return;
     }
 
-    const int    groups_per_k_head = problem.hv / problem.hq;
-    const dim3   grid(problem.hq, problem.total_chunks, 1);
-    const size_t shared_bytes = KktSolveSharedBytes<K, ConsumerThreads>();
+    using Kernel = Sm120KktSolve<K, ConsumerThreads, ConsumerRegisters>;
+
+    const int  groups_per_k_head = problem.hv / problem.hq;
+    const dim3 grid(problem.hq, problem.total_chunks, 1);
 
     static const cudaError_t smem_attribute_status =
         cudaFuncSetAttribute(Sm120KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(shared_bytes));
+                             static_cast<int>(Kernel::kSharedBytes));
     TM_CUDA_CHECK(smem_attribute_status);
 
     const int32_t* offsets_ptr    = q_offsets.data<int32_t>();
     const bool*    finished_ptr   = finished.data<bool>();
     auto*          desc_workspace = reinterpret_cast<CUtensorMap*>(tma_desc_workspace);
     Sm120KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>
-        <<<grid, kKktSolveConsumerWgs * ConsumerThreads, shared_bytes, stream>>>(offsets_ptr,
+        <<<grid, Kernel::kThreads, Kernel::kSharedBytes, stream>>>(offsets_ptr,
                                                                                  finished_ptr,
                                                                                  beta_ptr,
                                                                                  desc_workspace,
