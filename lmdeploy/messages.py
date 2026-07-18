@@ -696,7 +696,8 @@ class ScheduleMetrics:
     active_blocks: int = 0
     cached_blocks: int = 0
     free_blocks: int = 0
-    prefix_cache_hit_rate: float = 0
+    num_prefix_cache_query_tokens: int = 0
+    num_prefix_cache_hit_tokens: int = 0
     scheduler_tick: int = 0
 
 
