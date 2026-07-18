@@ -1007,6 +1007,11 @@ class SchedulerSequence:
     ) -> None:
         self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
 
+    def take_events(self) -> list[EngineEvent]:
+        """Return and clear pending engine events."""
+        events, self.engine_events = self.engine_events, []
+        return events
+
     def _update_embeddings(self, embeddings: list[InputEmbeddings]):
         """Update input embeddings."""
         self._num_history_images += self._num_images

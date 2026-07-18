@@ -23,7 +23,7 @@ from lmdeploy.messages import (
     TurbomindEngineConfig,
 )
 from lmdeploy.metrics.metrics_processor import metrics_processor
-from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
+from lmdeploy.metrics.stats import IterationStats, MultimodalStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeConnectionRequest,
@@ -220,7 +220,9 @@ class AsyncEngine:
             logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
             self.stat_loggers = [
                 LoggingStatLogger(dp_rank=dp_rank),
-                PrometheusStatLogger(model_name=self.model_name, max_model_len=self.session_len, dp_rank=dp_rank)
+                PrometheusStatLogger(model_name=self.model_name,
+                                     max_model_len=self.session_len,
+                                     dp_rank=dp_rank)
             ]
 
             # set stats loggers of metrics processor
@@ -538,6 +540,7 @@ class AsyncEngine:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
         if messages:
+            mm_stats = MultimodalStats(enabled=metrics_processor.enable_metrics)
             try:
                 prompt = messages
                 self.request_logger.log_prompt(session, prompt=prompt)
@@ -550,7 +553,9 @@ class AsyncEngine:
                                                                             chat_template_kwargs=chat_template_kwargs,
                                                                             media_io_kwargs=media_io_kwargs,
                                                                             mm_processor_kwargs=mm_processor_kwargs,
+                                                                            mm_stats=mm_stats,
                                                                             **kwargs)
+                metrics_processor.record_multimodal(mm_stats)
                 prompt = prompt_input.get('prompt')
                 input_ids = prompt_input.get('input_ids')
                 self.request_logger.log_inputs(session,
@@ -564,6 +569,7 @@ class AsyncEngine:
                 raise
             except Exception:
                 logger.exception('[generate] error in prompt processing')
+                metrics_processor.record_multimodal(mm_stats)
                 metrics_processor.increase_failed_requests('error')
                 remove_session_once()
                 yield GenOut(response='in prompt processing error',

@@ -7,7 +7,13 @@ from datetime import datetime
 
 import numpy as np
 
-from lmdeploy.metrics.stats import IterationStats, RequestStats, SchedulerStats, SpeculativeDecodingStats
+from lmdeploy.metrics.stats import (
+    IterationStats,
+    MultimodalStats,
+    RequestStats,
+    SchedulerStats,
+    SpeculativeDecodingStats,
+)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -27,6 +33,9 @@ class StatLoggerBase(ABC):
     def record_specdecode(self, stats: SpeculativeDecodingStats) -> None:
         ...
 
+    def record_multimodal(self, stats: MultimodalStats) -> None:
+        ...
+
     def log(self):  # noqa
         pass
 
@@ -42,6 +51,10 @@ class LoggingStatLogger(StatLoggerBase):
         self.last_log_time = now
         self.total_prompt_tokens = 0
         self.total_generation_tokens = 0
+        self.num_preemptions = 0
+        self.total_multimodal_requests = 0
+        self.total_multimodal_items = 0
+        self.total_multimodal_preprocess_time = 0.0
         # spec decode
         self.num_drafts: int = 0
         self.num_draft_tokens: int = 0
@@ -57,6 +70,7 @@ class LoggingStatLogger(StatLoggerBase):
         # the value is 0. This enables cumulative counting in `total_prompt_tokens`
         self.total_prompt_tokens += stats.prompt_tokens
         self.total_generation_tokens += stats.new_generation_tokens
+        self.num_preemptions += stats.num_preempted_reqs
 
     def record_specdecode(self, stats: SpeculativeDecodingStats):
         """Record spec decoding stats."""
@@ -71,6 +85,15 @@ class LoggingStatLogger(StatLoggerBase):
 
     def record_finish(self, stats: RequestStats):
         pass
+
+    def record_multimodal(self, stats: MultimodalStats) -> None:
+        if not stats.has_data:
+            return
+
+        total_time, _, item_counts, _ = stats.snapshot()
+        self.total_multimodal_requests += 1
+        self.total_multimodal_items += sum(item_counts.values())
+        self.total_multimodal_preprocess_time += total_time
 
     def get_spec_msg(self):
         """Get spec decoding logging msg."""
@@ -98,7 +121,7 @@ class LoggingStatLogger(StatLoggerBase):
         now = time.perf_counter()
 
         # skip logging if no tokens were processed
-        if self.total_prompt_tokens == 0 and self.total_generation_tokens == 0:
+        if (self.total_prompt_tokens == 0 and self.total_generation_tokens == 0):
             self._reset(now)
             return
 
@@ -109,7 +132,8 @@ class LoggingStatLogger(StatLoggerBase):
         spec_msg = self.get_spec_msg()
 
         # format and print
-        log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} DP{self.dp_rank}] "
+        log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} "
+                   f'Engine {self.dp_rank:03d}] '
                    f'Avg thr (in/out): {prompt_throughput:.1f} / {generation_throughput:.1f} tokens/s, '
                    f'Server (succeeded/failed/routed/waiting): '
                    f'{scheduler_stats.num_succeeded_reqs} / {scheduler_stats.num_failed_reqs} / '
@@ -120,6 +144,13 @@ class LoggingStatLogger(StatLoggerBase):
 
         if scheduler_stats.prefix_cache_hit_rate != 0:
             log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
+
+        if self.num_preemptions > 0:
+            log_msg += f'Preemptions: {self.num_preemptions}, '
+
+        if self.total_multimodal_requests:
+            avg_mm_time = self.total_multimodal_preprocess_time / self.total_multimodal_requests
+            log_msg += f'Avg MM preprocess: {avg_mm_time:.3f} s/req, '
 
         if spec_msg is not None:
             log_msg += spec_msg
@@ -151,6 +182,7 @@ class PrometheusStatLogger(StatLoggerBase):
 
         labelnames = ['model_name', 'engine']
         labelvalues = [model_name, str(dp_rank)]
+        self.labelvalues = labelvalues
 
         #
         # Scheduler stats
@@ -206,6 +238,11 @@ class PrometheusStatLogger(StatLoggerBase):
         self.counter_generation_tokens = prometheus_client.Counter(
             name='lmdeploy:generation_tokens_total',
             documentation='Number of generation tokens processed.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_num_preemptions = prometheus_client.Counter(
+            name='lmdeploy:num_preemptions_total',
+            documentation='Cumulative number of request preemptions from the engine.',
             labelnames=labelnames).labels(*labelvalues)
 
         # Speculative decoding counters. Acceptance rate and mean acceptance
@@ -375,6 +412,37 @@ class PrometheusStatLogger(StatLoggerBase):
                 buckets=request_latency_buckets,
                 labelnames=labelnames).labels(*labelvalues)
 
+        #
+        # Multimodal preprocessing
+        #
+        self.counter_multimodal_requests = prometheus_client.Counter(
+            name='lmdeploy:multimodal_requests_total',
+            documentation='Count of multimodal requests.',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_multimodal_items = prometheus_client.Counter(
+            name='lmdeploy:multimodal_items_total',
+            documentation='Count of multimodal input items by modality.',
+            labelnames=labelnames + ['modality'])
+        self.histogram_multimodal_preprocess_time = prometheus_client.Histogram(
+            name='lmdeploy:multimodal_preprocess_time_seconds',
+            documentation='Histogram of multimodal preprocessing time in seconds.',
+            buckets=request_latency_buckets,
+            labelnames=labelnames).labels(*labelvalues)
+        self.histogram_multimodal_stage_time = prometheus_client.Histogram(
+            name='lmdeploy:multimodal_stage_time_seconds',
+            documentation='Histogram of multimodal preprocessing stage time in seconds.',
+            buckets=request_latency_buckets,
+            labelnames=labelnames + ['stage', 'modality'])
+        self.histogram_multimodal_item_count = prometheus_client.Histogram(
+            name='lmdeploy:multimodal_item_count',
+            documentation='Histogram of multimodal item counts per request.',
+            buckets=[1, 2, 4, 8, 16, 32, 64, 128, 256],
+            labelnames=labelnames + ['modality'])
+        self.counter_multimodal_failures = prometheus_client.Counter(
+            name='lmdeploy:multimodal_processing_failures_total',
+            documentation='Count of multimodal preprocessing failures.',
+            labelnames=labelnames + ['stage', 'modality'])
+
     def record_schedule(self, stats: SchedulerStats) -> None:
         """Report schedule metrics to prometheus."""
         self.gauge_scheduler_succeeded.set(stats.num_succeeded_reqs)
@@ -391,6 +459,7 @@ class PrometheusStatLogger(StatLoggerBase):
 
         self.counter_prompt_tokens.inc(stats.prompt_tokens)
         self.counter_generation_tokens.inc(stats.new_generation_tokens)
+        self.counter_num_preemptions.inc(stats.num_preempted_reqs)
         self.histogram_iteration_tokens.observe(stats.prompt_tokens + stats.new_generation_tokens)
 
         if stats.ttft:
@@ -420,6 +489,26 @@ class PrometheusStatLogger(StatLoggerBase):
     def _get_counter_value(counter) -> float:
         """Get the current value from a prometheus counter child."""
         return counter._value.get()
+
+    def record_multimodal(self, stats: MultimodalStats) -> None:
+        if not stats.has_data:
+            return
+
+        total_time, stage_times, item_counts, failures = stats.snapshot()
+        labelvalues = self.labelvalues
+        self.counter_multimodal_requests.inc()
+        if total_time > 0:
+            self.histogram_multimodal_preprocess_time.observe(total_time)
+
+        for modality, count in item_counts.items():
+            self.counter_multimodal_items.labels(*(labelvalues + [modality])).inc(count)
+
+        for (stage, modality), seconds in stage_times.items():
+            self.histogram_multimodal_stage_time.labels(*(labelvalues + [stage, modality])).observe(seconds)
+        for modality, count in item_counts.items():
+            self.histogram_multimodal_item_count.labels(*(labelvalues + [modality])).observe(count)
+        for (stage, modality), count in failures.items():
+            self.counter_multimodal_failures.labels(*(labelvalues + [stage, modality])).inc(count)
 
     def record_specdecode(self, stats: SpeculativeDecodingStats) -> None:
         """Report speculative decoding metrics to prometheus."""

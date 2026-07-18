@@ -5,7 +5,7 @@ from lmdeploy.messages import ResponseType, ScheduleMetrics
 from lmdeploy.pytorch.utils import singleton
 from lmdeploy.utils import get_logger
 
-from .stats import SchedulerStats
+from .stats import MultimodalStats, SchedulerStats
 
 logger = get_logger('lmdeploy')
 
@@ -97,6 +97,17 @@ class MetricsProcessor:
         if not self.enable_metrics or self.metrics_queue is None:
             return
         self.metrics_queue.put_nowait(update_data)
+
+    def record_multimodal(self, stats: MultimodalStats | None):
+        """Record multimodal preprocessing stats."""
+        if not self.enable_metrics or stats is None:
+            return
+        stats.finish()
+        if not stats.mark_emitted():
+            return
+
+        for stat_logger in self.stat_loggers:
+            stat_logger.record_multimodal(stats)
 
     def increase_total_requests(self):
         """Increase total requests."""
