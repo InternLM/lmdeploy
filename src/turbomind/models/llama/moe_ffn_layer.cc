@@ -86,6 +86,13 @@ private:
 
     Tensor         temp_;
     Tensor_<float> shared_scales_;
+
+    // When a MOE model enables EP inference and the model includes dense layers or shared experts, an additional stream
+    // is used to perform sharding and cleaning of the FFN inputs.
+    Stream clear_stream_;
+    Event  clear_ready_event_;
+    Event  clear_done_event_;
+    bool   clear_pending_ = false;
 };
 
 MoeFfnDefaultImpl::MoeFfnDefaultImpl(const EngineParam& engine, const Context& ctx):
@@ -96,6 +103,11 @@ MoeFfnDefaultImpl::MoeFfnDefaultImpl(const EngineParam& engine, const Context& c
     max_token_num_(engine.max_forward_token_num * engine.attn_dp_size),
     is_warm_up_(*ctx.is_warm_up)
 {
+    if (ep_size_ > 1) {
+        clear_stream_      = Stream::create();
+        clear_ready_event_ = Event::create();
+        clear_done_event_  = Event::create();
+    }
 }
 
 void MoeFfnDefaultImpl::Init(MoeFfnLayer::ForwardParam& p)
@@ -279,6 +291,11 @@ void MoeFfnDefaultImpl::Combine(MoeFfnLayer::ForwardParam& p)
     TM_FUNCTION_SCOPE();
     auto& moe = *p.weights;
 
+    if (clear_pending_) {
+        core::Context::stream().Wait(clear_done_event_);
+        clear_pending_ = false;
+    }
+
     invokeMoeCombine(p.output,
                      temp_,
                      TM_CHECK_NOTNULL(moe.block())->w2->bias,
@@ -303,6 +320,7 @@ Tensor MoeFfnDefaultImpl::GetShardFfnInput(Tensor& global_hidden_states)
         return global_hidden_states;
     }
 
+    TM_CHECK(!clear_pending_);
     const int token_num         = global_hidden_states.shape(0);
     const int tokens_per_rank   = token_num / ep_size_;
     const int remainder         = token_num % ep_size_;
@@ -310,11 +328,21 @@ Tensor MoeFfnDefaultImpl::GetShardFfnInput(Tensor& global_hidden_states)
     const int local_token_begin = ep_rank_ * tokens_per_rank + std::min(ep_rank_, remainder);
     const int local_token_end   = local_token_begin + local_token_num;
 
-    if (local_token_begin > 0) {
-        Clear(global_hidden_states.slice(0, local_token_begin));
-    }
-    if (local_token_end < token_num) {
-        Clear(global_hidden_states.slice(local_token_end, token_num - local_token_end));
+    if (local_token_begin > 0 || local_token_end < token_num) {
+        auto& stream = core::Context::stream();
+
+        clear_ready_event_.Record(stream);
+        clear_stream_.Wait(clear_ready_event_);
+
+        if (local_token_begin > 0) {
+            Clear(global_hidden_states.slice(0, local_token_begin), clear_stream_);
+        }
+        if (local_token_end < token_num) {
+            Clear(global_hidden_states.slice(local_token_end, token_num - local_token_end), clear_stream_);
+        }
+
+        clear_done_event_.Record(clear_stream_);
+        clear_pending_ = true;
     }
 
     return global_hidden_states.slice(local_token_begin, local_token_num);
