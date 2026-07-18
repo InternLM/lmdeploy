@@ -4,7 +4,7 @@ import os
 import socket
 from pathlib import Path
 from typing import TypeVar
-from urllib.parse import ParseResult, urlparse
+from urllib.parse import ParseResult, urljoin, urlparse
 from urllib.request import url2pathname
 
 import requests
@@ -63,12 +63,26 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
     elif isinstance(media_io, VideoMediaIO):
         fetch_timeout = int(os.environ.get('LMDEPLOY_VIDEO_FETCH_TIMEOUT', 30))
 
+    max_redirects = 3
     client = requests.Session()
-    client.max_redirects = 3
-    response = client.get(url_spec.geturl(), headers=headers, timeout=fetch_timeout, allow_redirects=True)
-    response.raise_for_status()
+    current_url = url
+    # Follow redirects manually so _is_safe_url runs on every hop. requests'
+    # built-in redirect handling only validates the original URL, so a public
+    # host that passes the guard could 302 to an internal or cloud-metadata
+    # address and have its response returned (SSRF).
+    for _ in range(max_redirects + 1):
+        response = client.get(current_url, headers=headers, timeout=fetch_timeout, allow_redirects=False)
+        if response.is_redirect:
+            next_url = urljoin(current_url, response.headers['location'])
+            is_safe, reason = _is_safe_url(next_url)
+            if not is_safe:
+                raise ValueError(f'URL is blocked for security reasons: {reason}')
+            current_url = next_url
+            continue
+        response.raise_for_status()
+        return media_io.load_bytes(response.content)
 
-    return media_io.load_bytes(response.content)
+    raise ValueError(f'Exceeded maximum number of redirects ({max_redirects})')
 
 
 def _load_data_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
