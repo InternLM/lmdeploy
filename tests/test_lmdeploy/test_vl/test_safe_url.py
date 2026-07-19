@@ -40,8 +40,26 @@ def test_load_http_url_logic(mock_safe, mock_get):
     media_io = MagicMock()
     url_spec = urlparse('https://example.com/img.jpg')
 
-    # test success with allow_redirects=True
-    mock_get.return_value = MagicMock(content=b'data', status_code=200)
+    # A non-redirect response is returned directly. Redirects are now followed
+    # manually (allow_redirects=False) so every hop can be re-validated.
+    mock_get.return_value = MagicMock(is_redirect=False, content=b'data', status_code=200)
     media_io.load_bytes.return_value = 'loaded'
     assert _load_http_url(url_spec, media_io) == 'loaded'
-    assert mock_get.call_args.kwargs['allow_redirects'] is True
+    assert mock_get.call_args.kwargs['allow_redirects'] is False
+
+
+@patch('requests.Session.get')
+def test_load_http_url_revalidates_redirect_target(mock_get):
+    media_io = MagicMock()
+    url_spec = urlparse('https://example.com/img.jpg')
+
+    # The server 302s to a cloud-metadata address. The original host passes the
+    # guard but the redirect target must be re-validated and rejected (SSRF).
+    redirect = MagicMock(is_redirect=True)
+    redirect.headers = {'location': 'http://169.254.169.254/latest/meta-data'}
+    mock_get.return_value = redirect
+
+    with patch('lmdeploy.vl.media.connection._is_safe_url',
+               side_effect=[(True, ''), (False, 'blocked')]):
+        with pytest.raises(ValueError, match='blocked for security reasons'):
+            _load_http_url(url_spec, media_io)
