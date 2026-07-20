@@ -104,12 +104,26 @@ _MM_TOOL_CALL_MODEL_MARKERS = (
     'Intern-S2',
     'Qwen3-VL',
 )
+# Audio tool-call media types need native audio models (not VL-only).
+_MM_AUDIO_TOOL_CALL_MODEL_MARKERS = (
+    'Qwen2.5-Omni',
+    'Qwen3-Omni',
+)
+MM_AUDIO_TOOL_CALL_SKIP_REASON = (
+    'Audio tool-call media types require native audio models '
+    '(e.g. Qwen-Omni); VL-only models are skipped')
 
 
 def is_mm_tool_call_capable(model_case: str) -> bool:
     """True for model families that support image input and tool calling."""
     name = model_case.lower()
     return any(marker.lower() in name for marker in _MM_TOOL_CALL_MODEL_MARKERS)
+
+
+def is_mm_audio_tool_call_capable(model_case: str) -> bool:
+    """True for model families that support audio input and tool calling."""
+    name = model_case.lower()
+    return any(marker.lower() in name for marker in _MM_AUDIO_TOOL_CALL_MODEL_MARKERS)
 
 
 def resolve_mm_resource_path(config, filename: str) -> str | None:
@@ -124,6 +138,19 @@ def resolve_mm_resource_path(config, filename: str) -> str | None:
 def resolve_mm_image_url(config, filename: str) -> str | None:
     """Return a local filesystem URL for a test image, or None if missing."""
     return resolve_mm_resource_path(config, filename)
+
+
+def mm_file_to_data_url(path: str, *, mime: str | None = None) -> str:
+    """Encode a local media file as a ``data:<mime>;base64,...`` URL."""
+    import base64
+    import mimetypes
+
+    if mime is None:
+        mime, _ = mimetypes.guess_type(path)
+        mime = mime or 'application/octet-stream'
+    with open(path, 'rb') as f:
+        b64 = base64.b64encode(f.read()).decode('ascii')
+    return f'data:{mime};base64,{b64}'
 
 
 def build_multimodal_user_message(text: str, image_url: str, *, image_first: bool = False) -> dict:
@@ -146,10 +173,22 @@ def build_multimodal_media_part(
         media_type: str,
         source,
         **fields) -> dict:
-    """Build one OpenAI-style multimodal content part for *media_type*."""
+    """Build one OpenAI-style multimodal content part for *media_type*.
+
+    ``image_data`` must be JSON-serializable for OpenAI REST
+    (``chat.completions.create``); pass a local path / data-URL string, not
+    a ``PIL.Image`` (Python pipeline API only).
+    """
     if media_type == 'image_data':
-        from PIL import Image
-        data = source if hasattr(source, 'size') else Image.open(source)
+        if hasattr(source, 'size'):
+            import base64
+            from io import BytesIO
+            buf = BytesIO()
+            source.save(buf, format='JPEG')
+            b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+            data = f'data:image/jpeg;base64,{b64}'
+        else:
+            data = source
         return {'type': 'image_data', 'image_data': {'data': data, **fields}}
     if media_type in ('image_url', 'image', 'video_url', 'video',
                        'audio_url', 'audio', 'time_series_url', 'time_series'):
@@ -205,22 +244,35 @@ def _mm_tool_call_skip_target(item) -> bool:
     return cls_name.startswith('TestToolCallMultimodal')
 
 
+def _mm_audio_media_type_skip_target(item) -> bool:
+    """True for TestToolCallMultimodalMediaTypes audio parametrize cases."""
+    cls_name = item.cls.__name__ if item.cls is not None else ''
+    if cls_name != 'TestToolCallMultimodalMediaTypes':
+        return False
+    callspec = getattr(item, 'callspec', None)
+    if callspec is None:
+        return False
+    media_type = callspec.params.get('media_type')
+    return media_type in MM_AUDIO_MEDIA_TYPES
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip parallel-tool tests on Llama 3.1; skip MM tool tests on text-only
-    models."""
+    models; skip audio media types on VL-only models."""
     for item in items:
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
             continue
-        model_case = callspec.params.get('model_case')
-        if model_case is None:
-            continue
+        model_case = callspec.params['model_case']
         if _llama31_parallel_skip_target(item):
             if model_case and llama31_single_tool_only(model_case):
                 item.add_marker(pytest.mark.skip(reason=LLAMA31_SKIP_PARALLEL_REASON))
         if _mm_tool_call_skip_target(item):
             if model_case and not is_mm_tool_call_capable(model_case):
                 item.add_marker(pytest.mark.skip(reason=MM_TOOL_CALL_SKIP_REASON))
+        if _mm_audio_media_type_skip_target(item):
+            if model_case and not is_mm_audio_tool_call_capable(model_case):
+                item.add_marker(pytest.mark.skip(reason=MM_AUDIO_TOOL_CALL_SKIP_REASON))
 
 
 # ---------------------------------------------------------------------------

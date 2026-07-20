@@ -8,6 +8,7 @@ import uuid
 import aiohttp
 import requests
 from openai import OpenAI
+from utils.config_utils import get_model_path_from_config
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
 
 from lmdeploy.serve.openai.protocol import (
@@ -485,81 +486,31 @@ def assert_tool_arguments_incremental(stream_or_chunks, *, min_arg_deltas: int =
     return arg_chunks
 
 
-def _is_parser_buffer_placeholder(delta, choice, *, with_output_ids: bool = False) -> bool:
-    """Empty ``content`` filler chunk while parser buffers tool argument
-    streaming."""
-    if _stream_part_field(delta, 'content') != '':
-        return False
-    if any(_stream_part_field(delta, f) for f in ('reasoning_content', 'tool_calls')):
-        return False
-    if _stream_part_field(choice, 'finish_reason') is not None:
-        return False
-    if with_output_ids:
-        return bool(_stream_part_field(choice, 'output_ids'))
-    return True
-
-
-def assert_no_empty_content_placeholder(
-    stream_or_chunks,
-    *,
-    with_output_ids: bool = False,
-) -> None:
-    """Reject parser-buffer placeholder chunks during tool argument streaming.
-
-    By default flags any empty ``content`` filler chunk. When ``with_output_ids``
-    is True, only flags placeholders that also carry ``output_ids``.
-
-    Only flags placeholder chunks that appear between argument deltas; trailing
-    empty chunks before ``finish_reason`` are allowed.
-    """
-    description = 'empty content+output_ids' if with_output_ids else 'empty content'
-
-    pairs = _normalize_stream_delta_choice_pairs(stream_or_chunks)
-    bad_indices = []
-    saw_tool_call_phase = False
-    for i, (delta, choice) in enumerate(pairs):
-        if any(_iter_tool_function_fields(delta, 'name')):
-            saw_tool_call_phase = True
-        if not saw_tool_call_phase:
-            continue
-        if not _is_parser_buffer_placeholder(delta, choice, with_output_ids=with_output_ids):
-            continue
-        if any(_iter_tool_function_fields(pairs[j][0], 'arguments') for j in range(i + 1, len(pairs))):
-            bad_indices.append(i)
-
-    assert not bad_indices, (
-        f'Found {len(bad_indices)} parser-buffer placeholder chunk(s) with {description} '
-        f'during tool argument streaming (indices={bad_indices})')
-
-
 def validate_stream_tool_call_chunks(
     stream_or_chunks,
     *,
-    with_output_ids: bool = False,
     check_incremental_arguments: bool = True,
 ) -> None:
     """SSE protocol checks during streaming tool-call argument phase."""
     if check_incremental_arguments:
         assert_tool_arguments_incremental(stream_or_chunks)
-    assert_no_empty_content_placeholder(stream_or_chunks, with_output_ids=with_output_ids)
 
 
-def _stream_protocol_chunks(result: dict) -> tuple[list | None, bool]:
-    """Return stored raw stream chunks and whether to use output_ids
-    placeholder mode."""
+def _stream_protocol_chunks(result: dict) -> list | None:
+    """Return stored raw stream chunks for protocol checks."""
     if result['raw_sse_chunks']:
-        return result['raw_sse_chunks'], bool(result['output_ids'])
+        return result['raw_sse_chunks']
     if result['raw_chunks']:
-        return result['raw_chunks'], False
-    return None, False
+        return result['raw_chunks']
+    return None
 
 
 def _assert_stream_tool_call_protocol(result: dict, *, require_tool_call: bool) -> None:
     if not require_tool_call:
         return
-    chunks, with_output_ids = _stream_protocol_chunks(result)
+    chunks = _stream_protocol_chunks(result)
     if chunks:
-        validate_stream_tool_call_chunks(chunks, with_output_ids=with_output_ids)
+        validate_stream_tool_call_chunks(chunks)
 
 
 def _assert_stream_finish_reason(result: dict, expected_finish_reason: str | None) -> None:
@@ -600,11 +551,10 @@ _TOKENIZER_CACHE: dict[str, object] = {}
 
 
 def resolve_tokenizer_model_path(config: dict, model_case: str) -> str:
-    """Local HF path for tokenizer: ``{model_path}/{model_case}``."""
+    """Tokenizer path: HF repo id (``hf_hub``) or ``{model_path}/{model_case}`` (join)."""
     if os.path.isabs(model_case):
         return model_case
-    model_root = config['model_path']
-    return os.path.join(model_root, model_case)
+    return get_model_path_from_config(config, model_case)
 
 
 def get_tokenizer(tokenizer_path: str):
