@@ -1526,6 +1526,7 @@ def serve(model_path: str,
           allow_terminate_by_client: bool = False,
           enable_abort_handling: bool = False,
           speculative_config: SpeculativeConfig | None = None,
+          allowed_media_domains: list[str] | None = None,
           generation_config: str = 'auto',
           **kwargs):
     """An example to perform model inference through the command line
@@ -1578,6 +1579,8 @@ def serve(model_path: str,
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
         allow_terminate_by_client (bool): Allow request from client to terminate server.
+        allowed_media_domains (list[str] | None): Optional exact hostname
+            allowlist for HTTP(S) media URLs.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1618,6 +1621,7 @@ def serve(model_path: str,
                                                     max_log_len=max_log_len,
                                                     trust_remote_code=trust_remote_code,
                                                     speculative_config=speculative_config,
+                                                    allowed_media_domains=allowed_media_domains,
                                                     **kwargs)
     set_parsers(reasoning_parser, tool_call_parser)
 
