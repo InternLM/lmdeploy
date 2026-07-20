@@ -407,6 +407,7 @@ class MultimodalProcessor:
                 input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
                                                                       chat_template=chat_template,
                                                                       sequence_start=sequence_start,
+                                                                      tools=tools,
                                                                       chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages,
                                                            input_prompt=input_prompt,
@@ -425,6 +426,7 @@ class MultimodalProcessor:
                 input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
                                                                       chat_template=chat_template,
                                                                       sequence_start=sequence_start,
+                                                                      tools=tools,
                                                                       chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages,
                                                            input_prompt=input_prompt,
