@@ -23,15 +23,15 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
                                    cudaStream_t               stream)
 {
     constexpr int ChunkSize = 32;
-    using Kernel = Sm120GdrTmaDescPrepare<StateT, ChunkSize>;
+    using Kernel            = Sm120GdrTmaDescPrepare<StateT, ChunkSize>;
     static_assert(std::is_same_v<StateT, float> || std::is_same_v<StateT, __nv_bfloat16>,
                   "SM120 descriptor StateT must be float or bfloat16");
     static_assert(BlockDv == kContextParallelGdrBlockDv || BlockDv == kFusedGdrBlockDv);
-    const bool    needs_fused_desc = mode == Sm120GdrTmaMode::kFusedOnly || mode == Sm120GdrTmaMode::kAllDirectFused
+    const bool needs_fused_desc = mode == Sm120GdrTmaMode::kFusedOnly || mode == Sm120GdrTmaMode::kAllDirectFused
                                   || mode == Sm120GdrTmaMode::kAllContextParallel;
     const auto* state_ptrs_ptr = needs_fused_desc ? reinterpret_cast<const int64_t*>(state_ptrs.raw_data()) : nullptr;
 
-    using ChunkedKktTma = typename Kernel::ChunkedKktTma;
+    using ChunkedKktTma           = typename Kernel::ChunkedKktTma;
     const auto kkt_k_desc         = ChunkedKktTma::MakeKDesc(k);
     const auto kkt_resolvent_desc = ChunkedKktTma::MakeResolventDesc(resolvent);
 
@@ -49,10 +49,10 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
     CUtensorMap context_parallel_fused_gdr_v_desc{};
     CUtensorMap context_parallel_fused_gdr_out_desc{};
     if (needs_fused_desc) {
-        fused_q_desc                      = Kernel::MakeFusedGdrQkTmaDesc(q);
-        fused_q_hi_desc                   = Kernel::MakeFusedGdrQkTmaDesc(q);
-        fused_k_desc                      = Kernel::MakeFusedGdrQkTmaDesc(k);
-        fused_k_hi_desc                   = Kernel::MakeFusedGdrQkTmaDesc(k);
+        fused_q_desc                             = Kernel::MakeFusedGdrQkTmaDesc(q);
+        fused_q_hi_desc                          = Kernel::MakeFusedGdrQkTmaDesc(q);
+        fused_k_desc                             = Kernel::MakeFusedGdrQkTmaDesc(k);
+        fused_k_hi_desc                          = Kernel::MakeFusedGdrQkTmaDesc(k);
         const uint32_t fused_gdr_h_k_box_dims[5] = {64u, 2u, 1u, static_cast<uint32_t>(ChunkSize), 1u};
         fused_gdr_h_k_desc =
             Kernel::template MakeQkTmaDesc<__nv_bfloat16>(k, fused_gdr_h_k_box_dims, CU_TENSOR_MAP_SWIZZLE_128B);
@@ -61,7 +61,8 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
         context_parallel_fused_gdr_v_desc = Kernel::MakeFusedGdrValueTmaDesc(v, BlockDv);
         fused_g_desc                      = Kernel::MakeFusedGdrGateTmaDesc(g_cumsum);
         fused_resolvent_desc              = Kernel::MakeFusedGdrResolventTmaDesc(resolvent);
-        fused_state_desc = Kernel::MakeFusedGdrStateHeadTmaDesc(reinterpret_cast<StateT*>(workspace.raw_data()), BlockDv);
+        fused_state_desc =
+            Kernel::MakeFusedGdrStateHeadTmaDesc(reinterpret_cast<StateT*>(workspace.raw_data()), BlockDv);
         fused_out_desc                      = Kernel::MakeFusedGdrOutputTmaDesc(*out, BlockDv);
         context_parallel_fused_gdr_out_desc = Kernel::MakeFusedGdrOutputTmaDesc(*out, BlockDv);
     }
@@ -79,7 +80,7 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
         auto* context_parallel_segment_state_ptr =
             reinterpret_cast<float*>(workspace_base + layout.segment_state_offset);
         auto* context_parallel_segment_m_ptr = reinterpret_cast<float*>(workspace_base + layout.segment_m_offset);
-        constexpr bool kBf16State = std::is_same_v<StateT, __nv_bfloat16>;
+        constexpr bool kBf16State            = std::is_same_v<StateT, __nv_bfloat16>;
         constexpr int  prefix_block_dv =
             kBf16State ? Kernel::kCorrectInitialStatesBf16BlockDv : Kernel::kCorrectInitialStatesF32BlockDv;
         constexpr int prefix_external_block_dv =
@@ -92,10 +93,8 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
             Kernel::MakeContextParallelStateTmaDesc(cp_state_ptr, cp.total_segments, problem.hv, prefix_block_dv);
         correct_initial_states_segment_state_desc = Kernel::MakeContextParallelStateTmaDesc(
             context_parallel_segment_state_ptr, cp.total_segments, problem.hv, prefix_block_dv);
-        correct_initial_states_segment_m_desc =
-            Kernel::MakeCorrectInitialStatesSegmentMatrixTmaDesc(context_parallel_segment_m_ptr,
-                                                                 cp.total_segments,
-                                                                 problem.hv);
+        correct_initial_states_segment_m_desc = Kernel::MakeCorrectInitialStatesSegmentMatrixTmaDesc(
+            context_parallel_segment_m_ptr, cp.total_segments, problem.hv);
         correct_initial_states_external_state_desc = Kernel::MakeFusedGdrStateHeadTmaDesc(
             reinterpret_cast<StateT*>(workspace.raw_data()), prefix_external_block_dv);
         context_parallel_fused_gdr_state_desc =
@@ -126,12 +125,12 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
             0;
     const bool needs_kkt_desc = mode == Sm120GdrTmaMode::kSolveKkt || mode == Sm120GdrTmaMode::kAllDirectFused
                                 || mode == Sm120GdrTmaMode::kAllContextParallel;
-    const int                              kkt_tasks = needs_kkt_desc ? problem.sequence_num : 0;
-    const int                              blocks    = kkt_tasks + direct_desc_tasks + context_parallel_desc_tasks;
-    const auto q_base = Kernel::template MakeStridedTensorBase<__nv_bfloat16>(q);
-    const auto k_base = Kernel::template MakeStridedTensorBase<__nv_bfloat16>(k);
-    const auto v_base = Kernel::template MakeStridedTensorBase<__nv_bfloat16>(v);
-    const auto g_base = Kernel::template MakeStridedTensorBase<float>(g_cumsum);
+    const int  kkt_tasks = needs_kkt_desc ? problem.sequence_num : 0;
+    const int  blocks    = kkt_tasks + direct_desc_tasks + context_parallel_desc_tasks;
+    const auto q_base    = Kernel::template MakeStridedTensorBase<__nv_bfloat16>(q);
+    const auto k_base    = Kernel::template MakeStridedTensorBase<__nv_bfloat16>(k);
+    const auto v_base    = Kernel::template MakeStridedTensorBase<__nv_bfloat16>(v);
+    const auto g_base    = Kernel::template MakeStridedTensorBase<float>(g_cumsum);
     const typename Kernel::template StridedTensorBase<__nv_bfloat16> resolvent_base{
         const_cast<__nv_bfloat16*>(resolvent.data<__nv_bfloat16>()), resolvent.stride(0), resolvent.stride(1)};
     const typename Kernel::template StridedTensorBase<__nv_bfloat16> out_base =
@@ -185,22 +184,22 @@ void PrepareSm120GdrTmaDescriptors(const core::Tensor&        q,
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-#define TM_INSTANTIATE_SM120_TMA_PREPARE(STATE_T, BLOCK_DV)                                                         \
-    template void PrepareSm120GdrTmaDescriptors<STATE_T, BLOCK_DV>(const core::Tensor&,                            \
-                                                                   const core::Tensor&,                            \
-                                                                   const core::Tensor&,                            \
-                                                                   const core::Tensor&,                            \
-                                                                   const core::Tensor&,                            \
-                                                                   const core::Tensor&,                            \
-                                                                   const core::Tensor&,                            \
-                                                                   const core::Tensor&,                            \
-                                                                   core::Tensor*,                                  \
-                                                                   core::Tensor&,                                  \
-                                                                   const Problem&,                                 \
-                                                                   const ContextParallelPlan&,                     \
-                                                                   Sm120GdrTmaMode,                                \
-                                                                   Sm120GdrTmaLayout,                              \
-                                                                   int64_t,                                        \
+#define TM_INSTANTIATE_SM120_TMA_PREPARE(STATE_T, BLOCK_DV)                                                            \
+    template void PrepareSm120GdrTmaDescriptors<STATE_T, BLOCK_DV>(const core::Tensor&,                                \
+                                                                   const core::Tensor&,                                \
+                                                                   const core::Tensor&,                                \
+                                                                   const core::Tensor&,                                \
+                                                                   const core::Tensor&,                                \
+                                                                   const core::Tensor&,                                \
+                                                                   const core::Tensor&,                                \
+                                                                   const core::Tensor&,                                \
+                                                                   core::Tensor*,                                      \
+                                                                   core::Tensor&,                                      \
+                                                                   const Problem&,                                     \
+                                                                   const ContextParallelPlan&,                         \
+                                                                   Sm120GdrTmaMode,                                    \
+                                                                   Sm120GdrTmaLayout,                                  \
+                                                                   int64_t,                                            \
                                                                    cudaStream_t)
 
 TM_INSTANTIATE_SM120_TMA_PREPARE(float, kContextParallelGdrBlockDv);

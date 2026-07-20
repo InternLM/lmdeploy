@@ -69,8 +69,8 @@ inline Problem MakeSm120ContextParallelProblem(const Problem& problem, const Con
     return result;
 }
 
-bool                      PlanSm120Operation(const GdrKernelSpec&, const Operation&, const PlanningContext&, Plan*);
-Sm120DirectChunkWorkspace PartitionSm120DirectChunkWorkspace(const Arguments&, const Plan&);
+bool                          PlanSm120Operation(const GdrKernelSpec&, const Operation&, const PlanningContext&, Plan*);
+Sm120DirectChunkWorkspace     PartitionSm120DirectChunkWorkspace(const Arguments&, const Plan&);
 Sm120ContextParallelWorkspace PartitionSm120ContextParallelWorkspace(const Arguments&, const Plan&);
 
 void LaunchChunk32LocalCumsum(const core::Tensor&, const core::Tensor&, core::Tensor&, const Problem&, cudaStream_t);
@@ -100,12 +100,7 @@ void LaunchSm120Recurrent(const core::Tensor&,
                           int64_t,
                           cudaStream_t);
 template<class StateT>
-void PrepareSm120RecurrentStateTmaDescriptors(const core::Tensor&,
-                                              core::Tensor&,
-                                              int,
-                                              int,
-                                              const Plan&,
-                                              cudaStream_t);
+void PrepareSm120RecurrentStateTmaDescriptors(const core::Tensor&, core::Tensor&, int, int, const Plan&, cudaStream_t);
 void LaunchSm120KktSolve(const core::Tensor&,
                          const core::Tensor&,
                          const core::Tensor&,

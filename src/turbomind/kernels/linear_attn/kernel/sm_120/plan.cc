@@ -13,11 +13,11 @@
 namespace turbomind::linear_attn::delta_rule::detail {
 namespace {
 
-constexpr int kHeadDim                = 128;
-constexpr int kTmaDescriptorBytes     = 128;
-constexpr int kKktTmaDescCount        = 2;
-constexpr int kFusedGdrDataDescCount  = 8;
-constexpr int kFusedGdrStateDescCount = 1;
+constexpr int kHeadDim                                = 128;
+constexpr int kTmaDescriptorBytes                     = 128;
+constexpr int kKktTmaDescCount                        = 2;
+constexpr int kFusedGdrDataDescCount                  = 8;
+constexpr int kFusedGdrStateDescCount                 = 1;
 constexpr int kFusedGdrHDataDescCount                 = 4;
 constexpr int kFusedGdrHTensorDescCount               = 2;
 constexpr int kCorrectInitialStatesTensorDescCount    = 3;
@@ -43,8 +43,7 @@ size_t FusedGdrTmaDescriptorBytes(const Problem& problem)
 
 size_t FusedGdrHTmaDescriptorBytes(const Problem& problem)
 {
-    return (size_t(problem.sequence_num) * kFusedGdrHDataDescCount + kFusedGdrHTensorDescCount)
-           * kTmaDescriptorBytes;
+    return (size_t(problem.sequence_num) * kFusedGdrHDataDescCount + kFusedGdrHTensorDescCount) * kTmaDescriptorBytes;
 }
 
 size_t CorrectInitialStatesTmaDescriptorBytes(const Problem& problem)
@@ -65,8 +64,8 @@ int CpSegmentChunks(const Problem& problem)
     // SM120 chunk32 needs longer segments to amortize CP setup and correction.
     const double scaled =
         std::sqrt(double(problem.hv) * double(std::max(1, problem.total_chunks)) / double(problem.sm_count)) * 6.0;
-    const int power = std::max(0, int(std::round(std::log2(std::max(1.0, scaled)))));
-    const int rounded_chunks = std::max(4, 1 << power);
+    const int power            = std::max(0, int(std::round(std::log2(std::max(1.0, scaled)))));
+    const int rounded_chunks   = std::max(4, 1 << power);
     const int candidate_chunks = rounded_chunks + rounded_chunks / 2;
     // Use the longer segment only when the conservative BlockDv64 grid still
     // supplies three CTA waves; BlockDv32 can only increase this grid.
@@ -207,10 +206,10 @@ Sm120DirectChunkWorkspace PartitionSm120DirectChunkWorkspace(const Arguments& ar
 
 Sm120ContextParallelWorkspace PartitionSm120ContextParallelWorkspace(const Arguments& args, const Plan& plan)
 {
-    const auto&                    problem = plan.problem;
-    const auto&                    cp      = plan.cp;
-    auto*                          base    = static_cast<char*>(args.workspace->raw_data());
-    size_t                         offset  = 0;
+    const auto&                   problem = plan.problem;
+    const auto&                   cp      = plan.cp;
+    auto*                         base    = static_cast<char*>(args.workspace->raw_data());
+    size_t                        offset  = 0;
     Sm120ContextParallelWorkspace out{};
     out.g_cumsum = WorkspaceTensor(base, offset, plan.g_cumsum.layout, plan.g_cumsum.dtype, args.workspace->device());
     AddWorkspaceBytes(&offset, plan.g_cumsum.storage_size * sizeof(float));
@@ -229,8 +228,8 @@ Sm120ContextParallelWorkspace PartitionSm120ContextParallelWorkspace(const Argum
     AddWorkspaceBytes(&offset, StateBytes(cp.total_segments, problem.hv));
     out.layout.segment_state_offset = out.layout.cp_state_offset;
     out.segment_state               = out.cp_state;
-    out.layout.segment_m_offset = offset;
-    out.segment_m               = WorkspaceTensor(base,
+    out.layout.segment_m_offset     = offset;
+    out.segment_m                   = WorkspaceTensor(base,
                                     offset,
                                     core::Layout{{cp.total_segments, problem.hv, kHeadDim, kHeadDim}},
                                     kFloat32,
@@ -246,10 +245,8 @@ Sm120ContextParallelWorkspace PartitionSm120ContextParallelWorkspace(const Argum
         };
     partition(out.layout.cp_q_offsets_offset, out.cp_q_offsets, cp.cp_q_offsets, cp.total_segments + 1);
     partition(out.layout.cp_source_indices_offset, out.cp_source_indices, cp.cp_source_indices, cp.total_segments);
-    partition(out.layout.cp_sequence_starts_offset,
-              out.cp_sequence_starts,
-              cp.cp_sequence_starts,
-              problem.sequence_num + 1);
+    partition(
+        out.layout.cp_sequence_starts_offset, out.cp_sequence_starts, cp.cp_sequence_starts, problem.sequence_num + 1);
     partition(out.layout.cp_state_ptrs_offset, out.cp_state_ptrs, cp.cp_state_ptrs, cp.total_segments);
     partition(out.layout.cp_finished_offset, out.cp_finished, cp.cp_finished, cp.total_segments);
     partition(out.layout.cp_fallback_offset, out.cp_fallback, cp.cp_fallback, cp.total_segments * problem.hv);

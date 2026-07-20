@@ -25,8 +25,7 @@ class Sm120GdrKernel final: public GdrKernel {
     static int SelectFusedBlockDv(const Problem& problem, const ContextParallelPlan& cp)
     {
         const int total_chunks = cp.enabled ? cp.total_chunks : problem.total_chunks;
-        const int max_chunks =
-            cp.enabled ? (cp.total_chunks > 0 ? cp.segment_chunks : 0) : problem.max_sequence_chunks;
+        const int max_chunks = cp.enabled ? (cp.total_chunks > 0 ? cp.segment_chunks : 0) : problem.max_sequence_chunks;
         if (total_chunks <= 0 || max_chunks <= 0 || problem.hv <= 0) {
             return kContextParallelGdrBlockDv;
         }
@@ -93,9 +92,7 @@ class Sm120GdrKernel final: public GdrKernel {
     }
 
     template<int BlockDv>
-    static void RunContextParallelChunk32(const Arguments& args,
-                                          const delta_rule::Plan& plan,
-                                          cudaStream_t            stream)
+    static void RunContextParallelChunk32(const Arguments& args, const delta_rule::Plan& plan, cudaStream_t stream)
     {
         auto        workspace               = detail::PartitionSm120ContextParallelWorkspace(args, plan);
         const auto& beta                    = args.beta;
@@ -120,8 +117,7 @@ class Sm120GdrKernel final: public GdrKernel {
                                                                workspace.layout,
                                                                args.state_layer_offset,
                                                                stream);
-        detail::LaunchChunk32LocalCumsum(
-            args.g, args.q_offsets, workspace.g_cumsum, execution_problem, stream);
+        detail::LaunchChunk32LocalCumsum(args.g, args.q_offsets, workspace.g_cumsum, execution_problem, stream);
         detail::LaunchSm120KktSolve(args.k,
                                     beta,
                                     args.q_offsets,

@@ -40,16 +40,16 @@ struct Sm120CorrectInitialStates {
     }
 
     static __device__ __forceinline__ void Run(float* __restrict__ cp_state,
-                                                const float* __restrict__ segment_state,
-                                                const float* __restrict__ segment_m,
-                                                const bool* __restrict__ cp_fallback,
-                                                const int32_t* __restrict__ cp_sequence_starts,
-                                                const int64_t* __restrict__ state_ptrs,
-                                                int64_t state_layer_offset,
-                                                int     num_head_groups,
-                                                int     heads_per_block,
-                                                int     sequence_num,
-                                                int     hv)
+                                               const float* __restrict__ segment_state,
+                                               const float* __restrict__ segment_m,
+                                               const bool* __restrict__ cp_fallback,
+                                               const int32_t* __restrict__ cp_sequence_starts,
+                                               const int64_t* __restrict__ state_ptrs,
+                                               int64_t state_layer_offset,
+                                               int     num_head_groups,
+                                               int     heads_per_block,
+                                               int     sequence_num,
+                                               int     hv)
     {
         const int sequence_id = static_cast<int>(blockIdx.x);
         const int value_head  = static_cast<int>(blockIdx.y);
@@ -62,8 +62,8 @@ struct Sm120CorrectInitialStates {
             return;
         }
 
-        auto* initial_state = GroupedStateBase(
-            state_ptrs, sequence_id, value_head, num_head_groups, heads_per_block, state_layer_offset);
+        auto* initial_state =
+            GroupedStateBase(state_ptrs, sequence_id, value_head, num_head_groups, heads_per_block, state_layer_offset);
         float* first_state = cp_state + (static_cast<int64_t>(first_segment) * hv + value_head) * kStateElements;
         for (int element = static_cast<int>(threadIdx.x); element < kStateElements; element += blockDim.x) {
             first_state[element] = LoadState(initial_state, element);
@@ -74,14 +74,14 @@ struct Sm120CorrectInitialStates {
             const int64_t head_offset = (static_cast<int64_t>(segment) * hv + value_head) * kStateElements;
             const float*  previous    = cp_state + head_offset;
             const float*  transition  = segment_m + head_offset;
-            float* next = cp_state + (static_cast<int64_t>(segment + 1) * hv + value_head) * kStateElements;
-            const bool fallback = cp_fallback[static_cast<int64_t>(segment) * hv + value_head];
+            float*        next     = cp_state + (static_cast<int64_t>(segment + 1) * hv + value_head) * kStateElements;
+            const bool    fallback = cp_fallback[static_cast<int64_t>(segment) * hv + value_head];
 
             if (fallback) {
                 for (int element = static_cast<int>(threadIdx.x); element < kStateElements; element += blockDim.x) {
-                    float     value = next[element];
-                    const int row   = element / kHeadDim;
-                    const int col   = element - row * kHeadDim;
+                    float     value      = next[element];
+                    const int row        = element / kHeadDim;
+                    const int col        = element - row * kHeadDim;
                     float     correction = 0.0f;
 #pragma unroll 4
                     for (int k = 0; k < kHeadDim; ++k) {
@@ -137,18 +137,18 @@ void LaunchSm120CorrectInitialStatesTyped(core::Tensor&              cp_state,
     using Kernel = Sm120CorrectInitialStates<StateT>;
     static_cast<void>(cp);
     const dim3 grid(problem.sequence_num, problem.hv, 1);
-    Sm120CorrectInitialStatesKernel<StateT><<<grid, Kernel::kThreads, 0, stream>>>(
-        cp_state.data<float>(),
-        segment_state.data<float>(),
-        segment_m.data<float>(),
-        cp_fallback.data<bool>(),
-        cp_sequence_starts.data<int32_t>(),
-        reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
-        state_layer_offset,
-        problem.num_head_groups,
-        problem.heads_per_block,
-        problem.sequence_num,
-        problem.hv);
+    Sm120CorrectInitialStatesKernel<StateT>
+        <<<grid, Kernel::kThreads, 0, stream>>>(cp_state.data<float>(),
+                                                segment_state.data<float>(),
+                                                segment_m.data<float>(),
+                                                cp_fallback.data<bool>(),
+                                                cp_sequence_starts.data<int32_t>(),
+                                                reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
+                                                state_layer_offset,
+                                                problem.num_head_groups,
+                                                problem.heads_per_block,
+                                                problem.sequence_num,
+                                                problem.hv);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

@@ -44,8 +44,8 @@ struct Sm120KktSolve {
     static constexpr int kKktTmaDescriptorBytes = 128;
 
     static constexpr int kBlock16 = 16;
-// Rows per 16x16 fp32 tile including one padding row. Actual rows stay contiguous;
-// the extra row shifts successive tiles away from bank-aligned starts.
+    // Rows per 16x16 fp32 tile including one padding row. Actual rows stay contiguous;
+    // the extra row shifts successive tiles away from bank-aligned starts.
     static constexpr int kBlock16Stride = 17;
 
     static constexpr int kKTileSwizzleDim = 64;
@@ -53,10 +53,10 @@ struct Sm120KktSolve {
     {
         kKTileTmaDim = kKTileSwizzleDim,
     };
-    static constexpr int      kKTilePlaneElems  = kChunkSize * kKTileSwizzleDim;
-    static constexpr int      kA16iElems        = 2 * kBlock16Stride * kBlock16;
-    static constexpr int      kA16oElems        = kBlock16Stride * kBlock16;
-    static constexpr int      kOutputTileElems  = kChunkSize * kChunkSize;
+    static constexpr int      kKTilePlaneElems   = kChunkSize * kKTileSwizzleDim;
+    static constexpr int      kA16iElems         = 2 * kBlock16Stride * kBlock16;
+    static constexpr int      kA16oElems         = kBlock16Stride * kBlock16;
+    static constexpr int      kOutputTileElems   = kChunkSize * kChunkSize;
     static constexpr uint64_t kKktTmaNoCacheHint = 0;
 
     enum KktTmaDescIndex : int
@@ -88,10 +88,10 @@ struct Sm120KktSolve {
     {
         __align__(1024) MmaElement k_tile[2 * kKTilePlaneElems];
         __align__(1024) MmaElement out_tile[kOutputTileElems];
-        __align__(16) Scratch       scratch[kKktSolveConsumerWgs];
-        __align__(128) float        beta_stage[kChunkSize][4];
-        __align__(8) uint64_t       k_ready0;
-        __align__(8) uint64_t       k_ready1;
+        __align__(16) Scratch      scratch[kKktSolveConsumerWgs];
+        __align__(128) float       beta_stage[kChunkSize][4];
+        __align__(8) uint64_t      k_ready0;
+        __align__(8) uint64_t      k_ready1;
     };
 
     static constexpr size_t SharedBytes()
@@ -184,14 +184,14 @@ struct Sm120KktSolve {
     static __device__ __forceinline__ void Run(const int32_t* __restrict__ q_offsets,
                                                const bool* __restrict__ finished,
                                                const float* __restrict__ beta,
-                                               CUtensorMap* tma_desc_workspace,
-                                               int          token_num,
-                                               int          sequence_num,
-                                               int          hq,
-                                               int          hv,
-                                               int64_t      beta_stride,
-                                               int64_t      beta_batch_stride,
-                                               int          groups_per_k_head,
+                                               CUtensorMap*   tma_desc_workspace,
+                                               int            token_num,
+                                               int            sequence_num,
+                                               int            hq,
+                                               int            hv,
+                                               int64_t        beta_stride,
+                                               int64_t        beta_batch_stride,
+                                               int            groups_per_k_head,
                                                unsigned char* shared_raw)
     {
         const int     tx              = static_cast<int>(threadIdx.x);
@@ -233,11 +233,11 @@ struct Sm120KktSolve {
         MmaElement* k_tile1    = smem.k_tile + kKTilePlaneElems;
         MmaElement* out_tile   = smem.out_tile;
         float*      beta_stage = &smem.beta_stage[0][0];
-        const auto* gmem_desc = tma_desc_workspace + sequence_id * kLocalKktTmaDescCount;
+        const auto* gmem_desc  = tma_desc_workspace + sequence_id * kLocalKktTmaDescCount;
         AcquireAndPrefetchTmaDescriptors(gmem_desc, tx);
-        const CUtensorMap* k_desc          = &gmem_desc[kKktKDesc];
-        const CUtensorMap* resolvent_desc  = &gmem_desc[kKktResolventDesc];
-        constexpr int      tma_batch       = 0;
+        const CUtensorMap* k_desc         = &gmem_desc[kKktKDesc];
+        const CUtensorMap* resolvent_desc = &gmem_desc[kKktResolventDesc];
+        constexpr int      tma_batch      = 0;
 
         if (tx == 0) {
             cute::initialize_barrier(*k_ready0, 1);
@@ -260,7 +260,7 @@ struct Sm120KktSolve {
                 auto  s_neg_l10 = cute::make_tensor(cute::make_smem_ptr(scratch.neg_l10), Block16Layout<1>());
                 auto  s_out     = cute::make_tensor(cute::make_smem_ptr(out_tile), OutputTileLayout());
 
-                using Mma32   = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
+                using Mma32 = cute::TiledMMA<cute::MMA_Atom<MmaAtom>,
                                              cute::Layout<cute::Shape<cute::_2, cute::_2, cute::_1>>,
                                              cute::Tile<cute::Underscore, cute::Int<32>, cute::Underscore>>;
 
@@ -332,9 +332,9 @@ struct Sm120KktSolve {
                     if constexpr (GroupsPerKHead == 0) {
                         const int beta_quad = value_head / 4;
                         if (beta_quad != loaded_beta_quad) {
-                            const int beta_row  = role_tid / 4;
-                            const int beta_lane = role_tid % 4;
-                            const int beta_head = beta_quad * 4 + beta_lane;
+                            const int beta_row   = role_tid / 4;
+                            const int beta_lane  = role_tid % 4;
+                            const int beta_head  = beta_quad * 4 + beta_lane;
                             float     beta_value = 0.0f;
                             if (beta_row < valid && beta_head < hv) {
                                 const int64_t beta_offset =
@@ -443,8 +443,8 @@ struct Sm120KktSolve {
                         using namespace cute;
                         using MmaAtom = SM80_16x8x8_F32TF32TF32F32_TN;
                         using Mma16   = TiledMMA<MMA_Atom<MmaAtom>,
-                                                   Layout<Shape<_1, _2, _1>>,
-                                                   Tile<Underscore, Int<kBlock16>, Underscore>>;
+                                               Layout<Shape<_1, _2, _1>>,
+                                               Tile<Underscore, Int<kBlock16>, Underscore>>;
 
                         Mma16 mma16;
                         auto  identity = make_identity_tensor(Shape<_16, _16>{});
@@ -457,18 +457,19 @@ struct Sm120KktSolve {
                         float      block_fragment[4];
                         auto tA = make_tensor(make_rmem_ptr(a_fragment), partition_shape_A(mma16, Shape<_16, _16>{}));
                         auto tB = make_tensor(make_rmem_ptr(b_fragment), partition_shape_B(mma16, Shape<_16, _16>{}));
-                        auto tC = make_tensor(make_rmem_ptr(block_fragment), partition_shape_C(mma16, Shape<_16, _16>{}));
+                        auto tC =
+                            make_tensor(make_rmem_ptr(block_fragment), partition_shape_C(mma16, Shape<_16, _16>{}));
 
                         clear(tC);
 #pragma unroll
                         for (int i = 0; i < size(tA); ++i) {
                             const auto coord = tAcA(i);
-                            tA(i) = Tf32LoadTransform{}(s_a16i(1, get<0>(coord), get<1>(coord)));
+                            tA(i)            = Tf32LoadTransform{}(s_a16i(1, get<0>(coord), get<1>(coord)));
                         }
 #pragma unroll
                         for (int i = 0; i < size(tB); ++i) {
                             const auto coord = tBcB(i);
-                            tB(i) = Tf32LoadTransform{}(s_neg_l10(0, get<1>(coord), get<0>(coord)));
+                            tB(i)            = Tf32LoadTransform{}(s_neg_l10(0, get<1>(coord), get<0>(coord)));
                         }
 #pragma unroll
                         for (int k_block = 0; k_block < size<2>(tA); ++k_block) {
@@ -476,15 +477,15 @@ struct Sm120KktSolve {
                         }
 
                         OffdiagMmaSync();
-                        const int lane       = role_tid & 31;
-                        const int warp       = role_tid >> 5;
-                        const int pair_col   = lane & 3;
-                        const int pair_row   = lane >> 2;
+                        const int lane     = role_tid & 31;
+                        const int warp     = role_tid >> 5;
+                        const int pair_col = lane & 3;
+                        const int pair_row = lane >> 2;
 #pragma unroll
                         for (int row_select = 0; row_select < 2; ++row_select) {
-                            const int row  = pair_row + 8 * row_select;
-                            const int col  = 8 * warp + 2 * pair_col;
-                            const int frag = 2 * row_select;
+                            const int row              = pair_row + 8 * row_select;
+                            const int col              = 8 * warp + 2 * pair_col;
+                            const int frag             = 2 * row_select;
                             s_neg_l10(0, row, col + 0) = block_fragment[frag + 0];
                             s_neg_l10(0, row, col + 1) = block_fragment[frag + 1];
                         }
@@ -494,12 +495,12 @@ struct Sm120KktSolve {
 #pragma unroll
                         for (int i = 0; i < size(tA); ++i) {
                             const auto coord = tAcA(i);
-                            tA(i) = Tf32LoadTransform{}(s_neg_l10(0, get<0>(coord), get<1>(coord)));
+                            tA(i)            = Tf32LoadTransform{}(s_neg_l10(0, get<0>(coord), get<1>(coord)));
                         }
 #pragma unroll
                         for (int i = 0; i < size(tB); ++i) {
                             const auto coord = tBcB(i);
-                            tB(i) = Tf32LoadTransform{}(s_a16i(0, get<1>(coord), get<0>(coord)));
+                            tB(i)            = Tf32LoadTransform{}(s_a16i(0, get<1>(coord), get<0>(coord)));
                         }
 #pragma unroll
                         for (int k_block = 0; k_block < size<2>(tA); ++k_block) {
@@ -554,19 +555,18 @@ __global__ void __launch_bounds__(Sm120KktSolve<K, GroupsPerKHead>::kThreads,
                         int          groups_per_k_head)
 {
     extern __shared__ __align__(1024) unsigned char shared_raw[];
-    Sm120KktSolve<K, GroupsPerKHead>::Run(
-        q_offsets,
-        finished,
-        beta,
-        tma_desc_workspace,
-        token_num,
-        sequence_num,
-        hq,
-        hv,
-        beta_stride,
-        beta_batch_stride,
-        groups_per_k_head,
-        shared_raw);
+    Sm120KktSolve<K, GroupsPerKHead>::Run(q_offsets,
+                                          finished,
+                                          beta,
+                                          tma_desc_workspace,
+                                          token_num,
+                                          sequence_num,
+                                          hq,
+                                          hv,
+                                          beta_stride,
+                                          beta_batch_stride,
+                                          groups_per_k_head,
+                                          shared_raw);
 }
 
 template<class K, int GroupsPerKHead>
@@ -585,10 +585,9 @@ void LaunchKktSolveTyped(const float*        beta_ptr,
 
     const dim3 grid(problem.hq, problem.total_chunks, 1);
 
-    static const cudaError_t smem_attribute_status =
-        cudaFuncSetAttribute(Sm120KktSolveKernel<K, GroupsPerKHead>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(Kernel::kSharedBytes));
+    static const cudaError_t smem_attribute_status = cudaFuncSetAttribute(Sm120KktSolveKernel<K, GroupsPerKHead>,
+                                                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                                          static_cast<int>(Kernel::kSharedBytes));
     TM_CUDA_CHECK(smem_attribute_status);
     static const cudaError_t carveout_attribute_status =
         cudaFuncSetAttribute(Sm120KktSolveKernel<K, GroupsPerKHead>,
@@ -601,16 +600,16 @@ void LaunchKktSolveTyped(const float*        beta_ptr,
     auto*          desc_workspace = reinterpret_cast<CUtensorMap*>(tma_desc_workspace);
     Sm120KktSolveKernel<K, GroupsPerKHead>
         <<<grid, Kernel::kThreads, Kernel::kSharedBytes, stream>>>(offsets_ptr,
-                                                                  finished_ptr,
-                                                                  beta_ptr,
-                                                                  desc_workspace,
-                                                                  problem.token_num,
-                                                                  problem.sequence_num,
-                                                                  problem.hq,
-                                                                  problem.hv,
-                                                                  problem.beta_stride,
-                                                                  problem.beta_batch_stride,
-                                                                  problem.hv / problem.hq);
+                                                                   finished_ptr,
+                                                                   beta_ptr,
+                                                                   desc_workspace,
+                                                                   problem.token_num,
+                                                                   problem.sequence_num,
+                                                                   problem.hq,
+                                                                   problem.hv,
+                                                                   problem.beta_stride,
+                                                                   problem.beta_batch_stride,
+                                                                   problem.hv / problem.hq);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -627,15 +626,24 @@ void LaunchSm120KktSolveImpl(const core::Tensor&,
     const auto* beta_ptr = beta.data<float>();
     static_cast<void>(g_cumsum);
     const int groups_per_k_head = problem.hv / problem.hq;
-#define TM_LAUNCH_SM120_KKT(GROUPS)                                                                                  \
-    LaunchKktSolveTyped<__nv_bfloat16, GROUPS>(                                                                       \
-        beta_ptr, q_offsets, finished, tma_desc_workspace, problem, stream)
+#define TM_LAUNCH_SM120_KKT(GROUPS)                                                                                    \
+    LaunchKktSolveTyped<__nv_bfloat16, GROUPS>(beta_ptr, q_offsets, finished, tma_desc_workspace, problem, stream)
     switch (groups_per_k_head) {
-        case 1: TM_LAUNCH_SM120_KKT(1); break;
-        case 2: TM_LAUNCH_SM120_KKT(2); break;
-        case 3: TM_LAUNCH_SM120_KKT(3); break;
-        case 4: TM_LAUNCH_SM120_KKT(4); break;
-        default: TM_LAUNCH_SM120_KKT(0); break;
+        case 1:
+            TM_LAUNCH_SM120_KKT(1);
+            break;
+        case 2:
+            TM_LAUNCH_SM120_KKT(2);
+            break;
+        case 3:
+            TM_LAUNCH_SM120_KKT(3);
+            break;
+        case 4:
+            TM_LAUNCH_SM120_KKT(4);
+            break;
+        default:
+            TM_LAUNCH_SM120_KKT(0);
+            break;
     }
 #undef TM_LAUNCH_SM120_KKT
 }
@@ -654,8 +662,7 @@ void LaunchSm120KktSolve(const core::Tensor& k,
                          void*               tma_desc_workspace,
                          cudaStream_t        stream)
 {
-    LaunchSm120KktSolveImpl(
-        k, beta, q_offsets, g_cumsum, finished, resolvent, problem, tma_desc_workspace, stream);
+    LaunchSm120KktSolveImpl(k, beta, q_offsets, g_cumsum, finished, resolvent, problem, tma_desc_workspace, stream);
 }
 
 }  // namespace detail

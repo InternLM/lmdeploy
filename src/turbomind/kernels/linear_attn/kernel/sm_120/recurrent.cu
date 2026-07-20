@@ -24,28 +24,28 @@ namespace {
 
 template<int BlockDv, class StateT>
 struct Sm120GdrRecurrent {
-    static constexpr int      kBlockDv                           = BlockDv;
-    static constexpr int      kHeadDim                           = 128;
-    static constexpr float    kHeadScale                         = 0.08838834764831845f;
-    static constexpr int      kRecurrentStages                   = 1;
-    static constexpr int      kRecurrentConsumerThreads          = 256;
-    static constexpr int      kRecurrentProducerThreads          = 128;
-    static constexpr int      kRecurrentStoreThreads             = 32;
-    static constexpr int      kRecurrentLoaderThreads = kRecurrentProducerThreads - kRecurrentStoreThreads;
-    static constexpr int      kRecurrentThreads = kRecurrentConsumerThreads + kRecurrentProducerThreads;
-    static constexpr int      kRecurrentConsumerWarps      = kRecurrentConsumerThreads / 32;
-    static constexpr int      kRecurrentConsumerWarpGroups = kRecurrentConsumerThreads / 128;
-    static constexpr int      kRecurrentLoaderWarps         = kRecurrentLoaderThreads / 32;
-    static constexpr int      kRecurrentConsumerRegs        = 96;
-    static constexpr int      kRecurrentProducerRegs        = 32;
-    static constexpr int      kRecurrentBaseCtasPerSm            = 2;
-    static constexpr int      kRecurrentMediumCtasPerSm          = 3;
-    static constexpr int      kRecurrentMediumMinWorkPerBaseCta  = 8;
-    static constexpr int      kRecurrentMediumMaxWorkPerBaseCta  = 16;
-    static constexpr int      kRecurrentMaxDescriptorCtas        = 256;
-    static constexpr int      kRecurrentSm120SharedBytes         = 102400;
-    static constexpr int      kRecurrentStaticSharedReserveBytes = 1024;
-    static constexpr int      kRecurrentMaxDynamicSharedBytes =
+    static constexpr int   kBlockDv                           = BlockDv;
+    static constexpr int   kHeadDim                           = 128;
+    static constexpr float kHeadScale                         = 0.08838834764831845f;
+    static constexpr int   kRecurrentStages                   = 1;
+    static constexpr int   kRecurrentConsumerThreads          = 256;
+    static constexpr int   kRecurrentProducerThreads          = 128;
+    static constexpr int   kRecurrentStoreThreads             = 32;
+    static constexpr int   kRecurrentLoaderThreads            = kRecurrentProducerThreads - kRecurrentStoreThreads;
+    static constexpr int   kRecurrentThreads                  = kRecurrentConsumerThreads + kRecurrentProducerThreads;
+    static constexpr int   kRecurrentConsumerWarps            = kRecurrentConsumerThreads / 32;
+    static constexpr int   kRecurrentConsumerWarpGroups       = kRecurrentConsumerThreads / 128;
+    static constexpr int   kRecurrentLoaderWarps              = kRecurrentLoaderThreads / 32;
+    static constexpr int   kRecurrentConsumerRegs             = 96;
+    static constexpr int   kRecurrentProducerRegs             = 32;
+    static constexpr int   kRecurrentBaseCtasPerSm            = 2;
+    static constexpr int   kRecurrentMediumCtasPerSm          = 3;
+    static constexpr int   kRecurrentMediumMinWorkPerBaseCta  = 8;
+    static constexpr int   kRecurrentMediumMaxWorkPerBaseCta  = 16;
+    static constexpr int   kRecurrentMaxDescriptorCtas        = 256;
+    static constexpr int   kRecurrentSm120SharedBytes         = 102400;
+    static constexpr int   kRecurrentStaticSharedReserveBytes = 1024;
+    static constexpr int   kRecurrentMaxDynamicSharedBytes =
         kRecurrentSm120SharedBytes - kRecurrentStaticSharedReserveBytes;
     static constexpr float    kLog2e                        = 1.4426950408889634f;
     static constexpr uint64_t kTmaNoCacheHint               = 0;
@@ -121,73 +121,74 @@ struct Sm120GdrRecurrent {
     template<class T>
     static CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor)
     {
-    const uint64_t global_dims[5] = {
-        64u,
-        2u,
-        static_cast<uint64_t>(tensor.shape(2)),
-        static_cast<uint64_t>(tensor.shape(1)),
-        static_cast<uint64_t>(tensor.shape(0)),
-    };
-    const uint64_t global_strides[4] = {
-        64u * sizeof(T),
-        static_cast<uint64_t>(tensor.stride(2)) * sizeof(T),
-        static_cast<uint64_t>(tensor.stride(1)) * sizeof(T),
-        static_cast<uint64_t>(tensor.stride(0)) * sizeof(T),
-    };
-    const uint32_t box_dims[5] = {64u, 2u, 1u, 1u, 1u};
-    return MakeTmaDesc(const_cast<T*>(tensor.data<T>()),
-                       TmaDataType<T>(),
-                       5,
-                       global_dims,
-                       global_strides,
-                       box_dims,
-                       CU_TENSOR_MAP_SWIZZLE_NONE);
+        const uint64_t global_dims[5] = {
+            64u,
+            2u,
+            static_cast<uint64_t>(tensor.shape(2)),
+            static_cast<uint64_t>(tensor.shape(1)),
+            static_cast<uint64_t>(tensor.shape(0)),
+        };
+        const uint64_t global_strides[4] = {
+            64u * sizeof(T),
+            static_cast<uint64_t>(tensor.stride(2)) * sizeof(T),
+            static_cast<uint64_t>(tensor.stride(1)) * sizeof(T),
+            static_cast<uint64_t>(tensor.stride(0)) * sizeof(T),
+        };
+        const uint32_t box_dims[5] = {64u, 2u, 1u, 1u, 1u};
+        return MakeTmaDesc(const_cast<T*>(tensor.data<T>()),
+                           TmaDataType<T>(),
+                           5,
+                           global_dims,
+                           global_strides,
+                           box_dims,
+                           CU_TENSOR_MAP_SWIZZLE_NONE);
     }
 
     template<class T>
     static CUtensorMap MakeValueTmaDesc(const core::Tensor& tensor)
     {
-    const uint64_t global_dims[4] = {
-        static_cast<uint64_t>(kHeadDim),
-        static_cast<uint64_t>(tensor.shape(2)),
-        static_cast<uint64_t>(tensor.shape(1)),
-        static_cast<uint64_t>(tensor.shape(0)),
-    };
-    const uint64_t global_strides[3] = {
-        static_cast<uint64_t>(tensor.stride(2)) * sizeof(T),
-        static_cast<uint64_t>(tensor.stride(1)) * sizeof(T),
-        static_cast<uint64_t>(tensor.stride(0)) * sizeof(T),
-    };
-    const uint32_t box_dims[4] = {static_cast<uint32_t>(BlockDv), 1u, 1u, 1u};
-    return MakeTmaDesc(const_cast<T*>(tensor.data<T>()),
-                       TmaDataType<T>(),
-                       4,
-                       global_dims,
-                       global_strides,
-                       box_dims,
-                       CU_TENSOR_MAP_SWIZZLE_NONE);
+        const uint64_t global_dims[4] = {
+            static_cast<uint64_t>(kHeadDim),
+            static_cast<uint64_t>(tensor.shape(2)),
+            static_cast<uint64_t>(tensor.shape(1)),
+            static_cast<uint64_t>(tensor.shape(0)),
+        };
+        const uint64_t global_strides[3] = {
+            static_cast<uint64_t>(tensor.stride(2)) * sizeof(T),
+            static_cast<uint64_t>(tensor.stride(1)) * sizeof(T),
+            static_cast<uint64_t>(tensor.stride(0)) * sizeof(T),
+        };
+        const uint32_t box_dims[4] = {static_cast<uint32_t>(BlockDv), 1u, 1u, 1u};
+        return MakeTmaDesc(const_cast<T*>(tensor.data<T>()),
+                           TmaDataType<T>(),
+                           4,
+                           global_dims,
+                           global_strides,
+                           box_dims,
+                           CU_TENSOR_MAP_SWIZZLE_NONE);
     }
 
     static CUtensorMap MakeStateTmaDesc(StateT* ptr, int layers, int hv)
     {
-    const uint64_t global_dim[4] = {
-        static_cast<uint64_t>(kHeadDim),
-        static_cast<uint64_t>(kHeadDim),
-        static_cast<uint64_t>(hv),
-        static_cast<uint64_t>(layers),
-    };
-    const uint64_t global_stride[3] = {
-        static_cast<uint64_t>(kHeadDim * sizeof(StateT)),
-        static_cast<uint64_t>(kHeadDim * kHeadDim * sizeof(StateT)),
-        static_cast<uint64_t>(hv * kHeadDim * kHeadDim * sizeof(StateT)),
-    };
-    const uint32_t box_dim[4] = {
-        static_cast<uint32_t>(BlockDv),
-        static_cast<uint32_t>(kHeadDim),
-        1u,
-        1u,
-    };
-        return MakeTmaDesc(ptr, TmaDataType<StateT>(), 4, global_dim, global_stride, box_dim, CU_TENSOR_MAP_SWIZZLE_NONE);
+        const uint64_t global_dim[4] = {
+            static_cast<uint64_t>(kHeadDim),
+            static_cast<uint64_t>(kHeadDim),
+            static_cast<uint64_t>(hv),
+            static_cast<uint64_t>(layers),
+        };
+        const uint64_t global_stride[3] = {
+            static_cast<uint64_t>(kHeadDim * sizeof(StateT)),
+            static_cast<uint64_t>(kHeadDim * kHeadDim * sizeof(StateT)),
+            static_cast<uint64_t>(hv * kHeadDim * kHeadDim * sizeof(StateT)),
+        };
+        const uint32_t box_dim[4] = {
+            static_cast<uint32_t>(BlockDv),
+            static_cast<uint32_t>(kHeadDim),
+            1u,
+            1u,
+        };
+        return MakeTmaDesc(
+            ptr, TmaDataType<StateT>(), 4, global_dim, global_stride, box_dim, CU_TENSOR_MAP_SWIZZLE_NONE);
     }
 
     static __device__ __forceinline__ int DecodeHeadTileBatch(int head_tile, int hv)
@@ -207,60 +208,60 @@ struct Sm120GdrRecurrent {
 
     static __device__ __forceinline__ void UnpackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)
     {
-    if constexpr (!std::is_same_v<StateT, float>) {
-        static_assert(std::is_same_v<StateT, __nv_bfloat16>);
-        static_assert(BlockDv % 2 == 0);
-        constexpr int kPairs = kHeadDim * BlockDv / 2;
-        static_assert((kPairs & (kPairs - 1)) == 0);
-        static_assert(alignof(decltype(state_stage)) >= alignof(__nv_bfloat162));
-        auto* overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
-        // The compact bf16 TMA payload aliases the low half of the float tile;
-        // expand high-to-low so each phase overwrites only pairs already read.
-        for (int begin = kPairs / 2; begin > 0; begin >>= 1) {
-            for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
-                const int    element    = 2 * linear;
-                const int    dk         = element / BlockDv;
-                const int    dv         = element - dk * BlockDv;
-                const float2 pair       = __bfloat1622float2(overlay[linear]);
-                state_stage[dk][dv]     = pair.x;
-                state_stage[dk][dv + 1] = pair.y;
+        if constexpr (!std::is_same_v<StateT, float>) {
+            static_assert(std::is_same_v<StateT, __nv_bfloat16>);
+            static_assert(BlockDv % 2 == 0);
+            constexpr int kPairs = kHeadDim * BlockDv / 2;
+            static_assert((kPairs & (kPairs - 1)) == 0);
+            static_assert(alignof(decltype(state_stage)) >= alignof(__nv_bfloat162));
+            auto* overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
+            // The compact bf16 TMA payload aliases the low half of the float tile;
+            // expand high-to-low so each phase overwrites only pairs already read.
+            for (int begin = kPairs / 2; begin > 0; begin >>= 1) {
+                for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
+                    const int    element    = 2 * linear;
+                    const int    dk         = element / BlockDv;
+                    const int    dv         = element - dk * BlockDv;
+                    const float2 pair       = __bfloat1622float2(overlay[linear]);
+                    state_stage[dk][dv]     = pair.x;
+                    state_stage[dk][dv + 1] = pair.y;
+                }
+                cutlass::arch::NamedBarrier::sync(threads, kRecurrentBarrierStateConvert);
+            }
+            if (tid == 0) {
+                const float2 pair = __bfloat1622float2(overlay[0]);
+                state_stage[0][0] = pair.x;
+                state_stage[0][1] = pair.y;
             }
             cutlass::arch::NamedBarrier::sync(threads, kRecurrentBarrierStateConvert);
         }
-        if (tid == 0) {
-            const float2 pair = __bfloat1622float2(overlay[0]);
-            state_stage[0][0] = pair.x;
-            state_stage[0][1] = pair.y;
-        }
-        cutlass::arch::NamedBarrier::sync(threads, kRecurrentBarrierStateConvert);
-    }
     }
 
     static __device__ __forceinline__ void PackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)
     {
-    if constexpr (!std::is_same_v<StateT, float>) {
-        static_assert(std::is_same_v<StateT, __nv_bfloat16>);
-        static_assert(BlockDv % 2 == 0);
-        constexpr int kPairs = kHeadDim * BlockDv / 2;
-        static_assert((kPairs & (kPairs - 1)) == 0);
-        static_assert(alignof(decltype(state_stage)) >= alignof(__nv_bfloat162));
-        auto* overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
-        // Packing has the inverse dependency: write low-to-high so compact pairs
-        // only overwrite float elements that earlier phases already consumed.
-        if (tid == 0) {
-            overlay[0] = __float22bfloat162_rn(make_float2(state_stage[0][0], state_stage[0][1]));
-        }
-        __syncwarp();
-        for (int begin = 1; begin < kPairs; begin <<= 1) {
-            for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
-                const int element = 2 * linear;
-                const int dk      = element / BlockDv;
-                const int dv      = element - dk * BlockDv;
-                overlay[linear]   = __float22bfloat162_rn(make_float2(state_stage[dk][dv], state_stage[dk][dv + 1]));
+        if constexpr (!std::is_same_v<StateT, float>) {
+            static_assert(std::is_same_v<StateT, __nv_bfloat16>);
+            static_assert(BlockDv % 2 == 0);
+            constexpr int kPairs = kHeadDim * BlockDv / 2;
+            static_assert((kPairs & (kPairs - 1)) == 0);
+            static_assert(alignof(decltype(state_stage)) >= alignof(__nv_bfloat162));
+            auto* overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
+            // Packing has the inverse dependency: write low-to-high so compact pairs
+            // only overwrite float elements that earlier phases already consumed.
+            if (tid == 0) {
+                overlay[0] = __float22bfloat162_rn(make_float2(state_stage[0][0], state_stage[0][1]));
             }
             __syncwarp();
+            for (int begin = 1; begin < kPairs; begin <<= 1) {
+                for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
+                    const int element = 2 * linear;
+                    const int dk      = element / BlockDv;
+                    const int dv      = element - dk * BlockDv;
+                    overlay[linear] = __float22bfloat162_rn(make_float2(state_stage[dk][dv], state_stage[dk][dv + 1]));
+                }
+                __syncwarp();
+            }
         }
-    }
     }
 
     static __device__ void StageTile(SharedStorage& smem,
@@ -287,181 +288,201 @@ struct Sm120GdrRecurrent {
                                      int     heads_per_block,
                                      int     state_layer)
     {
-    constexpr int kValueBytes      = BlockDv * static_cast<int>(sizeof(__nv_bfloat16));
-    constexpr int kQkBytes         = kHeadDim * static_cast<int>(sizeof(__nv_bfloat16));
-    const int     batch            = DecodeHeadTileBatch(head_tile, hv);
-    const int     value_head       = DecodeHeadTileHead(head_tile, hv);
-    const int     dv0              = dv_tile * BlockDv;
-    const int     qk_head          = value_head / (hv / hq);
-    const int     gate_quad        = value_head / 4;
-    const int     gate_lane        = value_head - gate_quad * 4;
-    const int     head_group       = value_head / heads_per_block;
-    const int     local_head       = value_head % heads_per_block;
-    const int     state_desc_index = batch * num_head_groups + head_group;
-    const int64_t value_offset =
-        static_cast<int64_t>(batch) * out_batch_stride + static_cast<int64_t>(value_head) * out_head_stride + dv0;
-    const int gate_offset       = static_cast<int>(static_cast<int64_t>(batch) * gate_batch_stride + gate_quad * 4);
-    int       tile_finished_int = (loader_tid & 31) == 0 ? static_cast<int>(finished[batch]) : 0;
-    tile_finished_int           = __shfl_sync(0xffffffff, tile_finished_int, 0);
-    const bool tile_finished    = tile_finished_int != 0;
+        constexpr int kValueBytes      = BlockDv * static_cast<int>(sizeof(__nv_bfloat16));
+        constexpr int kQkBytes         = kHeadDim * static_cast<int>(sizeof(__nv_bfloat16));
+        const int     batch            = DecodeHeadTileBatch(head_tile, hv);
+        const int     value_head       = DecodeHeadTileHead(head_tile, hv);
+        const int     dv0              = dv_tile * BlockDv;
+        const int     qk_head          = value_head / (hv / hq);
+        const int     gate_quad        = value_head / 4;
+        const int     gate_lane        = value_head - gate_quad * 4;
+        const int     head_group       = value_head / heads_per_block;
+        const int     local_head       = value_head % heads_per_block;
+        const int     state_desc_index = batch * num_head_groups + head_group;
+        const int64_t value_offset =
+            static_cast<int64_t>(batch) * out_batch_stride + static_cast<int64_t>(value_head) * out_head_stride + dv0;
+        const int gate_offset       = static_cast<int>(static_cast<int64_t>(batch) * gate_batch_stride + gate_quad * 4);
+        int       tile_finished_int = (loader_tid & 31) == 0 ? static_cast<int>(finished[batch]) : 0;
+        tile_finished_int           = __shfl_sync(0xffffffff, tile_finished_int, 0);
+        const bool tile_finished    = tile_finished_int != 0;
 
-    const auto wait_state_slot = [&] {
-        cute::wait_barrier(smem.stage_free[stage], state_free_phase);
-        state_free_phase ^= 1;
-    };
+        const auto wait_state_slot = [&] {
+            cute::wait_barrier(smem.stage_free[stage], state_free_phase);
+            state_free_phase ^= 1;
+        };
 
-    wait_state_slot();
-    if (loader_tid == 0) {
-        smem.tile_finished[stage]   = static_cast<int>(tile_finished);
-        smem.tile_batch[stage]      = batch;
-        smem.tile_value_head[stage] = value_head;
-        smem.tile_dv0[stage]        = dv0;
-        smem.tile_out_offset[stage] = value_offset;
-    }
-
-    if (loader_tid == 0) {
-        const int aux_bytes = kValueBytes + 2 * kQkBytes;
-        cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.aux_tma_ready[stage], aux_bytes);
-        cute::SM90_TMA_LOAD_4D::copy(
-            &v_tma_desc, &smem.aux_tma_ready[stage], kTmaNoCacheHint, &smem.v_raw[stage][0], dv0, value_head, 0, batch);
-        cute::SM90_TMA_LOAD_5D::copy(
-            &q_tma_desc, &smem.aux_tma_ready[stage], kTmaNoCacheHint, &smem.q_raw[stage][0], 0, 0, qk_head, 0, batch);
-        cute::SM90_TMA_LOAD_5D::copy(
-            &k_tma_desc, &smem.aux_tma_ready[stage], kTmaNoCacheHint, &smem.k_raw[stage][0], 0, 0, qk_head, 0, batch);
-        smem.gate_beta[stage][0] = exp2f(g[gate_offset + gate_lane] * kLog2e);
-        smem.gate_beta[stage][1] = beta[gate_offset + gate_lane];
-        cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.state_tma_ready[stage],
-                                                                       StateTmaBytes());
-        if (hv >= 32) {
-            cute::prefetch_tma_descriptor(
-                reinterpret_cast<const cute::TmaDescriptor*>(&state_tma_descs[state_desc_index]));
+        wait_state_slot();
+        if (loader_tid == 0) {
+            smem.tile_finished[stage]   = static_cast<int>(tile_finished);
+            smem.tile_batch[stage]      = batch;
+            smem.tile_value_head[stage] = value_head;
+            smem.tile_dv0[stage]        = dv0;
+            smem.tile_out_offset[stage] = value_offset;
         }
-        cute::SM90_TMA_LOAD_4D::copy(&state_tma_descs[state_desc_index],
-                                     &smem.state_tma_ready[stage],
-                                     hv >= 32 ? static_cast<uint64_t>(cute::TMA::CacheHintSm90::EVICT_LAST) :
-                                                kTmaNoCacheHint,
-                                     reinterpret_cast<StateT*>(&smem.state[stage][0][0]),
-                                     dv0,
-                                     0,
-                                     local_head,
-                                     state_layer);
-    }
 
-    cute::wait_barrier(smem.aux_tma_ready[stage], aux_tma_phase);
-    aux_tma_phase ^= 1;
+        if (loader_tid == 0) {
+            const int aux_bytes = kValueBytes + 2 * kQkBytes;
+            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.aux_tma_ready[stage], aux_bytes);
+            cute::SM90_TMA_LOAD_4D::copy(&v_tma_desc,
+                                         &smem.aux_tma_ready[stage],
+                                         kTmaNoCacheHint,
+                                         &smem.v_raw[stage][0],
+                                         dv0,
+                                         value_head,
+                                         0,
+                                         batch);
+            cute::SM90_TMA_LOAD_5D::copy(&q_tma_desc,
+                                         &smem.aux_tma_ready[stage],
+                                         kTmaNoCacheHint,
+                                         &smem.q_raw[stage][0],
+                                         0,
+                                         0,
+                                         qk_head,
+                                         0,
+                                         batch);
+            cute::SM90_TMA_LOAD_5D::copy(&k_tma_desc,
+                                         &smem.aux_tma_ready[stage],
+                                         kTmaNoCacheHint,
+                                         &smem.k_raw[stage][0],
+                                         0,
+                                         0,
+                                         qk_head,
+                                         0,
+                                         batch);
+            smem.gate_beta[stage][0] = exp2f(g[gate_offset + gate_lane] * kLog2e);
+            smem.gate_beta[stage][1] = beta[gate_offset + gate_lane];
+            cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&smem.state_tma_ready[stage],
+                                                                           StateTmaBytes());
+            if (hv >= 32) {
+                cute::prefetch_tma_descriptor(
+                    reinterpret_cast<const cute::TmaDescriptor*>(&state_tma_descs[state_desc_index]));
+            }
+            cute::SM90_TMA_LOAD_4D::copy(&state_tma_descs[state_desc_index],
+                                         &smem.state_tma_ready[stage],
+                                         hv >= 32 ? static_cast<uint64_t>(cute::TMA::CacheHintSm90::EVICT_LAST) :
+                                                    kTmaNoCacheHint,
+                                         reinterpret_cast<StateT*>(&smem.state[stage][0][0]),
+                                         dv0,
+                                         0,
+                                         local_head,
+                                         state_layer);
+        }
 
-    for (int dv = loader_tid; dv < BlockDv; dv += kRecurrentLoaderThreads) {
-        smem.v[stage][dv] = __bfloat162float(smem.v_raw[stage][dv]);
-    }
-    for (int dk = loader_tid; dk < kHeadDim; dk += kRecurrentLoaderThreads) {
-        smem.q[stage][dk] = __bfloat162float(smem.q_raw[stage][dk]) * kHeadScale;
-        smem.k[stage][dk] = __bfloat162float(smem.k_raw[stage][dk]);
-    }
+        cute::wait_barrier(smem.aux_tma_ready[stage], aux_tma_phase);
+        aux_tma_phase ^= 1;
 
-    cute::wait_barrier(smem.state_tma_ready[stage], state_tma_phase);
-    state_tma_phase ^= 1;
-    __syncwarp();
-    if ((loader_tid & 31) == 0) {
-        cute::arrive_barrier(smem.tile_ready[stage]);
-    }
+        for (int dv = loader_tid; dv < BlockDv; dv += kRecurrentLoaderThreads) {
+            smem.v[stage][dv] = __bfloat162float(smem.v_raw[stage][dv]);
+        }
+        for (int dk = loader_tid; dk < kHeadDim; dk += kRecurrentLoaderThreads) {
+            smem.q[stage][dk] = __bfloat162float(smem.q_raw[stage][dk]) * kHeadScale;
+            smem.k[stage][dk] = __bfloat162float(smem.k_raw[stage][dk]);
+        }
+
+        cute::wait_barrier(smem.state_tma_ready[stage], state_tma_phase);
+        state_tma_phase ^= 1;
+        __syncwarp();
+        if ((loader_tid & 31) == 0) {
+            cute::arrive_barrier(smem.tile_ready[stage]);
+        }
     }
 
     static __device__ void ComputeTile(SharedStorage& smem, int stage, int role_tid)
     {
-    constexpr int kDvPerThreadPair = 2;
-    constexpr int kDvPairsPerWarp  = BlockDv / kDvPerThreadPair;
-    constexpr int kDkPerWarp       = kHeadDim / kRecurrentConsumerWarps;
-    static_assert(kDvPairsPerWarp == 32);
-    static_assert(kHeadDim % kRecurrentConsumerWarps == 0);
+        constexpr int kDvPerThreadPair = 2;
+        constexpr int kDvPairsPerWarp  = BlockDv / kDvPerThreadPair;
+        constexpr int kDkPerWarp       = kHeadDim / kRecurrentConsumerWarps;
+        static_assert(kDvPairsPerWarp == 32);
+        static_assert(kHeadDim % kRecurrentConsumerWarps == 0);
 
-    const int   lane     = role_tid & 31;
-    const int   warp     = role_tid >> 5;
-    const int   dv_pair  = lane;
-    const int   dv0      = dv_pair * kDvPerThreadPair;
-    const int   dv1      = dv0 + 1;
-    const int   dk_begin = warp * kDkPerWarp;
-    const int   dk_end   = dk_begin + kDkPerWarp;
-    const float decay    = smem.gate_beta[stage][0];
-    const float beta     = smem.gate_beta[stage][1];
+        const int   lane     = role_tid & 31;
+        const int   warp     = role_tid >> 5;
+        const int   dv_pair  = lane;
+        const int   dv0      = dv_pair * kDvPerThreadPair;
+        const int   dv1      = dv0 + 1;
+        const int   dk_begin = warp * kDkPerWarp;
+        const int   dk_end   = dk_begin + kDkPerWarp;
+        const float decay    = smem.gate_beta[stage][0];
+        const float beta     = smem.gate_beta[stage][1];
 
-    float corr0 = 0.0f;
-    float corr1 = 0.0f;
-    float sq0   = 0.0f;
-    float sq1   = 0.0f;
-    float kq    = 0.0f;
-    for (int dk = dk_begin; dk < dk_end; ++dk) {
-        float2 state_vec;
-        if constexpr (std::is_same_v<StateT, __nv_bfloat16>) {
-            const auto* state_ptr = reinterpret_cast<const __nv_bfloat162*>(&smem.state[stage][0][0]);
-            state_vec             = __bfloat1622float2(state_ptr[(dk * BlockDv + dv0) / 2]);
+        float corr0 = 0.0f;
+        float corr1 = 0.0f;
+        float sq0   = 0.0f;
+        float sq1   = 0.0f;
+        float kq    = 0.0f;
+        for (int dk = dk_begin; dk < dk_end; ++dk) {
+            float2 state_vec;
+            if constexpr (std::is_same_v<StateT, __nv_bfloat16>) {
+                const auto* state_ptr = reinterpret_cast<const __nv_bfloat162*>(&smem.state[stage][0][0]);
+                state_vec             = __bfloat1622float2(state_ptr[(dk * BlockDv + dv0) / 2]);
+            }
+            else {
+                static_assert(std::is_same_v<StateT, float>);
+                const auto* state_ptr = reinterpret_cast<const float2*>(&smem.state[stage][dk][dv0]);
+                state_vec             = *state_ptr;
+            }
+            const float kk     = smem.k[stage][dk];
+            const float qq     = smem.q[stage][dk];
+            const float state0 = state_vec.x * decay;
+            const float state1 = state_vec.y * decay;
+            corr0 += state0 * kk;
+            corr1 += state1 * kk;
+            sq0 += state0 * qq;
+            sq1 += state1 * qq;
+            if (lane == 0) {
+                kq += kk * qq;
+            }
         }
-        else {
-            static_assert(std::is_same_v<StateT, float>);
-            const auto* state_ptr = reinterpret_cast<const float2*>(&smem.state[stage][dk][dv0]);
-            state_vec             = *state_ptr;
-        }
-        const float kk     = smem.k[stage][dk];
-        const float qq     = smem.q[stage][dk];
-        const float state0 = state_vec.x * decay;
-        const float state1 = state_vec.y * decay;
-        corr0 += state0 * kk;
-        corr1 += state1 * kk;
-        sq0 += state0 * qq;
-        sq1 += state1 * qq;
+
+        smem.partial_corr[stage][warp][dv_pair] = make_float2(corr0, corr1);
+        smem.partial_sq[stage][warp][dv_pair]   = make_float2(sq0, sq1);
         if (lane == 0) {
-            kq += kk * qq;
+            smem.partial_kq[stage][warp] = kq;
         }
-    }
+        cutlass::arch::NamedBarrier::sync(kRecurrentConsumerThreads, kRecurrentBarrierPartial);
 
-    smem.partial_corr[stage][warp][dv_pair] = make_float2(corr0, corr1);
-    smem.partial_sq[stage][warp][dv_pair]   = make_float2(sq0, sq1);
-    if (lane == 0) {
-        smem.partial_kq[stage][warp] = kq;
-    }
-    cutlass::arch::NamedBarrier::sync(kRecurrentConsumerThreads, kRecurrentBarrierPartial);
-
-    float2 corr_sum = smem.partial_corr[stage][0][dv_pair];
-#pragma unroll
-    for (int producer_warp = 1; producer_warp < kRecurrentConsumerWarps; ++producer_warp) {
-        const float2 corr_part = smem.partial_corr[stage][producer_warp][dv_pair];
-        corr_sum.x += corr_part.x;
-        corr_sum.y += corr_part.y;
-    }
-    const float delta0 = (smem.v[stage][dv0] - corr_sum.x) * beta;
-    const float delta1 = (smem.v[stage][dv1] - corr_sum.y) * beta;
-
-    if (warp == 0) {
-        float2 sq_sum = smem.partial_sq[stage][0][dv_pair];
-        float  kq_sum = smem.partial_kq[stage][0];
+        float2 corr_sum = smem.partial_corr[stage][0][dv_pair];
 #pragma unroll
         for (int producer_warp = 1; producer_warp < kRecurrentConsumerWarps; ++producer_warp) {
-            const float2 sq_part = smem.partial_sq[stage][producer_warp][dv_pair];
-            sq_sum.x += sq_part.x;
-            sq_sum.y += sq_part.y;
-            kq_sum += smem.partial_kq[stage][producer_warp];
+            const float2 corr_part = smem.partial_corr[stage][producer_warp][dv_pair];
+            corr_sum.x += corr_part.x;
+            corr_sum.y += corr_part.y;
         }
-        smem.out[stage][dv0] = __float2bfloat16(sq_sum.x + delta0 * kq_sum);
-        smem.out[stage][dv1] = __float2bfloat16(sq_sum.y + delta1 * kq_sum);
-    }
+        const float delta0 = (smem.v[stage][dv0] - corr_sum.x) * beta;
+        const float delta1 = (smem.v[stage][dv1] - corr_sum.y) * beta;
 
-    for (int dk = dk_begin; dk < dk_end; ++dk) {
-        const float kk = smem.k[stage][dk];
-        if constexpr (std::is_same_v<StateT, __nv_bfloat16>) {
-            auto*  state_ptr                    = reinterpret_cast<__nv_bfloat162*>(&smem.state[stage][0][0]);
-            float2 state_vec                    = __bfloat1622float2(state_ptr[(dk * BlockDv + dv0) / 2]);
-            state_vec.x                         = state_vec.x * decay + kk * delta0;
-            state_vec.y                         = state_vec.y * decay + kk * delta1;
-            state_ptr[(dk * BlockDv + dv0) / 2] = __float22bfloat162_rn(state_vec);
+        if (warp == 0) {
+            float2 sq_sum = smem.partial_sq[stage][0][dv_pair];
+            float  kq_sum = smem.partial_kq[stage][0];
+#pragma unroll
+            for (int producer_warp = 1; producer_warp < kRecurrentConsumerWarps; ++producer_warp) {
+                const float2 sq_part = smem.partial_sq[stage][producer_warp][dv_pair];
+                sq_sum.x += sq_part.x;
+                sq_sum.y += sq_part.y;
+                kq_sum += smem.partial_kq[stage][producer_warp];
+            }
+            smem.out[stage][dv0] = __float2bfloat16(sq_sum.x + delta0 * kq_sum);
+            smem.out[stage][dv1] = __float2bfloat16(sq_sum.y + delta1 * kq_sum);
         }
-        else {
-            static_assert(std::is_same_v<StateT, float>);
-            auto*  state_ptr = reinterpret_cast<float2*>(&smem.state[stage][dk][dv0]);
-            float2 state_vec = *state_ptr;
-            state_vec.x      = state_vec.x * decay + kk * delta0;
-            state_vec.y      = state_vec.y * decay + kk * delta1;
-            *state_ptr       = state_vec;
+
+        for (int dk = dk_begin; dk < dk_end; ++dk) {
+            const float kk = smem.k[stage][dk];
+            if constexpr (std::is_same_v<StateT, __nv_bfloat16>) {
+                auto*  state_ptr                    = reinterpret_cast<__nv_bfloat162*>(&smem.state[stage][0][0]);
+                float2 state_vec                    = __bfloat1622float2(state_ptr[(dk * BlockDv + dv0) / 2]);
+                state_vec.x                         = state_vec.x * decay + kk * delta0;
+                state_vec.y                         = state_vec.y * decay + kk * delta1;
+                state_ptr[(dk * BlockDv + dv0) / 2] = __float22bfloat162_rn(state_vec);
+            }
+            else {
+                static_assert(std::is_same_v<StateT, float>);
+                auto*  state_ptr = reinterpret_cast<float2*>(&smem.state[stage][dk][dv0]);
+                float2 state_vec = *state_ptr;
+                state_vec.x      = state_vec.x * decay + kk * delta0;
+                state_vec.y      = state_vec.y * decay + kk * delta1;
+                *state_ptr       = state_vec;
+            }
         }
-    }
     }
 
     static constexpr int    kThreads     = kRecurrentThreads;
@@ -476,16 +497,16 @@ struct Sm120GdrRecurrent {
                                                const float* __restrict__ beta,
                                                const bool* __restrict__ finished,
                                                const CUtensorMap* __restrict__ state_tma_descs,
-                                               int     total_tiles,
-                                               int     batch_count,
-                                               int     hq,
-                                               int     hv,
-                                               int64_t gate_batch_stride,
-                                               int64_t out_batch_stride,
-                                               int64_t out_head_stride,
-                                               int     num_head_groups,
-                                               int     heads_per_block,
-                                               int     state_layer,
+                                               int            total_tiles,
+                                               int            batch_count,
+                                               int            hq,
+                                               int            hv,
+                                               int64_t        gate_batch_stride,
+                                               int64_t        out_batch_stride,
+                                               int64_t        out_head_stride,
+                                               int            num_head_groups,
+                                               int            heads_per_block,
+                                               int            state_layer,
                                                unsigned char* smem_raw)
     {
         auto& smem = *reinterpret_cast<SharedStorage*>(smem_raw);
@@ -575,28 +596,28 @@ struct Sm120GdrRecurrent {
                     const int head_tile = work_tile / kDvTiles;
                     const int dv_tile   = work_tile - head_tile * kDvTiles;
                     StageTile(smem,
-                                                        stage,
-                                                        head_tile,
-                                                        dv_tile,
-                                                        loader_tid,
-                                                        aux_tma_phase[stage],
-                                                        state_tma_phase[stage],
-                                                        state_free_phase[stage],
-                                                        state_tma_descs,
-                                                        q_tma_desc,
-                                                        k_tma_desc,
-                                                        v_tma_desc,
-                                                        g,
-                                                        beta,
-                                                        finished,
-                                                        hq,
-                                                        hv,
-                                                        gate_batch_stride,
-                                                        out_batch_stride,
-                                                        out_head_stride,
-                                                        num_head_groups,
-                                                        heads_per_block,
-                                                        state_layer);
+                              stage,
+                              head_tile,
+                              dv_tile,
+                              loader_tid,
+                              aux_tma_phase[stage],
+                              state_tma_phase[stage],
+                              state_free_phase[stage],
+                              state_tma_descs,
+                              q_tma_desc,
+                              k_tma_desc,
+                              v_tma_desc,
+                              g,
+                              beta,
+                              finished,
+                              hq,
+                              hv,
+                              gate_batch_stride,
+                              out_batch_stride,
+                              out_head_stride,
+                              num_head_groups,
+                              heads_per_block,
+                              state_layer);
                 }
             }
             return;
@@ -627,26 +648,27 @@ struct Sm120GdrRecurrent {
 };
 
 template<int BlockDv, class StateT>
-__global__ __launch_bounds__(Sm120GdrRecurrent<BlockDv, StateT>::kThreads,
-                             Sm120GdrRecurrent<BlockDv, StateT>::kMinBlocks)
-    void Sm120GdrRecurrentKernel(const __grid_constant__ CUtensorMap q_tma_desc,
-                            const __grid_constant__ CUtensorMap k_tma_desc,
-                            const __grid_constant__ CUtensorMap v_tma_desc,
-                            __nv_bfloat16* __restrict__ out,
-                            const float* __restrict__ g,
-                            const float* __restrict__ beta,
-                            const bool* __restrict__ finished,
-                            const CUtensorMap* __restrict__ state_tma_descs,
-                            int     total_tiles,
-                            int     batch_count,
-                            int     hq,
-                            int     hv,
-                            int64_t gate_batch_stride,
-                            int64_t out_batch_stride,
-                            int64_t out_head_stride,
-                            int     num_head_groups,
-                            int     heads_per_block,
-                            int     state_layer)
+__global__ __launch_bounds__(
+    Sm120GdrRecurrent<BlockDv, StateT>::kThreads,
+    Sm120GdrRecurrent<BlockDv,
+                      StateT>::kMinBlocks) void Sm120GdrRecurrentKernel(const __grid_constant__ CUtensorMap q_tma_desc,
+                                                                        const __grid_constant__ CUtensorMap k_tma_desc,
+                                                                        const __grid_constant__ CUtensorMap v_tma_desc,
+                                                                        __nv_bfloat16* __restrict__ out,
+                                                                        const float* __restrict__ g,
+                                                                        const float* __restrict__ beta,
+                                                                        const bool* __restrict__ finished,
+                                                                        const CUtensorMap* __restrict__ state_tma_descs,
+                                                                        int     total_tiles,
+                                                                        int     batch_count,
+                                                                        int     hq,
+                                                                        int     hv,
+                                                                        int64_t gate_batch_stride,
+                                                                        int64_t out_batch_stride,
+                                                                        int64_t out_head_stride,
+                                                                        int     num_head_groups,
+                                                                        int     heads_per_block,
+                                                                        int     state_layer)
 {
     extern __shared__ __align__(1024) unsigned char smem_raw[];
     Sm120GdrRecurrent<BlockDv, StateT>::Run(q_tma_desc,
@@ -673,12 +695,10 @@ __global__ __launch_bounds__(Sm120GdrRecurrent<BlockDv, StateT>::kThreads,
 template<int BlockDv, class StateT>
 void SetRecurrentGdrSharedMemoryLimit()
 {
-    using Kernel = Sm120GdrRecurrent<BlockDv, StateT>;
-    auto kernel = Sm120GdrRecurrentKernel<BlockDv, StateT>;
-    static const cudaError_t status =
-        cudaFuncSetAttribute(kernel,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(Kernel::kSharedBytes));
+    using Kernel                    = Sm120GdrRecurrent<BlockDv, StateT>;
+    auto                     kernel = Sm120GdrRecurrentKernel<BlockDv, StateT>;
+    static const cudaError_t status = cudaFuncSetAttribute(
+        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(Kernel::kSharedBytes));
     TM_CUDA_CHECK(status);
 }
 
@@ -697,12 +717,12 @@ struct Sm120GroupedStateDescPrepare {
                                                int                num_head_groups,
                                                CUtensorMap*       smem_descriptor)
     {
-        const int                             linear        = static_cast<int>(blockIdx.x);
-        const int                             lane          = static_cast<int>(threadIdx.x);
-        const int                             head_group    = linear % num_head_groups;
-        const int                             sequence      = (linear / num_head_groups) % sequence_count;
-        const int                             layer_group   = linear / (sequence_count * num_head_groups);
-        const int64_t                         pointer_index = static_cast<int64_t>(layer_group) * layer_group_stride
+        const int     linear        = static_cast<int>(blockIdx.x);
+        const int     lane          = static_cast<int>(threadIdx.x);
+        const int     head_group    = linear % num_head_groups;
+        const int     sequence      = (linear / num_head_groups) % sequence_count;
+        const int     layer_group   = linear / (sequence_count * num_head_groups);
+        const int64_t pointer_index = static_cast<int64_t>(layer_group) * layer_group_stride
                                       + static_cast<int64_t>(sequence) * sequence_stride
                                       + static_cast<int64_t>(head_group) * head_group_stride;
         CopyTmaDescriptor(smem_descriptor, &state_tma_desc, lane, kThreads);
@@ -719,27 +739,29 @@ struct Sm120GroupedStateDescPrepare {
 };
 
 template<class StateT>
-__global__ __launch_bounds__(Sm120GroupedStateDescPrepare<StateT>::kThreads,
-                             Sm120GroupedStateDescPrepare<StateT>::kMinBlocks)
-    void PrepareGroupedStateDescriptors(const __grid_constant__ CUtensorMap state_tma_desc,
-                                   const int64_t*                      addresses,
-                                   int64_t      layer_group_stride,
-                                   int64_t      sequence_stride,
-                                   int64_t      head_group_stride,
-                                   CUtensorMap* descriptors,
-                                   int          sequence_count,
-                                   int          num_head_groups)
+__global__ __launch_bounds__(
+    Sm120GroupedStateDescPrepare<StateT>::kThreads,
+    Sm120GroupedStateDescPrepare<StateT>::kMinBlocks) void PrepareGroupedStateDescriptors(const __grid_constant__
+                                                                                              CUtensorMap
+                                                                                                         state_tma_desc,
+                                                                                          const int64_t* addresses,
+                                                                                          int64_t layer_group_stride,
+                                                                                          int64_t sequence_stride,
+                                                                                          int64_t head_group_stride,
+                                                                                          CUtensorMap* descriptors,
+                                                                                          int          sequence_count,
+                                                                                          int          num_head_groups)
 {
     __shared__ __align__(128) CUtensorMap smem_descriptor;
     Sm120GroupedStateDescPrepare<StateT>::Run(state_tma_desc,
-                                               addresses,
-                                               layer_group_stride,
-                                               sequence_stride,
-                                               head_group_stride,
-                                               descriptors,
-                                               sequence_count,
-                                               num_head_groups,
-                                               &smem_descriptor);
+                                              addresses,
+                                              layer_group_stride,
+                                              sequence_stride,
+                                              head_group_stride,
+                                              descriptors,
+                                              sequence_count,
+                                              num_head_groups,
+                                              &smem_descriptor);
 }
 
 template<class StateT>
@@ -761,13 +783,13 @@ void PrepareSm120RecurrentStateTmaDescriptorsTyped(const core::Tensor& state_ptr
     auto*       descriptors = reinterpret_cast<CUtensorMap*>(state_tma_descs.raw_data());
     const int   work        = layer_groups * sequence_count * num_head_groups;
     PrepareGroupedStateDescriptors<StateT><<<work, DescriptorKernel::kThreads, 0, stream>>>(state_tma_desc,
-                                                                    addresses,
-                                                                    state_ptrs.stride(0),
-                                                                    state_ptrs.stride(1),
-                                                                    state_ptrs.stride(2),
-                                                                    descriptors,
-                                                                    sequence_count,
-                                                                    num_head_groups);
+                                                                                            addresses,
+                                                                                            state_ptrs.stride(0),
+                                                                                            state_ptrs.stride(1),
+                                                                                            state_ptrs.stride(2),
+                                                                                            descriptors,
+                                                                                            sequence_count,
+                                                                                            num_head_groups);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -795,9 +817,8 @@ void LaunchSm120GdrRecurrentTyped(const core::Tensor& q,
     const auto* beta_ptr     = beta.data<float>();
     auto*       out_ptr      = reinterpret_cast<__nv_bfloat16*>(out.raw_data());
     const auto* finished_ptr = finished.data<bool>();
-    const int   state_layer =
-        static_cast<int>(state_layer_offset
-                         / (static_cast<int64_t>(problem.heads_per_block) * Kernel::kHeadDim * Kernel::kHeadDim));
+    const int   state_layer  = static_cast<int>(
+        state_layer_offset / (static_cast<int64_t>(problem.heads_per_block) * Kernel::kHeadDim * Kernel::kHeadDim));
     const auto* state_tma_descs_ptr = reinterpret_cast<const CUtensorMap*>(state_tma_descs.raw_data());
     static_cast<void>(tma_desc_workspace);
 
@@ -809,13 +830,13 @@ void LaunchSm120GdrRecurrentTyped(const core::Tensor& q,
     const int     total_work_tiles = total_tiles * dv_tiles;
     // Medium persistent loops benefit from an extra queued CTA wave; smaller loops pay launch-tail overhead,
     // while larger loops already amortize per-CTA setup with the resident two-CTA grid.
-    const bool medium_persistent_grid = total_work_tiles > base_grid_blocks * Kernel::kRecurrentMediumMinWorkPerBaseCta
-                                        && total_work_tiles
-                                               <= base_grid_blocks * Kernel::kRecurrentMediumMaxWorkPerBaseCta;
+    const bool medium_persistent_grid =
+        total_work_tiles > base_grid_blocks * Kernel::kRecurrentMediumMinWorkPerBaseCta
+        && total_work_tiles <= base_grid_blocks * Kernel::kRecurrentMediumMaxWorkPerBaseCta;
     const int target_grid_blocks =
         sm_count * (medium_persistent_grid ? Kernel::kRecurrentMediumCtasPerSm : Kernel::kRecurrentBaseCtasPerSm);
-    const int grid_blocks = std::max(
-        1, std::min(std::min(total_work_tiles, target_grid_blocks), Kernel::kRecurrentMaxDescriptorCtas));
+    const int grid_blocks =
+        std::max(1, std::min(std::min(total_work_tiles, target_grid_blocks), Kernel::kRecurrentMaxDescriptorCtas));
 
     const auto q_tma_desc = Kernel::template MakeQkTmaDesc<__nv_bfloat16>(q);
     const auto k_tma_desc = Kernel::template MakeQkTmaDesc<__nv_bfloat16>(k);
@@ -823,23 +844,23 @@ void LaunchSm120GdrRecurrentTyped(const core::Tensor& q,
     SetRecurrentGdrSharedMemoryLimit<block_dv, StateT>();
     Sm120GdrRecurrentKernel<block_dv, StateT>
         <<<grid_blocks, Kernel::kThreads, Kernel::kSharedBytes, stream>>>(q_tma_desc,
-                                                                 k_tma_desc,
-                                                                 v_tma_desc,
-                                                                 out_ptr,
-                                                                 g_ptr,
-                                                                 beta_ptr,
-                                                                 finished_ptr,
-                                                                 state_tma_descs_ptr,
-                                                                 total_tiles,
-                                                                 problem.sequence_num,
-                                                                 problem.hq,
-                                                                 problem.hv,
-                                                                 problem.gate_batch_stride,
-                                                                 out.stride(0),
-                                                                 out.stride(2),
-                                                                 problem.num_head_groups,
-                                                                 problem.heads_per_block,
-                                                                 state_layer);
+                                                                          k_tma_desc,
+                                                                          v_tma_desc,
+                                                                          out_ptr,
+                                                                          g_ptr,
+                                                                          beta_ptr,
+                                                                          finished_ptr,
+                                                                          state_tma_descs_ptr,
+                                                                          total_tiles,
+                                                                          problem.sequence_num,
+                                                                          problem.hq,
+                                                                          problem.hv,
+                                                                          problem.gate_batch_stride,
+                                                                          out.stride(0),
+                                                                          out.stride(2),
+                                                                          problem.num_head_groups,
+                                                                          problem.heads_per_block,
+                                                                          state_layer);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -882,19 +903,19 @@ void PrepareSm120RecurrentStateTmaDescriptors(const core::Tensor& state_ptrs,
                                                           stream);
 }
 
-#define TM_INSTANTIATE_SM120_RECURRENT(STATE_T)                                                                    \
-    template void LaunchSm120Recurrent<STATE_T>(const core::Tensor&,                                               \
-                                                 const core::Tensor&,                                               \
-                                                 const core::Tensor&,                                               \
-                                                 const core::Tensor&,                                               \
-                                                 const core::Tensor&,                                               \
-                                                 const core::Tensor&,                                               \
-                                                 const core::Tensor&,                                               \
-                                                 core::Tensor&,                                                     \
-                                                 const Problem&,                                                    \
-                                                 int64_t,                                                           \
-                                                 cudaStream_t);                                                     \
-    template void PrepareSm120RecurrentStateTmaDescriptors<STATE_T>(                                               \
+#define TM_INSTANTIATE_SM120_RECURRENT(STATE_T)                                                                        \
+    template void LaunchSm120Recurrent<STATE_T>(const core::Tensor&,                                                   \
+                                                const core::Tensor&,                                                   \
+                                                const core::Tensor&,                                                   \
+                                                const core::Tensor&,                                                   \
+                                                const core::Tensor&,                                                   \
+                                                const core::Tensor&,                                                   \
+                                                const core::Tensor&,                                                   \
+                                                core::Tensor&,                                                         \
+                                                const Problem&,                                                        \
+                                                int64_t,                                                               \
+                                                cudaStream_t);                                                         \
+    template void PrepareSm120RecurrentStateTmaDescriptors<STATE_T>(                                                   \
         const core::Tensor&, core::Tensor&, int, int, const Plan&, cudaStream_t)
 
 TM_INSTANTIATE_SM120_RECURRENT(float);

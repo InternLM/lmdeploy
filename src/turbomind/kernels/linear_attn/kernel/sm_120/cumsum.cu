@@ -61,18 +61,18 @@ struct Sm120ChunkLocalCumsum {
     static __device__ __forceinline__ void Run(const float* __restrict__ g,
                                                const int32_t* __restrict__ q_offsets,
                                                float* __restrict__ g_cumsum,
-                                               int     sequence_num,
-                                               int     token_num,
-                                               int     hv,
-                                               int64_t input_gate_stride,
-                                               int64_t input_gate_batch_stride,
-                                               int64_t output_gate_stride,
-                                               int64_t output_gate_batch_stride,
-                                               const TmaTemplates* descriptor_templates,
+                                               int                    sequence_num,
+                                               int                    token_num,
+                                               int                    hv,
+                                               int64_t                input_gate_stride,
+                                               int64_t                input_gate_batch_stride,
+                                               int64_t                output_gate_stride,
+                                               int64_t                output_gate_batch_stride,
+                                               const TmaTemplates*    descriptor_templates,
                                                const DescriptorBases* descriptor_bases,
-                                               CUtensorMap* kkt_desc_workspace,
-                                               CUtensorMap* fused_desc_workspace,
-                                               CUtensorMap* descriptor_stage)
+                                               CUtensorMap*           kkt_desc_workspace,
+                                               CUtensorMap*           fused_desc_workspace,
+                                               CUtensorMap*           descriptor_stage)
     {
         static_assert(ChunkSize % kWarpSize == 0);
         static_assert(kThreads <= 1024);
@@ -124,22 +124,21 @@ struct Sm120ChunkLocalCumsum {
 
         if constexpr (PrepareDirectDescriptors) {
             if (local_chunk_id == 0 && blockIdx.y == 0) {
-                const int physical_batch  = seq_start / token_num;
-                const int local_seq_start = seq_start - physical_batch * token_num;
-                const int seq_len         = seq_end - seq_start;
-                const auto& templates     = *descriptor_templates;
-                const auto& bases         = *descriptor_bases;
-                ChunkedKktTma::Build(
-                    &kkt_desc_workspace[sequence_id * DescriptorPrepare::kKktTmaDescCount],
-                    descriptor_stage,
-                    templates.kkt_k,
-                    templates.kkt_resolvent,
-                    bases.k,
-                    bases.resolvent,
-                    tid,
-                    local_seq_start,
-                    physical_batch,
-                    seq_len);
+                const int   physical_batch  = seq_start / token_num;
+                const int   local_seq_start = seq_start - physical_batch * token_num;
+                const int   seq_len         = seq_end - seq_start;
+                const auto& templates       = *descriptor_templates;
+                const auto& bases           = *descriptor_bases;
+                ChunkedKktTma::Build(&kkt_desc_workspace[sequence_id * DescriptorPrepare::kKktTmaDescCount],
+                                     descriptor_stage,
+                                     templates.kkt_k,
+                                     templates.kkt_resolvent,
+                                     bases.k,
+                                     bases.resolvent,
+                                     tid,
+                                     local_seq_start,
+                                     physical_batch,
+                                     seq_len);
                 DescriptorPrepare::BuildSequenceDataTmaDescriptors(
                     &fused_desc_workspace[sequence_id * DescriptorPrepare::kFusedGdrDataDescCount],
                     descriptor_stage,
@@ -178,9 +177,9 @@ struct Sm120ChunkLocalCumsum {
                 const int head_lane  = linear - token_lane * head_count;
                 float4    values     = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
                 if (token_lane < token_count) {
-                    const int flat_token = token0 + token_lane;
-                    const int batch_id = flat_token / token_num;
-                    const int token    = flat_token - batch_id * token_num;
+                    const int     flat_token   = token0 + token_lane;
+                    const int     batch_id     = flat_token / token_num;
+                    const int     token        = flat_token - batch_id * token_num;
                     const int64_t input_offset = static_cast<int64_t>(batch_id) * input_gate_batch_stride
                                                  + static_cast<int64_t>(token) * input_gate_stride + head_base
                                                  + head_lane;
@@ -199,9 +198,9 @@ struct Sm120ChunkLocalCumsum {
                 const int head_lane  = linear - token_lane * kHeadsPerBlock;
                 float     value      = 0.0f;
                 if (head_lane < head_count && token_lane < token_count) {
-                    const int flat_token = token0 + token_lane;
-                    const int batch_id = flat_token / token_num;
-                    const int token    = flat_token - batch_id * token_num;
+                    const int     flat_token   = token0 + token_lane;
+                    const int     batch_id     = flat_token / token_num;
+                    const int     token        = flat_token - batch_id * token_num;
                     const int64_t input_offset = static_cast<int64_t>(batch_id) * input_gate_batch_stride
                                                  + static_cast<int64_t>(token) * input_gate_stride + head_base
                                                  + head_lane;
@@ -215,8 +214,8 @@ struct Sm120ChunkLocalCumsum {
         // Each warp scans one or more complete 32-token head rows.
 #pragma unroll
         for (int head_lane = warp_id; head_lane < kHeadsPerBlock; head_lane += kWarps) {
-            float value = stage[head_lane][warp_lane];
-            value       = WarpInclusiveScan(value, warp_lane);
+            float value                 = stage[head_lane][warp_lane];
+            value                       = WarpInclusiveScan(value, warp_lane);
             stage[head_lane][warp_lane] = value;
         }
         __syncthreads();
@@ -230,13 +229,13 @@ struct Sm120ChunkLocalCumsum {
                 const int token_lane = linear / head_count;
                 const int head_lane  = linear - token_lane * head_count;
                 if (token_lane < token_count) {
-                    const int flat_token = token0 + token_lane;
-                    const int batch_id = flat_token / token_num;
-                    const int token    = flat_token - batch_id * token_num;
+                    const int     flat_token    = token0 + token_lane;
+                    const int     batch_id      = flat_token / token_num;
+                    const int     token         = flat_token - batch_id * token_num;
                     const int64_t output_offset = static_cast<int64_t>(batch_id) * output_gate_batch_stride
                                                   + static_cast<int64_t>(token) * output_gate_stride + head_base
                                                   + head_lane;
-                    const float4 values = make_float4(stage[head_lane + 0][token_lane],
+                    const float4 values                                  = make_float4(stage[head_lane + 0][token_lane],
                                                       stage[head_lane + 1][token_lane],
                                                       stage[head_lane + 2][token_lane],
                                                       stage[head_lane + 3][token_lane]);
@@ -250,9 +249,9 @@ struct Sm120ChunkLocalCumsum {
                 const int token_lane = linear / kHeadsPerBlock;
                 const int head_lane  = linear - token_lane * kHeadsPerBlock;
                 if (head_lane < head_count && token_lane < token_count) {
-                    const int flat_token = token0 + token_lane;
-                    const int batch_id = flat_token / token_num;
-                    const int token    = flat_token - batch_id * token_num;
+                    const int     flat_token    = token0 + token_lane;
+                    const int     batch_id      = flat_token / token_num;
+                    const int     token         = flat_token - batch_id * token_num;
                     const int64_t output_offset = static_cast<int64_t>(batch_id) * output_gate_batch_stride
                                                   + static_cast<int64_t>(token) * output_gate_stride + head_base
                                                   + head_lane;
@@ -276,20 +275,20 @@ __global__ void ParallelChunkLocalCumsumKernel(const float* __restrict__ g,
                                                int64_t output_gate_batch_stride)
 {
     Sm120ChunkLocalCumsum<ChunkSize>::Run(g,
-                                                           q_offsets,
-                                                           g_cumsum,
-                                                           sequence_num,
-                                                           token_num,
-                                                           hv,
-                                                           input_gate_stride,
-                                                           input_gate_batch_stride,
-                                                           output_gate_stride,
-                                                           output_gate_batch_stride,
-                                                           nullptr,
-                                                           nullptr,
-                                                           nullptr,
-                                                           nullptr,
-                                                           nullptr);
+                                          q_offsets,
+                                          g_cumsum,
+                                          sequence_num,
+                                          token_num,
+                                          hv,
+                                          input_gate_stride,
+                                          input_gate_batch_stride,
+                                          output_gate_stride,
+                                          output_gate_batch_stride,
+                                          nullptr,
+                                          nullptr,
+                                          nullptr,
+                                          nullptr,
+                                          nullptr);
 }
 
 template<int ChunkSize>
@@ -297,36 +296,36 @@ __global__ void ParallelChunkLocalCumsumAndPrepareDirectKernel(
     const float* __restrict__ g,
     const int32_t* __restrict__ q_offsets,
     float* __restrict__ g_cumsum,
-    int     sequence_num,
-    int     token_num,
-    int     hv,
-    int64_t input_gate_stride,
-    int64_t input_gate_batch_stride,
-    int64_t output_gate_stride,
-    int64_t output_gate_batch_stride,
-    const __grid_constant__ typename Sm120ChunkLocalCumsum<ChunkSize, true>::TmaTemplates descriptor_templates,
+    int                                                                                      sequence_num,
+    int                                                                                      token_num,
+    int                                                                                      hv,
+    int64_t                                                                                  input_gate_stride,
+    int64_t                                                                                  input_gate_batch_stride,
+    int64_t                                                                                  output_gate_stride,
+    int64_t                                                                                  output_gate_batch_stride,
+    const __grid_constant__ typename Sm120ChunkLocalCumsum<ChunkSize, true>::TmaTemplates    descriptor_templates,
     const __grid_constant__ typename Sm120ChunkLocalCumsum<ChunkSize, true>::DescriptorBases descriptor_bases,
-    CUtensorMap* kkt_desc_workspace,
-    CUtensorMap* fused_desc_workspace)
+    CUtensorMap*                                                                             kkt_desc_workspace,
+    CUtensorMap*                                                                             fused_desc_workspace)
 {
     using Kernel            = Sm120ChunkLocalCumsum<ChunkSize, true>;
     using DescriptorPrepare = typename Kernel::DescriptorPrepare;
     __shared__ __align__(128) CUtensorMap descriptor_stage[DescriptorPrepare::kFusedGdrDataDescCount];
     Sm120ChunkLocalCumsum<ChunkSize, true>::Run(g,
-                                                                q_offsets,
-                                                                g_cumsum,
-                                                                sequence_num,
-                                                                token_num,
-                                                                hv,
-                                                                input_gate_stride,
-                                                                input_gate_batch_stride,
-                                                                output_gate_stride,
-                                                                output_gate_batch_stride,
-                                                                &descriptor_templates,
-                                                                &descriptor_bases,
-                                                                kkt_desc_workspace,
-                                                                fused_desc_workspace,
-                                                                descriptor_stage);
+                                                q_offsets,
+                                                g_cumsum,
+                                                sequence_num,
+                                                token_num,
+                                                hv,
+                                                input_gate_stride,
+                                                input_gate_batch_stride,
+                                                output_gate_stride,
+                                                output_gate_batch_stride,
+                                                &descriptor_templates,
+                                                &descriptor_bases,
+                                                kkt_desc_workspace,
+                                                fused_desc_workspace,
+                                                descriptor_stage);
 }
 
 template<int ChunkSize>
@@ -347,17 +346,16 @@ void LaunchChunkCumsum(const core::Tensor& g,
 
     using Kernel = Sm120ChunkLocalCumsum<ChunkSize>;
     dim3 grid(problem.total_chunks, cdiv(problem.hv, Kernel::kHeadsPerBlock));
-    ParallelChunkLocalCumsumKernel<ChunkSize><<<grid, Kernel::kThreads, 0, stream>>>(
-        g_ptr,
-        q_offsets.data<int32_t>(),
-        out_ptr,
-        problem.sequence_num,
-        problem.token_num,
-        problem.hv,
-        g.stride(1),
-        g.stride(0),
-        g_cumsum.stride(1),
-        g_cumsum.stride(0));
+    ParallelChunkLocalCumsumKernel<ChunkSize><<<grid, Kernel::kThreads, 0, stream>>>(g_ptr,
+                                                                                     q_offsets.data<int32_t>(),
+                                                                                     out_ptr,
+                                                                                     problem.sequence_num,
+                                                                                     problem.token_num,
+                                                                                     problem.hv,
+                                                                                     g.stride(1),
+                                                                                     g.stride(0),
+                                                                                     g_cumsum.stride(1),
+                                                                                     g_cumsum.stride(0));
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -395,29 +393,29 @@ void LaunchChunkCumsumAndPrepareDirect(const core::Tensor& q,
         DescriptorPrepare::MakeFusedGdrOutputTmaDesc(out, BlockDv),
     };
     typename Kernel::DescriptorBases descriptor_bases{};
-    descriptor_bases.q          = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(q);
-    descriptor_bases.k          = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(k);
-    descriptor_bases.v          = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(v);
-    descriptor_bases.g_cumsum   = {g_cumsum.data<float>(), g_cumsum.stride(0), g_cumsum.stride(1)};
-    descriptor_bases.resolvent  = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(resolvent);
-    descriptor_bases.out        = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(out);
+    descriptor_bases.q         = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(q);
+    descriptor_bases.k         = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(k);
+    descriptor_bases.v         = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(v);
+    descriptor_bases.g_cumsum  = {g_cumsum.data<float>(), g_cumsum.stride(0), g_cumsum.stride(1)};
+    descriptor_bases.resolvent = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(resolvent);
+    descriptor_bases.out       = DescriptorPrepare::template MakeStridedTensorBase<__nv_bfloat16>(out);
 
     dim3 grid(problem.total_chunks, cdiv(problem.hv, Kernel::kHeadsPerBlock));
     ParallelChunkLocalCumsumAndPrepareDirectKernel<ChunkSize>
         <<<grid, Kernel::kThreads, 0, stream>>>(g.data<float>(),
-                                               q_offsets.data<int32_t>(),
-                                               g_cumsum.data<float>(),
-                                               problem.sequence_num,
-                                               problem.token_num,
-                                               problem.hv,
-                                               g.stride(1),
-                                               g.stride(0),
-                                               g_cumsum.stride(1),
-                                               g_cumsum.stride(0),
-                                               descriptor_templates,
-                                               descriptor_bases,
-                                               reinterpret_cast<CUtensorMap*>(kkt_desc_workspace),
-                                               reinterpret_cast<CUtensorMap*>(fused_desc_workspace));
+                                                q_offsets.data<int32_t>(),
+                                                g_cumsum.data<float>(),
+                                                problem.sequence_num,
+                                                problem.token_num,
+                                                problem.hv,
+                                                g.stride(1),
+                                                g.stride(0),
+                                                g_cumsum.stride(1),
+                                                g_cumsum.stride(0),
+                                                descriptor_templates,
+                                                descriptor_bases,
+                                                reinterpret_cast<CUtensorMap*>(kkt_desc_workspace),
+                                                reinterpret_cast<CUtensorMap*>(fused_desc_workspace));
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -449,33 +447,23 @@ void LaunchChunk32LocalCumsumAndPrepareDirect(const core::Tensor& q,
                                               cudaStream_t        stream)
 {
     static_assert(BlockDv == kContextParallelGdrBlockDv || BlockDv == kFusedGdrBlockDv);
-    LaunchChunkCumsumAndPrepareDirect<BlockDv, 32>(q,
-                                                   k,
-                                                   v,
-                                                   g,
-                                                   q_offsets,
-                                                   g_cumsum,
-                                                   resolvent,
-                                                   out,
-                                                   kkt_desc_workspace,
-                                                   fused_desc_workspace,
-                                                   problem,
-                                                   stream);
+    LaunchChunkCumsumAndPrepareDirect<BlockDv, 32>(
+        q, k, v, g, q_offsets, g_cumsum, resolvent, out, kkt_desc_workspace, fused_desc_workspace, problem, stream);
 }
 
-#define TM_INSTANTIATE_SM120_CUMSUM_PREPARE(BLOCK_DV)                                                              \
-    template void LaunchChunk32LocalCumsumAndPrepareDirect<BLOCK_DV>(const core::Tensor&,                         \
-                                                                      const core::Tensor&,                         \
-                                                                      const core::Tensor&,                         \
-                                                                      const core::Tensor&,                         \
-                                                                      const core::Tensor&,                         \
-                                                                      core::Tensor&,                               \
-                                                                      core::Tensor&,                               \
-                                                                      core::Tensor&,                               \
-                                                                      void*,                                       \
-                                                                      void*,                                       \
-                                                                      const Problem&,                              \
-                                                                      cudaStream_t)
+#define TM_INSTANTIATE_SM120_CUMSUM_PREPARE(BLOCK_DV)                                                                  \
+    template void LaunchChunk32LocalCumsumAndPrepareDirect<BLOCK_DV>(const core::Tensor&,                              \
+                                                                     const core::Tensor&,                              \
+                                                                     const core::Tensor&,                              \
+                                                                     const core::Tensor&,                              \
+                                                                     const core::Tensor&,                              \
+                                                                     core::Tensor&,                                    \
+                                                                     core::Tensor&,                                    \
+                                                                     core::Tensor&,                                    \
+                                                                     void*,                                            \
+                                                                     void*,                                            \
+                                                                     const Problem&,                                   \
+                                                                     cudaStream_t)
 
 TM_INSTANTIATE_SM120_CUMSUM_PREPARE(kContextParallelGdrBlockDv);
 TM_INSTANTIATE_SM120_CUMSUM_PREPARE(kFusedGdrBlockDv);

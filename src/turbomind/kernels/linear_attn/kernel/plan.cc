@@ -63,8 +63,8 @@ Problem BuildProblem(const PlanningContext& context, const GdrKernelSpec& spec)
         return problem;
     }
 
-    problem.sequence_num = static_cast<int>(context.q_offsets.size() - 1);
-    int total_chunks         = 0;
+    problem.sequence_num    = static_cast<int>(context.q_offsets.size() - 1);
+    int total_chunks        = 0;
     int max_sequence_chunks = 0;
     for (int sequence = 0; sequence < problem.sequence_num; ++sequence) {
         const int tokens = context.q_offsets[sequence + 1] - context.q_offsets[sequence];
