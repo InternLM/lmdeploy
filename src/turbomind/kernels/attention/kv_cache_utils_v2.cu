@@ -134,8 +134,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
             rope.init(di);
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
-                const int ti = history_len + offset.y + s * Map::kDeltaS + token_idx;  // sequence local
-                rope.apply(vec_K[s][c], ti);
+                const int qi = offset.y + s * Map::kDeltaS + token_idx;
+                const int ti = history_len + qi;  // sequence local
+                rope.apply(vec_K[s][c], ti, qi);
             }
         }
     }
@@ -441,7 +442,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
-                rope.apply(out_K[s][c], ti);
+                rope.apply(out_K[s][c], ti, ti);
             }
         }
     }

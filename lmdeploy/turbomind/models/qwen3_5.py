@@ -47,6 +47,7 @@ from ..builders import (
     _act_type_id,
     make_layer_norm_config,
 )
+from ..builders._base import ParallelGroup
 from ..builders.attention import split_output_gate
 from ..linear import Linear, transform_input_dim, transform_output_dim
 from ..text_model import TextModel
@@ -448,7 +449,7 @@ class Qwen3_5VisionModel(TextModel):
             token_begin, token_end = self._offset_pair(input_mm['offset'])
             fingerprint = _resolve_fingerprint(input_mm)
             items.append(
-                _tm.multimodal.Qwen3_5VitItem(
+                _tm.multimodal.QwenVitItem(
                     modality=tm_modality,
                     data=data,
                     token_begin=token_begin,
@@ -457,7 +458,7 @@ class Qwen3_5VisionModel(TextModel):
                     fingerprint=fingerprint,
                 ))
 
-        return _tm.multimodal.Qwen3_5VitInput(items)
+        return _tm.multimodal.QwenVitInput(items)
 
     # ------------------------------------------------------------------
     # model() — build the vision sub-tree
@@ -495,7 +496,7 @@ class Qwen3_5VisionModel(TextModel):
         root.build()
 
     def _make_vision_root_cfg(self):
-        cfg = _tm.Qwen3_5VitConfig()
+        cfg = _tm.QwenVitConfig()
         cfg.data_type = self._resolver.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.out_hidden_dim = self._vis_out_hidden
@@ -508,6 +509,8 @@ class Qwen3_5VisionModel(TextModel):
         cfg.temporal_patch_size = self._vis_temporal
         cfg.num_position_embeddings = self._vis_pos_n
         cfg.spatial_merge_size = self._vis_spatial_merge
+        # Qwen3.5 ViT MLP uses the tanh-approximation GELU.
+        cfg.gelu_tanh = True
         cfg.norm_eps = self._vis_norm_eps
         return cfg
 
@@ -528,7 +531,7 @@ class Qwen3_5VisionModel(TextModel):
         return blocks.build()
 
     def vit_block(self, pfx):
-        cfg = _tm.Qwen3_5VitBlockConfig()
+        cfg = _tm.QwenVitBlockConfig()
         cfg.data_type = self._resolver.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.head_num = self._vis_heads
@@ -593,8 +596,9 @@ class Qwen3_5VisionModel(TextModel):
             v = _pad_head_dim_out(v, **pad_kwargs)
             proj = _pad_head_dim_in(proj, **pad_kwargs)
 
+        attn_tp = self._model_tp if self._vis_heads % self._model_tp.size == 0 else ParallelGroup(1, None)
         m = self._restore_dtype(
-            AttentionBuilder(cfg, self._ctx, tp=self._model_tp))
+            AttentionBuilder(cfg, self._ctx, tp=attn_tp))
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(proj)
         return m.build()

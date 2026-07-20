@@ -423,7 +423,7 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
 }
 
 template<class T, class B, int vec_size>
-__global__ void biasKernel(T* data, const B* bias, int num, int dim)
+__global__ void biasKernel(T* output, T* data, const B* bias, int num, int dim)
 {
     int ti = blockIdx.x;
     int di = threadIdx.x * vec_size;
@@ -435,12 +435,22 @@ __global__ void biasKernel(T* data, const B* bias, int num, int dim)
     Load(x, data + ti * dim + di);
     using namespace ops;
     x = x + cast<T>(b);
-    Store(data + ti * dim + di, x);
+    Store(output + ti * dim + di, x);
 }
 
-void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
+template<bool inplace>
+void ApplyBias(Tensor& output, Tensor& data, const Tensor& bias, cudaStream_t st)
 {
     if (!bias) {
+        if constexpr (!inplace) {
+            TM_CHECK(output.shape() == data.shape());
+            TM_CHECK_EQ(output.dtype(), data.dtype());
+            TM_CHECK(output.is_contiguous());
+            TM_CHECK(data.is_contiguous());
+            if (auto size = data.byte_size()) {
+                TM_CUDA_CHECK(cudaMemcpyAsync(output.raw_data(), data.raw_data(), size, cudaMemcpyDefault, st));
+            }
+        }
         return;
     }
 
@@ -458,7 +468,8 @@ void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
             const int blocks  = num;
             const int threads = dim / vec_size;
             TM_CHECK_LE(threads, 1024);
-            biasKernel<T, B, vec_size><<<blocks, threads, 0, st>>>(data.data<T>(),  //
+            biasKernel<T, B, vec_size><<<blocks, threads, 0, st>>>(output.data<T>(),  //
+                                                                   data.data<T>(),
                                                                    bias.data<B>(),
                                                                    num,
                                                                    dim);
@@ -472,6 +483,16 @@ void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
     };
     TM_DISPATCH_DTYPES(data.dtype(), invoke0, float, half, nv_bfloat16);
     TM_CUDA_CHECK(cudaGetLastError());
+}
+
+void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
+{
+    ApplyBias<true>(data, data, bias, st);
+}
+
+void ApplyBias(Tensor& output, Tensor& data, const Tensor& bias, cudaStream_t st)
+{
+    ApplyBias<false>(output, data, bias, st);
 }
 
 template<class T, int vec_size>

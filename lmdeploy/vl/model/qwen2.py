@@ -5,28 +5,14 @@ from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
-def check_qwen_vl_deps_install():
-    """Check qwen_vl_utils."""
-    try:
-        import qwen_vl_utils  # noqa: F401
-    except ImportError:
-        raise ImportError('please install qwen_vl_utils by `pip install qwen_vl_utils`'  # noqa: E501
-                          )
-    try:
-        from transformers import Qwen2VLForConditionalGeneration  # noqa: F401
-    except ImportError:
-        raise ImportError('please install latest transformers by '
-                          'pip install git+https://github.com/huggingface/transformers.git')
-
-
 @VISION_MODELS.register_module()
 class Qwen2VLModel(VisionModel):
     """Qwen2VL model."""
 
     _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
+    _turbomind_native_vision = True
 
     def build_preprocessor(self, trust_remote_code: bool = False):
-        check_qwen_vl_deps_install()
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = self.processor.tokenizer
@@ -35,16 +21,12 @@ class Qwen2VLModel(VisionModel):
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
-        from qwen_vl_utils import process_vision_info
-
         images = self.collect_multimodal_items(messages)
-        optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
+        optional_keys = {'min_pixels', 'max_pixels'}
         outputs = []
         for modality, image, params in images:
-            item = dict(type='image', image=image)
-            item.update({key: params[key] for key in params.keys() if key in optional_keys})
-            image_inputs, _ = process_vision_info([dict(content=[item])])
-            result = self.processor.image_processor(images=image_inputs, return_tensors='pt')
+            image_kwargs = {key: params[key] for key in params.keys() if key in optional_keys}
+            result = self.processor.image_processor(images=[image], return_tensors='pt', **image_kwargs)
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
@@ -53,7 +35,6 @@ class Qwen2VLModel(VisionModel):
         return messages
 
     def build_model(self, trust_remote_code: bool = False):
-        check_qwen_vl_deps_install()
         arch = self.hf_config.architectures[0]
         if arch == 'Qwen2VLForConditionalGeneration':
             from transformers import Qwen2VLForConditionalGeneration as AutoModelCls

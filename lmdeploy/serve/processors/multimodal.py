@@ -430,13 +430,14 @@ class MultimodalProcessor:
                                                            mm_processor_kwargs=mm_processor_kwargs)
             else:
                 results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs=mm_processor_kwargs)
-                results = await self.vl_encoder.async_infer(results)
+                if not self.vl_encoder.model._turbomind_native_vision:
+                    results = await self.vl_encoder.async_infer(results)
                 results = await self.vl_encoder.wrap_for_turbomind(messages=results,
-                                                                chat_template=chat_template,
-                                                                tokenizer=self.tokenizer,
-                                                                sequence_start=sequence_start,
-                                                                tools=tools,
-                                                                chat_template_kwargs=chat_template_kwargs)
+                                                                   chat_template=chat_template,
+                                                                   tokenizer=self.tokenizer,
+                                                                   sequence_start=sequence_start,
+                                                                   tools=tools,
+                                                                   chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             if self.vl_encoder._uses_new_preprocess:
                 input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,

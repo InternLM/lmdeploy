@@ -234,11 +234,12 @@ struct AttentionUniversal {
             rope.init(di);
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
-                const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
-                rope.apply(vec_Q[s][c], ti);
+                const int qi = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx;
+                const int ti = qi + history_len;
+                rope.apply(vec_Q[s][c], ti, qi);
                 if constexpr (kProcessKV) {
                     if (s == 0) {
-                        rope.apply(vec_K[0][c], ti);
+                        rope.apply(vec_K[0][c], ti, qi);
                     }
                 }
             }

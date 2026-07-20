@@ -203,6 +203,14 @@ class ImageEncoder:
                         ...
                     }
         """
+        if self.model._turbomind_native_vision:
+            return await self.wrap_for_pytorch(messages,
+                                               chat_template,
+                                               tokenizer,
+                                               sequence_start,
+                                               tools=tools,
+                                               chat_template_kwargs=chat_template_kwargs)
+
         result = self.model.to_turbomind(messages,
                                          chat_template,
                                          tokenizer,

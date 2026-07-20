@@ -35,6 +35,7 @@ class InternVL3VisionModel(InternVLVisionModel):
     """Internvl3 vision model."""
 
     _arch = ['InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration']
+    _turbomind_native_vision = True
 
     def __init__(self,
                  model_path: str,
@@ -107,7 +108,7 @@ class InternVL3VisionModel(InternVLVisionModel):
             cur_num_patches = image_num_patches[idx]
             pixel_values = image_pixel_values[cum_num_patches:cum_num_patches + cur_num_patches, ...]
             cum_num_patches += cur_num_patches
-            data = dict(pixel_values=pixel_values,
+            data = dict(pixel_values=pixel_values.to(self.mm_feature_dtype),
                         image_tokens=self.image_tokens_per_patch * cur_num_patches,
                         image_token_id=self.image_token_id)
             outputs.append(data)

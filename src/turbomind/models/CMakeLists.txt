@@ -15,15 +15,14 @@ add_library(models STATIC
         model_weight.cc
         model_root.cc
         vision_model.cc
-        qwen3_5vit/qwen3_5vit_block_weight.cc
-        qwen3_5vit/qwen3_5vit_weight.cc
-        qwen3_5vit/fast_pos_embed.cu
-        qwen3_5vit/fast_rotary_pos_emb.cu
-        qwen3_5vit/fused_embed_merge.cu
-        qwen3_5vit/qkv_preprocess.cu
-        qwen3_5vit/mrope_position_ids.cu
-        qwen3_5vit/bias_gelu.cu
-        qwen3_5vit/qwen3_5vit.cc
+        qwenvit/qwenvit_kernels.cu
+        qwenvit/qwenvit_block_weight.cc
+        qwenvit/qwenvit_weight.cc
+        qwenvit/qwenvit.cc
+        internvit/internvit_kernels.cu
+        internvit/internvit_block_weight.cc
+        internvit/internvit_weight.cc
+        internvit/internvit.cc
         llama/LlamaLinear.cu
         llama/LlamaFfnLayer.cc
         llama/moe_ffn_layer.cc
@@ -73,7 +72,7 @@ if(BUILD_TEST)
             CUDA::cudart)
 
     add_executable(test_mrope_position_ids
-            qwen3_5vit/test_mrope_position_ids.cu)
+            qwenvit/test_mrope_position_ids.cu)
     set_property(TARGET test_mrope_position_ids PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
     target_link_libraries(test_mrope_position_ids PRIVATE
             models

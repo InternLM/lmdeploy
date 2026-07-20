@@ -26,6 +26,10 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
 
 void ApplyBias(Tensor& x, const Tensor& bias, const Buffer_<int>& offsets, float scale, cudaStream_t st);
 
+// x = x + bias
 void ApplyBias(Tensor& x, const Tensor& bias, cudaStream_t st);
+
+// out = x + bias
+void ApplyBias(Tensor& out, Tensor& x, const Tensor& bias, cudaStream_t st);
 
 }  // namespace turbomind
