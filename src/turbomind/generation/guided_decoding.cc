@@ -31,7 +31,7 @@ GuidedDecoding::GuidedDecoding(const BaseGenerationParam& base, const comm::Host
 
     for (int i = 0; i < phases; ++i) {
         auto& d    = data_.emplace_back(std::make_shared<Data>());
-        d->bitmask = empty_like(bitmask_buf_);
+        d->bitmask = empty_like(bitmask_buf_, kDEVICE);
     }
 }
 
