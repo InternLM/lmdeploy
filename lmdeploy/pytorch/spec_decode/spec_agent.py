@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
@@ -157,6 +158,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         misc_config: MiscConfig,
         dist_ctx: DistContext,
         device: str = 'cuda',
+        guided_decoding_manager=None,
     ):
         super().__init__(specdecode_config,
                          backend_config,
@@ -167,15 +169,22 @@ class SpecModelAgent(BaseSpecModelAgent):
                          device,
                          )
 
+        self.guided_helper = GuidedSpecHelper(guided_decoding_manager)
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
-
-        # Guided decoding — set by ModelAgent after construction
-        self.guided_helper = GuidedSpecHelper()
+        self.proposer.guided_helper = self.guided_helper
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
-        # for long context carry-over in chunked decoding
+        self._init_runtime_state()
+
+    def _init_runtime_state(self):
+        """Initialize request-local draft carry state."""
         self._prev_chunk_last = {}
+
+    def reset_runtime_state(self):
+        """Discard request-local draft carry state after sleep cancels
+        sessions."""
+        self._prev_chunk_last.clear()
 
     @contextmanager
     def draft_context(self):
@@ -599,6 +608,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
             padding_batch_size = max(dp_meta.dp_batches)
             new_dpmeta = DPMeta.build(inputs.input_ids.numel(), dp_meta.dp_batches)
+            new_dpmeta.dp_is_decoding = dp_meta.dp_is_decoding
             return new_dpmeta, padding_batch_size
 
         def _update_dp_model_inputs(inputs: ModelInputs, dp_meta: DPMeta, padding_batch_size: int | None):
@@ -641,7 +651,9 @@ class SpecModelAgent(BaseSpecModelAgent):
                 extra_inputs.last_token_indices = None
                 # for dp > 1, need to update dp_meta and model inputs for next loop
                 dp_meta, padding_batch_size = __build_dp_meta(inputs)
-
+                # pad block_offsets for non-last chunks dummy run when dp>1
+                if dp_meta is not None and inputs.is_chunk and not inputs.is_last_chunk:
+                    inputs.block_offsets = torch.nn.functional.pad(inputs.block_offsets, (0, 1), value=0)
                 for loop_idx in range(loop_count):
                     inputs = _update_dp_model_inputs(inputs, dp_meta, padding_batch_size)
                     outputs = self._forward_impl(inputs)
@@ -688,57 +700,70 @@ class SpecModelAgent(BaseSpecModelAgent):
         draft_dist_config = self.draft_dist_ctx.dist_config
         if draft_dist_config.dp > 1:
             num_tokens = inputs.input_ids.numel()
+            batch_size = inputs.seq_length.numel()
             with self.draft_context():
                 inputs.build_dp_meta([num_tokens] * draft_dist_config.world_size)
+            inputs.dp_meta.dp_batches = [batch_size] * draft_dist_config.world_size
             inputs.dp_meta.dp_is_decoding = inputs.is_decoding
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""
-        target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
-        # warmup prefill
-        inputs = self.inputs_strategy.make_dummy(max_batches,
-                                                 is_decoding=False,
-                                                 device='cuda',
-                                                 vocab_size=self.model_config.vocab_size,
-                                                 target_hidden_size=target_hidden_size,
-                                                 target_dtype=self.model_config.dtype,
-                                                 meta=self.make_dummy_meta)
+        with self.draft_context():
+            dist_config = self.draft_dist_ctx.dist_config
+            if dist_config.dp > 1:
+                dist.barrier(group=self.draft_dist_ctx.cpu_group)
 
-        self._build_warmup_dp_meta(inputs)
-        self._forward_impl(inputs)
+            target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
-        capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
-        capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
-
-        # warmup decode
-        for batch_size in capture_batch_sizes:
-            # decode with num_spec_tokens + 1 per seq
-            inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                    is_decoding=True,
-                                                    device='cuda',
-                                                    vocab_size=self.model_config.vocab_size,
-                                                    max_q_seqlen=self.num_spec_tokens + 1,
-                                                    target_hidden_size=target_hidden_size,
-                                                    target_dtype=self.model_config.dtype,
-                                                    meta=self.make_dummy_meta)
+            # warmup prefill
+            inputs = self.inputs_strategy.make_dummy(max_batches,
+                                                     is_decoding=False,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     target_hidden_size=target_hidden_size,
+                                                     target_dtype=self.model_config.dtype,
+                                                     meta=self.make_dummy_meta)
             self._build_warmup_dp_meta(inputs)
+
+            # warmup prefill
             self._forward_impl(inputs)
-            # decode 1 tokens per sequence
-            inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                    is_decoding=True,
-                                                    device='cuda',
-                                                    vocab_size=self.model_config.vocab_size,
-                                                    max_q_seqlen=1,
-                                                    target_hidden_size=self.model_config.hidden_size,
-                                                    target_dtype=self.model_config.dtype,
-                                                    meta=self.make_dummy_meta)
-            self._build_warmup_dp_meta(inputs)
-            self._forward_impl(inputs)
+            torch.cuda.synchronize()
+
+            capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
+            capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+
+            # warmup decode
+            for batch_size in capture_batch_sizes:
+                # decode with num_spec_tokens + 1 per seq
+                inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                         is_decoding=True,
+                                                         device='cuda',
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         max_q_seqlen=self.num_spec_tokens + 1,
+                                                         target_hidden_size=target_hidden_size,
+                                                         target_dtype=self.model_config.dtype,
+                                                         meta=self.make_dummy_meta)
+                self._build_warmup_dp_meta(inputs)
+                self._forward_impl(inputs)
+                torch.cuda.synchronize()
+                # decode 1 tokens per sequence
+                inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                         is_decoding=True,
+                                                         device='cuda',
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         max_q_seqlen=1,
+                                                         target_hidden_size=self.model_config.hidden_size,
+                                                         target_dtype=self.model_config.dtype,
+                                                         meta=self.make_dummy_meta)
+                self._build_warmup_dp_meta(inputs)
+                self._forward_impl(inputs)
+                torch.cuda.synchronize()
 
     def reset_graph_runner(self):
         """Reset graph runner."""
         with self.draft_context():
+            self._prev_chunk_last.clear()
             if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
                 self.proposer.model.reset()
 

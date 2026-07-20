@@ -4,10 +4,12 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <numeric>
 #include <thread>
 
 #include "nvtx3/nvToolsExt.h"
 
+#include "src/turbomind/comm/env.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
@@ -15,18 +17,20 @@
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/request.h"
+#include "src/turbomind/engine/scheduler.h"
 
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
-#include "src/turbomind/models/decoder_layer_weight.h"
-#include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/context_token_resource.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
+
+#include "src/turbomind/memory/object.h"
+#include "src/turbomind/memory/stats.h"
 
 // #include "dbg.h"
 
@@ -37,18 +41,15 @@ using std::unique_ptr;
 using std::vector;
 
 struct RequestData {
-    vector<shared_ptr<Request>> infer;  // incoming inference request
-    vector<shared_ptr<Request>> kill;   // incoming kill request
-
-    vector<int> cancel;  // canceled indices in current batch
-    bool        abort;
+    vector<shared_ptr<Request>> infer;   // incoming inference request
+    vector<int>                 cancel;  // canceled indices in current batch
+    bool                        abort;
 };
 
 template<class Archive>
 void serdes(Archive& ar, RequestData& r)
 {
     ar& r.infer;
-    ar& r.kill;
     ar& r.cancel;
     ar& r.abort;
 }
@@ -58,23 +59,22 @@ struct Engine::Impl {
     using Requests = vector<shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
+    struct State;
+
     Impl(EngineParam                  param,
+         ObjectAllocator              alloc,
+         CacheRegistry                cache_registry,
          LanguageModel                model,
          std::unique_ptr<VisionModel> vision_model,
-         const ModelWeight&           weights,
          Context&                     ctx,
          Gateway&                     gateway,
          int                          device_id,
          int                          queue_id,
          int                          phases);
 
-    void CreateSequenceManager();
-
     void InternalThreadEntry();
 
-    void Validate(Requests& infer_rs, Requests& kill_rs);
-
-    void Kill(const Requests& rs, vector<Signal>& signals);
+    void Validate(Requests& infer_reqs);
 
     vector<int> GetCanceled();
 
@@ -82,19 +82,26 @@ struct Engine::Impl {
 
     void Accept(const Requests& rs, vector<Signal>& signals);
 
-    void Interrupt(RequestCache& c);
+    void Interrupt(Sequence& c);
+
+    void Retire(State& s);
 
     // Allocation of memory / compute resources
     void Schedule();
 
-    // intiailize RC from `Sequence`
+    // Forward-progress guard: fail the head-of-line request on genuine cache OOM
+    void FailStalledHeadOfLine(std::vector<Signal>& signals);
+
+    // Initialize batch data from engine-local sequence state
     void Setup(BatchData& d);
 
-    // Sync vars from batch output to RC
+    // Sync vars from batch output to engine-local sequence state
     void Update(BatchData& d, std::vector<Signal>& signals);
 
     void Run(BatchOp op, int phase, Ref<TensorMap> env)
     {
+        // Vision sub-graph runs first so its env outputs (image embeddings,
+        // mrope tensors) are visible to the language model in the same pass.
         if (vision_model_) {
             vision_model_->Run(op, phase, env);
         }
@@ -108,6 +115,8 @@ struct Engine::Impl {
     }
 
     void UpdateScheduleMetrics();
+
+    void MaybeLogCacheStats();
 
     ~Impl();
 
@@ -129,27 +138,29 @@ struct Engine::Impl {
 
     int& is_warm_up_;
 
-    unique_ptr<SequenceManager> seq_mgr_;
+    ObjectAllocator object_allocator_;
+    Scheduler       scheduler_;
 
     Queue<unique_ptr<BatchData>> inbound_;
     Queue<unique_ptr<BatchData>> outbound_;
 
     LanguageModel                model_;
-    std::unique_ptr<VisionModel> vision_model_;  // null for text-only models
-    const ModelWeight&           weights_;
+    std::unique_ptr<VisionModel> vision_model_;  // null for text-only checkpoints
     ModelExecutor                executor_;
 
     std::thread internal_thread_;
 
-    int session_len_trunc_;
+    // int session_len_trunc_;
 
     shared_ptr<ScheduleMetrics> metrics_;
 
-    std::atomic<int64_t> scheduler_tick_{};
+    int      cache_log_interval_ = GetEnv<CACHE_LOG_INTERVAL>();  // read once (GetEnv caches statically)
+    uint64_t schedule_counter_   = 0;
 
     struct State {
-        vector<shared_ptr<RequestCache>> rc;
-        vector<int>                      perm;
+        vector<unique_ptr<Sequence>> rc;
+
+        vector<int> perm;  // current  -> previous
 
         int bs0     = 0;
         int active  = 0;
@@ -167,27 +178,36 @@ struct Engine::Impl {
     struct Data {
     };
     vector<Data> data_;
-
-    // staging buffers
-    Buffer_<void*> block_ptrs_buf_;
-    Buffer_<int>   block_ptrs_offsets_buf_;
 };
 
 Engine::Impl::~Impl()
 {
     TM_LOG_INFO("{}", __PRETTY_FUNCTION__);
+    if (cache_log_interval_ && tp_rank_ == 0) {
+        TM_LOG_WARN("dp{} cache stats:\n{}", dp_rank_, FormatMemoryStats(object_allocator_.Stats()));
+    }
     inbound_.close();
     outbound_.close();
     if (internal_thread_.joinable()) {
         internal_thread_.join();
     }
     executor_ = {};
+
+    for (auto& state : states_) {
+        for (auto& cache : state.rc) {
+            if (cache) {
+                scheduler_.Release(*cache);
+                cache.reset();
+            }
+        }
+    }
 }
 
 Engine::Impl::Impl(EngineParam                  param,
+                   ObjectAllocator              alloc,
+                   CacheRegistry                cache_registry,
                    LanguageModel                model,
                    std::unique_ptr<VisionModel> vision_model,
-                   const ModelWeight&           weights,
                    Context&                     ctx,
                    Gateway&                     gateway,
                    int                          device_id,
@@ -204,9 +224,17 @@ Engine::Impl::Impl(EngineParam                  param,
     queue_id_{queue_id},
     async_{phases > 1},
     is_warm_up_{*ctx.is_warm_up},
+    object_allocator_{std::move(alloc)},
+    scheduler_{object_allocator_,
+               std::move(cache_registry),
+               param_.cache_block_seq_len * param_.attn_cp_size,
+               param_.enable_prefix_caching,
+               param_.cache_prompt,
+               param_.cache_prompt_boundary_skip,
+               param_.cache_generation,
+               is_warm_up_},
     model_{std::move(model)},
-    vision_model_{std::move(vision_model)},
-    weights_{weights}
+    vision_model_{std::move(vision_model)}
 {
     states_.emplace_back();
 
@@ -216,125 +244,15 @@ Engine::Impl::Impl(EngineParam                  param,
 
     executor_ = ModelExecutor{model_, vision_model_.get(), ctx, device_id_, outbound_, inbound_};
 
-    CreateSequenceManager();  // initializes `session_len_trunc_`
-
-    const ssize_t max_batch_block_num = param.max_batch_size * cdiv(session_len_trunc_, param_.cache_block_seq_len);
-    block_ptrs_buf_                   = {max_batch_block_num, kCPUpinned};
-    block_ptrs_offsets_buf_           = {param.max_batch_size + 1, kCPUpinned};
+    if (cache_log_interval_ && tp_rank_ == 0) {
+        TM_LOG_WARN("dp{} cache stats:\n{}", dp_rank_, FormatMemoryStats(object_allocator_.Stats()));
+    }
 }
 
-void Engine::Impl::CreateSequenceManager()
-{
-    const auto cache_block_seq_len = param_.cache_block_seq_len;
-
-    // Derive DeltaNet fields if linear attention exists
-    bool has_linear_attention = false;
-    int  linear_key_head_dim = 0, linear_value_head_dim = 0;
-    int  linear_conv_kernel_dim = 0, linear_num_key_heads = 0, linear_num_value_heads = 0;
-    for (int i = 0; i < weights_.num_layer; ++i) {
-        if (auto* dn = weights_.layer(i)->linear_attn.get()) {
-            has_linear_attention   = true;
-            linear_key_head_dim    = dn->key_head_dim;
-            linear_value_head_dim  = dn->value_head_dim;
-            linear_conv_kernel_dim = dn->d_conv;
-            linear_num_key_heads   = dn->num_k_heads * param_.attn_tp_size;
-            linear_num_value_heads = dn->num_v_heads * param_.attn_tp_size;
-            break;
-        }
-    }
-
-    if (has_linear_attention && param_.enable_prefix_caching) {
-        TM_LOG_FATAL("Prefix caching is unsupported when linear attention is present");
-    }
-
-    const auto get_free_size = [&] {
-        size_t free{}, total{};
-        TM_CUDA_CHECK(cudaMemGetInfo(&free, &total));
-        return AllReduce(tp_group_, free, comm::RedOp::kMin);
-    };
-
-    seq_mgr_ = std::make_unique<SequenceManager>(weights_.head_dim,
-                                                 weights_.kv_head_num / param_.attn_tp_size,
-                                                 weights_.num_layer,
-                                                 weights_.layer_types,
-                                                 param_.quant_policy,
-                                                 weights_.data_type,
-                                                 weights_.data_type,  // runtime_dtype = data_type
-                                                 linear_key_head_dim,
-                                                 linear_value_head_dim,
-                                                 linear_conv_kernel_dim,
-                                                 linear_num_key_heads,
-                                                 linear_num_value_heads,
-                                                 cache_block_seq_len,
-                                                 param_.attn_tp_size,
-                                                 param_.max_batch_size,
-                                                 param_.cache_max_block_count,
-                                                 param_.cache_chunk_size,
-                                                 param_.enable_prefix_caching,
-                                                 tp_rank_,
-                                                 param_.attn_cp_size,
-                                                 core::Context::alloc(kDEVICE),
-                                                 get_free_size);
-
-    const auto max_cached_tokens = seq_mgr_->max_block_count() * (size_t)cache_block_seq_len * param_.attn_cp_size;
-    session_len_trunc_           = std::min(max_cached_tokens, (size_t)param_.session_len);
-    TM_LOG_INFO("max cached tokens: {}", max_cached_tokens);
-    if (session_len_trunc_ != param_.session_len) {
-        TM_LOG_WARN("`session_len` truncated to {} due to limited KV cache memory", session_len_trunc_);
-    }
-    UpdateScheduleMetrics();
-}
-
-void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
+void Engine::Impl::Validate(Requests& infer_reqs)
 {
     std::pmr::monotonic_buffer_resource    mbr;
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
-
-    bool has_linear_attention = false;
-    for (auto t : weights_.layer_types) {
-        if (t == 1) {
-            has_linear_attention = true;
-            break;
-        }
-    }
-
-    auto count = [&occur](const auto& reqs) {
-        for (const auto& r : reqs) {
-            ++occur[r->id];
-        }
-    };
-
-    auto validate = [&](auto& reqs, const char* type, bool is_infer) {
-        for (const auto& r : reqs) {
-            if (occur[r->id] > 1) {
-                TM_LOG_ERROR("Skip conflicting {} request for ID {}", type, r->id);
-                r->ec = Request::kConflict;
-            }
-            if (!r->ec && is_infer && has_linear_attention && !r->session.end_flag) {
-                TM_LOG_ERROR("Skip inconsistent {} request for ID {}. Linear attention only supports stateless "
-                             "requests",
-                             type,
-                             r->id);
-                r->ec = Request::kInconsistency;
-            }
-            if (param_.enable_prefix_caching) {
-                if (r->session.step != 0) {
-                    // Prefix caching is incompatible with interactive mode
-                    TM_LOG_ERROR("Skip inconsistent {} request for ID {} step {}", type, r->id, r->session.step);
-                    r->ec = Request::kInconsistency;
-                }
-                else if (r->gen_cfg.output_logits == GenerationConfig::kAll
-                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll || r->gen_cfg.return_ppl) {
-                    // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
-                    TM_LOG_ERROR("Skip inconsistent {} request for ID {}. It cannot output logits or "
-                                 "last_hidden_states for all tokens or ppl",
-                                 type,
-                                 r->id);
-                    r->ec = Request::kInconsistency;
-                }
-            }
-        }
-    };
 
     for (const auto& s : states_) {
         for (int i = 0; i < s.size(); ++i) {
@@ -343,14 +261,33 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
             }
         }
     }
+    for (const auto& r : infer_reqs) {
+        ++occur[r->id];
+    }
 
-    count(kill_reqs);
-    count(infer_reqs);
+    for (const auto& r : infer_reqs) {
+        if (occur[r->id] > 1) {
+            TM_LOG_ERROR("Skip conflicting infer request for ID {}", r->id);
+            r->ec = Request::kConflict;
+        }
+        if (!r->ec && param_.enable_prefix_caching) {
+            if (r->step != 0) {
+                TM_LOG_ERROR("Skip inconsistent infer request for ID {} step {}: "
+                             "prefix caching is incompatible with a nonzero step",
+                             r->id,
+                             r->step);
+                r->ec = Request::kInconsistency;
+            }
+            else if (r->gen_cfg.output_logits == GenerationConfig::kAll
+                     || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll || r->gen_cfg.return_ppl) {
+                TM_LOG_ERROR("Skip inconsistent infer request for ID {}: prefix caching cannot "
+                             "output logits/last_hidden_states for all tokens or ppl",
+                             r->id);
+                r->ec = Request::kInconsistency;
+            }
+        }
+    }
 
-    validate(kill_reqs, "kill", false);
-    validate(infer_reqs, "infer", true);
-
-    // New requests that never get a chance to start
     for (auto& r : infer_reqs) {
         if (r && r->cancel_flag.load(std::memory_order_acquire) == -1) {
             r->ec = Request::kCancel;
@@ -372,44 +309,26 @@ vector<int> Engine::Impl::GetCanceled()
     return idxs;
 }
 
-void Engine::Impl::Kill(const Requests& kills, vector<Signal>& signals)
+void Engine::Impl::Interrupt(Sequence& c)
 {
-    for (auto& r : kills) {
-        if (r) {
-            int ec = r->ec;
-            if (!ec) {
-                if (!seq_mgr_->Erase(r->id)) {
-                    ec = Request::kInvalid;
-                }
-            }
-            signals.push_back([=] { r->end_cb ? r->end_cb(ec) : void(); });
-        }
-    }
+    Sequence*          p = &c;
+    Buffer_<Sequence*> rs{&p, 1, kCPU};
+    Run(BatchOp::kDel, -1, TensorMap{{"requests", rs}});
+
+    scheduler_.Release(c);
 }
 
-void Engine::Impl::Interrupt(RequestCache& c)
+void Engine::Impl::Retire(State& s)
 {
-    auto& s = *TM_CHECK_NOTNULL(c.seq);
-    if (c.req->session.end_flag) {
-        if (!is_warm_up_ && s.status != Sequence::kCached) {  // At least `Locked` status is required for caching
-            seq_mgr_->CacheGeneration(s);
+    for (auto& p : s.rc) {
+        if (!p || !p->retiring || p->inflight != 0) {
+            continue;
         }
-        TM_CHECK(seq_mgr_->Erase(c.req->id));
+
+        Interrupt(*p);
+        p.reset();
+        ++s.finish;
     }
-    else {
-        if (s.recurrent_states && c.seq_len != s.cache_len) {
-            TM_LOG_WARN(
-                "[Engine][Interrupt] Invalidating cache for ID {} due to linear-state/cache mismatch ({} vs {})",
-                s.id,
-                c.seq_len,
-                s.cache_len);
-            seq_mgr_->InvalidateStatesAndCache(s);
-        }
-        else {
-            seq_mgr_->UpdateAndSetUnlock(s);
-        }
-    }
-    c.seq = nullptr;
 }
 
 void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
@@ -417,13 +336,14 @@ void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
     auto& s = states_.at(0);
     for (const auto& i : indices) {
         auto& c = TM_CHECK_NOTNULL(s.rc[i]);
-        c->done = true;
-        Interrupt(*c);
-        signals.push_back([r = std::move(c->req), l = c->seq_len] {  //
-            UpdateState(*r, Request::kCancel, l);
-        });
-        c.reset();
-        s.finish += 1;
+        if (c->retiring) {
+            continue;
+        }
+
+        c->is_canceled = true;
+        c->retiring    = true;
+        c->done        = true;
+        signals.push_back([r = c->req, l = c->seq_len] { UpdateState(*r, Request::kCancel, l); });
     }
 }
 
@@ -431,7 +351,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 {
     auto& s = states_.at(0);
 
-    vector<unique_ptr<RequestCache>> incoming;
+    vector<unique_ptr<Sequence>> incoming;
     incoming.reserve(rs.size());
 
     for (const auto& r : rs) {
@@ -441,89 +361,32 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             continue;
         }
 
-        const int input_len = r->inputs.at("input_ids").shape(0);
+        const auto& input_ids = r->inputs.at("input_ids");
+        const int   input_len = input_ids.shape(0);
 
-        if (input_len > session_len_trunc_) {
+        if (input_len > param_.session_len) {
             signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
             continue;
         }
 
-        auto ptr = r->session.start_flag ? seq_mgr_->Create(r->id) : seq_mgr_->Get(r->id);
-        if (!ptr) {
-            signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
-            continue;
-        }
+        /// TODO: force step after prefix matching
 
-        const int step = [&] {
-            int s = r->session.step;
-            if (s < 0) {
-                s = ptr->tokens.size();
-            }
-            else if (s > ptr->tokens.size()) {
-                if (tp_rank_ == 0) {
-                    TM_LOG_WARN("Skipping invalid step ({}) setting for ID {}", s, ptr->id);
-                }
-                s = ptr->tokens.size();
-            }
-            return s;
-        }();
-
-        if (step + input_len > session_len_trunc_) {
-            signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
-            continue;
-        }
-
-        if (step && param_.enable_prefix_caching) {
-            // step not supported in prefix-caching mode
-            signals.push_back([r] { UpdateState(*r, Request::kInconsistency, 0); });
-            continue;
-        }
-
-        auto& seq = *ptr;
-        seq_mgr_->AcquireLinearStateSlot(seq);
-
-        if (seq.recurrent_states) {
-            if (step != seq.cache_len) {
-                signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
-                continue;
-            }
-        }
-
-        auto c = std::make_unique<RequestCache>(r, seq);
-
-        if (step < seq.tokens.size()) {
-            seq.tokens.resize(step);
-            seq.cache_len = std::min(seq.cache_len, step);
-        }
-
-        c->step0 = step;
-
-        // const int* input_ids = r->inputs.at("input_ids").data<int>();
-        auto& input_ids = r->inputs.at("input_ids");
+        auto c = std::make_unique<Sequence>(r);
 
         int* token_ids = c->token_ids = r->output_ids.data();
-
         /// TODO: move this somewhere else
-        token_ids = std::copy_n(seq.tokens.data(), seq.tokens.size(), token_ids);
         token_ids = std::copy_n(input_ids.data<int>(), input_len, token_ids);
 
         c->prompt_len = c->seq_len = token_ids - c->token_ids;  // all known tokens
 
-        // Only prefix cache needs prompt data
-        if (param_.enable_prefix_caching && input_len && r->session.start_flag) {
-            seq.prompt.insert(seq.prompt.end(), input_ids.data<int>(), input_ids.data<int>() + input_len);
-        }
-
-        // dbg(seq.cache_len, seq.tokens.size(), input_len, c->seq_len);
-
         int max_seq_len = c->prompt_len + c->gen_cfg.max_new_tokens;
-        if (max_seq_len > session_len_trunc_) {
-            max_seq_len = session_len_trunc_;
+        if (max_seq_len > param_.session_len) {
+            max_seq_len = param_.session_len;
             if (tp_rank_ == 0) {
                 const int trunc_output_len = max_seq_len - c->prompt_len;
                 // clang-format off
                 TM_LOG_WARN("ID {}: total sequence length ({} + {}) exceeds `session_len` ({}), `max_new_tokens` is truncated to {}",
-                    seq.id, c->prompt_len, c->gen_cfg.max_new_tokens, session_len_trunc_, trunc_output_len);
+                    r->id, c->prompt_len, c->gen_cfg.max_new_tokens, param_.session_len, trunc_output_len);
                 // clang-format on
             }
         }
@@ -532,7 +395,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         incoming.push_back(std::move(c));
     }
 
-    Buffer_<RequestCache*> buf(incoming.size(), kCPU);
+    Buffer_<Sequence*> buf(incoming.size(), kCPU);
     for (int i = 0; i < incoming.size(); ++i) {
         buf[i] = incoming[i].get();
     }
@@ -542,6 +405,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
     for (auto& x : incoming) {
         if (x->status == 0) {
+            scheduler_.AdmitPrompt(*x);
             s.rc.push_back(std::move(x));
         }
         else {
@@ -558,75 +422,82 @@ void Engine::Impl::Schedule()
     TM_FUNCTION_SCOPE();
     auto& s = states_.at(0);
 
-    vector<const Sequence*>  sequences;
-    vector<Sequence::Status> status;
-    vector<int>              context_length;
-    vector<int>              alpha;
-    vector<uint64_t>         priorities;
-    vector<RequestCache*>    cache;
-    vector<int>              inv;
+    vector<Sequence*> eligible;
+
+    vector<int> was_active;
+    vector<int> context_length;
+    vector<int> orignal_idxs;
+    vector<int> inflight_input_len;
 
     for (int i = 0; i < s.size(); ++i) {
-        // skip invalid positions
-        if (const auto& c = s.rc[i]) {
-            cache.push_back(c.get());
-            sequences.push_back(c->seq);
-            status.push_back(c->seq->status);
-            priorities.push_back(c->req->unique_id);
-            context_length.push_back(c->seq_len + c->beta /* plus draft tokens */);
-            alpha.push_back(c->alpha);
-            TM_CHECK(c->seq->status == Sequence::kActive || c->alpha == 0) << c->seq->status << " " << c->alpha;
-            inv.push_back(i);
-            c->input_len = c->history_len = 0;
-            // dbg(c->request->id, c->seq_len, c->sequence.cache_len, c->alpha, c->beta, c->is_decoding,
-            // c->is_generate);
+        auto& p = s.rc[i];
+        if (!p) {
+            continue;
+        }
+        auto& c = *p;
+        if (!c.retiring) {
+            eligible.push_back(&c);
+            was_active.push_back(c.is_active);
+            context_length.push_back(c.seq_len + c.inflight_new_tokens /* plus draft tokens */);
+            inflight_input_len.push_back(c.inflight_input_len);
+            orignal_idxs.push_back(i);
+            c.input_len = c.history_len = 0;
         }
     }
 
-    // dbg("Schedule");
+    ScheduleResources resources;
+    resources.Add<ForwardTokenResource>(param_.max_forward_token_num);
+    resources.Add<ContextTokenResource>(param_.max_context_token_num);
 
-    seq_mgr_->Materialize(
-        sequences, context_length, alpha, priorities, param_.max_forward_token_num, param_.max_context_token_num);
+    scheduler_.Schedule(eligible, resources);
 
-    vector<int> idxs(sequences.size());
+    vector<int> idxs(eligible.size());
     std::iota(idxs.begin(), idxs.end(), 0);
 
-    subrange active{idxs.begin(), std::stable_partition(idxs.begin(), idxs.end(), [&](int i) {
-                        return sequences[i]->status == Sequence::kActive;  // IS active
-                    })};
+    subrange active{idxs.begin(),
+                    std::stable_partition(idxs.begin(), idxs.end(), [&](int i) { return eligible[i]->is_active; })};
 
-    TM_CHECK(sequences.empty() || !active.empty()) << "No enough blocks";
+    // An empty active batch (cache OOM / resource starvation) is handled by
+    // FailStalledHeadOfLine, called after Schedule() returns, where request
+    // lifecycle and signal emission live (see README forward-progress).
 
     if (is_warm_up_) {
         // Avoid extra iteration for warm up request in async mode (force inactivate)
-        active = {active.begin(), std::stable_partition(active.begin(), active.end(), [&](int i) {  //
-                      return alpha[i] == 0;
+        active = {active.begin(), std::stable_partition(active.begin(), active.end(), [&](int i) {
+                      return inflight_input_len[i] == 0;
                   })};
     }
 
     subrange inactive{active.end(), idxs.end()};
 
-    subrange existing{active.begin(), std::stable_partition(active.begin(), active.end(), [&](int i) {
-                          return status[i] == Sequence::kActive;  // WAS active in active
-                      })};
+    for (auto i : active) {
+        eligible[i]->is_active = true;
+    }
+    for (auto i : inactive) {
+        eligible[i]->is_active   = false;
+        eligible[i]->input_len   = 0;
+        eligible[i]->history_len = 0;
+    }
+
+    subrange existing{active.begin(),
+                      std::stable_partition(active.begin(), active.end(), [&](int i) { return was_active[i]; })};
 
     subrange swap_in{existing.end(), active.end()};
 
-    subrange swap_out{inactive.begin(), std::stable_partition(inactive.begin(), inactive.end(), [&](int i) {
-                          return status[i] == Sequence::kActive;  // WAS active in inactive
-                      })};
+    subrange swap_out{inactive.begin(),
+                      std::stable_partition(inactive.begin(), inactive.end(), [&](int i) { return was_active[i]; })};
 
     // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
     // |<----------- active ----------->|<------- inactive ----->|
 
     for (auto i : swap_in) {
-        cache[i]->autoregres = {};
-        cache[i]->generating = {};
+        eligible[i]->autoregres = {};
+        eligible[i]->generating = {};
     }
 
     if (param_.enable_metrics) {
         for (auto i : swap_in) {
-            if (auto& m = cache[i]->req->metrics; TM_LIKELY(m)) {
+            if (auto& m = eligible[i]->req->metrics; TM_LIKELY(m)) {
                 int64_t expected = 0;
                 m->scheduled_time.compare_exchange_strong(
                     expected, RequestMetrics::timestamp(), std::memory_order_relaxed);
@@ -635,86 +506,135 @@ void Engine::Impl::Schedule()
     }
 
     for (auto i : existing) {
-        if (cache[i]->generating) {
-            cache[i]->autoregres = true;
-        }
+        auto& c      = *eligible[i];
+        c.autoregres = c.generating && c.input_len == 1;
     }
 
     for (auto i : active) {
-        auto& s = *sequences[i];
-        auto& c = *cache[i];
-        if (s.cache_len + c.alpha + s.input_length == c.seq_len + c.beta) {
-            c.generating = true;
-        }
+        auto& c      = *eligible[i];
+        c.generating = c.resume_len + c.inflight_input_len + c.input_len == c.seq_len + c.inflight_new_tokens;
     }
 
     // move partially prefilled sequences to the back
-    subrange partial{std::stable_partition(active.begin(), active.end(), [&](int i) { return cache[i]->generating; }),
-                     active.end()};
-    TM_CHECK_LE(partial.size(), 1);
+    subrange partial{
+        std::stable_partition(active.begin(), active.end(), [&](int i) { return eligible[i]->generating; }),
+        active.end()};
 
     // dbg(inv);
 
-    vector<shared_ptr<RequestCache>> rc(idxs.size());
-    vector<int>                      perm(idxs.size());
+    vector<unique_ptr<Sequence>> rc;
+    vector<int>                  perm;
+    rc.reserve(s.size());
+    perm.reserve(s.size());
     for (int i = 0; i < idxs.size(); ++i) {
-        perm[i] = inv[idxs[i]];              // inverse map to original indices
-        rc[i]   = std::move(s.rc[perm[i]]);  // warp the request cache
+        perm.push_back(orignal_idxs[idxs[i]]);   // inverse map to original indices (curr -> prev)
+        rc.push_back(std::move(s.rc[perm[i]]));  // permute the engine-local sequence state
     }
+    // Put done sequences to the back, logical blocks need to be updated.
+    for (int i = 0; i < s.size(); ++i) {
+        if (auto& p = s.rc[i]) {
+            perm.push_back(i);
+            rc.push_back(std::move(p));
+        }
+    }
+
     s.rc.swap(rc);
     s.perm.swap(perm);
 
-    for (auto& c : s.rc) {
-        /// ! input_length not updated for inactive seqs
-        c->input_len   = c->seq->input_length;
-        c->history_len = c->seq->cache_len;
-        // dbg(c->request->id,
-        //     c->seq_len,
-        //     c->history_len,
-        //     c->input_len,
-        //     c->alpha,
-        //     c->beta,
-        //     c->is_decoding,
-        //     c->is_generate);
+    s.bs0 = std::exchange(s.active, active.size());
+    if (cache_log_interval_ && schedule_counter_ % cache_log_interval_ == 0) {
+        TM_LOG_INFO("dp{} total: {}, eligible: {}, active: {}", dp_rank_, s.size(), eligible.size(), s.bs0);
     }
-
-    s.bs0     = std::exchange(s.active, active.size());
     s.swapout = swap_out.size();
     s.finish  = 0;
+}
+
+void Engine::Impl::FailStalledHeadOfLine(std::vector<Signal>& signals)
+{
+    auto& s = states_.at(0);
+
+    if (s.active != 0 || is_warm_up_) {
+        return;  // work was admitted, or warm-up legitimately forces empty active
+    }
+
+    // Nothing was admitted this pass. If no in-flight work remains, no memory
+    // will ever be released, so the highest-priority eligible request cannot
+    // make progress even with maximum eviction. Fail it with kOutOfMemory: it
+    // retires, releases its held cache, and the next request becomes
+    // head-of-line (see README forward-progress).
+    Sequence* victim = nullptr;
+    for (auto& p : s.rc) {
+        if (!p) {
+            continue;
+        }
+        if (p->inflight > 0) {
+            return;  // in-flight batch will release memory when it completes (transient drain)
+        }
+        if (!p->retiring && (!victim || p->req->unique_id < victim->req->unique_id)) {
+            victim = p.get();  // smallest unique_id == highest priority == root of the OOM
+        }
+    }
+
+    if (!victim) {
+        return;
+    }
+
+    TM_LOG_WARN("dp{} ID {}: cache out of memory, no request can be admitted; failing head-of-line request",
+                dp_rank_,
+                victim->req->id);
+
+    victim->retiring = true;
+    victim->done     = true;
+    signals.push_back([r = victim->req] { UpdateState(*r, Request::kOutOfMemory, 0); });
 }
 
 void Engine::Impl::Setup(BatchData& d)
 {
     TM_FUNCTION_SCOPE();
-    auto& st = states_.at(0);
+    auto& s = states_.at(0);
 
-    d.rc.resize(st.active);
-    std::copy_n(st.rc.begin(), st.active, d.rc.begin());
-
-    block_ptrs_offsets_buf_[0] = 0;
-    auto block_ptrs            = block_ptrs_buf_.data();
-    for (int i = 0; i < st.active; ++i) {
-        const auto& s                  = *st.rc[i]->seq;
-        block_ptrs_offsets_buf_[i + 1] = block_ptrs_offsets_buf_[i] + s.blocks.size();
-        block_ptrs = std::transform(s.blocks.cbegin(), s.blocks.cend(), block_ptrs, [&](int block_id) {
-            return seq_mgr_->GetBlockPtr(block_id);
-        });
-    }
-
-    d.bs0 = st.bs0;
-    d.bsz = st.active;
+    d.bs0 = s.bs0;
+    d.bsz = s.active;
 
     d.perm = {d.bsz, kCPU};
-    std::copy_n(st.perm.data(), d.bsz, d.perm.data());
-
-    // dbg(d.bs0, d.bsz, d.perm);
+    std::copy_n(s.perm.data(), d.bsz, d.perm.data());
 
     BatchCopy copy{};
 
-    TensorMap env{{"batch", d.buf()},
-                  {"copy", copy.buf()},
-                  {"block_ptrs_offsets", block_ptrs_offsets_buf_},
-                  {"block_ptrs", block_ptrs_buf_}};
+    Buffer_<Sequence*> rs{s.active, kCPU};
+    for (int i = 0; i < s.active; ++i) {
+        auto* c = TM_CHECK_NOTNULL(s.rc[i].get());
+        ++c->inflight;
+        rs[i] = c;
+    }
+
+    d.restore_copies.clear();
+    d.publish_copies.clear();
+    {
+        const ObjectAllocator& alloc   = scheduler_.allocator();
+        auto                   resolve = [&](std::vector<CacheCopy>& in, std::vector<ResolvedCopy>& out) {
+            for (const auto& [src, dst] : in) {
+                const CacheBlock& cs = *TM_CHECK_NOTNULL(src);
+                const CacheBlock& cd = *TM_CHECK_NOTNULL(dst);
+                TM_CHECK_NOTNULL(cs.allocation.a);  // validity (resolved allocation) on both ends
+                TM_CHECK_NOTNULL(cd.allocation.a);
+                TM_CHECK_EQ(cs.object_id, cd.object_id);        // same object => same part layout
+                TM_CHECK_EQ(cs.part_count(), cd.part_count());  // both replay-populated to the same layout
+                TM_CHECK_EQ(cs.part_count(), alloc.PartCount(cs.object_id));
+                for (int p = 0; p < cs.part_count(); ++p) {
+                    out.push_back({cs.base(p), cd.base(p), alloc.PartBytes(cs.object_id, p)});
+                }
+            }
+            in.clear();
+        };
+        for (int i = 0; i < s.active; ++i) {
+            auto& c = *s.rc[i];
+            resolve(c.restore_copies, d.restore_copies);
+            resolve(c.publish_copies, d.publish_copies);
+        }
+    }
+
+    TensorMap env{{"requests", rs}, {"batch", d.buf()}, {"copy", copy.buf()}};
 
     Run(BatchOp::kSetup, d.phase, env);
 
@@ -727,7 +647,6 @@ void Engine::Impl::Setup(BatchData& d)
         AllGather(dp_group_, d.local_token_num.data(), 1);
     }
     d.global_token_num = std::accumulate(d.local_token_num.begin(), d.local_token_num.end(), 0);
-    // dbg(dp_group_->rank(), d.local_token_num, d.global_token_num);
 }
 
 void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
@@ -756,67 +675,72 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 
     env = {};
 
-    vector<const Sequence*> sequences_to_cache;
+    vector<int> perm(s.size());
+    if (async_) {
+        perm = s.perm;
+    }
+    else {
+        std::iota(perm.begin(), perm.end(), 0);
+    }
 
-    for (int i = 0; i < b.rc.size(); ++i) {
-        // In async mode, `seq` may be nullptr when the request is done
-        if (auto& c = *b.rc[i]; c.seq) {
-            if (auto& s = *c.seq; generating[i]) {
-                c.token_ids[c.seq_len] = output_ids[i];
-                c.seq_len              = sequence_length[i];
-                s.cache_len            = sequence_length[i] - 1;
-                if (const int new_tokens = c.seq_len - s.tokens.size()) {
-                    s.tokens.insert(s.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
+    for (int i = 0; i < s.size(); ++i) {
+        int j = perm[i];
+        if (j < b.bsz) {
+            auto& c      = *TM_CHECK_NOTNULL(s.rc[i]);
+            c.filled_len = generating[j] ? sequence_length[j] - 1 : sequence_length[j];
+            if (c.retiring) {
+                continue;
+            }
+            if (generating[j]) {
+                c.token_ids[c.seq_len] = output_ids[j];
+                c.seq_len              = sequence_length[j];
+                if (int new_tokens = c.seq_len - c.tokens.size(); TM_LIKELY(new_tokens)) {
+                    c.tokens.insert(c.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
                 }
-                if (TM_UNLIKELY(finished[i])) {
-                    signals.push_back([r = c.req, l = c.seq_len] {  //
-                        UpdateState(*r, Request::kFinish, l);
-                    });
+                if (TM_UNLIKELY(finished[j])) {
+                    if (!c.is_canceled) {
+                        scheduler_.Finalize(c);
+                    }
+                    signals.push_back([r = c.req, l = c.seq_len] { UpdateState(*r, Request::kFinish, l); });
+                    c.retiring = true;
+                    c.done     = true;
                 }
-                else if (c.req->stream_output) {
-                    signals.push_back([r = c.req, l = c.seq_len] {  //
-                        UpdateState(*r, Request::kOk, l);
-                    });
+                else if (TM_LIKELY(c.req->stream_output)) {
+                    signals.push_back([r = c.req, l = c.seq_len] { UpdateState(*r, Request::kOk, l); });
                 }
             }
-            else {
-                s.cache_len = sequence_length[i];
-            }
-            c.done |= finished[i];
-            if (c.seq->status != Sequence::kCached) {  // At least `Locked` status is required for caching
-                sequences_to_cache.push_back(c.seq);
-            }
-            // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
+        }
+        else {  // new
         }
     }
 
-    if (!is_warm_up_) {
-        seq_mgr_->CachePrompt(sequences_to_cache, sequences_to_cache.size());
-    }
-
-    b.rc.clear();
+    // b.rc.clear();
 
     if (async_) {
         const int size = s.active + s.swapout;
         for (int i = 0; i < size; ++i) {
             auto& c = *s.rc[i];
             if (i < s.active) {
-                c.alpha = c.input_len;
-                c.beta  = c.generating;
+                c.inflight_input_len  = c.input_len;
+                c.inflight_new_tokens = c.generating;
             }
             else {
                 // Just got swaped-out
-                c.alpha = c.beta = 0;
+                c.inflight_input_len  = 0;
+                c.inflight_new_tokens = 0;
             }
         }
     }
 
-    for (auto& x : s.rc) {
-        if (TM_UNLIKELY(x->done)) {
-            Interrupt(*x);
-            x.reset();
-            s.finish += 1;
+    for (int i = 0; i < s.size(); ++i) {
+        const int j = perm[i];
+        if (j >= b.bsz) {
+            continue;
         }
+
+        auto& c = *TM_CHECK_NOTNULL(s.rc[i]);
+        TM_CHECK_GT(c.inflight, 0);
+        --c.inflight;
     }
 }
 
@@ -847,9 +771,9 @@ void Engine::Impl::InternalThreadEntry()
             const int  n_free   = param_.max_batch_size - st.size() + st.finish;
             const bool blocking = n_free == param_.max_batch_size;
 
-            gateway_.pop(rs->infer, rs->kill, n_free, blocking, rs->abort, dp_group_, queue_id_);
+            gateway_.pop(rs->infer, n_free, blocking, rs->abort, dp_group_, queue_id_);
 
-            Validate(rs->infer, rs->kill);
+            Validate(rs->infer);
 
             rs->cancel = GetCanceled();
         }
@@ -870,13 +794,13 @@ void Engine::Impl::InternalThreadEntry()
 
         vector<Signal> signals;
 
-        Kill(rs->kill, signals);
-
         Accept(rs->infer, signals);
 
         Cancel(rs->cancel, signals);
 
         gateway_.notify(std::move(signals), tp_rank_ == 0);
+
+        Retire(st);
 
         int n_active = st.size() - st.finish;
 
@@ -888,7 +812,11 @@ void Engine::Impl::InternalThreadEntry()
 
             Schedule();
 
+            FailStalledHeadOfLine(signals);
+
             UpdateScheduleMetrics();
+
+            MaybeLogCacheStats();
 
             Setup(*d);
 
@@ -909,6 +837,8 @@ void Engine::Impl::InternalThreadEntry()
 
             Update(*d, signals);
 
+            Retire(st);
+
             gateway_.notify(std::move(signals), tp_rank_ == 0);
 
             // if (future.valid()) {
@@ -927,16 +857,25 @@ Engine::Engine(Engine&&) noexcept = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
 Engine::Engine(EngineParam                  param,
+               ObjectAllocator              alloc,
+               CacheRegistry                cache_registry,
                LanguageModel                model,
                std::unique_ptr<VisionModel> vision_model,
-               const ModelWeight&           weights,
                Context&                     ctx,
                Gateway&                     gateway,
                int                          device_id,
                int                          dp_rank,
                int                          phases):
-    impl_{std::make_unique<Impl>(
-        param, std::move(model), std::move(vision_model), weights, ctx, gateway, device_id, dp_rank, phases)}
+    impl_{std::make_unique<Impl>(param,
+                                 std::move(alloc),
+                                 std::move(cache_registry),
+                                 std::move(model),
+                                 std::move(vision_model),
+                                 ctx,
+                                 gateway,
+                                 device_id,
+                                 dp_rank,
+                                 phases)}
 {
 }
 
@@ -945,30 +884,43 @@ void Engine::Start()
     return impl_->Start();
 }
 
+void Engine::Impl::MaybeLogCacheStats()
+{
+    if (cache_log_interval_ <= 0 || tp_rank_ != 0) {
+        return;  // disabled, or non-primary TP rank (avoid duplicate lines)
+    }
+    if (++schedule_counter_ % static_cast<uint64_t>(cache_log_interval_) != 0) {
+        return;
+    }
+    TM_LOG_WARN("dp{} cache stats:\n{}", dp_rank_, FormatMemoryStats(object_allocator_.Stats()));
+}
+
 void Engine::Impl::UpdateScheduleMetrics()
 {
-    const auto scheduler_tick = scheduler_tick_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (param_.enable_metrics) {
+        // const auto& [total, active, cached] = seq_mgr_->seq_stats();
 
-    const auto [total, active, cached] = seq_mgr_->seq_stats();
+        // auto m = std::make_shared<ScheduleMetrics>();
 
-    auto m = std::make_shared<ScheduleMetrics>();
+        // m->total_seqs   = total;
+        // m->active_seqs  = active;
+        // m->waiting_seqs = total - active;
 
-    m->total_seqs     = total;
-    m->active_seqs    = active;
-    m->waiting_seqs   = total - active;
-    m->scheduler_tick = scheduler_tick;
+        // m->total_blocks  = seq_mgr_->total_count();
+        // m->active_blocks = seq_mgr_->active_count();
+        // m->cached_blocks = seq_mgr_->cached_count();
+        // m->free_blocks   = seq_mgr_->free_count();
 
-    m->total_blocks  = seq_mgr_->total_count();
-    m->active_blocks = seq_mgr_->active_count();
-    m->cached_blocks = seq_mgr_->cached_count();
-    m->free_blocks   = seq_mgr_->free_count();
-
-    std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
+        // std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
+    }
 }
 
 shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 {
-    return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
+    if (impl_->param_.enable_metrics) {
+        return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
+    }
+    return {};
 }
 
 }  // namespace turbomind

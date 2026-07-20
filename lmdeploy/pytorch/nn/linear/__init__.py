@@ -37,7 +37,7 @@ def build_linear(
     quant_method = None
     if quant_config is not None:
         quant_config = get_build_model_context().quant_config
-        quant_method = quant_config.get_quant_method(prefix)
+        quant_method = quant_config.get_quant_method(prefix, module_kind='linear')
 
     if dp_gather and quant_method is not None:
         assert quant_method in ['fp8'], (f'Do not support dp_gather with quant_method={quant_method}')
@@ -201,7 +201,7 @@ def build_merged_colwise_linear(
     quant_method = None
     if quant_config is not None:
         quant_config = get_build_model_context().quant_config
-        quant_method = quant_config.get_quant_method(prefix)
+        quant_method = quant_config.get_quant_method(prefix, module_kind='linear')
     if dp_gather and quant_method is not None:
         assert quant_method in ['fp8'], (f'Do not support dp_gather with quant_method={quant_method}')
 
@@ -273,7 +273,7 @@ def build_qkv_proj(in_features: int,
     quant_method = None
     if quant_config is not None:
         quant_config = get_build_model_context().quant_config
-        quant_method = quant_config.get_quant_method(prefix)
+        quant_method = quant_config.get_quant_method(prefix, module_kind='linear')
     if head_size_v is None:
         head_size_v = head_size
 

@@ -197,6 +197,11 @@ class EngineLoop:
         # event. If sleep ended every session, this should remain cleared.
         self.has_runable_event.set()
 
+    def reset_runtime_state(self):
+        """Discard request-local scheduling state after sleep cancels
+        sessions."""
+        self.inputs_maker.reset_runtime_state()
+
     @staticmethod
     def _log_resps(outputs: list[InferOutput]):
         """Log resps."""
@@ -409,6 +414,8 @@ class EngineLoop:
 
     async def _prefetch_next_inputs(self):
         """Collect migration completions before prefetching the next batch."""
+        if self._sleep_requested:
+            return None, None
         self.scheduler.collect_migration_done()
         return await self.inputs_maker.prefetch_next_inputs()
 
