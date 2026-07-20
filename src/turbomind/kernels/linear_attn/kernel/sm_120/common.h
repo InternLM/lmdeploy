@@ -15,6 +15,11 @@
 #include <string>
 #include <type_traits>
 
+#include <cute/pointer_flagged.hpp>
+#include <cute/swizzle_layout.hpp>
+#include <cute/tensor.hpp>
+#include <cute/underscore.hpp>
+
 #include <cute/algorithm/clear.hpp>
 #include <cute/algorithm/cooperative_gemm.hpp>
 #include <cute/algorithm/gemm.hpp>
@@ -25,10 +30,6 @@
 #include <cute/arch/mma_sm80.hpp>
 #include <cute/atom/copy_traits_sm90.hpp>
 #include <cute/atom/mma_traits_sm80.hpp>
-#include <cute/pointer_flagged.hpp>
-#include <cute/swizzle_layout.hpp>
-#include <cute/tensor.hpp>
-#include <cute/underscore.hpp>
 #include <cutlass/arch/barrier.h>
 #include <cutlass/arch/reg_reconfig.h>
 

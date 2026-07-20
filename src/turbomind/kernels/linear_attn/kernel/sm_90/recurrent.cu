@@ -13,9 +13,10 @@
 #include <new>
 #include <type_traits>
 
+#include <cute/tensor.hpp>
+
 #include <cute/arch/copy.hpp>
 #include <cute/arch/copy_sm90_tma.hpp>
-#include <cute/tensor.hpp>
 #include <cutlass/arch/barrier.h>
 
 namespace turbomind::linear_attn::delta_rule {

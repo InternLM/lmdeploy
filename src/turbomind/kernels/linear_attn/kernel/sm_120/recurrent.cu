@@ -12,9 +12,10 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <cute/arch/copy_sm90_tma.hpp>
 #include <cute/swizzle_layout.hpp>
 #include <cute/tensor.hpp>
+
+#include <cute/arch/copy_sm90_tma.hpp>
 #include <cutlass/arch/barrier.h>
 #include <cutlass/arch/reg_reconfig.h>
 

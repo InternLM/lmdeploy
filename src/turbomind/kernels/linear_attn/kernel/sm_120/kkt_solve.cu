@@ -12,6 +12,12 @@
 
 #include <cstdint>
 #include <type_traits>
+
+#include <cute/layout.hpp>
+#include <cute/swizzle_layout.hpp>
+#include <cute/tensor.hpp>
+#include <cute/underscore.hpp>
+
 #include <cute/algorithm/clear.hpp>
 #include <cute/algorithm/cooperative_gemm.hpp>
 #include <cute/algorithm/gemm.hpp>
@@ -20,10 +26,6 @@
 #include <cute/arch/copy_sm90_tma.hpp>
 #include <cute/arch/mma_sm80.hpp>
 #include <cute/atom/mma_traits_sm80.hpp>
-#include <cute/layout.hpp>
-#include <cute/swizzle_layout.hpp>
-#include <cute/tensor.hpp>
-#include <cute/underscore.hpp>
 #include <cutlass/arch/barrier.h>
 #include <cutlass/arch/reg_reconfig.h>
 #include <cutlass/numeric_types.h>
