@@ -116,6 +116,60 @@ class FusedMoEW8A8Builder(ABC):
         """Build from mlp."""
         raise NotImplementedError
 
+class FusedMoEStaticF8Impl(ABC):
+    """Fused MoE static FP8 implementation."""
+
+    def update_weights(
+        self,
+        gate_up_weights: torch.Tensor,
+        gate_up_weight_scale: torch.Tensor,
+        gate_up_input_scale: torch.Tensor,
+        down_weights: torch.Tensor,
+        down_weight_scale: torch.Tensor,
+        down_input_scale: torch.Tensor,
+    ):
+        """Update weights and scales."""
+        return (
+            gate_up_weights,
+            gate_up_weight_scale,
+            gate_up_input_scale,
+            down_weights,
+            down_weight_scale,
+            down_input_scale,
+        )
+
+    @abstractmethod
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.LongTensor,
+        gate_up_weights: torch.Tensor,
+        gate_up_weight_scale: torch.Tensor,
+        gate_up_input_scale: torch.Tensor,
+        down_weights: torch.Tensor,
+        down_weight_scale: torch.Tensor,
+        down_input_scale: torch.Tensor,
+        expert_list: list[int] = None,
+    ):
+        """Forward."""
+        raise NotImplementedError
+
+
+class FusedMoEStaticF8Builder(ABC):
+    """Fused MoE static FP8 builder."""
+
+    @staticmethod
+    @abstractmethod
+    def build(
+        top_k: int,
+        num_experts: int,
+        renormalize: bool = False,
+        out_dtype: torch.dtype = torch.float16,
+        quant_dtype: torch.dtype = torch.float8_e4m3fn,
+    ):
+        """Build static FP8 MoE implementation."""
+        raise NotImplementedError
 
 class FusedMoEBlockedF8Impl(ABC):
     """Fused moe blocked f8 implementation."""

@@ -294,6 +294,84 @@ def per_token_quant_int8(x, eps, quant_dtype=torch.int8):
 
     return x_q, x_s
 
+def per_tensor_quant_fp8(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+    quant_dtype: torch.dtype = torch.float8_e4m3fn,
+):
+    """Quantize a tensor using a static per-tensor FP8 scale."""
+    assert quant_dtype.is_floating_point
+    assert scale.numel() == 1
+
+    scale = scale.to(
+        device=x.device,
+        dtype=torch.float32,
+    )
+
+    dtype_info = torch.finfo(quant_dtype)
+
+    x_quant = torch.clamp(
+        x.float() / scale,
+        min=dtype_info.min,
+        max=dtype_info.max,
+    ).to(quant_dtype)
+
+    return x_quant
+
+def matmul_kernel_static_quant(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    residual: torch.Tensor | None = None,
+    bias: torch.Tensor | None = None,
+    output_dtype: torch.dtype = torch.float16,
+):
+    """Run static per-tensor FP8 quantization and W8A8 GEMM."""
+    assert b.ndim == 2
+    assert b.is_contiguous()
+    assert b.dtype.is_floating_point
+
+    input_quant = per_tensor_quant_fp8(
+        a,
+        input_scale,
+        quant_dtype=b.dtype,
+    )
+
+    num_tokens = a.numel() // a.shape[-1]
+    out_features = b.shape[0]
+
+    input_scale_vector = (
+        input_scale.float()
+        .reshape(1)
+        .expand(num_tokens)
+        .contiguous()
+    )
+
+    if weight_scale.numel() == 1:
+        weight_scale_vector = (
+            weight_scale.float()
+            .reshape(1)
+            .expand(out_features)
+            .contiguous()
+        )
+    else:
+        assert weight_scale.numel() == out_features
+        weight_scale_vector = (
+            weight_scale.float()
+            .reshape(out_features)
+            .contiguous()
+        )
+
+    return matmul_kernel_dynamic_quant(
+        input_quant,
+        b,
+        input_scale_vector,
+        weight_scale_vector,
+        residual=residual,
+        bias=bias,
+        output_dtype=output_dtype,
+    )
 
 @triton.jit
 def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
