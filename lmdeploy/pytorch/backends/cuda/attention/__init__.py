@@ -32,6 +32,22 @@ def use_fa3_warning():
     return False
 
 
+def _fa3_disabled_reasons(alibi: bool, learnable_sink: bool, block_sparse_size: int, head_size: int):
+    """Get reasons why FA3 attention cannot be enabled."""
+    reasons = []
+    if alibi:
+        reasons.append('alibi=True')
+    if learnable_sink:
+        reasons.append('learnable_sink=True')
+    if block_sparse_size != 1:
+        reasons.append(f'block_sparse_size={block_sparse_size}')
+    if head_size > 256:
+        reasons.append(f'head_size={head_size}')
+    if not use_fa3:
+        reasons.append('FlashAttention-3 is unavailable')
+    return reasons
+
+
 @functools.lru_cache
 def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int, head_size: int) -> bool:
     """Check if FA3 should be enabled.
@@ -129,6 +145,14 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             **kwargs,
         )
         enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size, head_size)
+
+        from ..batch_invariant import is_batch_invariant_policy_enabled
+        if is_batch_invariant_policy_enabled():
+            if use_flash_mla:
+                raise RuntimeError('enable_batch_invariant requires FA3 attention, but this layer uses FlashMLA.')
+            if not enable_fa3:
+                reasons = ', '.join(_fa3_disabled_reasons(alibi, learnable_sink, block_sparse_size, head_size))
+                raise RuntimeError(f'enable_batch_invariant requires FA3 attention, but FA3 is disabled: {reasons}.')
 
         if use_flash_mla is True:
             logger.debug('Build FlashMLAImpl Attention')

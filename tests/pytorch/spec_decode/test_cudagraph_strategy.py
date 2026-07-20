@@ -32,7 +32,8 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
         def __init__(self):
             self.max_seqlen_q_calls = []
 
-        def update_meta_flashattn(self, batch_size, max_seqlen_q, block_size, max_seqlen_k, cache_seqlens):
+        def update_meta_flashattn(self, batch_size, max_seqlen_q, block_size, max_seqlen_k, cache_seqlens,
+                                  num_splits=0):
             self.max_seqlen_q_calls.append(max_seqlen_q)
             return torch.zeros(4, dtype=torch.int32)
 

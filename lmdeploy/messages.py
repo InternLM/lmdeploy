@@ -415,6 +415,12 @@ class PytorchEngineConfig:
             must be multiples of the cache block size.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
+        enable_batch_invariant: Enable batch-invariant greedy inference on
+            supported CUDA backends. The initial implementation is Hopper-only.
+            It can also be enabled process-wide with
+            `LMDEPLOY_ENABLE_BATCH_INVARIANT=1`. Warning: expert
+            parallelism/DeepEP is unsupported, and active eviction/recompute
+            may break batch-invariant behavior.
         custom_module_map: nn module map customized by users. Once
             provided, the original nn modules of the model will be
             substituted by the mapping ones
@@ -478,6 +484,7 @@ class PytorchEngineConfig:
     prefix_cache_decode_state_interval: int = 0
     device_type: str = 'cuda'
     eager_mode: bool = False
+    enable_batch_invariant: bool = False
     custom_module_map: dict[str, str] = None
     download_dir: str = None
     revision: str = None
@@ -527,6 +534,8 @@ class PytorchEngineConfig:
         except ValueError as e:
             raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
+        if self.enable_batch_invariant and self.device_type != 'cuda':
+            raise ValueError('enable_batch_invariant is currently supported only for CUDA backend.')
         assert self.kernel_block_size >= 16 and \
                (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
                f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
