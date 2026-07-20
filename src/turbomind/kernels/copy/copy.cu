@@ -190,10 +190,12 @@ void VectorizedCopy(
         constexpr int kMaxVec   = 128 / kElemBits;
 
         auto dispatch_vec = [&](auto v) {
-            constexpr int kVec = v.value;
-
             auto dispatch_rank = [&](auto d) {
-                constexpr int kRank = d.value;
+                // Keep template arguments local to this nested lambda. MSVC
+                // otherwise captures constexpr values from the enclosing
+                // lambda and rejects them as non-type template arguments.
+                constexpr int kVec  = decltype(v)::value;
+                constexpr int kRank = decltype(d)::value;
 
                 auto data_shape  = detail::make_cute_shape<kRank>(a.shape().data());
                 auto src_strides = detail::make_cute_stride<kRank>(a.stride().data());
