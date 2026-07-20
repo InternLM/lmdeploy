@@ -226,7 +226,7 @@ def test_prompt_cancel_updates_metrics():
     asyncio.run(_run_prompt_cancel_updates_metrics())
 
 
-async def _run_max_new_tokens_zero_keeps_history_len():
+async def _run_max_new_tokens_zero_cleans_up_session():
     from lmdeploy.metrics.metrics_processor import metrics_processor
     from lmdeploy.metrics.stats import SchedulerStats
     from lmdeploy.serve.core.async_engine import AsyncEngine
@@ -247,7 +247,6 @@ async def _run_max_new_tokens_zero_keeps_history_len():
 
         out = await generator.__anext__()
 
-        assert out.history_token_len == 0
         assert out.input_token_len == 2
         assert out.finish_reason == 'length'
         assert not hasattr(session, 'step')
@@ -256,5 +255,5 @@ async def _run_max_new_tokens_zero_keeps_history_len():
         metrics_processor.scheduler_stats = old_stats
 
 
-def test_max_new_tokens_zero_keeps_history_len_after_close():
-    asyncio.run(_run_max_new_tokens_zero_keeps_history_len())
+def test_max_new_tokens_zero_cleans_up_session():
+    asyncio.run(_run_max_new_tokens_zero_cleans_up_session())

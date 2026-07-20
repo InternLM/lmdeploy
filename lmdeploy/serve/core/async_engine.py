@@ -44,7 +44,6 @@ logger = get_logger('lmdeploy')
 class GenOut:
     """Pack all response information together."""
     response: str
-    history_token_len: int
     input_token_len: int
     generate_token_len: int
     finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
@@ -240,7 +239,6 @@ class AsyncEngine:
         logger.info(f'[generate] drop stale session {session.session_id} '
                     f'(session.epoch={epoch}, async_engine.epoch={self.epoch})')
         return GenOut(response='',
-                      history_token_len=0,
                       input_token_len=input_token_len,
                       generate_token_len=0,
                       finish_reason='abort',
@@ -510,7 +508,6 @@ class AsyncEngine:
             raise ValueError(f'Invalid session_id: {session_id}. It should be an instance of Session or an integer.')
         session_id = session.session_id
         session_removed = False
-        history_len = 0
 
         def remove_session_once():
             nonlocal session_removed
@@ -555,7 +552,6 @@ class AsyncEngine:
                 metrics_processor.increase_failed_requests('error')
                 remove_session_once()
                 yield GenOut(response='in prompt processing error',
-                             history_token_len=history_len,
                              input_token_len=len(input_ids) if input_ids is not None else 0,
                              generate_token_len=0,
                              finish_reason='error',
@@ -567,7 +563,6 @@ class AsyncEngine:
             prompt_input = dict(input_ids=input_ids)
 
         gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
-        history_len = 0
         input_len = len(input_ids)
 
         if gen_config.max_new_tokens == 0:
@@ -575,7 +570,6 @@ class AsyncEngine:
             metrics_processor.increase_failed_requests('error')
             remove_session_once()
             yield GenOut(response='',
-                         history_token_len=history_len,
                          input_token_len=input_len,
                          generate_token_len=0,
                          finish_reason='length',
@@ -589,14 +583,12 @@ class AsyncEngine:
             metrics_processor.increase_failed_requests('error')
             remove_session_once()
             yield GenOut(response=errmsg,
-                         history_token_len=history_len,
                          input_token_len=input_len,
                          generate_token_len=0,
                          finish_reason='error',
                          token_ids=[])
             return
         logger.info(f'session={session_id}, '
-                    f'history_tokens={history_len}, '
                     f'input_tokens={input_len}, '
                     f'max_new_tokens={gen_config.max_new_tokens}, '
                     f'prep={do_preprocess}')
@@ -623,7 +615,6 @@ class AsyncEngine:
                 metrics_processor.increase_failed_requests('abort')
                 remove_session_once()
                 yield GenOut(response='',
-                             history_token_len=history_len,
                              input_token_len=input_len,
                              generate_token_len=0,
                              finish_reason='abort',
@@ -683,7 +674,6 @@ class AsyncEngine:
                     res = token_ids[ids_offset:]
 
                     out = GenOut(response,
-                                 history_len,
                                  input_len,
                                  gen_len,
                                  finish_reason,
@@ -734,7 +724,6 @@ class AsyncEngine:
                                 f'"{finish_reason}", input_tokens '
                                 f'{input_len}, output_tokens {gen_len}')
                     yield GenOut(response,
-                                 history_len,
                                  input_len,
                                  gen_len,
                                  finish_reason,
@@ -750,7 +739,6 @@ class AsyncEngine:
                                  'reason "error"')
                     metrics_processor.increase_failed_requests('error')
                     yield GenOut(response=f'internal error happened, status code {outputs.status}',
-                                 history_token_len=history_len,
                                  input_token_len=input_len,
                                  generate_token_len=0,
                                  finish_reason='error',
