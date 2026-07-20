@@ -26,7 +26,7 @@ constexpr CUtensorMapDataType FusedGdrTmaDataType<float>()
 
 inline CUtensorMapSwizzle FusedGdrBf16TmaSwizzle(int block_dv)
 {
-    if (block_dv == kContextParallelGdrBlockDv) {
+    if (block_dv == 32) {
         return CU_TENSOR_MAP_SWIZZLE_64B;
     }
     if (block_dv == kFusedGdrBlockDv || block_dv == kWideGdrBlockDv) {
@@ -39,7 +39,7 @@ template<class StateT>
 inline CUtensorMapSwizzle ContextParallelStateTmaSwizzle(int block_dv)
 {
     static_assert(std::is_same_v<StateT, __nv_bfloat16> || std::is_same_v<StateT, float>);
-    if (block_dv != kContextParallelGdrBlockDv) {
+    if (block_dv != 32) {
         return CU_TENSOR_MAP_SWIZZLE_NONE;
     }
     if constexpr (std::is_same_v<StateT, __nv_bfloat16>) {
@@ -53,7 +53,7 @@ inline CUtensorMapSwizzle ContextParallelStateTmaSwizzle(int block_dv)
 template<int ChunkSize>
 constexpr CUtensorMapSwizzle FusedGdrSquareTmaSwizzle()
 {
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
+    static_assert(ChunkSize == kChunkSize);
     if constexpr (ChunkSize == 32) {
         return CU_TENSOR_MAP_SWIZZLE_64B;
     }
@@ -119,7 +119,7 @@ CUtensorMap MakeQkTmaDesc(const core::Tensor& tensor, const uint32_t (&box_dims)
 template<int ChunkSize>
 CUtensorMap MakeChunkedKktTmaDesc(const core::Tensor& k)
 {
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
+    static_assert(ChunkSize == kChunkSize);
     const uint32_t box_dims[5] = {64u, 1u, 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeQkTmaDesc<__nv_bfloat16>(k, box_dims, CU_TENSOR_MAP_SWIZZLE_128B);
 }
@@ -132,7 +132,7 @@ inline CUtensorMap MakeChunkedKktTmaDesc(const core::Tensor& k)
 template<int ChunkSize>
 inline CUtensorMap MakeFusedGdrHGateTmaDesc(const core::Tensor& gate)
 {
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
+    static_assert(ChunkSize == kChunkSize);
     const uint64_t global_dims[3] = {
         static_cast<uint64_t>(gate.stride(1)),
         static_cast<uint64_t>(gate.shape(1)),
@@ -160,7 +160,7 @@ inline CUtensorMap MakeFusedGdrHGateTmaDesc(const core::Tensor& gate)
 template<int ChunkSize>
 CUtensorMap MakeChunkedKktResolventTmaDesc(const core::Tensor& resolvent)
 {
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
+    static_assert(ChunkSize == kChunkSize);
     const uint64_t global_dims[4] = {
         static_cast<uint64_t>(ChunkSize),
         static_cast<uint64_t>(resolvent.shape(2)),
@@ -190,7 +190,7 @@ inline CUtensorMap MakeChunkedKktResolventTmaDesc(const core::Tensor& resolvent)
 template<int ChunkSize>
 CUtensorMap MakeFusedGdrQkTmaDesc(const core::Tensor& q_or_k)
 {
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
+    static_assert(ChunkSize == kChunkSize);
     const uint32_t box_dims[5] = {64u, 1u, 1u, static_cast<uint32_t>(ChunkSize), 1u};
     return MakeQkTmaDesc<__nv_bfloat16>(q_or_k, box_dims, CU_TENSOR_MAP_SWIZZLE_128B);
 }
@@ -203,7 +203,7 @@ inline CUtensorMap MakeFusedGdrQkTmaDesc(const core::Tensor& q_or_k)
 template<int ChunkSize>
 CUtensorMap MakeFusedGdrValueTmaDesc(const core::Tensor& v, int block_dv)
 {
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
+    static_assert(ChunkSize == kChunkSize);
     const int      tma_block_dv   = block_dv == kWideGdrBlockDv ? kFusedGdrBlockDv : block_dv;
     const uint64_t global_dims[4] = {
         static_cast<uint64_t>(kHeadDim),
@@ -234,7 +234,7 @@ inline CUtensorMap MakeFusedGdrValueTmaDesc(const core::Tensor& v, int block_dv)
 template<int ChunkSize>
 CUtensorMap MakeFusedGdrOutputTmaDesc(core::Tensor& out, int block_dv)
 {
-    static_assert(kSupportedGdrChunkSize<ChunkSize>);
+    static_assert(ChunkSize == kChunkSize);
     const int      tma_block_dv   = block_dv == kWideGdrBlockDv ? kFusedGdrBlockDv : block_dv;
     const uint64_t global_dims[4] = {
         static_cast<uint64_t>(kHeadDim),
@@ -316,6 +316,9 @@ CUtensorMap MakeContextParallelStateTmaDesc(StateT* ptr, int total_segments, int
 template<class T>
 CUtensorMap MakeCorrectInitialStatesSegmentMatrixTmaDesc(T* ptr, int total_segments, int hv)
 {
+    constexpr int kRowsPerTma = 64;
+    static_assert(kHeadDim % kRowsPerTma == 0);
+
     const uint64_t global_dim[4] = {
         static_cast<uint64_t>(kHeadDim),
         static_cast<uint64_t>(kHeadDim),
@@ -328,7 +331,7 @@ CUtensorMap MakeCorrectInitialStatesSegmentMatrixTmaDesc(T* ptr, int total_segme
         static_cast<uint64_t>(hv) * kHeadDim * kHeadDim * sizeof(T),
     };
     const uint32_t box_dim[4] = {
-        static_cast<uint32_t>(kCorrectInitialStatesMRowsPerTma),
+        static_cast<uint32_t>(kRowsPerTma),
         static_cast<uint32_t>(kHeadDim),
         1u,
         1u,
@@ -364,6 +367,42 @@ CUtensorMap MakeFusedGdrHSegmentMatrixTmaDesc(T* ptr, int total_segments, int hv
 template<int KernelChunkSize = kChunkSize>
 struct Sm90GdrTmaDescPrepare {
     static constexpr int kDescriptorChunkSize = KernelChunkSize;
+    static constexpr int kKktTmaDescCount     = 4;
+
+    enum FusedGdrTmaDescIndex : int
+    {
+        kFusedGdrQDesc = 0,
+        kFusedGdrKDesc,
+        kFusedGdrVDesc,
+        kFusedGdrResolventDesc,
+        kFusedGdrOutDesc,
+        kFusedGdrStateDesc,
+    };
+
+    enum FusedGdrHTmaDescIndex : int
+    {
+        kFusedGdrHKDesc = 0,
+        kFusedGdrHVDesc,
+        kFusedGdrHGDesc,
+        kFusedGdrHResolventDesc,
+        kFusedGdrHSegmentStateDesc,
+        kFusedGdrHSegmentMDesc,
+    };
+
+    enum CorrectInitialStatesTmaDescIndex : int
+    {
+        kCorrectInitialStatesCpStateDesc = 0,
+        kCorrectInitialStatesSegmentStateDesc,
+        kCorrectInitialStatesSegmentMDesc,
+        kCorrectInitialStatesExternalStateDesc,
+    };
+
+    static constexpr int kFusedGdrDataDescCount    = kFusedGdrStateDesc;
+    static constexpr int kFusedGdrHDataDescCount   = kFusedGdrHSegmentStateDesc;
+    static constexpr int kFusedGdrHTensorDescCount = 2;
+
+    static_assert(kFusedGdrHSegmentStateDesc - kFusedGdrHDataDescCount == 0);
+    static_assert(kFusedGdrHSegmentMDesc - kFusedGdrHDataDescCount == 1);
 
     static __device__ __forceinline__ int
     ContextParallelSegmentCount(int sequence_begin, int sequence_end, int segment_tokens)
@@ -457,7 +496,7 @@ struct Sm90GdrTmaDescPrepare {
                                             int                        physical_batch,
                                             int                        seq_len)
     {
-        static_assert(kSupportedGdrChunkSize<ChunkSize>);
+        static_assert(ChunkSize == kChunkSize);
         const int lane_id = tid & 31;
         if (tid < 32) {
             RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrQDesc],
@@ -553,7 +592,7 @@ struct Sm90GdrTmaDescPrepare {
                                                                          int                        physical_batch,
                                                                          int                        seq_len)
     {
-        static_assert(kSupportedGdrChunkSize<ChunkSize>);
+        static_assert(ChunkSize == kChunkSize);
         const int lane_id = tid & 31;
         if (tid < 32) {
             RebaseSequenceDescriptor<3>(&gmem_desc[kChunkedKktKDesc],
@@ -617,7 +656,7 @@ struct Sm90GdrTmaDescPrepare {
                                              int                            physical_batch,
                                              int                            sequence_len)
     {
-        static_assert(kSupportedGdrChunkSize<ChunkSize>);
+        static_assert(ChunkSize == kChunkSize);
         const int lane_id = tid & 31;
         if (tid < 32) {
             RebaseSequenceDescriptor<3>(&gmem_desc[kFusedGdrHKDesc],
@@ -1032,9 +1071,8 @@ struct Sm90GdrTmaDescPrepare {
                 const int local_sequence_begin = sequence_begin - physical_batch * token_num;
                 auto*     direct_fused_desc =
                     reinterpret_cast<CUtensorMap*>(workspace_base + layout.direct_fused_desc_offset);
-                const auto direct_slices = MakeFusedGdrTmaDescriptorSlices(direct_fused_desc, sequence_num);
                 FusedGdrBuildSequenceDataTmaDescriptors<kDescriptorChunkSize>(
-                    &direct_slices.data[sequence * kFusedGdrDataDescCount],
+                    &direct_fused_desc[sequence * kFusedGdrDataDescCount],
                     scratch,
                     *fused_q_desc_ptr,
                     *fused_k_desc_ptr,
@@ -1059,11 +1097,7 @@ struct Sm90GdrTmaDescPrepare {
             reinterpret_cast<CUtensorMap*>(workspace_base + layout.correct_initial_states_desc_offset);
         auto* context_parallel_fused_gdr_desc =
             reinterpret_cast<CUtensorMap*>(workspace_base + layout.context_parallel_fused_gdr_desc_offset);
-        const auto fused_gdr_h_slices = MakeFusedGdrHTmaDescriptorSlices(fused_gdr_h_desc, sequence_num);
-        const auto correct_initial_states_slices =
-            MakeCorrectInitialStatesTmaDescriptorSlices(correct_initial_states_desc);
-        const auto context_parallel_fused_gdr_slices =
-            MakeContextParallelFusedGdrTmaDescriptorSlices(context_parallel_fused_gdr_desc, sequence_num);
+        auto* fused_gdr_h_tensor_desc = fused_gdr_h_desc + sequence_num * kFusedGdrHDataDescCount;
         const StridedTensorBase<const float> g_cumsum_read{g_cumsum, output_gate_batch_stride, output_gate_stride};
 
         const int fused_gdr_h_tensor_task_begin = FusedGdrHTensorTaskBegin(sequence_num);
@@ -1076,7 +1110,7 @@ struct Sm90GdrTmaDescPrepare {
                 const int physical_batch       = sequence_begin / token_num;
                 const int local_sequence_begin = sequence_begin - physical_batch * token_num;
                 FusedGdrHBuildSequenceDataTmaDescriptors<kDescriptorChunkSize>(
-                    &fused_gdr_h_slices.data[sequence * kFusedGdrHDataDescCount],
+                    &fused_gdr_h_desc[sequence * kFusedGdrHDataDescCount],
                     scratch,
                     *fused_k_desc_ptr,
                     *fused_gdr_h_v_desc_ptr,
@@ -1095,7 +1129,7 @@ struct Sm90GdrTmaDescPrepare {
         }
 
         if (descriptor_task == fused_gdr_h_tensor_task_begin) {
-            FusedGdrHBuildTmaDescriptors(fused_gdr_h_slices.segment_state,
+            FusedGdrHBuildTmaDescriptors(fused_gdr_h_tensor_desc,
                                          scratch,
                                          *context_parallel_segment_state_desc_ptr,
                                          *context_parallel_segment_m_desc_ptr,
@@ -1104,7 +1138,7 @@ struct Sm90GdrTmaDescPrepare {
         }
 
         if (descriptor_task == fused_gdr_h_tensor_task_begin + 1) {
-            CorrectInitialStatesBuildTmaDescriptors(correct_initial_states_slices.cp_state,
+            CorrectInitialStatesBuildTmaDescriptors(correct_initial_states_desc,
                                                     scratch,
                                                     *correct_initial_states_cp_state_desc_ptr,
                                                     *correct_initial_states_segment_state_desc_ptr,
@@ -1121,7 +1155,7 @@ struct Sm90GdrTmaDescPrepare {
             const int physical_batch       = sequence_begin / token_num;
             const int local_sequence_begin = sequence_begin - physical_batch * token_num;
             FusedGdrBuildSequenceDataTmaDescriptors<kDescriptorChunkSize>(
-                &context_parallel_fused_gdr_slices.data[sequence * kFusedGdrDataDescCount],
+                &context_parallel_fused_gdr_desc[sequence * kFusedGdrDataDescCount],
                 scratch,
                 *fused_q_desc_ptr,
                 *fused_k_desc_ptr,

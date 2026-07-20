@@ -17,7 +17,6 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
                                            const Problem&             problem,
                                            const ContextParallelPlan& cp,
                                            Sm90GdrTmaLayout           layout,
-                                           DataType                   state_dtype,
                                            cudaStream_t               stream)
 {
     const bool               context_parallel = cp.enabled;
@@ -49,19 +48,18 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&        q,
     CUtensorMap correct_initial_states_segment_m_desc{};
     if (context_parallel) {
         fused_gdr_h_g_desc         = MakeFusedGdrHGateTmaDesc(g_cumsum);
-        fused_gdr_h_v_desc         = MakeFusedGdrValueTmaDesc(v, kFusedGdrHBlockDv);
+        fused_gdr_h_v_desc         = MakeFusedGdrValueTmaDesc(v, kWideGdrBlockDv);
         fused_gdr_h_resolvent_desc = MakeFusedGdrHResolventTmaDesc(resolvent);
 
-        auto*     workspace_base    = static_cast<char*>(workspace.raw_data());
-        auto*     cp_state_ptr      = reinterpret_cast<float*>(workspace_base + layout.cp_state_offset);
-        auto*     segment_state_ptr = reinterpret_cast<__nv_bfloat16*>(workspace_base + layout.segment_state_offset);
-        auto*     segment_m_ptr     = reinterpret_cast<__nv_bfloat16*>(workspace_base + layout.segment_m_offset);
-        const int prefix_block_dv =
-            state_dtype == kBfloat16 ? kCorrectInitialStatesBf16BlockDv : kCorrectInitialStatesF32BlockDv;
+        auto* workspace_base          = static_cast<char*>(workspace.raw_data());
+        auto* cp_state_ptr            = reinterpret_cast<float*>(workspace_base + layout.cp_state_offset);
+        auto* segment_state_ptr       = reinterpret_cast<__nv_bfloat16*>(workspace_base + layout.segment_state_offset);
+        auto* segment_m_ptr           = reinterpret_cast<__nv_bfloat16*>(workspace_base + layout.segment_m_offset);
+        constexpr int prefix_block_dv = 32;
         context_parallel_segment_state_desc =
-            MakeContextParallelStateTmaDesc(segment_state_ptr, cp.total_segments, problem.hv, kFusedGdrHBlockDv);
+            MakeContextParallelStateTmaDesc(segment_state_ptr, cp.total_segments, problem.hv, kWideGdrBlockDv);
         context_parallel_segment_m_desc =
-            MakeFusedGdrHSegmentMatrixTmaDesc(segment_m_ptr, cp.total_segments, problem.hv, kFusedGdrHMBlockDv);
+            MakeFusedGdrHSegmentMatrixTmaDesc(segment_m_ptr, cp.total_segments, problem.hv, kFusedGdrBlockDv);
         correct_initial_states_cp_state_desc =
             MakeContextParallelStateTmaDesc(cp_state_ptr, cp.total_segments, problem.hv, prefix_block_dv);
         correct_initial_states_segment_state_desc =

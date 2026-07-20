@@ -10,6 +10,15 @@ namespace {
 
 template<class StateT, int BlockDv>
 struct Sm90CorrectInitialStates {
+    enum TmaDescIndex : int
+    {
+        kCorrectInitialStatesCpStateDesc = 0,
+        kCorrectInitialStatesSegmentStateDesc,
+        kCorrectInitialStatesSegmentMDesc,
+    };
+
+    static constexpr int kCorrectInitialStatesMRowsPerTma = 64;
+
     static constexpr int kCorrectInitialStatesKTile                = 128;
     static constexpr int kCorrectInitialStatesStoreStages          = 2;
     static constexpr int kCorrectInitialStatesProducerTid0         = 128;
@@ -66,7 +75,7 @@ struct Sm90CorrectInitialStates {
 
     static CUTE_HOST_DEVICE constexpr auto GlobalStateTileLayout()
     {
-        static_assert(BlockDv == kCorrectInitialStatesF32BlockDv);
+        static_assert(BlockDv == 32);
         return cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
                                  cute::make_stride(cute::Int<kHeadDim>{}, cute::Int<1>{}));
     }
@@ -74,7 +83,7 @@ struct Sm90CorrectInitialStates {
     template<class Element>
     static CUTE_HOST_DEVICE constexpr auto SharedStateTileLayout()
     {
-        static_assert(BlockDv == kCorrectInitialStatesF32BlockDv);
+        static_assert(BlockDv == 32);
         auto base = cute::make_layout(cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<BlockDv>{}),
                                       cute::make_stride(cute::Int<BlockDv>{}, cute::Int<1>{}));
         if constexpr (std::is_same_v<Element, __nv_bfloat16> || std::is_same_v<Element, cute::bfloat16_t>) {
@@ -142,7 +151,6 @@ struct Sm90CorrectInitialStates {
                                                int            sequence_num,
                                                unsigned char* smem_raw)
     {
-        static_assert(BlockDv == kCorrectInitialStatesF32BlockDv || BlockDv == kCorrectInitialStatesBf16BlockDv);
         static_assert(kFusedGdrValidStateT<StateT>, "fused chunk GDR StateT must be float or bfloat16");
         static_assert(BlockDv == 32);
         auto&      smem = *reinterpret_cast<SharedStorage*>(smem_raw);
@@ -169,10 +177,9 @@ struct Sm90CorrectInitialStates {
             return;
         }
 
-        const auto  slices                 = MakeCorrectInitialStatesTmaDescriptorSlices(tma_desc_workspace);
-        const auto* cp_state_tma_desc      = slices.cp_state;
-        const auto* segment_state_tma_desc = slices.segment_state;
-        const auto* segment_m_tma_desc     = slices.segment_m;
+        const auto* cp_state_tma_desc      = tma_desc_workspace + kCorrectInitialStatesCpStateDesc;
+        const auto* segment_state_tma_desc = tma_desc_workspace + kCorrectInitialStatesSegmentStateDesc;
+        const auto* segment_m_tma_desc     = tma_desc_workspace + kCorrectInitialStatesSegmentMDesc;
         if (tid == 0) {
             cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(cp_state_tma_desc));
             cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(segment_state_tma_desc));
@@ -428,10 +435,9 @@ void LaunchSm90CorrectInitialStatesTyped(core::Tensor&              cp_state,
                                          cudaStream_t               stream)
 {
     static_assert(kFusedGdrValidStateT<StateT>, "fused chunk GDR StateT must be float or bfloat16");
-    constexpr int block_dv =
-        std::is_same_v<StateT, __nv_bfloat16> ? kCorrectInitialStatesBf16BlockDv : kCorrectInitialStatesF32BlockDv;
-    const int  dv_tiles = CeilDiv(kHeadDim, block_dv);
-    const dim3 grid(problem.hv * dv_tiles, 1, problem.sequence_num);
+    constexpr int block_dv = 32;
+    const int     dv_tiles = CeilDiv(kHeadDim, block_dv);
+    const dim3    grid(problem.hv * dv_tiles, 1, problem.sequence_num);
     using Kernel = Sm90CorrectInitialStates<StateT, block_dv>;
     const dim3   block(Kernel::kThreads);
     const size_t smem_bytes = Kernel::SharedBytes();

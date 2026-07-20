@@ -186,7 +186,6 @@ void PrepareSm90GdrTmaDescriptorsAndCumsum(const core::Tensor&,
                                            const Problem&,
                                            const ContextParallelPlan&,
                                            Sm90GdrTmaLayout,
-                                           DataType,
                                            cudaStream_t);
 
 }  // namespace detail

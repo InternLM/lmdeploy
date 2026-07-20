@@ -14,6 +14,155 @@ namespace {
 
 template<class T, class StateT, int BlockDv, bool ContextParallel>
 struct Sm90FusedGdrFwd {
+    static constexpr int kContextParallelGdrBlockDv = 32;
+
+    enum TmaDescIndex : int
+    {
+        kFusedGdrQDesc = 0,
+        kFusedGdrKDesc,
+        kFusedGdrVDesc,
+        kFusedGdrResolventDesc,
+        kFusedGdrOutDesc,
+    };
+
+    static constexpr int kFusedGdrDataDescCount = 5;
+
+    static __device__ __forceinline__ void FusedGdrFenceProxyAsyncShared()
+    {
+        // Release generic-proxy shared writes to WGMMA's async proxy. This is not
+        // a thread rendezvous or a WGMMA completion wait.
+        cutlass::arch::fence_view_async_shared();
+    }
+
+    static __device__ __forceinline__ __nv_bfloat16 CastFromFloat(float value)
+    {
+        return __float2bfloat16(value);
+    }
+
+    template<class Element>
+    static CUTE_HOST_DEVICE constexpr auto GmmaSquareKLayout()
+    {
+        return cute::tile_to_shape(cute::SM90::GMMA::Layout_K_SW128_Atom<Element>{},
+                                   cute::make_shape(cute::Int<kChunkSize>{}, cute::Int<kChunkSize>{}));
+    }
+
+    static constexpr int kHStateReadThreads = 3 * kFusedGdrRoleThreads;
+    static constexpr int kGateVdReadThreads = 3 * kFusedGdrRoleThreads;
+
+    static __device__ __forceinline__ int CeilDivDevice(int value, int divisor)
+    {
+        return (value + divisor - 1) / divisor;
+    }
+
+    // Forward-only named barriers. CUTLASS maps user IDs 0-7 to
+    // SM90 hardware barrier IDs 8-15.
+    static constexpr int kBarrierStateUpdate    = 1;
+    static constexpr int kBarrierValueU         = 2;
+    static constexpr int kBarrierVdReadDone     = 3;
+    static constexpr int kBarrierOutputAg       = 4;
+    static constexpr int kBarrierOutputLocal    = 5;
+    static constexpr int kBarrierHStateReadDone = 6;
+
+    static_assert(kBarrierHStateReadDone + cutlass::arch::NamedBarrier::ReservedNamedBarrierCount
+                  < cutlass::arch::NamedBarrier::HardwareMaxNumNamedBarriers);
+
+    template<int BarrierId>
+    static __device__ __forceinline__ void MmaSyncNamed()
+    {
+        cutlass::arch::NamedBarrier::sync(kFusedGdrRoleThreads, BarrierId);
+    }
+
+    static __device__ __forceinline__ void StateWaitForHReaders()
+    {
+        cutlass::arch::NamedBarrier::sync(kHStateReadThreads, kBarrierHStateReadDone);
+    }
+
+    static __device__ __forceinline__ void HReaderArrive()
+    {
+        cutlass::arch::NamedBarrier::arrive(kHStateReadThreads, kBarrierHStateReadDone);
+    }
+
+    static __device__ __forceinline__ void ValueWaitForGateVdReaders()
+    {
+        cutlass::arch::NamedBarrier::sync(kGateVdReadThreads, kBarrierVdReadDone);
+    }
+
+    static __device__ __forceinline__ void StateGateReadArrive()
+    {
+        cutlass::arch::NamedBarrier::arrive(kGateVdReadThreads, kBarrierVdReadDone);
+    }
+
+    static __device__ __forceinline__ void OutputVdReadArrive()
+    {
+        cutlass::arch::NamedBarrier::arrive(kGateVdReadThreads, kBarrierVdReadDone);
+    }
+
+    static CUTE_HOST_DEVICE constexpr auto SwizzledA64Layout()
+    {
+        return cute::composition(cute::Swizzle<3, 3, 3>{},
+                                 cute::Layout<cute::Shape<cute::_64, cute::_64>, cute::Stride<cute::_64, cute::_1>>{});
+    }
+
+    static CUTE_HOST_DEVICE constexpr auto SwizzledV128RowLayout()
+    {
+        return cute::composition(
+            cute::Swizzle<3, 3, 3>{},
+            cute::Layout<cute::Shape<cute::Int<kChunkSize>, cute::Shape<cute::Int<kFusedGdrBlockDv>, cute::_2>>,
+                         cute::Stride<cute::Int<kFusedGdrBlockDv>,
+                                      cute::Stride<cute::_1, cute::Int<kFusedGdrBlockDv * kChunkSize>>>>{});
+    }
+
+    static CUTE_HOST_DEVICE constexpr auto SwizzledV32RowLayout()
+    {
+        return cute::composition(cute::Swizzle<2, 3, 3>{},
+                                 cute::Layout<cute::Shape<cute::_64, cute::_32>, cute::Stride<cute::_32, cute::_1>>{});
+    }
+
+    template<int LayoutBlockDv>
+    static CUTE_HOST_DEVICE constexpr auto SwizzledVRowLayout()
+    {
+        static_assert(LayoutBlockDv == kContextParallelGdrBlockDv || LayoutBlockDv == kFusedGdrBlockDv
+                      || LayoutBlockDv == kWideGdrBlockDv);
+        if constexpr (LayoutBlockDv == kContextParallelGdrBlockDv) {
+            return SwizzledV32RowLayout();
+        }
+        else if constexpr (LayoutBlockDv == kFusedGdrBlockDv) {
+            return SwizzledA64Layout();
+        }
+        else {
+            return SwizzledV128RowLayout();
+        }
+    }
+
+    template<class TiledMma, class AFragment, class TB, class BLayout, class Accumulator>
+    static __device__ __forceinline__ void GmmaRs(TiledMma&                        tiled_mma,
+                                                  uint32_t                         thread_idx,
+                                                  AFragment const&                 tCrA,
+                                                  cute::Tensor<TB, BLayout> const& sB,
+                                                  Accumulator&                     tCrC,
+                                                  cute::SM90::GMMA::ScaleOut       scale)
+    {
+        auto thr_mma = tiled_mma.get_thread_slice(thread_idx);
+        auto tCsB    = thr_mma.partition_B(sB);
+        auto tCrB    = thr_mma.make_fragment_B(tCsB);
+
+        constexpr int K_BLOCK_MAX = cute::size<2>(AFragment{});
+        static_assert(K_BLOCK_MAX == cute::size<2>(decltype(tCrB){}));
+
+        FusedGdrFenceProxyAsyncShared();
+        cute::warpgroup_fence_operand(tCrC);
+        cute::warpgroup_arrive();
+        tiled_mma.accumulate_ = scale;
+#pragma unroll
+        for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block) {
+            cute::gemm(tiled_mma, tCrA(cute::_, cute::_, k_block), tCrB(cute::_, cute::_, k_block), tCrC);
+            tiled_mma.accumulate_ = cute::SM90::GMMA::ScaleOut::One;
+        }
+        cute::warpgroup_commit_batch();
+        cute::warpgroup_wait<0>();
+        cute::warpgroup_fence_operand(tCrC);
+    }
+
     static constexpr float kHeadScale = 0.08838834764831845f;
 
     static constexpr int kFusedGdrGateRowsPerWarp = 8;
@@ -255,7 +404,7 @@ struct Sm90FusedGdrFwd {
     template<int ChunkSize>
     static __device__ __forceinline__ int ResolventTmaCoord(int value_head)
     {
-        static_assert(kSupportedGdrChunkSize<ChunkSize>);
+        static_assert(ChunkSize == kChunkSize);
         return value_head * ChunkSize;
     }
 
@@ -416,7 +565,7 @@ struct Sm90FusedGdrFwd {
                     auto c_coord = GmmaCFragmentCoord(pair, row_select, stripe);
                     auto a_coord = cute::make_coord(
                         cute::make_coord(pair, row_select, cute::Int<innerK>{}), cute::Int<0>{}, cute::Int<kBlock>{});
-                    tCrPrs(a_coord) = Element(CastFromFloat<T>(static_cast<float>(tCrP(c_coord))));
+                    tCrPrs(a_coord) = Element(CastFromFloat(static_cast<float>(tCrP(c_coord))));
                 });
             });
         });
@@ -520,19 +669,11 @@ struct Sm90FusedGdrFwd {
         const int64_t beta_sequence_offset = static_cast<int64_t>(gate_physical_batch) * beta_batch_stride
                                              + static_cast<int64_t>(gate_local_sequence_begin) * beta_stride
                                              + value_head;
-        const int          qk_tma_head_coord  = qk_head;
-        constexpr int      qk_tma_batch_coord = 0;
-        const int          chunks             = CeilDivDevice(seq_len, kChunkSize);
-        const CUtensorMap* data_desc          = nullptr;
-        if constexpr (ContextParallel) {
-            const auto context_parallel_fused_gdr_slices =
-                MakeContextParallelFusedGdrTmaDescriptorSlices(tma_desc_workspace, data_sequence_num);
-            data_desc = context_parallel_fused_gdr_slices.data + sequence_id * kFusedGdrDataDescCount;
-        }
-        else {
-            const auto direct_slices = MakeFusedGdrTmaDescriptorSlices(tma_desc_workspace, data_sequence_num);
-            data_desc                = direct_slices.data + batch_id * kFusedGdrDataDescCount;
-        }
+        const int          qk_tma_head_coord   = qk_head;
+        constexpr int      qk_tma_batch_coord  = 0;
+        const int          chunks              = CeilDivDevice(seq_len, kChunkSize);
+        const int          descriptor_sequence = ContextParallel ? sequence_id : batch_id;
+        const CUtensorMap* data_desc           = tma_desc_workspace + descriptor_sequence * kFusedGdrDataDescCount;
         AcquireAndPrefetchDataTmaDescriptors(data_desc, tid);
         const CUtensorMap* q_desc         = &data_desc[kFusedGdrQDesc];
         const CUtensorMap* k_desc         = &data_desc[kFusedGdrKDesc];
@@ -812,7 +953,7 @@ struct Sm90FusedGdrFwd {
             }
             // Rendezvous: named barrier 1 aligns WG0 after loading the state fragment
             // before the first state-snapshot phase.
-            FusedGdrMmaSyncNamed<kFusedGdrBarrierStateUpdate>();
+            MmaSyncNamed<kBarrierStateUpdate>();
 
             for (int chunk = 0; chunk < chunks; ++chunk) {
                 const int token0      = chunk * kChunkSize;
@@ -831,7 +972,7 @@ struct Sm90FusedGdrFwd {
                 FusedGdrStoreFragmentBf16Stsm<T, Element>(tCrState, s_h, thr_mma, role_tid);
                 // Rendezvous: named barrier 1 completes WG0's h_shared STSM
                 // publication before the snapshot is released.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierStateUpdate>();
+                MmaSyncNamed<kBarrierStateUpdate>();
                 // Release: WG0 publishes h_shared to WGs 1 and 2 for this chunk phase.
                 cute::arrive_barrier(smem.state_snapshot_bar);
 
@@ -839,11 +980,11 @@ struct Sm90FusedGdrFwd {
                 cute::wait_barrier(smem.gate_ready_bar, phase);
                 FusedGdrDecayStateFragment(tCrState, smem.g_exp[kChunkSize - 1]);
                 // Release: WG0 has consumed the current single-slot gate generation.
-                FusedGdrStateGateReadArrive();
+                StateGateReadArrive();
 
                 // Rendezvous: WG0 waits only until WGs 1/2 have drained their
                 // h_shared WGMMA reads; output and VD tails proceed independently.
-                FusedGdrStateWaitForHReaders();
+                StateWaitForHReaders();
                 // Acquire: WG1 has published VN for WG0's state-update GMMA.
                 cute::wait_barrier(smem.update_ready_bar, phase);
                 auto s_k_t =
@@ -852,11 +993,11 @@ struct Sm90FusedGdrFwd {
                 auto s_vn = cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.vn_shared[0][0])),
                                               FusedGdrGmmaVdTLayout<Element, BlockDv>());
                 // Rendezvous: named barrier 1 aligns WG0 before the state update reads VN.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierStateUpdate>();
+                MmaSyncNamed<kBarrierStateUpdate>();
                 FusedGdrStateUpdateFragmentGmmaBf16Vd<BlockDv, T>(role_tid, s_k_t, s_vn, tCrState);
                 // Rendezvous: named barrier 1 aligns WG0 after the separately drained
                 // update WGMMA before the state fragment is stored or republished.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierStateUpdate>();
+                MmaSyncNamed<kBarrierStateUpdate>();
 
                 const bool store_final_state =
                     chunk == chunks - 1 && (!ContextParallel || sequence_terminal) && !finished[batch_id];
@@ -868,7 +1009,7 @@ struct Sm90FusedGdrFwd {
                     auto g_state = cute::make_tensor(cute::make_gmem_ptr(state_base), state_tile_layout);
                     FusedGdrStoreStateFragmentGlobal<StateT>(tCrState, g_state, thr_mma, role_tid);
                     // Rendezvous: named barrier 1 completes WG0's final-state store phase.
-                    FusedGdrMmaSyncNamed<kFusedGdrBarrierStateUpdate>();
+                    MmaSyncNamed<kBarrierStateUpdate>();
                 }
                 // Release WG0's read ownership to the producer warps. The stage becomes
                 // reusable only after WGs 1 and 2 contribute their 128 arrivals.
@@ -925,7 +1066,7 @@ struct Sm90FusedGdrFwd {
                 }
                 // Rendezvous: named barrier 2 completes WG1's gate-vector stores before
                 // releasing them to WGs 0 and 2.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierValueU>();
+                MmaSyncNamed<kBarrierValueU>();
                 // Release: WG1 publishes g, g_exp, and g_rev_exp to WGs 0 and 2.
                 cute::arrive_barrier(smem.gate_ready_bar);
                 // Acquire: WG0 has published the h_shared snapshot consumed by WG1.
@@ -938,7 +1079,7 @@ struct Sm90FusedGdrFwd {
                                              FusedGdrGmmaStateTLayout<Element, BlockDv>());
                 FusedGdrGmmaSs(tiled_mma, role_tid, s_k, s_h, tCrU, cute::SM90::GMMA::ScaleOut::Zero);
                 // Release: WG1 has drained its h_shared WGMMA read for this generation.
-                FusedGdrHReaderArrive();
+                HReaderArrive();
 
                 auto s_v =
                     cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.v_stage[stage][0][0])),
@@ -960,20 +1101,20 @@ struct Sm90FusedGdrFwd {
                 // because both use the same shared arena through different layouts.
                 // Rendezvous: named barrier 2 completes all original V reads before WG1
                 // overwrites the same v_stage storage with W.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierValueU>();
+                MmaSyncNamed<kBarrierValueU>();
                 auto s_w_store =
                     cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.v_stage[stage][0][0])),
                                       FusedGdrGmmaVdRowLayout<Element, BlockDv>());
                 FusedGdrStoreFragmentBf16Stsm<T, Element>(tCrU, s_w_store, thr_mma, role_tid);
                 // Rendezvous: named barrier 2 completes WG1's W stores before the second
                 // GMMA consumes W through the async proxy.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierValueU>();
+                MmaSyncNamed<kBarrierValueU>();
 
                 // Acquire: WG2 has published packed AG before WG1's second GMMA.
                 cute::wait_barrier(smem.ag_ready_bar, phase);
                 auto s_a =
                     cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.a_stage[stage][0][0])),
-                                      FusedGdrGmmaSquareKLayout<Element>());
+                                      GmmaSquareKLayout<Element>());
                 FusedGdrGmmaSs(tiled_mma, role_tid, s_a, s_w, tCrU, cute::SM90::GMMA::ScaleOut::Zero);
 
                 ForEachProjectedGmmaC<ValueMma>(
@@ -990,7 +1131,7 @@ struct Sm90FusedGdrFwd {
                 cute::arrive_barrier(smem.vd_ready_bar);
                 // Rendezvous: named barrier 2 aligns WG1 after VD publication before
                 // transforming the fragment and publishing VN.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierValueU>();
+                MmaSyncNamed<kBarrierValueU>();
                 ForEachProjectedGmmaC<ValueMma>(
                     c_projection,
                     [&](int row) { return smem.g_rev_exp[row]; },
@@ -1005,7 +1146,7 @@ struct Sm90FusedGdrFwd {
                 cute::arrive_barrier(smem.update_ready_bar);
                 // Rendezvous: WG1 waits until WG0 has consumed the gate vectors and
                 // WG2 has drained vd_shared before either single-slot arena advances.
-                FusedGdrValueWaitForGateVdReaders();
+                ValueWaitForGateVdReaders();
                 // Release WG1's final reads of K, V/W, gates, and AG. The stage becomes
                 // reusable only after WGs 0 and 2 contribute their 128 arrivals.
                 cute::arrive_barrier(smem.stage_free_bar[stage]);
@@ -1077,16 +1218,15 @@ struct Sm90FusedGdrFwd {
                                       FusedGdrGmmaQkKLayout<Element>());
                 auto s_ag =
                     cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.a_stage[stage][0][0])),
-                                      FusedGdrGmmaSquareKLayout<Element>());
+                                      GmmaSquareKLayout<Element>());
                 auto tCrP = cute::partition_fragment_C(
                     square_mma, cute::make_shape(cute::Int<kChunkSize>{}, cute::Int<kChunkSize>{}));
                 FusedGdrGmmaSs<false>(square_mma, role_tid, s_q, s_k, tCrP, cute::SM90::GMMA::ScaleOut::Zero);
 
                 // Acquire: WG1 has published g, g_exp, and g_rev_exp for P/AG formation.
                 cute::wait_barrier(smem.gate_ready_bar, phase);
-                auto s_a_raw =
-                    cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.a_stage[stage][0][0])),
-                                      FusedGdrSwizzledA64Layout());
+                auto s_a_raw = cute::make_tensor(
+                    cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.a_stage[stage][0][0])), SwizzledA64Layout());
                 {
                     auto tCrAgPack = cute::make_fragment_like<Element>(tCrP);
                     ForEachProjectedGmmaC<SquareMma>(
@@ -1107,14 +1247,14 @@ struct Sm90FusedGdrFwd {
 
                             const float a_value       = static_cast<float>(s_a_raw(row, column)) * g_rel * beta_column;
                             const float p_value       = static_cast<float>(tCrP(fragment_coord)) * kHeadScale * g_rel;
-                            tCrAgPack(fragment_coord) = Element(CastFromFloat<T>(a_value));
+                            tCrAgPack(fragment_coord) = Element(CastFromFloat(a_value));
                             tCrP(fragment_coord)      = p_value;
                         });
                     StorePackedBf16Stsm<Element>(tCrAgPack, s_ag, thr_square, role_tid);
                 }
                 // Rendezvous: named barrier 4 completes WG2's packed AG STSM before
                 // AG is released to WG1.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierOutputAg>();
+                MmaSyncNamed<kBarrierOutputAg>();
                 // Release: WG2 publishes packed AG; WG1 acquires it before its second GMMA.
                 cute::arrive_barrier(smem.ag_ready_bar);
 
@@ -1128,7 +1268,7 @@ struct Sm90FusedGdrFwd {
                 auto tCrO = thr_output.make_fragment_C(tCsO);
                 FusedGdrGmmaSs(output_mma, role_tid, s_q, s_h, tCrO, cute::SM90::GMMA::ScaleOut::Zero);
                 // Release: WG2 has drained its h_shared WGMMA read for this generation.
-                FusedGdrHReaderArrive();
+                HReaderArrive();
 
                 ForEachProjectedGmmaC<OutputMma>(
                     c_projection,
@@ -1146,10 +1286,10 @@ struct Sm90FusedGdrFwd {
                 cute::wait_barrier(smem.vd_ready_bar, phase);
                 auto s_vd = cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.vd_shared[0][0])),
                                               FusedGdrGmmaVdTLayout<Element, BlockDv>());
-                FusedGdrGmmaRs(output_rs_mma, role_tid, tCrPrs, s_vd, tCrO, cute::SM90::GMMA::ScaleOut::One);
+                GmmaRs(output_rs_mma, role_tid, tCrPrs, s_vd, tCrO, cute::SM90::GMMA::ScaleOut::One);
 
                 // Release WG1 after the final RS-WGMMA has drained its vd_shared read.
-                FusedGdrOutputVdReadArrive();
+                OutputVdReadArrive();
 
                 const int output_stage      = chunk % kFusedGdrOutputStoreStages;
                 const int output_free_phase = ((chunk / kFusedGdrOutputStoreStages) & 1) ^ 1;
@@ -1159,11 +1299,11 @@ struct Sm90FusedGdrFwd {
                 cute::wait_barrier(smem.out_free_bar[output_stage], output_free_phase);
                 auto s_out = cute::make_tensor(
                     cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.o_shared[output_stage][0][0])),
-                    FusedGdrSwizzledVRowLayout<BlockDv>());
+                    SwizzledVRowLayout<BlockDv>());
                 FusedGdrStoreFragmentBf16Stsm<T, Element>(tCrO, s_out, thr_output, role_tid);
                 // Rendezvous: named barrier 5 completes WG2's output STSM publication
                 // before o_shared is released to the output-store leader.
-                FusedGdrMmaSyncNamed<kFusedGdrBarrierOutputLocal>();
+                MmaSyncNamed<kBarrierOutputLocal>();
                 // Release: WG2 publishes this output slot to the store leader.
                 cute::arrive_barrier(smem.out_ready_bar[output_stage]);
                 // Release WG2's final reads of Q/K, resolvent, and beta. The stage

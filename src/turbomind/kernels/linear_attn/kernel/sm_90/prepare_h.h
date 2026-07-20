@@ -12,6 +12,24 @@ namespace {
 
 template<class T>
 struct Sm90FusedGdrH {
+    enum TmaDescIndex : int
+    {
+        kFusedGdrHKDesc = 0,
+        kFusedGdrHVDesc,
+        kFusedGdrHResolventDesc = 3,
+    };
+
+    static constexpr int kFusedGdrHDataDescCount = 4;
+
+    template<class Element>
+    static CUTE_HOST_DEVICE constexpr auto GmmaSquareLayout()
+    {
+        return cute::tile_to_shape(cute::SM90::GMMA::Layout_MN_SW128_Atom<Element>{},
+                                   cute::make_shape(cute::Int<kChunkSize>{}, cute::Int<kChunkSize>{}));
+    }
+
+    static constexpr int kConsumerStoreThreads = kFusedGdrConsumerThreads + kCudaWarpThreads;
+
     static constexpr int kFusedGdrHProducerRegisters = 32;
     static constexpr int kFusedGdrHStateRegisters    = 160;
     static constexpr int kFusedGdrHXRegisters        = 160;
@@ -197,7 +215,6 @@ struct Sm90FusedGdrH {
                                                 int64_t beta_stride,
                                                 int64_t beta_batch_stride)
     {
-        static_assert(kFusedGdrHBlockDv == kWideGdrBlockDv);
         using Element = typename FusedGdrMmaTraits<T>::Element;
 
         const int tid         = static_cast<int>(threadIdx.x);
@@ -224,8 +241,7 @@ struct Sm90FusedGdrH {
         const int   token_base         = warmup_begin - sequence_begin;
         const int   chunks             = warmup_chunks;
         const int   qk_head            = value_head / (hv / hq);
-        const auto  slices             = MakeFusedGdrHTmaDescriptorSlices(tma_desc_workspace, sequence_num);
-        const auto* data_desc          = slices.data + sequence_id * kFusedGdrHDataDescCount;
+        const auto* data_desc          = tma_desc_workspace + sequence_id * kFusedGdrHDataDescCount;
         const auto* k_tma_desc         = &data_desc[kFusedGdrHKDesc];
         const auto* v_tma_desc         = &data_desc[kFusedGdrHVDesc];
         const auto* resolvent_tma_desc = &data_desc[kFusedGdrHResolventDesc];
@@ -237,7 +253,7 @@ struct Sm90FusedGdrH {
             cute::prefetch_tma_descriptor(k_tma_desc);
             cute::prefetch_tma_descriptor(v_tma_desc);
             cute::prefetch_tma_descriptor(resolvent_tma_desc);
-            cute::initialize_barrier(smem.iteration_entry_bar, kFusedGdrConsumerStoreThreads);
+            cute::initialize_barrier(smem.iteration_entry_bar, kConsumerStoreThreads);
             cute::initialize_barrier(smem.h_gate_ready_bar, 2 * kFusedGdrRoleThreads);
             cute::initialize_barrier(smem.xy_ready_bar, kFusedGdrConsumerThreads);
             cute::initialize_barrier(smem.state_update_done_bar, kFusedGdrRoleThreads);
@@ -511,7 +527,7 @@ struct Sm90FusedGdrH {
 
                 auto s_a_t =
                     cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.a_stage[stage][0][0])),
-                                      FusedGdrGmmaSquareLayout<Element>());
+                                      GmmaSquareLayout<Element>());
                 auto s_k =
                     cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.k_stage[stage][0][0])),
                                       FusedGdrGmmaQkKLayout<Element>());
@@ -919,7 +935,7 @@ void LaunchSm90FusedGdrHTyped(const core::Tensor&        k,
                               void*                      tma_desc_workspace,
                               cudaStream_t               stream)
 {
-    static_assert(BlockDv == kFusedGdrHBlockDv);
+    static_assert(BlockDv == kWideGdrBlockDv);
     using Kernel = Sm90FusedGdrH<__nv_bfloat16>;
     static_cast<void>(k);
     static_cast<void>(v);
