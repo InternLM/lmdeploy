@@ -804,6 +804,7 @@ BACKEND_MODULES = {
 
 BACKEND_UNSUPPORTED_REASONS = (
     'turbomind_requires_bf16_qkv',
+    'flashqla_requires_chunk32',
     'flashqla_requires_chunk64',
     'fla_requires_chunk64',
     'cp_selected',

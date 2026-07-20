@@ -707,7 +707,7 @@ def test_grouped_partial_head_block_and_nonzero_layer_offset_match_reference():
 @pytest.mark.skipif(non_sm90_or_sm120, reason='optimized GDR target requires SM90 or SM120')
 def test_chunked_nonzero_physical_start_matches_compact_reference():
     case = InputCase(
-        layout=Fixed(batch_size=1, seq_len=113),
+        layout=Fixed(batch_size=1, seq_len=128),
         heads=Heads(hq=1, hv=4),
         input_dtype=torch.bfloat16,
         has_h0=True,
@@ -715,15 +715,15 @@ def test_chunked_nonzero_physical_start_matches_compact_reference():
     )
     inputs = make_input_tensors(case, device='cuda')
     native_inputs = _canonical_native_inputs(inputs)
-    q_offsets = torch.tensor([7, 47, 113], device='cuda', dtype=torch.int32)
-    compact_offsets = torch.tensor([0, 40, 106], device='cuda', dtype=torch.int32)
+    q_offsets = torch.tensor([7, 64, 128], device='cuda', dtype=torch.int32)
+    compact_offsets = torch.tensor([0, 57, 121], device='cuda', dtype=torch.int32)
     compact = replace(
         inputs,
-        q=inputs.q[:, 7:113].contiguous(),
-        k=inputs.k[:, 7:113].contiguous(),
-        v=inputs.v[:, 7:113].contiguous(),
-        g=inputs.g[:, 7:113].contiguous(),
-        beta=inputs.beta[:, 7:113].contiguous(),
+        q=inputs.q[:, 7:128].contiguous(),
+        k=inputs.k[:, 7:128].contiguous(),
+        v=inputs.v[:, 7:128].contiguous(),
+        g=inputs.g[:, 7:128].contiguous(),
+        beta=inputs.beta[:, 7:128].contiguous(),
         offsets=compact_offsets,
     )
     initial = inputs.h0.repeat(2, 1, 1, 1)
@@ -739,7 +739,7 @@ def test_chunked_nonzero_physical_start_matches_compact_reference():
         state_ptrs=ptrs, q_offsets=q_offsets,
         finished=torch.zeros(2, device='cuda', dtype=torch.bool),
         state_dtype='f32', mode='chunked', num_head_groups=1, heads_per_block=4)
-    torch.testing.assert_close(actual_o[:, 7:113], expected_o, rtol=8e-2, atol=8e-2)
+    torch.testing.assert_close(actual_o[:, 7:128], expected_o, rtol=8e-2, atol=8e-2)
     torch.testing.assert_close(storage, expected_state, rtol=8e-2, atol=8e-2)
 
 
@@ -847,16 +847,18 @@ def test_one_chunked_plan_reuses_grouped_state_across_layer_offsets():
 
 
 @cuda_required
-@pytest.mark.skipif(_device_capability() != (9, 0), reason='exact CP is retained only on SM90')
-def test_sm90_auto_exact_cp_matches_normalized_reference():
+@pytest.mark.skipif(non_sm90_or_sm120, reason='optimized GDR target requires SM90 or SM120')
+def test_cp_matches_normalized_reference():
+    chunk_size = 32 if is_sm120 else 64
+    seq_len = 513 * chunk_size if is_sm120 else 4096
     case = InputCase(
-        layout=Fixed(batch_size=1, seq_len=4096),
+        layout=Fixed(batch_size=1, seq_len=seq_len),
         heads=Heads(hq=2, hv=8),
         input_dtype=torch.bfloat16,
         has_h0=True,
         seed=71005,
     )
-    run = RunCase(input=case, state_dtype='f32', chunk_size=64)
+    run = RunCase(input=case, state_dtype='f32', chunk_size=chunk_size)
     inputs = make_input_tensors(case, device='cuda')
     native_inputs = _canonical_native_inputs(inputs)
     state = make_state_buffer(inputs.h0, run, torch.device('cuda'))
@@ -875,10 +877,11 @@ def test_sm90_auto_exact_cp_matches_normalized_reference():
         num_head_groups=1,
         heads_per_block=8,
     )
+    assert plan['problem']['chunk_size'] == chunk_size
     assert plan['cp']['enabled'] is True
     expected_o, expected_state = chunk_gated_delta_rule_fwd(
         inputs.q, inputs.k, inputs.v, inputs.g, inputs.beta,
-        initial_state=initial, chunk_size=64)
+        initial_state=initial, chunk_size=chunk_size)
     state.reset(inputs.h0)
     actual_o = turbomind_gated_delta_rule.chunk_gated_delta_rule_fwd(
         native_inputs.q, native_inputs.k, native_inputs.v,

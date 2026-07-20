@@ -87,6 +87,7 @@ struct Problem {
     int      head_dim{128};
     int      chunk_size{kAutoGdrChunkSize};
     int      total_chunks{};
+    int      max_sequence_chunks{};
     int      num_head_groups{1};
     int      heads_per_block{};
 };

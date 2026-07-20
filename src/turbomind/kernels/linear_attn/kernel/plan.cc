@@ -57,18 +57,23 @@ Problem BuildProblem(const PlanningContext& context, const GdrKernelSpec& spec)
     problem.num_head_groups   = context.num_head_groups;
     problem.heads_per_block   = context.heads_per_block;
     if (spec.mode == GdrMode::kRecurrent) {
-        problem.sequence_num = context.physical_batch;
-        problem.total_chunks = context.physical_batch;
+        problem.sequence_num        = context.physical_batch;
+        problem.total_chunks        = context.physical_batch;
+        problem.max_sequence_chunks = context.physical_batch > 0 ? 1 : 0;
         return problem;
     }
 
     problem.sequence_num = static_cast<int>(context.q_offsets.size() - 1);
-    int total_chunks     = 0;
+    int total_chunks         = 0;
+    int max_sequence_chunks = 0;
     for (int sequence = 0; sequence < problem.sequence_num; ++sequence) {
         const int tokens = context.q_offsets[sequence + 1] - context.q_offsets[sequence];
-        total_chunks += CeilDiv(tokens, spec.chunk_size);
+        const int chunks = CeilDiv(tokens, spec.chunk_size);
+        total_chunks += chunks;
+        max_sequence_chunks = std::max(max_sequence_chunks, chunks);
     }
-    problem.total_chunks = total_chunks;
+    problem.total_chunks        = total_chunks;
+    problem.max_sequence_chunks = max_sequence_chunks;
     return problem;
 }
 
