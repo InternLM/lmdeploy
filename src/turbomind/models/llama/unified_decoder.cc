@@ -96,6 +96,8 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
                                                                   ctx,
                                                                   phases);
     }
+
+    TM_CHECK(!(moe_weights.empty() && engine.ep_size > 1)) << "Dense model is not supported with ep_size > 1";
 }
 
 void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
@@ -289,14 +291,18 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
                                                       global_hidden_states,
                                                       weights.at(layer)->moe_ffn.get(),
-                                                      ffn_layer_ ? 1.f : 0.f,
+                                                      weights.at(layer)->feed_forward ? 1.f : 0.f,
                                                       layer};
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
         if (ffn_layer_ && weights.at(layer)->feed_forward) {
-            ffn_layer_->forward(
-                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward.get(), (int)layer});
+            auto ffn_input_shared =
+                moe_ffn_layer_ ? moe_ffn_layer_->GetShardFfnInput(global_hidden_states) : global_hidden_states;
+            if (ffn_input_shared.shape(0) > 0) {
+                ffn_layer_->forward(
+                    {ffn_input_shared, ffn_input_shared, weights.at(layer)->feed_forward.get(), (int)layer});
+            }
         }
 
         if (moe_fwd_param) {

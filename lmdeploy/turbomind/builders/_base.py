@@ -142,10 +142,33 @@ class Context:
     def __init__(self, devices, data_type):
         self.devices = devices
         self.data_type = data_type
+        self._active_mask_stack = [(True,) * len(devices)]
+
+    @property
+    def active_mask(self):
+        return self._active_mask_stack[-1]
+
+    def active_mask_scope(self, active_mask):
+        return _ActiveMaskScope(self, active_mask)
+
+
+class _ActiveMaskScope:
+    """Temporarily restrict builders created under the context."""
+
+    def __init__(self, ctx, active_mask):
+        self._ctx = ctx
+        self._active_mask = tuple(bool(x) for x in active_mask)
+
+    def __enter__(self):
+        self._ctx._active_mask_stack.append(self._active_mask)
+
+    def __exit__(self, exc_type, exc, tb):
+        self._ctx._active_mask_stack.pop()
+        return False
 
 
 class ParallelGroup:
-    """Bundle a parallelism size with per-GPU TP ranks."""
+    """Bundle a parallelism size with per-GPU ranks."""
     def __init__(self, size, ranks):
         self.size = size
         self.ranks = ranks
@@ -181,6 +204,7 @@ class Builder:
         # __setattr__.
         self._built = False
         self._ctx = ctx
+        self._active_mask = ctx.active_mask
         self.tp = ParallelGroup(1, None)   # default: no TP
         self.config = config
         if hasattr(self.config, 'data_type'):
@@ -219,6 +243,9 @@ class Builder:
         if self.tp.ranks and self.tp.size > 1:
             return self.tp.ranks[gpu_idx]
         return 0
+
+    def _is_active(self, gpu_idx: int) -> bool:
+        return self._active_mask[gpu_idx]
 
     # ------------------------------------------------------------------
     # Add methods — stage into pending dicts (pre-build only)
@@ -280,6 +307,9 @@ class Builder:
         # --- Per-GPU: standalone creation + tensor copy --------------------
         handles = []
         for i, ctx in enumerate(self._ctx.devices):
+            if not self._is_active(i):
+                handles.append(None)
+                continue
             with ctx:
                 rank = self._rank_for(i) if tp > 1 else 0
 
@@ -363,6 +393,9 @@ class Builder:
         """Create one C++ module per context via ``_tm.create_module(cfg)``."""
         handles = []
         for i, ctx in enumerate(self._ctx.devices):
+            if not self._is_active(i):
+                handles.append(None)
+                continue
             with ctx:
                 cfg = self._cfg_for_rank(i)
                 handle = _tm.create_module(cfg)
@@ -380,7 +413,9 @@ class Builder:
     def _commit_child(self, name: str, handles: list):
         """Attach pre-created per-GPU child handles to parent handles."""
         for i, (parent_h, child_h) in enumerate(
-                zip(self._handles, handles)):
+                zip(self._handles, handles, strict=True)):
+            if parent_h is None or child_h is None:
+                continue
             with self._ctx.devices[i]:
                 parent_h.add_child_raw(name, child_h)
 
@@ -405,6 +440,8 @@ class Builder:
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
         for i, handle in enumerate(self._handles):
+            if handle is None:
+                continue
             with self._ctx.devices[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
                 shard = _shard(tensor, split_dim, tp, rank)

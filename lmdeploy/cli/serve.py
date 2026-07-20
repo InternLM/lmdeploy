@@ -135,7 +135,7 @@ class SubCliServe:
         hf_overrides = ArgumentHelper.hf_overrides(pt_group)
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
         dp = ArgumentHelper.dp(pt_group)
-        ArgumentHelper.ep(pt_group)
+        ep_act = ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
@@ -163,6 +163,7 @@ class SubCliServe:
         tb_group._group_actions.append(hf_overrides)
         tb_group._group_actions.append(disable_metrics)
         tb_group._group_actions.append(dp)
+        tb_group._group_actions.append(ep_act)
         tb_group._group_actions.append(language_model_only)
         ArgumentHelper.cp(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -275,6 +276,7 @@ class SubCliServe:
                                                    tp=args.tp,
                                                    dp=args.dp,
                                                    cp=args.cp,
+                                                   ep=args.ep,
                                                    nnodes=args.nnodes,
                                                    node_rank=args.node_rank,
                                                    dist_init_addr=args.dist_init_addr,

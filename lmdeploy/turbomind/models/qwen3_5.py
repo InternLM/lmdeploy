@@ -206,13 +206,13 @@ class Qwen3_5TextModel(TextModel):
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts_pfx = pfx + 'experts'
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(self._n_experts):
+        for e in m.range(self._n_experts):
             experts[e] = self._moe_expert_ffn(
                 experts_pfx, e, self.cfg.moe_intermediate_size)
         m.experts = experts.build()
@@ -639,7 +639,7 @@ class Qwen3_5Model:
                 vision_cfg, resolver=vision_resolver or resolver)
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp):
         for m in (self.text_model, self.vision_model):
             if m is not None:
                 m.bind_runtime(
@@ -647,6 +647,7 @@ class Qwen3_5Model:
                     root_handles=root_handles,
                     attn_tp=attn_tp,
                     mlp_tp=mlp_tp,
+                    ep=ep,
                     model_tp=model_tp,
                 )
 
