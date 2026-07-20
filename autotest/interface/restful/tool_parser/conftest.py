@@ -75,8 +75,11 @@ MM_TEST_IMAGE_BEIJING = 'Beijing_Small.jpeg'
 MM_TEST_IMAGE_POSE = 'human-pose.jpg'
 MM_TEST_VIDEO = 'red-panda.mp4'
 MM_TEST_AUDIO = 'zh.wav'
+# Seismic npy used by Intern-S1-Pro / Intern-S2 time-series docs & model card.
+MM_TEST_TIME_SERIES = '0092638_seism.npy'
+MM_TIME_SERIES_SAMPLING_RATE = 100
 
-# MULTIMODAL_TYPES from lmdeploy; local fixtures cover image + video + audio.
+# MULTIMODAL_TYPES from lmdeploy; local fixtures cover image + video + audio + time_series.
 MM_IMAGE_MEDIA_TYPES = (
     'image_url',
     'image',
@@ -90,8 +93,13 @@ MM_AUDIO_MEDIA_TYPES = (
     'audio_url',
     'audio',
 )
+MM_TIME_SERIES_MEDIA_TYPES = (
+    'time_series_url',
+    'time_series',
+)
 MM_MEDIA_TYPES_WITH_FIXTURES = (
     MM_IMAGE_MEDIA_TYPES + MM_VIDEO_MEDIA_TYPES + MM_AUDIO_MEDIA_TYPES
+    + MM_TIME_SERIES_MEDIA_TYPES
 )
 MM_MEDIA_TYPES_WITHOUT_FIXTURES = tuple(
     t for t in MULTIMODAL_TYPES if t not in MM_MEDIA_TYPES_WITH_FIXTURES)
@@ -112,6 +120,15 @@ _MM_AUDIO_TOOL_CALL_MODEL_MARKERS = (
 MM_AUDIO_TOOL_CALL_SKIP_REASON = (
     'Audio tool-call media types require native audio models '
     '(e.g. Qwen-Omni); VL-only models are skipped')
+# Time-series tool-call needs models with ts encoder (Intern-S1-Pro / Intern-S2).
+# Qwen3.5 has processor hooks in code but returns finish_reason=error
+# ("in prompt processing error") on stock weights — do not enable here.
+_MM_TIME_SERIES_TOOL_CALL_MODEL_MARKERS = (
+    'Intern-S1-Pro',
+    'Intern-S2',
+)
+MM_TIME_SERIES_TOOL_CALL_SKIP_REASON = (
+    'Time-series tool-call media types require Intern-S1-Pro / Intern-S2')
 
 
 def is_mm_tool_call_capable(model_case: str) -> bool:
@@ -124,6 +141,14 @@ def is_mm_audio_tool_call_capable(model_case: str) -> bool:
     """True for model families that support audio input and tool calling."""
     name = model_case.lower()
     return any(marker.lower() in name for marker in _MM_AUDIO_TOOL_CALL_MODEL_MARKERS)
+
+
+def is_mm_time_series_tool_call_capable(model_case: str) -> bool:
+    """True for model families that support time-series input and tool
+    calling."""
+    name = model_case.lower()
+    return any(
+        marker.lower() in name for marker in _MM_TIME_SERIES_TOOL_CALL_MODEL_MARKERS)
 
 
 def resolve_mm_resource_path(config, filename: str) -> str | None:
@@ -211,6 +236,21 @@ def build_multimodal_user_message_media(
     return {'role': 'user', 'content': parts}
 
 
+def build_multimodal_user_message_mixed_media(
+        text: str,
+        media_parts: list[tuple[str, object]],
+) -> dict:
+    """User message with text followed by multiple multimodal parts.
+
+    ``media_parts`` entries are ``(media_type, source)`` pairs, e.g.
+    ``[('image_url', path), ('video_url', path)]``.
+    """
+    parts: list[dict] = [{'type': 'text', 'text': text}]
+    for media_type, source in media_parts:
+        parts.append(build_multimodal_media_part(media_type, source))
+    return {'role': 'user', 'content': parts}
+
+
 def mm_media_fixture_filename(media_type: str) -> str:
     """Map a media type to a filename under resource_path."""
     if media_type in ('image_url', 'image', 'image_data'):
@@ -219,6 +259,8 @@ def mm_media_fixture_filename(media_type: str) -> str:
         return MM_TEST_VIDEO
     if media_type in ('audio_url', 'audio'):
         return MM_TEST_AUDIO
+    if media_type in ('time_series_url', 'time_series'):
+        return MM_TEST_TIME_SERIES
     raise ValueError(f'No local fixture for media type {media_type!r}')
 
 
@@ -227,6 +269,14 @@ def mm_create_extra_body_for_media_type(media_type: str) -> dict | None:
     if media_type in ('video_url', 'video'):
         return dict(MM_VIDEO_EXTRA_BODY)
     return None
+
+
+def mm_media_part_fields_for_media_type(media_type: str) -> dict:
+    """Extra fields for ``build_multimodal_media_part`` (e.g.
+    sampling_rate)."""
+    if media_type in ('time_series_url', 'time_series'):
+        return {'sampling_rate': MM_TIME_SERIES_SAMPLING_RATE}
+    return {}
 
 
 def _llama31_parallel_skip_target(item) -> bool:
@@ -256,9 +306,21 @@ def _mm_audio_media_type_skip_target(item) -> bool:
     return media_type in MM_AUDIO_MEDIA_TYPES
 
 
+def _mm_time_series_media_type_skip_target(item) -> bool:
+    """True for TestToolCallMultimodalMediaTypes time_series parametrize."""
+    cls_name = item.cls.__name__ if item.cls is not None else ''
+    if cls_name != 'TestToolCallMultimodalMediaTypes':
+        return False
+    callspec = getattr(item, 'callspec', None)
+    if callspec is None:
+        return False
+    media_type = callspec.params.get('media_type')
+    return media_type in MM_TIME_SERIES_MEDIA_TYPES
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip parallel-tool tests on Llama 3.1; skip MM tool tests on text-only
-    models; skip audio media types on VL-only models."""
+    models; skip audio / time_series media types when unsupported."""
     for item in items:
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
@@ -273,6 +335,10 @@ def pytest_collection_modifyitems(config, items):
         if _mm_audio_media_type_skip_target(item):
             if model_case and not is_mm_audio_tool_call_capable(model_case):
                 item.add_marker(pytest.mark.skip(reason=MM_AUDIO_TOOL_CALL_SKIP_REASON))
+        if _mm_time_series_media_type_skip_target(item):
+            if model_case and not is_mm_time_series_tool_call_capable(model_case):
+                item.add_marker(
+                    pytest.mark.skip(reason=MM_TIME_SERIES_TOOL_CALL_SKIP_REASON))
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +572,7 @@ MM_SCENE_BEIJING = 'Beijing in photo.'
 MM_SCENE_MIAMI = 'Outdoor workout in Miami (see photo).'
 MM_SCENE_VIDEO = 'Red panda video from Sichuan.'
 MM_SCENE_AUDIO = 'Chinese audio about running.'
+MM_SCENE_TIME_SERIES = 'Seismic waveform time series (100 Hz).'
 
 MM_USER_BEIJING_WEATHER = 'Weather in Beijing, China (state: Beijing)?'
 MM_USER_MIAMI_WEATHER = "What's the weather like in Miami, FL?"
@@ -514,6 +581,9 @@ MM_USER_TIGER_SEARCH = 'Tiger in photo. Search recent tiger conservation news.'
 MM_USER_AUDIO_SEARCH = (
     'Listen to the audio and search the web for how running '
     'benefits physical health as described.')
+MM_USER_TIME_SERIES_SEARCH = (
+    'Inspect this seismic time series. Search the web for how to report '
+    'P-wave and S-wave onset indices for earthquake events.')
 
 
 def _mm_user_text(user_prompt: str, *, scene: str | None = None) -> str:
@@ -547,7 +617,12 @@ def mm_weather_messages_for_media_type(
     return [
         MESSAGES_ASKING_FOR_WEATHER[0],
         build_multimodal_user_message_media(
-            text, media_type, source, media_first=media_first),
+            text,
+            media_type,
+            source,
+            media_first=media_first,
+            **mm_media_part_fields_for_media_type(media_type),
+        ),
     ]
 
 
@@ -561,7 +636,31 @@ def mm_audio_search_messages_for_media_type(
     return [
         MESSAGES_ASKING_FOR_SEARCH[0],
         build_multimodal_user_message_media(
-            text, media_type, source, media_first=media_first),
+            text,
+            media_type,
+            source,
+            media_first=media_first,
+            **mm_media_part_fields_for_media_type(media_type),
+        ),
+    ]
+
+
+def mm_time_series_search_messages_for_media_type(
+        media_type: str,
+        source,
+        *,
+        media_first: bool = False) -> list[dict]:
+    """Search tool-call messages for time_series MULTIMODAL_TYPES (.npy)."""
+    text = _mm_user_text(MM_USER_TIME_SERIES_SEARCH, scene=MM_SCENE_TIME_SERIES)
+    return [
+        MESSAGES_ASKING_FOR_SEARCH[0],
+        build_multimodal_user_message_media(
+            text,
+            media_type,
+            source,
+            media_first=media_first,
+            **mm_media_part_fields_for_media_type(media_type),
+        ),
     ]
 
 
@@ -647,6 +746,22 @@ def build_mm_dual_image_dallas_messages(
         MESSAGES_ASKING_FOR_WEATHER[0],
         build_multimodal_user_message_multi(
             text, [tiger_url, pose_url]),
+    ]
+
+
+def build_mm_image_and_video_dallas_messages(
+        image_url: str, video_url: str) -> list[dict]:
+    """Same-turn image_url + video_url weather tool-call messages."""
+    text = _mm_user_text(
+        MESSAGES_ASKING_FOR_WEATHER[1]['content'],
+        scene=f'{MM_SCENE_DALLAS} {MM_SCENE_VIDEO}',
+    )
+    return [
+        MESSAGES_ASKING_FOR_WEATHER[0],
+        build_multimodal_user_message_mixed_media(
+            text,
+            [('image_url', image_url), ('video_url', video_url)],
+        ),
     ]
 
 

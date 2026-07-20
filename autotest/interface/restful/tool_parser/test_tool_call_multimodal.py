@@ -25,11 +25,15 @@ from .conftest import (
     MM_TEST_IMAGE_BEIJING,
     MM_TEST_IMAGE_POSE,
     MM_TEST_IMAGE_TIGER,
+    MM_TEST_VIDEO,
+    MM_TIME_SERIES_MEDIA_TYPES,
+    MM_VIDEO_EXTRA_BODY,
     MM_VIDEO_MEDIA_TYPES,
     _apply_marks_mm,
     _ToolCallTestBase,
     build_mm_dallas_weather_user_message,
     build_mm_dual_image_dallas_messages,
+    build_mm_image_and_video_dallas_messages,
     build_mm_miami_weather_user_message,
     build_mm_parallel_weather_messages,
     build_mm_parallel_weather_user_message,
@@ -41,6 +45,7 @@ from .conftest import (
     mm_dallas_weather_messages,
     mm_file_to_data_url,
     mm_miami_weather_messages,
+    mm_time_series_search_messages_for_media_type,
     mm_weather_messages_for_media_type,
 )
 
@@ -782,6 +787,62 @@ class TestToolCallMultimodalDualImage(_ToolCallTestBase):
 
 
 @_apply_marks_mm
+class TestToolCallMultimodalMixedMedia(_ToolCallTestBase):
+    """Same-turn mixed modalities (image + video) with tools."""
+
+    def _image_and_video_weather_messages(self):
+        image_url = self._require_mm_image(MM_TEST_IMAGE_TIGER)
+        video_url = self._require_mm_resource(MM_TEST_VIDEO)
+        return build_mm_image_and_video_dallas_messages(image_url, video_url)
+
+    def test_image_and_video_weather_tool(self, backend, model_case):
+        messages = self._image_and_video_weather_messages()
+        client, model_name = self._get_client()
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+            extra_body=dict(MM_VIDEO_EXTRA_BODY),
+        )
+        choice = response.choices[0]
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for image+video; got '
+            f'finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        tool_calls = choice.message.tool_calls
+        assert tool_calls is not None and len(tool_calls) >= 1
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'get_current_weather'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'city' in parsed and 'state' in parsed
+        assert 'dallas' in parsed['city'].lower()
+        assert 'tx' in parsed['state'].lower()
+
+    def test_image_and_video_weather_tool_streaming(self, backend, model_case):
+        messages = self._image_and_video_weather_messages()
+        r = self._stream_tool_call(
+            messages,
+            tools=[WEATHER_TOOL],
+            extra_body=dict(MM_VIDEO_EXTRA_BODY),
+        )
+        assert r['role'] == 'assistant'
+        assert r['chunk_count'] > 0
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
+        parsed = assert_arguments_parseable(r['args_str'])
+        assert 'city' in parsed and 'state' in parsed
+        assert 'dallas' in parsed['city'].lower()
+        assert 'tx' in parsed['state'].lower()
+
+
+@_apply_marks_mm
 class TestToolCallMultimodalToolResultImage(_ToolCallTestBase):
     """Tool message content may include image_url parts."""
 
@@ -922,7 +983,7 @@ class TestToolCallMultimodalParallel(_ToolCallTestBase):
 @_apply_marks_mm
 class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
     """Smoke tool_call for each MULTIMODAL_TYPES variant with local fixtures
-    (non-stream + stream for image/video/audio)."""
+    (non-stream + stream for image/video/audio/time_series)."""
 
     def _weather_tool_call_for_media_type(self, media_type: str) -> dict:
         source = self._require_mm_media_source(media_type)
@@ -1004,6 +1065,49 @@ class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
     def _search_tool_call_stream_for_audio_media_type(self, media_type: str) -> dict:
         source = self._require_mm_media_source(media_type)
         messages = mm_audio_search_messages_for_media_type(media_type, source)
+        r = self._stream_tool_call(messages, tools=[SEARCH_TOOL])
+        assert r['role'] == 'assistant'
+        assert r['chunk_count'] > 0, (
+            f'Expected at least one SSE chunk for media_type={media_type!r}')
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=SEARCH_TOOL['function']['name'],
+            **self._parser_validation_kwargs([SEARCH_TOOL]),
+        )
+        return assert_arguments_parseable(r['args_str'])
+
+    def _search_tool_call_for_time_series_media_type(self, media_type: str) -> dict:
+        source = self._require_mm_media_source(media_type)
+        messages = mm_time_series_search_messages_for_media_type(
+            media_type, source)
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[SEARCH_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for media_type={media_type!r}; '
+            f'got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'web_search'
+        return assert_arguments_parseable(tc.function.arguments)
+
+    def _search_tool_call_stream_for_time_series_media_type(
+            self, media_type: str) -> dict:
+        source = self._require_mm_media_source(media_type)
+        messages = mm_time_series_search_messages_for_media_type(
+            media_type, source)
         r = self._stream_tool_call(messages, tools=[SEARCH_TOOL])
         assert r['role'] == 'assistant'
         assert r['chunk_count'] > 0, (
@@ -1107,4 +1211,17 @@ class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
     def test_search_tool_audio_media_types_streaming(
             self, backend, model_case, media_type):
         parsed = self._search_tool_call_stream_for_audio_media_type(media_type)
+        self._assert_search_query_args(parsed)
+
+    @pytest.mark.parametrize('media_type', MM_TIME_SERIES_MEDIA_TYPES)
+    def test_search_tool_time_series_media_types(
+            self, backend, model_case, media_type):
+        parsed = self._search_tool_call_for_time_series_media_type(media_type)
+        self._assert_search_query_args(parsed)
+
+    @pytest.mark.parametrize('media_type', MM_TIME_SERIES_MEDIA_TYPES)
+    def test_search_tool_time_series_media_types_streaming(
+            self, backend, model_case, media_type):
+        parsed = self._search_tool_call_stream_for_time_series_media_type(
+            media_type)
         self._assert_search_query_args(parsed)
