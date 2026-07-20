@@ -5,13 +5,13 @@ from functools import cache
 
 import torch
 
-from tests.turbomind.linear_attn.benchmark import (
+from .benchmark import (
     BenchmarkRequest,
     BenchmarkTask,
     apply_cp_pattern,
     diff_metrics,
 )
-from tests.turbomind.linear_attn.cases import InputTensors, RunCase
+from .cases import InputTensors, RunCase
 
 
 class FlashQlaUnsupported(ValueError):
@@ -148,8 +148,8 @@ def _cp_pattern_segment_tokens(inputs: InputTensors) -> int:
 
 def make_benchmark_task(run: RunCase, inputs: InputTensors, request: BenchmarkRequest,
                         device: torch.device) -> BenchmarkTask:
-    from tests.turbomind.linear_attn.benchmark import base_row
-    from tests.turbomind.linear_attn.reference import chunk_gated_delta_rule_fwd
+    from .benchmark import base_row
+    from .reference import chunk_gated_delta_rule_fwd
 
     validate_benchmark_case(run, request)
     if request.cp_pattern != 'auto':

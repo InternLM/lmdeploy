@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 
 import torch
 
-from tests.turbomind.linear_attn.benchmark import (
+from .benchmark import (
     BenchmarkRequest,
     BenchmarkTask,
     apply_cp_pattern,
@@ -12,14 +12,14 @@ from tests.turbomind.linear_attn.benchmark import (
     diff_metrics,
     enforce_cp_intent,
 )
-from tests.turbomind.linear_attn.cases import (
+from .cases import (
     Fixed,
     InputTensors,
     RunCase,
     make_packed_qkv_views,
     make_state_buffer,
 )
-from tests.turbomind.linear_attn.reference import (
+from .reference import (
     chunk_gated_delta_rule_fwd as reference_chunk_gated_delta_rule_fwd,
 )
 

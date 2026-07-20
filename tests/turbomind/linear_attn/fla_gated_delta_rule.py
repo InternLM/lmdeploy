@@ -7,12 +7,12 @@ os.environ['FLA_INTRACARD_CP'] = '0'
 
 import torch
 
-from tests.turbomind.linear_attn.benchmark import (
+from .benchmark import (
     BenchmarkRequest,
     BenchmarkTask,
     diff_metrics,
 )
-from tests.turbomind.linear_attn.cases import InputTensors, RunCase
+from .cases import InputTensors, RunCase
 
 CHUNK_SIZE = 64
 SCALE = 128 ** -0.5
@@ -67,8 +67,8 @@ def validate_benchmark_case(run: RunCase, request: BenchmarkRequest) -> None:
 
 def make_benchmark_task(run: RunCase, inputs: InputTensors, request: BenchmarkRequest,
                         device: torch.device) -> BenchmarkTask:
-    from tests.turbomind.linear_attn.benchmark import base_row
-    from tests.turbomind.linear_attn.reference import chunk_gated_delta_rule_fwd
+    from .benchmark import base_row
+    from .reference import chunk_gated_delta_rule_fwd
 
     validate_benchmark_case(run, request)
 

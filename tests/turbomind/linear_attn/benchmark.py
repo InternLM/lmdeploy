@@ -10,7 +10,7 @@ from types import ModuleType, SimpleNamespace
 
 import torch
 
-from tests.turbomind.linear_attn.cases import (
+from .cases import (
     Fixed,
     Heads,
     InputCase,
@@ -795,10 +795,10 @@ def select_runs(request: SuiteRequest, families: CaseFamilies) -> tuple[RunCase,
 
 
 BACKEND_MODULES = {
-    'reference': 'tests.turbomind.linear_attn.reference',
-    'turbomind': 'tests.turbomind.linear_attn.turbomind_gated_delta_rule',
-    'fla': 'tests.turbomind.linear_attn.fla_gated_delta_rule',
-    'flashqla': 'tests.turbomind.linear_attn.flashqla_gated_delta_rule',
+    'reference': '.reference',
+    'turbomind': '.turbomind_gated_delta_rule',
+    'fla': '.fla_gated_delta_rule',
+    'flashqla': '.flashqla_gated_delta_rule',
 }
 
 
@@ -819,7 +819,7 @@ def get_backend_module(name: str) -> ModuleType:
         module_name = BACKEND_MODULES[name]
     except KeyError as exc:
         raise ValueError(f'unsupported backend {name}') from exc
-    return importlib.import_module(module_name)
+    return importlib.import_module(module_name, package=__package__)
 
 
 def unavailable_row(run: RunCase, request: BenchmarkRequest) -> dict[str, object]:

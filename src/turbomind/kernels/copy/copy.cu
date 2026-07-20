@@ -46,10 +46,21 @@ auto make_cute_stride(const ssize_t* data)
 
 // Construct vec_factors tuple: (kVec, 1, 1, ...) — used for element coord scaling.
 // Dim 0 (innermost) scales by kVec; all other dims scale by 1.
+template<int kVec, size_t I>
+auto make_vec_factor()
+{
+    if constexpr (I == 0) {
+        return Int<kVec>{};
+    }
+    else {
+        return Int<1>{};
+    }
+}
+
 template<int kVec, int kRank, size_t... Is>
 auto make_vec_factors_impl(std::index_sequence<Is...>)
 {
-    return make_shape((Is == 0 ? Int<kVec>{} : Int<1>{})...);
+    return make_shape(make_vec_factor<kVec, Is>()...);
 }
 
 template<int kVec, int kRank>

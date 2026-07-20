@@ -5,8 +5,8 @@ import math
 import torch
 import torch.nn.functional as F
 
-from tests.turbomind.linear_attn.benchmark import BenchmarkRequest, BenchmarkTask, diff_metrics
-from tests.turbomind.linear_attn.cases import InputTensors, RunCase
+from .benchmark import BenchmarkRequest, BenchmarkTask, diff_metrics
+from .cases import InputTensors, RunCase
 
 HEAD_DIM = 128
 CHUNK_SIZE = 64
@@ -427,7 +427,7 @@ def is_available() -> bool:
 
 def make_benchmark_task(run: RunCase, inputs: InputTensors, request: BenchmarkRequest,
                         device: torch.device) -> BenchmarkTask:
-    from tests.turbomind.linear_attn.benchmark import base_row
+    from .benchmark import base_row
 
     def execute():
         return chunk_gated_delta_rule_fwd(

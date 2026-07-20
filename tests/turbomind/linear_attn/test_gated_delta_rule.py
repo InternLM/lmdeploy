@@ -3,8 +3,8 @@ from dataclasses import replace
 import pytest
 import torch
 
-from tests.turbomind.linear_attn import turbomind_gated_delta_rule
-from tests.turbomind.linear_attn.benchmark import (
+from . import turbomind_gated_delta_rule
+from .benchmark import (
     CP_FALLBACK_SEGMENT_LOG_DECAY,
     SuiteRequest,
     apply_cp_pattern,
@@ -13,7 +13,7 @@ from tests.turbomind.linear_attn.benchmark import (
     select_runs,
     validate_cp_request,
 )
-from tests.turbomind.linear_attn.cases import (
+from .cases import (
     Fixed,
     Heads,
     InputCase,
@@ -25,7 +25,7 @@ from tests.turbomind.linear_attn.cases import (
     make_packed_qkv_views,
     make_state_buffer,
 )
-from tests.turbomind.linear_attn.reference import chunk_gated_delta_rule_fwd
+from .reference import chunk_gated_delta_rule_fwd
 
 cuda_required = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required for native delta-rule tests')
 
