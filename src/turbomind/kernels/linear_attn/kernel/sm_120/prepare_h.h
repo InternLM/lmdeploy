@@ -995,26 +995,30 @@ __global__ __launch_bounds__(
                                                                    int64_t beta_stride,
                                                                    int64_t beta_batch_stride)
 {
-    extern __shared__ __align__(1024) unsigned char smem_raw[];
-    Sm120FusedGdrH<T, BlockDv>::Run(tma_desc_workspace,
-                                    segment_state,
-                                    segment_m,
-                                    g_cumsum,
-                                    beta,
-                                    q_offsets,
-                                    cp_source_indices,
-                                    cp_q_offsets,
-                                    cp_finished,
-                                    cp_fallback,
-                                    sequence_num,
-                                    token_num,
-                                    hq,
-                                    hv,
-                                    gate_stride,
-                                    gate_batch_stride,
-                                    beta_stride,
-                                    beta_batch_stride,
-                                    smem_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        extern __shared__ __align__(1024) unsigned char smem_raw[];
+        Sm120FusedGdrH<T, BlockDv>::Run(tma_desc_workspace,
+                                        segment_state,
+                                        segment_m,
+                                        g_cumsum,
+                                        beta,
+                                        q_offsets,
+                                        cp_source_indices,
+                                        cp_q_offsets,
+                                        cp_finished,
+                                        cp_fallback,
+                                        sequence_num,
+                                        token_num,
+                                        hq,
+                                        hv,
+                                        gate_stride,
+                                        gate_batch_stride,
+                                        beta_stride,
+                                        beta_batch_stride,
+                                        smem_raw);
+    }
+#endif
 }
 
 template<int BlockDv>

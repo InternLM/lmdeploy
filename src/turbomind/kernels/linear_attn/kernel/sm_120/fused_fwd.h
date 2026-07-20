@@ -1086,33 +1086,37 @@ __global__
                                                                   int64_t k_token_stride,
                                                                   int64_t k_head_stride)
 {
-    extern __shared__ __align__(1024) unsigned char smem_raw[];
-    Sm120FusedGdrFwd<T, StateT, BlockDv, ContextParallel>::Run(tma_desc_workspace,
-                                                               q_global,
-                                                               k_global,
-                                                               beta,
-                                                               q_offsets,
-                                                               finished,
-                                                               data_q_offsets,
-                                                               cp_source_indices,
-                                                               cp_state_ptrs,
-                                                               state_ptrs,
-                                                               state_layer_offset,
-                                                               data_sequence_num,
-                                                               token_num,
-                                                               hq,
-                                                               hv,
-                                                               num_head_groups,
-                                                               heads_per_block,
-                                                               beta_stride,
-                                                               beta_batch_stride,
-                                                               q_batch_stride,
-                                                               q_token_stride,
-                                                               q_head_stride,
-                                                               k_batch_stride,
-                                                               k_token_stride,
-                                                               k_head_stride,
-                                                               smem_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        extern __shared__ __align__(1024) unsigned char smem_raw[];
+        Sm120FusedGdrFwd<T, StateT, BlockDv, ContextParallel>::Run(tma_desc_workspace,
+                                                                   q_global,
+                                                                   k_global,
+                                                                   beta,
+                                                                   q_offsets,
+                                                                   finished,
+                                                                   data_q_offsets,
+                                                                   cp_source_indices,
+                                                                   cp_state_ptrs,
+                                                                   state_ptrs,
+                                                                   state_layer_offset,
+                                                                   data_sequence_num,
+                                                                   token_num,
+                                                                   hq,
+                                                                   hv,
+                                                                   num_head_groups,
+                                                                   heads_per_block,
+                                                                   beta_stride,
+                                                                   beta_batch_stride,
+                                                                   q_batch_stride,
+                                                                   q_token_stride,
+                                                                   q_head_stride,
+                                                                   k_batch_stride,
+                                                                   k_token_stride,
+                                                                   k_head_stride,
+                                                                   smem_raw);
+    }
+#endif
 }
 
 template<class StateT, int BlockDv, bool ContextParallel>

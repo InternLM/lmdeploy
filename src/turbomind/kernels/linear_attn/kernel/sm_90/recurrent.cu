@@ -955,28 +955,32 @@ __global__ __launch_bounds__(
                                                                       int64_t state_layer_offset,
                                                                       int     state_layer)
 {
-    extern __shared__ __align__(1024) unsigned char smem_raw[];
-    Sm90GdrRecurrent<BlockDv, StateT>::Run(&q_tma_desc,
-                                           &k_tma_desc,
-                                           &v_tma_desc,
-                                           out,
-                                           g,
-                                           beta,
-                                           finished,
-                                           state_ptrs,
-                                           state_tma_descs,
-                                           total_tiles,
-                                           batch_count,
-                                           hq,
-                                           hv,
-                                           gate_batch_stride,
-                                           out_batch_stride,
-                                           out_head_stride,
-                                           num_head_groups,
-                                           heads_per_block,
-                                           state_layer_offset,
-                                           state_layer,
-                                           smem_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
+        extern __shared__ __align__(1024) unsigned char smem_raw[];
+        Sm90GdrRecurrent<BlockDv, StateT>::Run(&q_tma_desc,
+                                               &k_tma_desc,
+                                               &v_tma_desc,
+                                               out,
+                                               g,
+                                               beta,
+                                               finished,
+                                               state_ptrs,
+                                               state_tma_descs,
+                                               total_tiles,
+                                               batch_count,
+                                               hq,
+                                               hv,
+                                               gate_batch_stride,
+                                               out_batch_stride,
+                                               out_head_stride,
+                                               num_head_groups,
+                                               heads_per_block,
+                                               state_layer_offset,
+                                               state_layer,
+                                               smem_raw);
+    }
+#endif
 }
 
 template<int BlockDv, class StateT>
@@ -1094,25 +1098,29 @@ __global__ __launch_bounds__(32,
                                                                     int          sequence_count,
                                                                     int          num_head_groups)
 {
-    __shared__ __align__(128) CUtensorMap smem_descriptor;
-    const int                             linear        = static_cast<int>(blockIdx.x);
-    const int                             lane          = static_cast<int>(threadIdx.x);
-    const int                             head_group    = linear % num_head_groups;
-    const int                             sequence      = (linear / num_head_groups) % sequence_count;
-    const int                             layer_group   = linear / (sequence_count * num_head_groups);
-    const int64_t                         pointer_index = static_cast<int64_t>(layer_group) * layer_group_stride
-                                  + static_cast<int64_t>(sequence) * sequence_stride
-                                  + static_cast<int64_t>(head_group) * head_group_stride;
-    CopyTmaDescriptor(&smem_descriptor, &state_tma_desc, lane, 32);
-    __syncwarp();
-    if (lane == 0) {
-        auto* state_base = reinterpret_cast<StateT*>(static_cast<uintptr_t>(addresses[pointer_index]));
-        ReplaceTmaAddress(&smem_descriptor, state_base);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
+        __shared__ __align__(128) CUtensorMap smem_descriptor;
+        const int                             linear        = static_cast<int>(blockIdx.x);
+        const int                             lane          = static_cast<int>(threadIdx.x);
+        const int                             head_group    = linear % num_head_groups;
+        const int                             sequence      = (linear / num_head_groups) % sequence_count;
+        const int                             layer_group   = linear / (sequence_count * num_head_groups);
+        const int64_t                         pointer_index = static_cast<int64_t>(layer_group) * layer_group_stride
+                                      + static_cast<int64_t>(sequence) * sequence_stride
+                                      + static_cast<int64_t>(head_group) * head_group_stride;
+        CopyTmaDescriptor(&smem_descriptor, &state_tma_desc, lane, 32);
+        __syncwarp();
+        if (lane == 0) {
+            auto* state_base = reinterpret_cast<StateT*>(static_cast<uintptr_t>(addresses[pointer_index]));
+            ReplaceTmaAddress(&smem_descriptor, state_base);
+        }
+        __syncwarp();
+        PublishTmaDescriptor(&descriptors[linear], &smem_descriptor);
+        __syncwarp();
+        cute::tma_descriptor_fence_acquire(reinterpret_cast<cute::TmaDescriptor*>(&descriptors[linear]));
     }
-    __syncwarp();
-    PublishTmaDescriptor(&descriptors[linear], &smem_descriptor);
-    __syncwarp();
-    cute::tma_descriptor_fence_acquire(reinterpret_cast<cute::TmaDescriptor*>(&descriptors[linear]));
+#endif
 }
 
 template<int BlockDv, class StateT>

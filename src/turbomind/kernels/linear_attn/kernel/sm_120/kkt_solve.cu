@@ -554,19 +554,23 @@ __global__ void __launch_bounds__(Sm120KktSolve<K, GroupsPerKHead>::kThreads,
                         int64_t      beta_batch_stride,
                         int          groups_per_k_head)
 {
-    extern __shared__ __align__(1024) unsigned char shared_raw[];
-    Sm120KktSolve<K, GroupsPerKHead>::Run(q_offsets,
-                                          finished,
-                                          beta,
-                                          tma_desc_workspace,
-                                          token_num,
-                                          sequence_num,
-                                          hq,
-                                          hv,
-                                          beta_stride,
-                                          beta_batch_stride,
-                                          groups_per_k_head,
-                                          shared_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        extern __shared__ __align__(1024) unsigned char shared_raw[];
+        Sm120KktSolve<K, GroupsPerKHead>::Run(q_offsets,
+                                              finished,
+                                              beta,
+                                              tma_desc_workspace,
+                                              token_num,
+                                              sequence_num,
+                                              hq,
+                                              hv,
+                                              beta_stride,
+                                              beta_batch_stride,
+                                              groups_per_k_head,
+                                              shared_raw);
+    }
+#endif
 }
 
 template<class K, int GroupsPerKHead>

@@ -1340,28 +1340,32 @@ __global__
                                                                  int     num_head_groups,
                                                                  int     heads_per_block)
 {
-    extern __shared__ __align__(1024) unsigned char smem_raw[];
-    Sm90FusedGdrFwd<T, StateT, BlockDv, ContextParallel>::Run(tma_desc_workspace,
-                                                              g_cumsum,
-                                                              beta,
-                                                              gate_batch_stride,
-                                                              gate_stride,
-                                                              beta_batch_stride,
-                                                              beta_stride,
-                                                              token_num,
-                                                              q_offsets,
-                                                              finished,
-                                                              data_q_offsets,
-                                                              cp_source_indices,
-                                                              cp_state_ptrs,
-                                                              state_ptrs,
-                                                              state_layer_offset,
-                                                              data_sequence_num,
-                                                              hq,
-                                                              hv,
-                                                              num_head_groups,
-                                                              heads_per_block,
-                                                              smem_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
+        extern __shared__ __align__(1024) unsigned char smem_raw[];
+        Sm90FusedGdrFwd<T, StateT, BlockDv, ContextParallel>::Run(tma_desc_workspace,
+                                                                  g_cumsum,
+                                                                  beta,
+                                                                  gate_batch_stride,
+                                                                  gate_stride,
+                                                                  beta_batch_stride,
+                                                                  beta_stride,
+                                                                  token_num,
+                                                                  q_offsets,
+                                                                  finished,
+                                                                  data_q_offsets,
+                                                                  cp_source_indices,
+                                                                  cp_state_ptrs,
+                                                                  state_ptrs,
+                                                                  state_layer_offset,
+                                                                  data_sequence_num,
+                                                                  hq,
+                                                                  hv,
+                                                                  num_head_groups,
+                                                                  heads_per_block,
+                                                                  smem_raw);
+    }
+#endif
 }
 
 template<class StateT, int BlockDv, bool ContextParallel>

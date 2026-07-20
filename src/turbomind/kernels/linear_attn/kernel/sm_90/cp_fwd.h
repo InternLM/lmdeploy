@@ -394,20 +394,24 @@ __global__ __launch_bounds__(
                                                         int     heads_per_block,
                                                         int     sequence_num)
 {
-    extern __shared__ __align__(1024) unsigned char smem_raw[];
-    Sm90CorrectInitialStates<StateT, BlockDv>::Run(tma_desc_workspace,
-                                                   state_ptrs,
-                                                   cp_sequence_starts,
-                                                   finished,
-                                                   cp_fallback,
-                                                   segment_state,
-                                                   segment_m,
-                                                   cp_state_base,
-                                                   state_layer_offset,
-                                                   num_head_groups,
-                                                   heads_per_block,
-                                                   sequence_num,
-                                                   smem_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
+        extern __shared__ __align__(1024) unsigned char smem_raw[];
+        Sm90CorrectInitialStates<StateT, BlockDv>::Run(tma_desc_workspace,
+                                                       state_ptrs,
+                                                       cp_sequence_starts,
+                                                       finished,
+                                                       cp_fallback,
+                                                       segment_state,
+                                                       segment_m,
+                                                       cp_state_base,
+                                                       state_layer_offset,
+                                                       num_head_groups,
+                                                       heads_per_block,
+                                                       sequence_num,
+                                                       smem_raw);
+    }
+#endif
 }
 
 template<class StateT, int BlockDv>

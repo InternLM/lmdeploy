@@ -274,21 +274,25 @@ __global__ void ParallelChunkLocalCumsumKernel(const float* __restrict__ g,
                                                int64_t output_gate_stride,
                                                int64_t output_gate_batch_stride)
 {
-    Sm120ChunkLocalCumsum<ChunkSize>::Run(g,
-                                          q_offsets,
-                                          g_cumsum,
-                                          sequence_num,
-                                          token_num,
-                                          hv,
-                                          input_gate_stride,
-                                          input_gate_batch_stride,
-                                          output_gate_stride,
-                                          output_gate_batch_stride,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        Sm120ChunkLocalCumsum<ChunkSize>::Run(g,
+                                              q_offsets,
+                                              g_cumsum,
+                                              sequence_num,
+                                              token_num,
+                                              hv,
+                                              input_gate_stride,
+                                              input_gate_batch_stride,
+                                              output_gate_stride,
+                                              output_gate_batch_stride,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr);
+    }
+#endif
 }
 
 template<int ChunkSize>
@@ -308,24 +312,28 @@ __global__ void ParallelChunkLocalCumsumAndPrepareDirectKernel(
     CUtensorMap*                                                                             kkt_desc_workspace,
     CUtensorMap*                                                                             fused_desc_workspace)
 {
-    using Kernel            = Sm120ChunkLocalCumsum<ChunkSize, true>;
-    using DescriptorPrepare = typename Kernel::DescriptorPrepare;
-    __shared__ __align__(128) CUtensorMap descriptor_stage[DescriptorPrepare::kFusedGdrDataDescCount];
-    Sm120ChunkLocalCumsum<ChunkSize, true>::Run(g,
-                                                q_offsets,
-                                                g_cumsum,
-                                                sequence_num,
-                                                token_num,
-                                                hv,
-                                                input_gate_stride,
-                                                input_gate_batch_stride,
-                                                output_gate_stride,
-                                                output_gate_batch_stride,
-                                                &descriptor_templates,
-                                                &descriptor_bases,
-                                                kkt_desc_workspace,
-                                                fused_desc_workspace,
-                                                descriptor_stage);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        using Kernel            = Sm120ChunkLocalCumsum<ChunkSize, true>;
+        using DescriptorPrepare = typename Kernel::DescriptorPrepare;
+        __shared__ __align__(128) CUtensorMap descriptor_stage[DescriptorPrepare::kFusedGdrDataDescCount];
+        Sm120ChunkLocalCumsum<ChunkSize, true>::Run(g,
+                                                    q_offsets,
+                                                    g_cumsum,
+                                                    sequence_num,
+                                                    token_num,
+                                                    hv,
+                                                    input_gate_stride,
+                                                    input_gate_batch_stride,
+                                                    output_gate_stride,
+                                                    output_gate_batch_stride,
+                                                    &descriptor_templates,
+                                                    &descriptor_bases,
+                                                    kkt_desc_workspace,
+                                                    fused_desc_workspace,
+                                                    descriptor_stage);
+    }
+#endif
 }
 
 template<int ChunkSize>

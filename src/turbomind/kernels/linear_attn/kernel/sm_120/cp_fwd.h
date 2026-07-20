@@ -109,17 +109,21 @@ __global__ void Sm120CorrectInitialStatesKernel(float* __restrict__ cp_state,
                                                 int     sequence_num,
                                                 int     hv)
 {
-    Sm120CorrectInitialStates<StateT>::Run(cp_state,
-                                           segment_state,
-                                           segment_m,
-                                           cp_fallback,
-                                           cp_sequence_starts,
-                                           state_ptrs,
-                                           state_layer_offset,
-                                           num_head_groups,
-                                           heads_per_block,
-                                           sequence_num,
-                                           hv);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        Sm120CorrectInitialStates<StateT>::Run(cp_state,
+                                               segment_state,
+                                               segment_m,
+                                               cp_fallback,
+                                               cp_sequence_starts,
+                                               state_ptrs,
+                                               state_layer_offset,
+                                               num_head_groups,
+                                               heads_per_block,
+                                               sequence_num,
+                                               hv);
+    }
+#endif
 }
 
 template<class StateT>

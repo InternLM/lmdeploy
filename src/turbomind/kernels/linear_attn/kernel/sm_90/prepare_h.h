@@ -888,26 +888,30 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
     int64_t beta_stride,
     int64_t beta_batch_stride)
 {
-    extern __shared__ __align__(1024) unsigned char smem_raw[];
-    Sm90FusedGdrH<T>::Run(tma_desc_workspace,
-                          g_cumsum,
-                          beta,
-                          segment_state,
-                          segment_m,
-                          q_offsets,
-                          cp_source_indices,
-                          cp_q_offsets,
-                          cp_finished,
-                          cp_fallback,
-                          token_num,
-                          sequence_num,
-                          hq,
-                          hv,
-                          gate_stride,
-                          gate_batch_stride,
-                          beta_stride,
-                          beta_batch_stride,
-                          smem_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
+        extern __shared__ __align__(1024) unsigned char smem_raw[];
+        Sm90FusedGdrH<T>::Run(tma_desc_workspace,
+                              g_cumsum,
+                              beta,
+                              segment_state,
+                              segment_m,
+                              q_offsets,
+                              cp_source_indices,
+                              cp_q_offsets,
+                              cp_finished,
+                              cp_fallback,
+                              token_num,
+                              sequence_num,
+                              hq,
+                              hv,
+                              gate_stride,
+                              gate_batch_stride,
+                              beta_stride,
+                              beta_batch_stride,
+                              smem_raw);
+    }
+#endif
 }
 
 void SetFusedGdrHSharedMemoryLimit(size_t smem_bytes)

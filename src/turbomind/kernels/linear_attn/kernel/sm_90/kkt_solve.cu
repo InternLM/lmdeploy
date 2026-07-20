@@ -1032,19 +1032,23 @@ __global__ void __launch_bounds__(Sm90KktSolve<K, ConsumerThreads, ConsumerRegis
                        int64_t      beta_batch_stride,
                        int          groups_per_k_head)
 {
-    extern __shared__ __align__(1024) unsigned char shared_raw[];
-    Sm90KktSolve<K, ConsumerThreads, ConsumerRegisters>::Run(beta,
-                                                             q_offsets,
-                                                             finished,
-                                                             tma_desc_workspace,
-                                                             total_tokens,
-                                                             sequence_num,
-                                                             hq,
-                                                             hv,
-                                                             beta_stride,
-                                                             beta_batch_stride,
-                                                             groups_per_k_head,
-                                                             shared_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
+        extern __shared__ __align__(1024) unsigned char shared_raw[];
+        Sm90KktSolve<K, ConsumerThreads, ConsumerRegisters>::Run(beta,
+                                                                 q_offsets,
+                                                                 finished,
+                                                                 tma_desc_workspace,
+                                                                 total_tokens,
+                                                                 sequence_num,
+                                                                 hq,
+                                                                 hv,
+                                                                 beta_stride,
+                                                                 beta_batch_stride,
+                                                                 groups_per_k_head,
+                                                                 shared_raw);
+    }
+#endif
 }
 
 template<class K, int ConsumerThreads = 128, int ConsumerRegisters = 160>

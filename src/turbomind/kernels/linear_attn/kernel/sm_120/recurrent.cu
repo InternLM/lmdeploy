@@ -670,26 +670,30 @@ __global__ __launch_bounds__(
                                                                         int     heads_per_block,
                                                                         int     state_layer)
 {
-    extern __shared__ __align__(1024) unsigned char smem_raw[];
-    Sm120GdrRecurrent<BlockDv, StateT>::Run(q_tma_desc,
-                                            k_tma_desc,
-                                            v_tma_desc,
-                                            out,
-                                            g,
-                                            beta,
-                                            finished,
-                                            state_tma_descs,
-                                            total_tiles,
-                                            batch_count,
-                                            hq,
-                                            hv,
-                                            gate_batch_stride,
-                                            out_batch_stride,
-                                            out_head_stride,
-                                            num_head_groups,
-                                            heads_per_block,
-                                            state_layer,
-                                            smem_raw);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        extern __shared__ __align__(1024) unsigned char smem_raw[];
+        Sm120GdrRecurrent<BlockDv, StateT>::Run(q_tma_desc,
+                                                k_tma_desc,
+                                                v_tma_desc,
+                                                out,
+                                                g,
+                                                beta,
+                                                finished,
+                                                state_tma_descs,
+                                                total_tiles,
+                                                batch_count,
+                                                hq,
+                                                hv,
+                                                gate_batch_stride,
+                                                out_batch_stride,
+                                                out_head_stride,
+                                                num_head_groups,
+                                                heads_per_block,
+                                                state_layer,
+                                                smem_raw);
+    }
+#endif
 }
 
 template<int BlockDv, class StateT>
@@ -752,16 +756,20 @@ __global__ __launch_bounds__(
                                                                                           int          sequence_count,
                                                                                           int          num_head_groups)
 {
-    __shared__ __align__(128) CUtensorMap smem_descriptor;
-    Sm120GroupedStateDescPrepare<StateT>::Run(state_tma_desc,
-                                              addresses,
-                                              layer_group_stride,
-                                              sequence_stride,
-                                              head_group_stride,
-                                              descriptors,
-                                              sequence_count,
-                                              num_head_groups,
-                                              &smem_descriptor);
+#if __CUDA_ARCH__
+    if constexpr (__CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300) {
+        __shared__ __align__(128) CUtensorMap smem_descriptor;
+        Sm120GroupedStateDescPrepare<StateT>::Run(state_tma_desc,
+                                                  addresses,
+                                                  layer_group_stride,
+                                                  sequence_stride,
+                                                  head_group_stride,
+                                                  descriptors,
+                                                  sequence_count,
+                                                  num_head_groups,
+                                                  &smem_descriptor);
+    }
+#endif
 }
 
 template<class StateT>
