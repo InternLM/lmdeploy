@@ -112,8 +112,8 @@ def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
     bl_gbps = total_bytes * ITERS / (bl_ms * 1e6)
 
     pct = gc_gbps / pt_gbps * 100 if pt_gbps > 0 else 0
-    print(f"         GenericCopy: {gc_gbps:.1f} GB/s | PyTorch: {pt_gbps:.1f} GB/s | "
-          f"Contiguous: {bl_gbps:.1f} GB/s ({pct:.1f}% of PyTorch)")
+    print(f'         GenericCopy: {gc_gbps:.1f} GB/s | PyTorch: {pt_gbps:.1f} GB/s | '
+          f'Contiguous: {bl_gbps:.1f} GB/s ({pct:.1f}% of PyTorch)')
     return gc_gbps, pt_gbps, pct
 
 
@@ -133,12 +133,12 @@ def run_test(name, torch_tensor):
     status = 'PASS' if match else 'FAIL'
     shape = list(torch_tensor.shape)
     stride = list(torch_tensor.stride())
-    print(f"  [{status}] {name}: shape={shape}, stride={stride}")
+    print(f'  [{status}] {name}: shape={shape}, stride={stride}')
 
     if not match:
         mismatches = (result != golden).sum().item()
         total = result.numel()
-        print(f"         mismatches={mismatches}/{total}")
+        print(f'         mismatches={mismatches}/{total}')
 
     if match:
         bench = benchmark_copy(name, tm_src, tm_dst, torch_tensor)
@@ -156,7 +156,7 @@ def main():
 
     DTYPE = DTYPE_MAP[args.dtype]
 
-    print(f"GenericCopy Test Suite — dtype={args.dtype}")
+    print(f'GenericCopy Test Suite — dtype={args.dtype}')
     print('=' * 60)
 
     all_passed = True
@@ -229,11 +229,11 @@ def main():
     sweep_trans = []
     for n in [1024, 2048, 4096, 8192, 16384]:
         numel = n * n
-        size_label = f"{numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"{numel // 1024}K"
-        shape_label = f"{n}x{n}"
+        size_label = f'{numel // (1024 * 1024)}M' if numel >= 1024 * 1024 else f'{numel // 1024}K'
+        shape_label = f'{n}x{n}'
 
         total += 1
-        ok, bench = run_test(f"contig {size_label} ({shape_label})", _rand(n, n))
+        ok, bench = run_test(f'contig {size_label} ({shape_label})', _rand(n, n))
         if ok:
             passed += 1
             sweep_contig.append((shape_label, *bench))
@@ -241,7 +241,7 @@ def main():
             all_passed = False
 
         total += 1
-        ok, bench = run_test(f"trans  {size_label} ({shape_label})", _rand(n, n).t())
+        ok, bench = run_test(f'trans  {size_label} ({shape_label})', _rand(n, n).t())
         if ok:
             passed += 1
             sweep_trans.append((shape_label, *bench))
@@ -252,11 +252,11 @@ def main():
     sweep_batched = []
     for (b_, m, n) in [(8, 1024, 1024), (32, 512, 512), (8, 4096, 128)]:
         numel = b_ * m * n
-        size_label = f"{numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"{numel // 1024}K"
-        shape_label = f"{b_}x{m}x{n}"
+        size_label = f'{numel // (1024 * 1024)}M' if numel >= 1024 * 1024 else f'{numel // 1024}K'
+        shape_label = f'{b_}x{m}x{n}'
 
         total += 1
-        ok, bench = run_test(f"batched-trans {size_label} ({shape_label})",
+        ok, bench = run_test(f'batched-trans {size_label} ({shape_label})',
                              _rand(b_, m, n).transpose(1, 2))
         if ok:
             passed += 1
@@ -265,31 +265,31 @@ def main():
             all_passed = False
 
     # --- Throughput summary table ---
-    print(f"\n{'=' * 60}")
-    print(f"Throughput Summary (dtype={args.dtype}, GB/s):")
-    print(f"  {'Shape':<14} {'GenericCopy':>12} {'PyTorch':>12} {'%PT':>8}")
-    print(f"  {'-' * 14} {'-' * 12} {'-' * 12} {'-' * 8}")
+    print(f'\n{"=" * 60}')
+    print(f'Throughput Summary (dtype={args.dtype}, GB/s):')
+    print(f'  {"Shape":<14} {"GenericCopy":>12} {"PyTorch":>12} {"%PT":>8}')
+    print(f'  {"-" * 14} {"-" * 12} {"-" * 12} {"-" * 8}')
     print('  Contiguous:')
     for shape, gc, pt, pct in sweep_contig:
-        print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
+        print(f'  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%')
     print('  Transpose:')
     for shape, gc, pt, pct in sweep_trans:
-        print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
+        print(f'  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%')
     print('  Batched transpose:')
     for shape, gc, pt, pct in sweep_batched:
-        print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
+        print(f'  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%')
 
     # --- Negative strides ---
     print('\nNegative strides (flip):')
     try:
         check('flip dim=0', _rand(32, 64).flip(0))
     except Exception as e:
-        print(f"  [SKIP] flip dim=0: {e}")
+        print(f'  [SKIP] flip dim=0: {e}')
         total += 1
 
     # --- Summary ---
-    print(f"\n{'=' * 60}")
-    print(f"Results: {passed}/{total} passed")
+    print(f'\n{"=" * 60}')
+    print(f'Results: {passed}/{total} passed')
     if all_passed:
         print('ALL TESTS PASSED')
     else:
