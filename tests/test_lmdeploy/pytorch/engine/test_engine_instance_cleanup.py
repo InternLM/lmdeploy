@@ -23,6 +23,9 @@ class _FakeReqSender:
             return resps.pop(0)
         return _response(ResponseType.SUCCESS)
 
+    async def async_send(self, req_type, data):
+        return self.send_async(req_type, data)
+
     async def async_recv(self, resp, wait_main=True):
         return self.responses.pop(0)
 
@@ -70,7 +73,7 @@ def test_engine_instance_ends_session_after_finish():
     outputs = asyncio.run(_consume(instance.async_stream_infer(7, [1, 2])))
 
     assert outputs[-1].status == ResponseType.FINISH
-    assert (RequestType.END_SESSION, {'session_id': 7, 'response': False}) in req_sender.sent_async
+    assert (RequestType.END_SESSION, {'session_id': 7}) in req_sender.sent_async
 
 
 def test_engine_instance_ends_session_when_generator_is_closed():
@@ -92,7 +95,7 @@ def test_engine_instance_ends_session_when_generator_is_closed():
     first = asyncio.run(_run())
 
     assert first.status == ResponseType.SUCCESS
-    assert (RequestType.END_SESSION, {'session_id': 8, 'response': False}) in req_sender.sent_async
+    assert (RequestType.END_SESSION, {'session_id': 8}) in req_sender.sent_async
 
 
 def test_engine_instance_input_length_error_does_not_touch_backend_session():

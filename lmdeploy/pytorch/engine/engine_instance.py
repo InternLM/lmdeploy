@@ -365,7 +365,17 @@ class EngineInstance(EngineInstanceBase):
 
     async def async_end(self, session_id: int):
         """End the given session."""
-        return end(self.req_sender, session_id)
+        logger.debug(f'session[{session_id}] try end session.')
+        resp = await self.req_sender.async_send(
+            RequestType.END_SESSION,
+            dict(session_id=session_id),
+        )
+        _check_resp(
+            resp,
+            [ResponseType.SUCCESS, ResponseType.SESSION_NOT_EXIST],
+            f'Failed to end session {session_id}: {resp.type}',
+        )
+        return resp.type
 
     def end(self, session_id: int):
         """End the given session."""

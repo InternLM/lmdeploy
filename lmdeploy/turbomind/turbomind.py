@@ -712,7 +712,6 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            stop (bool): indicator for cancelling the session
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
