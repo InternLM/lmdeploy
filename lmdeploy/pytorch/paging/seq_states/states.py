@@ -16,6 +16,7 @@ def _free_seq(seq: SchedulerSequence, scheduler: 'Scheduler'):
         seq.prefix_cache.match_start_step = -1
         seq.prefix_cache.private_recompute_start_step = -1
         seq.prefix_cache.private_recompute_end_step = -1
+        seq.prefix_cache.private_recompute_trie_blocks.clear()
     seq.cached_tokens = 0
     seq.kv_token_limit = None
     if seq.num_blocks > 0:

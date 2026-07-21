@@ -544,6 +544,7 @@ class Scheduler:
         prefix_cache.match_start_step = -1
         prefix_cache.private_recompute_start_step = -1
         prefix_cache.private_recompute_end_step = -1
+        prefix_cache.private_recompute_trie_blocks.clear()
         seq.cached_tokens = 0
 
     def _rollback_prefix_match_for_prefill_gate(self, seq: SchedulerSequence, stats_snapshot, reason: str):

@@ -51,9 +51,9 @@ SSM checkpoint detail:
   Abandoned reservations are discarded.
 * Matching a SSM prefix never walks KV blocks as the source of truth.
   ``_match_state_checkpoint()`` searches ready checkpoint steps, filters by
-  ``(adapter, step, last_block_hash)``, then verifies every ancestor block's
-  tokens and multimodal extra hashes before mutating the sequence.  A hit
-  appends trie-owned KV blocks, advances ``seq.num_history_ids``, records
+  ``(adapter, step, last_block_hash)``, then proves the complete prefix against
+  immutable exact-match metadata built when the checkpoint is published.  A
+  hit appends trie-owned KV blocks, advances ``seq.num_history_ids``, records
   ``restore_state``/``restore_node``, and may replay routed experts.
 * Restore is two-phase.  The scheduler/input maker pins the ready checkpoint by
   incrementing ``state_ref_count``.  ``ModelAgent`` copies
@@ -65,12 +65,10 @@ SSM checkpoint detail:
   an exact ready SSM checkpoint is intentionally a miss.
 """
 
-import enum
 import heapq
 import logging
 import time
 from dataclasses import dataclass
-from typing import TypeAlias
 
 import numpy as np
 
@@ -79,6 +77,14 @@ from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig
 from .block_manager import BaseBlockManager
+from .prefix_cache_checkpoint import (
+    StateCheckpointIndex,
+    StateCheckpointMatchData,
+    StateCheckpointVerifyStatus,
+    freeze_state_checkpoint_match_data,
+    make_node_multimodal_identity,
+    make_request_multimodal_identity,
+)
 
 logger = get_logger('lmdeploy')
 
@@ -101,14 +107,6 @@ class PrefixCacheStats:
         return 0.0 if self.num_query_tokens <= 0 else float(self.num_hit_tokens) / self.num_query_tokens
 
 
-class StateCheckpointVerifyStatus(enum.Enum):
-    """Outcome of sparse SSM checkpoint verification."""
-    HIT = enum.auto()
-    REQUEST_MISMATCH = enum.auto()
-    STALE_INDEX_ENTRY = enum.auto()
-    STALE_CHECKPOINT = enum.auto()
-
-
 class Node:
     """One full-token-block edge in the prefix-cache trie.
 
@@ -117,13 +115,23 @@ class Node:
     carries VLM content identity for blocks that overlap multimodal spans.
 
     The same node may also own an optional SSM checkpoint.  ``state_idx`` is
-    the checkpoint slot, ``state_ready`` means the slot has been published and
-    is matchable, and ``state_ref_count`` pins the slot while an async restore
-    may still read it or a producer save may still write it.
+    the checkpoint slot, and ``state_ref_count`` pins the slot while an async
+    restore may still read it or a producer save may still write it.
+    ``state_ready`` together with non-``None`` ``state_match_data`` means the
+    slot has been published and is matchable.  A topology change invalidates
+    ``state_match_data`` immediately; lookup later removes that temporarily
+    stale ready/index entry.
+    ``state_match_data`` caches the immutable host identity and logical KV path
+    used to prove and apply an exact checkpoint hit without repeated Python
+    block scans.
 
     ``parent`` is intentionally stateful: assigning it updates the old and new
-    parent ``children`` maps.  Detached nodes can therefore still exist as
-    stale auxiliary-index entries, but they are no longer trie truth.
+    parent ``children`` maps and invalidates cached checkpoint paths in the
+    moved subtree.  Detached nodes can therefore still exist as stale
+    auxiliary-index entries, but they are no longer trie truth.
+    ``_topology_epoch`` changes during that invalidation;
+    ``state_topology_epoch`` records the version captured by a checkpoint
+    reservation so a path change before publication is also detectable.
     """
 
     def __init__(self,
@@ -147,6 +155,9 @@ class Node:
         self.state_ready = state_ready
         self.state_ref_count = state_ref_count
         self.state_access_time = state_access_time
+        self.state_match_data: StateCheckpointMatchData | None = None
+        self._topology_epoch = 0
+        self.state_topology_epoch = -1
         self.routed_experts = routed_experts
         self.adapter_name = adapter_name
         self.children: dict[int, Node] = dict()
@@ -159,31 +170,33 @@ class Node:
     @parent.setter
     def parent(self, val: 'Node'):
         old_parent = self._parent
-        if old_parent is not None:
+        if old_parent is val:
+            return
+        if old_parent is not None and old_parent.children.get(self.hash_key) is self:
             old_parent.children.pop(self.hash_key)
         if val is not None:
+            displaced = val.children.get(self.hash_key)
+            if displaced is not None and displaced is not self:
+                displaced._parent = None
+                displaced._invalidate_state_match_data()
             val.children[self.hash_key] = self
         self._parent = val
+        self._invalidate_state_match_data()
+
+    def _invalidate_state_match_data(self):
+        """Invalidate checkpoint paths affected by moving this subtree."""
+        pending = [self]
+        while pending:
+            node = pending.pop()
+            node._topology_epoch += 1
+            node.state_match_data = None
+            pending.extend(node.children.values())
 
     def __lt__(self, other):
         return True
 
     def __le__(self, other):
         return True
-
-
-StateCheckpointKey: TypeAlias = tuple[str, int, int]
-StateCheckpointIndex: TypeAlias = dict[StateCheckpointKey, list[Node]]
-StateCheckpointSteps: TypeAlias = dict[str, set[int]]
-
-
-@dataclass
-class StateCheckpointVerifyResult:
-    """Verified checkpoint candidate details."""
-    status: StateCheckpointVerifyStatus
-    reason: str = ''
-    matched_blocks: list[int] | None = None
-    matched_nodes: list[Node] | None = None
 
 
 class BlockTrie:
@@ -218,8 +231,7 @@ class BlockTrie:
         self.leaves: set[Node] = set()
         # SSM checkpoints are sparse.  The trie still owns KV blocks, but ready
         # recurrent-state snapshots are indexed only at selected exact steps.
-        self._state_checkpoint_index: StateCheckpointIndex = dict()
-        self._state_checkpoint_steps: StateCheckpointSteps = dict()
+        self._state_checkpoints = StateCheckpointIndex(self.block_size, self._make_key)
         self.stats = PrefixCacheStats()
 
     # Prefix-cache stats and tentative-match rollback helpers.
@@ -374,6 +386,15 @@ class BlockTrie:
 
         seq.append_routed_experts(np.concatenate(expert_slices, axis=0).copy())
 
+    def _append_state_checkpoint_routed_experts(self, seq: SchedulerSequence, node: Node, start: int):
+        """Replay checkpoint-path experts only when the request asks for
+        them."""
+        if not seq.return_routed_experts:
+            return
+        nodes = self._get_node_blocks(node)
+        nodes = nodes[start // self.block_size:]
+        self._append_matched_routed_experts(seq, nodes, start)
+
     def cache_routed_experts_for_seq(self, seq: SchedulerSequence):
         """Enrich attached trie nodes with routed experts from a sequence."""
         if not self.enable or not seq.return_routed_experts:
@@ -392,25 +413,17 @@ class BlockTrie:
         for seq in seqs:
             self.cache_routed_experts_for_seq(seq)
 
-    # Sparse SSM checkpoint index helpers.  The lookup key is only a filter;
-    # `_verify_state_checkpoint_node()` remains the correctness check.
+    # Sparse SSM checkpoint index facade.  The extracted index owns lookup and
+    # exact verification; this class validates trie ownership before mutation.
 
-    def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int) -> StateCheckpointKey:
-        """Make the sparse SSM checkpoint lookup key for a sequence prefix.
-
-        The last block key is only a filter into the sparse index.  Candidate nodes are still verified by walking the
-        full ancestor chain so hash collisions or stale index entries cannot produce a false state hit.
-        """
-        start = step - self.block_size
-        end = step
-        tokens = seq.history_cache[start:end]
-        extra_hashes = self._get_block_extra_hashes(seq, start, end)
-        return (seq.adapter_name, step, self._make_key(tokens, extra_hashes))
+    def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int):
+        """Make the coarse sparse-index key for a request prefix."""
+        return self._state_checkpoints.make_request_key(seq, step)
 
     @staticmethod
-    def _make_state_checkpoint_node_key(node: Node) -> StateCheckpointKey:
-        """Make the sparse SSM checkpoint lookup key for a trie node."""
-        return (node.adapter_name, node.num_matched, node.hash_key)
+    def _make_state_checkpoint_node_key(node: Node):
+        """Make the canonical sparse-index key for a checkpoint node."""
+        return StateCheckpointIndex.make_node_key(node)
 
     def _index_state_checkpoint(self, node: Node):
         """Add a ready state checkpoint to the sparse SSM index."""
@@ -418,45 +431,53 @@ class BlockTrie:
             raise RuntimeError('Cannot index an unready SSM prefix-cache checkpoint.')
         if not self._is_attached_node(node):
             raise RuntimeError('Cannot index a detached SSM prefix-cache checkpoint node.')
-        key = self._make_state_checkpoint_node_key(node)
-        nodes = self._state_checkpoint_index.setdefault(key, [])
-        if not any(indexed_node is node for indexed_node in nodes):
-            nodes.append(node)
-        steps = self._state_checkpoint_steps.setdefault(node.adapter_name, set())
-        steps.add(node.num_matched)
-
-    def _refresh_state_checkpoint_step(self, adapter_name: str, step: int):
-        """Drop an adapter step when no indexed checkpoint still owns it."""
-        steps = self._state_checkpoint_steps.get(adapter_name)
-        if steps is None or step not in steps:
-            return
-        has_step = any(key[0] == adapter_name and key[1] == step for key in self._state_checkpoint_index)
-        if not has_step:
-            steps.remove(step)
-        if len(steps) == 0:
-            self._state_checkpoint_steps.pop(adapter_name)
-
-    def _remove_state_checkpoint_index_entry(self, node: Node, key: StateCheckpointKey):
-        """Remove a node from one sparse-index bucket."""
-        nodes = self._state_checkpoint_index.get(key)
-        if nodes is None:
-            return False
-
-        old_len = len(nodes)
-        nodes[:] = [indexed_node for indexed_node in nodes if indexed_node is not node]
-        if len(nodes) == old_len:
-            return False
-        if len(nodes) == 0:
-            self._state_checkpoint_index.pop(key)
-        self._refresh_state_checkpoint_step(key[0], key[1])
-        return True
+        self._state_checkpoints.add(node)
 
     def _unindex_state_checkpoint(self, node: Node):
         """Remove a state checkpoint from every sparse-index bucket."""
-        removed = False
-        for key in list(self._state_checkpoint_index):
-            removed = self._remove_state_checkpoint_index_entry(node, key) or removed
-        return removed
+        return self._state_checkpoints.remove(node)
+
+    def _make_state_checkpoint_match_data_from_node(self, node: Node):
+        """Build exact match data by reconstructing a node path.
+
+        This fallback serves direct-node tests and diagnostics.  Production publication uses the producer sequence's
+        contiguous buffers instead.
+        """
+        nodes = tuple(self._get_node_blocks(node))
+        if len(nodes) * self.block_size != node.num_matched:
+            raise RuntimeError('Cannot publish an SSM checkpoint with a detached ancestor chain.')
+        if any(not self._is_attached_node(block_node) for block_node in nodes):
+            raise RuntimeError('Cannot publish an SSM checkpoint with a stale ancestor link.')
+
+        token_ids = np.concatenate([block_node.tokens for block_node in nodes])
+        multimodal_hashes = make_node_multimodal_identity(nodes, self.block_size)
+        blocks = np.fromiter((block_node.block for block_node in nodes), dtype=np.int64, count=len(nodes))
+        return freeze_state_checkpoint_match_data(token_ids, multimodal_hashes, blocks)
+
+    def _make_state_checkpoint_match_data_from_seq(self, node: Node, seq: SchedulerSequence):
+        """Snapshot exact match data from a checkpoint producer.
+
+        ``BlockTrie.allocate()`` already made the producer cursor authoritative
+        for this prefix.  Its recorded private-recompute substitutions turn
+        the contiguous logical-block copy back into the canonical trie path
+        without rebuilding thousands of Python ``Node`` objects per save.
+        """
+        step = node.num_matched
+        num_blocks = step // self.block_size
+        token_ids = seq.history_cache[:step].copy()
+        blocks = seq.logical_blocks.get_real_blocks()[:num_blocks].copy()
+        for block_id, trie_block in seq.prefix_cache.private_recompute_trie_blocks.items():
+            if block_id < num_blocks:
+                blocks[block_id] = trie_block
+        multimodal_hashes = make_request_multimodal_identity(seq, step)
+        start = step - self.block_size
+        extra_hashes = self._get_block_extra_hashes(seq, start, step)
+        has_complete_identity = len(token_ids) == step and len(blocks) == num_blocks
+        has_matching_owner = (seq.adapter_name == node.adapter_name and len(blocks) > 0
+                              and blocks[-1] == node.block and self._match_node(node, token_ids[start:], extra_hashes))
+        if not has_complete_identity or not has_matching_owner:
+            raise RuntimeError('Cannot publish an SSM checkpoint from a mismatched sequence cursor.')
+        return freeze_state_checkpoint_match_data(token_ids, multimodal_hashes, blocks)
 
     # SSM checkpoint reservation and publication lifecycle.
 
@@ -483,6 +504,7 @@ class BlockTrie:
                 return -1
             node.state_idx = self.state_manager.allocate_checkpoint_state()
         node.state_ready = False
+        node.state_topology_epoch = node._topology_epoch
         return node.state_idx
 
     def _clear_pending_state_checkpoint(self, seq: SchedulerSequence):
@@ -622,7 +644,7 @@ class BlockTrie:
 
         return self.reserve_state_checkpoint_for_seq(seq, step=step, is_decode=True)
 
-    def mark_state_checkpoint_ready(self, node: Node):
+    def mark_state_checkpoint_ready(self, node: Node, seq: SchedulerSequence | None = None):
         """Mark a node-owned state checkpoint as ready for SSM matching."""
         if node.state_idx < 0:
             raise RuntimeError('Cannot mark an unreserved state checkpoint as ready.')
@@ -630,11 +652,30 @@ class BlockTrie:
             raise RuntimeError('Cannot publish a pinned SSM prefix-cache checkpoint.')
         if not self._is_attached_node(node):
             raise RuntimeError('Cannot publish a detached SSM prefix-cache checkpoint node.')
+        if node.state_topology_epoch != node._topology_epoch:
+            raise RuntimeError('Cannot publish an SSM checkpoint after its trie path changed.')
         if node.state_ready:
-            self._unindex_state_checkpoint(node)
+            if node.state_match_data is None:
+                raise RuntimeError('Cannot republish an invalidated SSM prefix-cache checkpoint.')
+            return
+
+        if seq is None:
+            match_data = self._make_state_checkpoint_match_data_from_node(node)
+        else:
+            match_data = self._make_state_checkpoint_match_data_from_seq(node, seq)
+        node.state_match_data = match_data
         node.state_ready = True
         node.state_access_time = time.perf_counter()
-        self._index_state_checkpoint(node)
+        try:
+            self._index_state_checkpoint(node)
+        except Exception:
+            # Publication is all-or-nothing.  The caller still owns this
+            # unready reservation and can release its state slot safely.
+            self._unindex_state_checkpoint(node)
+            node.state_ready = False
+            node.state_access_time = 0.0
+            node.state_match_data = None
+            raise
 
     @staticmethod
     def _is_same_ready_decode_state_checkpoint(node: Node, step: int):
@@ -647,6 +688,8 @@ class BlockTrie:
             return 'missing node'
         if not self._is_attached_node(node):
             return 'detached node'
+        if node.state_topology_epoch != node._topology_epoch:
+            return 'trie path changed after reservation'
         if node.state_idx != state_idx:
             return f'state changed: current={node.state_idx}'
         if node.num_matched != save_step:
@@ -731,12 +774,13 @@ class BlockTrie:
         save_step = prefix_cache.save_step
         is_decode = prefix_cache.save_is_decode
         node = prefix_cache.save_node
-        self._clear_pending_state_checkpoint(seq)
         if state_idx < 0:
+            self._clear_pending_state_checkpoint(seq)
             return False
 
         invalid_reason = self._state_checkpoint_commit_invalid_reason(node, state_idx, save_step)
         if invalid_reason is not None:
+            self._clear_pending_state_checkpoint(seq)
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f'Drop invalid SSM prefix-cache checkpoint commit: session_id={seq.session_id} '
                              f'seq_id={seq.seq_id} step={save_step} state_idx={state_idx} '
@@ -744,7 +788,13 @@ class BlockTrie:
             self._release_invalid_state_checkpoint_reservation(seq, node, state_idx, is_decode)
             return False
 
-        self.mark_state_checkpoint_ready(node)
+        try:
+            self.mark_state_checkpoint_ready(node, seq)
+        except Exception:
+            self._clear_pending_state_checkpoint(seq)
+            self._release_invalid_state_checkpoint_reservation(seq, node, state_idx, is_decode)
+            raise
+        self._clear_pending_state_checkpoint(seq)
         if is_decode:
             prefix_cache.decode_state_node = node
         if acquire_save_ref:
@@ -854,6 +904,8 @@ class BlockTrie:
                 node.state_ready = False
                 node.state_ref_count = 0
                 node.state_access_time = 0.0
+            node.state_match_data = None
+            node.state_topology_epoch = -1
             return
         if node.state_ready:
             self._unindex_state_checkpoint(node)
@@ -862,6 +914,8 @@ class BlockTrie:
         node.state_ready = False
         node.state_ref_count = 0
         node.state_access_time = 0.0
+        node.state_match_data = None
+        node.state_topology_epoch = -1
 
     def evict_state_checkpoints(self, max_num_states: int):
         """Evict ready SSM state checkpoints without removing KV trie nodes."""
@@ -869,15 +923,9 @@ class BlockTrie:
             return 0
 
         candidates = []
-        seen_nodes = set()
-        for nodes in self._state_checkpoint_index.values():
-            for node in nodes:
-                node_id = id(node)
-                if node_id in seen_nodes:
-                    continue
-                seen_nodes.add(node_id)
-                if self._is_evictable_state_checkpoint(node):
-                    candidates.append((node.state_access_time, node))
+        for node in self._state_checkpoints.unique_nodes():
+            if self._is_evictable_state_checkpoint(node):
+                candidates.append((node.state_access_time, node))
         heapq.heapify(candidates)
 
         evicted = 0
@@ -910,6 +958,13 @@ class BlockTrie:
         parent = node.parent
         return parent is not None and parent.children.get(node.hash_key) is node
 
+    def _has_current_state_checkpoint_path(self, node: Node):
+        """Check a cached checkpoint path through its invalidation contract."""
+        match_data = node.state_match_data
+        if match_data is None or len(match_data.blocks) == 0:
+            return False
+        return (len(match_data.blocks) * self.block_size == node.num_matched and self._is_attached_node(node))
+
     @staticmethod
     def _is_attached_leaf(node: Node):
         """Check whether a node is a current attached trie leaf."""
@@ -925,6 +980,8 @@ class BlockTrie:
         """Check whether a sequence cursor still reaches the adapter root."""
         if node.parent is None:
             return node.block < 0 and self._roots.get(node.adapter_name) is node
+        if node.state_match_data is not None:
+            return self._has_current_state_checkpoint_path(node)
         nodes = self._get_node_blocks(node)
         if len(nodes) * self.block_size != node.num_matched:
             return False
@@ -939,9 +996,9 @@ class BlockTrie:
         nodes.reverse()
         return nodes
 
-    def _drop_stale_state_checkpoint_index_entry(self, node: Node, key: StateCheckpointKey, reason: str):
+    def _drop_stale_state_checkpoint_index_entry(self, node: Node, key, reason: str):
         """Remove a bad sparse-index entry without releasing a valid node."""
-        removed = self._remove_state_checkpoint_index_entry(node, key)
+        removed = self._state_checkpoints.remove_entry(node, key)
         if removed and logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Drop stale SSM prefix-cache checkpoint index entry: adapter={key[0]} '
                          f'step={key[1]} node_adapter={node.adapter_name} '
@@ -967,71 +1024,68 @@ class BlockTrie:
         node.state_ready = False
         node.state_ref_count = 0
         node.state_access_time = 0.0
+        node.state_match_data = None
+        node.state_topology_epoch = -1
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Release stale SSM prefix-cache checkpoint candidate: '
                          f'adapter={node.adapter_name} step={node.num_matched} '
                          f'state_idx={state_idx} was_ready={state_ready} reason={reason}')
         return state_idx >= 0 or state_ready
 
-    def _verify_state_checkpoint_node(self, seq: SchedulerSequence, node: Node, index_key: StateCheckpointKey):
-        """Verify a sparse SSM checkpoint candidate exactly.
+    def _handle_state_checkpoint_rejection(self, seq: SchedulerSequence, node: Node, key, match_result):
+        """Clean up a rejected sparse candidate according to its status."""
+        if match_result.status == StateCheckpointVerifyStatus.STALE_INDEX_ENTRY:
+            self._drop_stale_state_checkpoint_index_entry(node, key, match_result.reason)
+        elif match_result.status == StateCheckpointVerifyStatus.STALE_CHECKPOINT:
+            self._release_stale_state_checkpoint_candidate(node, match_result.reason)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f'Reject SSM prefix-cache checkpoint candidate: '
+                         f'session_id={seq.session_id} seq_id={seq.seq_id} step={node.num_matched} '
+                         f'state_idx={node.state_idx} status={match_result.status.name} '
+                         f'reason={match_result.reason}')
 
-        Matching only the sparse index key is not enough: we require every
-        ancestor block to match tokens and multimodal extra hashes before
-        restoring the frozen recurrent state.
-        """
-        if not self._is_ready_state_checkpoint_node(node):
-            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
-                                               reason='checkpoint is not ready')
-
+    def _has_required_recompute_suffix(self, seq: SchedulerSequence, node: Node, recompute_blocks: int):
+        """Check that an exact checkpoint has enough cached MTP overlap."""
         step = node.num_matched
-        if step <= 0:
-            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
-                                               reason=f'invalid checkpoint step: {step}')
+        raw_match_step = self._find_raw_block_match_step(seq, node)
+        required_step = step + recompute_blocks * self.block_size
+        if raw_match_step >= required_step:
+            return True, raw_match_step
 
-        nodes = self._get_node_blocks(node)
-        if len(nodes) * self.block_size != step:
-            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
-                                               reason='checkpoint ancestor chain is detached')
-        for block_node in nodes:
-            if not self._is_attached_node(block_node):
-                return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
-                                                   reason='checkpoint ancestor link is stale')
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f'Reject SSM prefix-cache checkpoint without MTP overlap: '
+                         f'session_id={seq.session_id} seq_id={seq.seq_id} step={step} '
+                         f'raw_match_step={raw_match_step} required_step={required_step}')
+        return False, raw_match_step
 
-        node_key = self._make_state_checkpoint_node_key(node)
-        if index_key != node_key:
-            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_INDEX_ENTRY,
-                                               reason='checkpoint is indexed under a stale key')
+    def _apply_state_checkpoint_hit(self,
+                                    seq: SchedulerSequence,
+                                    node: Node,
+                                    matched_blocks: np.ndarray,
+                                    initial_step: int,
+                                    raw_match_step: int):
+        """Acquire a verified checkpoint prefix and update sequence state."""
+        step = node.num_matched
+        new_blocks = matched_blocks[initial_step // self.block_size:]
+        self.allocator.update_access_time(new_blocks)
+        self.allocator.add_ref_count(new_blocks, 1)
+        seq.logical_blocks.append(new_blocks)
+        seq.set_step(step)
+        self._append_state_checkpoint_routed_experts(seq, node, initial_step)
 
-        if node.adapter_name != seq.adapter_name:
-            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_INDEX_ENTRY,
-                                               reason='checkpoint adapter differs from lookup adapter')
+        prefix_cache = seq.prefix_cache
+        prefix_cache.restore_state = node.state_idx
+        prefix_cache.restore_node = node
+        prefix_cache.last_shared_node = node
+        if raw_match_step >= 0:
+            self._set_private_recompute_range(seq, step, raw_match_step)
 
-        max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
-        if step > max_step:
-            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
-                                               reason='checkpoint is longer than this request')
-        if seq.clamp_prefix_cache_match_step(step) != step:
-            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
-                                               reason='checkpoint would stop inside a multimodal span')
-
-        matched_blocks = []
-        for idx, block_node in enumerate(nodes):
-            start = idx * self.block_size
-            end = start + self.block_size
-            tokens = seq.history_cache[start:end]
-            extra_hashes = self._get_block_extra_hashes(seq, start, end)
-            if not self._match_node(block_node, tokens, extra_hashes):
-                return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
-                                                   reason=f'block payload mismatch at block {idx}')
-            if seq.return_routed_experts and block_node.routed_experts is None:
-                return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
-                                                   reason=f'routed experts missing at block {idx}')
-            matched_blocks.append(block_node.block)
-
-        return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.HIT,
-                                           matched_blocks=matched_blocks,
-                                           matched_nodes=nodes)
+        self._record_match_stats(seq,
+                                 query_tokens=seq.num_all_ids - initial_step,
+                                 hit_tokens=step - initial_step)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f'SSM prefix-cache hit: session_id={seq.session_id} seq_id={seq.seq_id} '
+                         f'init_step={initial_step} matched_step={step} state_idx={node.state_idx}')
 
     def _match_state_checkpoint(self, seq: SchedulerSequence):
         """Match SSM prefixes through sparse ready-checkpoint lookup.
@@ -1050,54 +1104,28 @@ class BlockTrie:
 
         recompute_blocks = max(0, seq.prefix_cache.match_recompute_blocks)
         raw_match_step = -1
-        if recompute_blocks == 0:
-            max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
-        else:
-            # SSM checkpoint lookup is sparse, but MTP overlap needs the raw KV
-            # trie depth so the whole checkpoint-to-raw-hit span stays private.
-            raw_match_step = self._find_raw_block_match_step(seq, init_curr)
-            max_step = max(init_num_matched, raw_match_step - recompute_blocks * self.block_size)
+        max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
         max_step = seq.clamp_prefix_cache_match_step(max_step)
-        steps = self._state_checkpoint_steps.get(seq.adapter_name, ())
-        for step in sorted((step for step in steps if init_num_matched < step <= max_step), reverse=True):
+        candidate_steps = self._state_checkpoints.candidate_steps(seq.adapter_name, init_num_matched, max_step)
+        for step in candidate_steps:
             if seq.clamp_prefix_cache_match_step(step) != step:
                 continue
             key = self._make_state_checkpoint_lookup_key(seq, step)
-            for node in tuple(self._state_checkpoint_index.get(key, ())):
-                match_result = self._verify_state_checkpoint_node(seq, node, key)
+            for node in self._state_checkpoints.candidates(key):
+                path_is_current = self._has_current_state_checkpoint_path(node)
+                match_result = self._state_checkpoints.verify(seq, node, key, path_is_current)
                 if match_result.status != StateCheckpointVerifyStatus.HIT:
-                    if match_result.status == StateCheckpointVerifyStatus.STALE_INDEX_ENTRY:
-                        self._drop_stale_state_checkpoint_index_entry(node, key, match_result.reason)
-                    elif match_result.status == StateCheckpointVerifyStatus.STALE_CHECKPOINT:
-                        self._release_stale_state_checkpoint_candidate(node, match_result.reason)
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(f'Reject SSM prefix-cache checkpoint candidate: '
-                                     f'session_id={seq.session_id} seq_id={seq.seq_id} step={step} '
-                                     f'state_idx={node.state_idx} status={match_result.status.name} '
-                                     f'reason={match_result.reason}')
+                    self._handle_state_checkpoint_rejection(seq, node, key, match_result)
                     continue
 
-                matched_blocks = match_result.matched_blocks
-                matched_nodes = match_result.matched_nodes
-                matched_nodes = matched_nodes[init_num_matched // self.block_size:]
-                matched_blocks = np.array(matched_blocks[init_num_matched // self.block_size:])
-                self.allocator.update_access_time(matched_blocks)
-                self.allocator.add_ref_count(matched_blocks, 1)
-                seq.logical_blocks.append(matched_blocks)
-                seq.set_step(step)
-                self._append_matched_routed_experts(seq, matched_nodes, init_num_matched)
-                seq.prefix_cache.restore_state = node.state_idx
-                seq.prefix_cache.restore_node = node
-                seq.prefix_cache.last_shared_node = node
                 if recompute_blocks > 0:
-                    self._set_private_recompute_range(seq, step, raw_match_step)
-                self._record_match_stats(seq,
-                                         query_tokens=seq.num_all_ids - init_num_matched,
-                                         hit_tokens=step - init_num_matched)
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f'SSM prefix-cache hit: session_id={seq.session_id} seq_id={seq.seq_id} '
-                                 f'init_step={init_num_matched} matched_step={step} '
-                                 f'state_idx={node.state_idx}')
+                    has_recompute_suffix, raw_match_step = self._has_required_recompute_suffix(
+                        seq, node, recompute_blocks)
+                    if not has_recompute_suffix:
+                        continue
+
+                self._apply_state_checkpoint_hit(seq, node, match_result.matched_blocks, init_num_matched,
+                                                 raw_match_step)
                 return
 
         seq.prefix_cache.last_shared_node = init_curr
@@ -1106,7 +1134,7 @@ class BlockTrie:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'SSM prefix-cache miss: session_id={seq.session_id} seq_id={seq.seq_id} '
                          f'init_step={init_num_matched} raw_match_step={raw_match_step} '
-                         f'max_step={max_step} ready_steps={len(steps)}')
+                         f'max_step={max_step} ready_steps={self._state_checkpoints.num_steps(seq.adapter_name)}')
 
     def match(self, seq: SchedulerSequence):
         """Tentatively match reusable prefix blocks for a sequence.
@@ -1253,6 +1281,7 @@ class BlockTrie:
             self.leaves.discard(node)
 
         block_id = num_matched // block_size
+        private_trie_blocks = seq.prefix_cache.private_recompute_trie_blocks
         blocks = []
         free_blocks = []
         while num_matched + block_size <= num_valid_ids:
@@ -1274,12 +1303,14 @@ class BlockTrie:
                     # the target forward can regenerate hidden-state bridge data.
                     # Traverse the identity path, but keep the fresh writable
                     # sequence block instead of substituting the shared trie one.
+                    private_trie_blocks[block_id] = child.block
                     node = child
                     num_matched += block_size
                     block_id += 1
                     continue
                 # Another sequence inserted the same key before us.  Reuse the
                 # trie-owned block and release this sequence's duplicate block.
+                private_trie_blocks.pop(block_id, None)
                 node = child
                 self._try_cache_node_routed_experts(node, seq, start, end)
                 if block != node.block:
@@ -1287,6 +1318,7 @@ class BlockTrie:
                     logical_blocks[block_id] = node.block
                     blocks.append(node.block)
             else:
+                private_trie_blocks.pop(block_id, None)
                 routed_experts = self._get_routed_experts_for_range(seq, start, end)
                 node = Node(hash_key=hash_key,
                             block=block,

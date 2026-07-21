@@ -83,6 +83,9 @@ class PrefixCacheState:
     ``private_recompute_*_step`` marks trie-known blocks that were deliberately
     dropped from a match and therefore must stay writable/private during the
     next allocation instead of being deduplicated back to shared trie blocks.
+    ``private_recompute_trie_blocks`` maps those logical block indices to the
+    corresponding trie-owned block ids so a later state checkpoint snapshots
+    the canonical cache path rather than request-private blocks.
     ``suppress_match_stats`` is set while replaying work after recompute
     eviction; cache reuse may still happen, but it should not affect the public
     prefix-cache hit-rate metric.
@@ -118,6 +121,7 @@ class PrefixCacheState:
     match_recompute_blocks: int = 0
     private_recompute_start_step: int = -1
     private_recompute_end_step: int = -1
+    private_recompute_trie_blocks: dict[int, int] = field(default_factory=dict, repr=False)
     suppress_match_stats: bool = False
 
 
