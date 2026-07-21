@@ -27,6 +27,8 @@ def _apply_rope_first(x, cos, sin, rope_interleaved):
     return out
 
 
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='requires device with cc>=9.0')
 @pytest.mark.parametrize('rope_interleaved', [True, False])
 @pytest.mark.parametrize('heads', [32, 64])
 def test_prepare_dsa_indexer_q_matches_unfused_quantization(rope_interleaved, heads):

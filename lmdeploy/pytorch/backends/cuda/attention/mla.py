@@ -208,6 +208,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Run sparse FlashMLA over a BF16 flat KV view."""
         flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
         num_q_heads = query.size(1)
+        # flash_mla_sparse_fwd requires query heads to be multiple of alignment
         if num_q_heads % self._MLA_HEAD_ALIGNMENT != 0:
             padding = self._MLA_HEAD_ALIGNMENT - num_q_heads % self._MLA_HEAD_ALIGNMENT
             query = torch.nn.functional.pad(query, (0, 0, 0, padding))
