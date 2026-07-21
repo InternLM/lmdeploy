@@ -75,9 +75,9 @@ import numpy as np
 from lmdeploy.pytorch.messages import PrefixCacheExtraHashes, SchedulerSequence
 from lmdeploy.utils import get_logger
 
-from ..config import CacheConfig
-from .block_manager import BaseBlockManager
-from .prefix_cache_checkpoint import (
+from ...config import CacheConfig
+from ..block_manager import BaseBlockManager
+from .checkpoint import (
     StateCheckpointIndex,
     StateCheckpointMatchData,
     StateCheckpointVerifyStatus,

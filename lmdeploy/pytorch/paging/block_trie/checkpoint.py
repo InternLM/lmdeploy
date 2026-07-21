@@ -23,7 +23,7 @@ import numpy as np
 from lmdeploy.pytorch.messages import PrefixCacheExtraHashes, SchedulerSequence
 
 if TYPE_CHECKING:
-    from .block_trie import Node
+    from .trie import Node
 
 
 StateCheckpointKey: TypeAlias = tuple[str, int, int]
