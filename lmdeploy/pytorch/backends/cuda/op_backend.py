@@ -117,11 +117,19 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig, decoding_query_len: int):
         """Update meta for flashmla."""
+        is_fp8_kvcache = model_config.use_mla_fp8_cache
+        index_topk = model_config.mla_index_topk
+        # FlashMLA block tables and BF16 sparse physical-slot indices are int32.
+        if attn_metadata.block_offsets.dtype != torch.int32:
+            attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
+
+        # BF16 sparse decode uses sparse_fwd and needs no paged scheduler metadata.
+        if index_topk is not None and not is_fp8_kvcache:
+            return
+
         import flash_mla
         num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
         num_attention_heads *= decoding_query_len
-        is_fp8_kvcache = model_config.use_mla_fp8_cache
-        index_topk = model_config.mla_index_topk
         num_heads_q = None if index_topk is None else num_attention_heads
         tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
                                                                          num_attention_heads,
@@ -131,9 +139,6 @@ class CudaOpsBackend(DefaultOpsBackend):
                                                                          topk=index_topk)
         attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
         attn_metadata.num_splits = num_splits
-
-        if attn_metadata.block_offsets.dtype != torch.int32:
-            attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
 
     @classmethod
     def update_meta_flashattn(cls, attn_metadata, step_context):

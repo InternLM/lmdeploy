@@ -26,9 +26,17 @@ def _get_sparse_index_topk(topk: int):
 
 def _get_causal_k_seqlens(cu_seqlen_q: Tensor, q_seqlens: Tensor, k_seqlens: Tensor,
                           num_tokens: int) -> Tensor:
-    """Expand final KV lengths into the causal length of each query."""
+    """Expand request-level final KV lengths into per-query causal lengths.
+
+    For a request with Q query tokens and final KV length K, query offset i can
+    see K - Q + i + 1 positions. Top-k needs these row-wise lengths so it
+    cannot return future query positions masked by the score kernel.
+    """
+    # Start row of each request in the flattened query tensor.
     q_start = torch.repeat_interleave(cu_seqlen_q[:-1], q_seqlens, output_size=num_tokens)
+    # KV prefix that existed before the current multi-token query group.
     history_lengths = torch.repeat_interleave(k_seqlens - q_seqlens, q_seqlens, output_size=num_tokens)
+    # Convert flattened row ids into request-local query offsets.
     query_offsets = torch.arange(num_tokens, device=q_seqlens.device) - q_start
     return history_lengths + query_offsets + 1
 
@@ -62,6 +70,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                            max_q_seqlen=max_q_seqlen,
                            max_k_seqlen=max_kv_seqlen,
                            causal=True)
+        # Multi-token queries need one causal KV length per score row.
         if scores.size(0) != k_seqlens.size(0):
             k_seqlens = _get_causal_k_seqlens(cu_seqlen_q, q_seqlens, k_seqlens, scores.size(0))
         sparse_index_topk = _get_sparse_index_topk(self.topk)

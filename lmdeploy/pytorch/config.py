@@ -362,7 +362,7 @@ class ModelConfig:
 
     # flash mla
     use_flash_mla: bool = False
-    use_mla_fp8_cache: bool = False
+    mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
 
     # dllm
@@ -392,6 +392,11 @@ class ModelConfig:
 
     # flags mark if this model use mrope
     use_mrope: bool = False
+
+    @property
+    def use_mla_fp8_cache(self):
+        """Whether MLA uses the DeepSeek-V3.2 FP8 cache layout."""
+        return self.mla_kv_cache_dtype == 'fp8_ds_mla'
 
     def get_head_size(self):
         """Get head size."""

@@ -102,7 +102,7 @@ class DSATopKIndicesBuffer(nn.Module):
         return self.indices[:num_tokens]
 
     def compact(self, row_indices: torch.Tensor) -> torch.Tensor:
-        """Move selected query rows to the front for recurrent MTP reuse."""
+        """Copy selected rows to the prefix for recurrent MTP reuse."""
         selected = self.indices.index_select(0, row_indices)
         self.indices[:selected.size(0)].copy_(selected)
         return self.indices[:selected.size(0)]

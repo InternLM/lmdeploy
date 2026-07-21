@@ -1,14 +1,88 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
-from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.messages import QuantPolicy
+from lmdeploy.pytorch.config import CacheConfig, ModelConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+
+
+def test_bf16_sparse_mla_cache_layout():
+    model_config = ModelConfig(hidden_size=6144,
+                               num_layers=2,
+                               num_attention_heads=64,
+                               num_key_value_heads=1,
+                               bos_token_id=None,
+                               eos_token_id=[1],
+                               head_dim=576,
+                               k_head_dim=576,
+                               v_head_dim=0,
+                               dtype=torch.bfloat16,
+                               use_flash_mla=True,
+                               mla_kv_cache_dtype='bfloat16',
+                               mla_index_topk=2048)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+
+    k_desc = CacheEngine.get_k_cache_desc(model_config, cache_config)
+    v_desc = CacheEngine.get_v_cache_desc(model_config, cache_config)
+
+    assert k_desc.shape == [64, 1, 576]
+    assert k_desc.dtype == torch.bfloat16
+    assert v_desc.shape == [64, 1, 0]
+    assert v_desc.dtype == torch.bfloat16
+
+
+def test_fp8_sparse_mla_cache_layout():
+    model_config = ModelConfig(hidden_size=6144,
+                               num_layers=2,
+                               num_attention_heads=64,
+                               num_key_value_heads=1,
+                               bos_token_id=None,
+                               eos_token_id=[1],
+                               head_dim=576,
+                               k_head_dim=576,
+                               v_head_dim=0,
+                               dtype=torch.bfloat16,
+                               use_flash_mla=True,
+                               mla_kv_cache_dtype='bfloat16',
+                               mla_index_topk=2048)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               quant_policy=QuantPolicy.FP8)
+    CacheEngine.get_cache_block_size(cache_config, model_config)
+
+    assert model_config.mla_kv_cache_dtype == 'fp8_ds_mla'
+
+    k_desc = CacheEngine.get_k_cache_desc(model_config, cache_config)
+    v_desc = CacheEngine.get_v_cache_desc(model_config, cache_config)
+
+    assert k_desc.shape == [64, 1, 656]
+    assert k_desc.dtype == torch.float8_e4m3fn
+    assert v_desc.shape == [64, 1, 0]
+    assert v_desc.dtype == torch.float8_e4m3fn
+
+
+@pytest.mark.parametrize('quant_policy',
+                         [QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT])
+def test_sparse_mla_rejects_other_cache_policies(quant_policy):
+    model_config = SimpleNamespace(mla_index_topk=2048)
+    cache_config = SimpleNamespace(quant_policy=quant_policy)
+
+    with pytest.raises(ValueError, match='Sparse MLA does not support quant_policy'):
+        CacheEngine.get_cache_block_size(cache_config, model_config)
 
 
 def test_allocate_caches_requires_block_size_divisible_by_kernel_block_size():

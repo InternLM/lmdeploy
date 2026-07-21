@@ -274,7 +274,8 @@ class ArgumentHelper:
                                    type=_parse,
                                    default=default,
                                    help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
-                                   'turbo_quant (or 0/4/8/16/17/42). fp8 defaults to fp8_e4m3.')
+                                   'turbo_quant (or 0/4/8/16/17/42). For DSA models, fp8 uses the '
+                                   'fp8_ds_mla layout.')
 
     @staticmethod
     def rope_scaling_factor(parser):

@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from lmdeploy.pytorch.config import ModelConfig
+from lmdeploy.pytorch.configurations.deepseek_v32 import DeepseekV32ModelConfigBuilder
 from lmdeploy.pytorch.configurations.glm_moe_dsa import (
     GlmMoeDsaModelConfigBuilder,
     normalize_glm_moe_dsa_config,
@@ -164,7 +165,17 @@ def test_glm_moe_dsa_builder_creates_sparse_mla_config(monkeypatch):
     assert cfg.num_key_value_heads == 1
     assert model_config.num_key_value_heads == 1
     assert model_config.head_dim == 576
-    assert model_config.use_mla_fp8_cache is True
+    assert model_config.mla_kv_cache_dtype == 'bfloat16'
+    assert model_config.use_mla_fp8_cache is False
+
+
+def test_deepseek_v32_builder_defaults_to_bf16_sparse_mla(monkeypatch):
+    _patch_v32_base_builder(monkeypatch)
+    cfg = _make_config(model_type='deepseek_v32', use_flash_mla=True, index_head_dim=128, index_topk=2048)
+
+    model_config = DeepseekV32ModelConfigBuilder.build(cfg)
+
+    assert model_config.mla_kv_cache_dtype == 'bfloat16'
 
 
 def test_glm_moe_dsa_draft_selects_glm_mtp_model(monkeypatch):

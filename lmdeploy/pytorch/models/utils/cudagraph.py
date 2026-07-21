@@ -173,7 +173,10 @@ class CudaGraphMixin:
         input_buffers['cu_seqlens_q'] = input_buffers['cu_seqlens'][0]
         input_buffers['cu_seqlens_k'] = input_buffers['cu_seqlens'][1]
 
-        if graph_meta.use_flash_mla is True:
+        # BF16 sparse decode uses sparse_fwd and has no scheduler metadata buffers.
+        use_flash_mla_meta = (graph_meta.use_flash_mla
+                              and (graph_meta.use_mla_fp8_cache or graph_meta.mla_index_topk is None))
+        if use_flash_mla_meta:
             import flash_mla
 
             # create buffers for flash mla
@@ -258,7 +261,10 @@ class CudaGraphMixin:
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
 
-        if graph_meta.use_flash_mla is True:
+        # BF16 sparse decode uses sparse_fwd and has no scheduler metadata buffers.
+        use_flash_mla_meta = (graph_meta.use_flash_mla
+                              and (graph_meta.use_mla_fp8_cache or graph_meta.mla_index_topk is None))
+        if use_flash_mla_meta:
             import flash_mla
             step_ctx = get_step_ctx_manager().current_context()
             model_config = step_ctx.model_config
