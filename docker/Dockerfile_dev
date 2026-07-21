@@ -1,16 +1,23 @@
-FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS cu128
 
 # environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
     PATH=/opt/py3/bin:/root/.local/bin:${PATH} \
     TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
-    CUDA_VERSION_SHORT=cu128
+    CUDA_VERSION_SHORT=cu128 \
+    PYTORCH_CUDA_VERSION=cu126
 
 # Install dependencies and create python virtual environment
 RUN --mount=type=cache,target=/var/cache/apt \
     --mount=type=cache,target=/root/.cache \
-    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list; \
+    fi && \
+    if [ -d /etc/apt/sources.list.d ]; then \
+        find /etc/apt/sources.list.d -type f -name '*.sources' -exec \
+            sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' {} +; \
+    fi && \
     apt-get update -y && \
     apt-get install -y --no-install-recommends \
         tzdata wget curl openssh-server ssh sudo git-core \
@@ -33,7 +40,9 @@ RUN mkdir -p /wheels
 
 # install lmdeploy and its dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements_cuda.txt --extra-index-url https://download.pytorch.org/whl/cu128 && \
+    grep -E '^torch(vision)?([<>=]|$)' requirements/runtime_cuda.txt > /tmp/requirements_torch.txt && \
+    uv pip install -r /tmp/requirements_torch.txt --index-url https://download.pytorch.org/whl/${PYTORCH_CUDA_VERSION} && \
+    uv pip install -r requirements_cuda.txt && \
     uv pip install -e .
 
 RUN --mount=type=cache,target=/root/.cache/uv \

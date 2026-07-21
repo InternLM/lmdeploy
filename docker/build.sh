@@ -2,7 +2,7 @@
 
 mkdir -p /wheels
 
-if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+if [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
     pip install nvidia-nccl-cu13
 else
     pip install nvidia-nccl-cu12
