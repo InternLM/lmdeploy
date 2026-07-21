@@ -136,6 +136,14 @@ TurboMind::Impl::~Impl()
     if (gateway_) {
         gateway_->shutdown();
     }
+    // Keep every engine and executor queue alive until the gateway abort has
+    // propagated through each TP group. Closing one rank's queues before this
+    // handshake completes can strand its peers in the host communicator.
+    for (auto& engine : engines_) {
+        if (engine) {
+            engine.Join();
+        }
+    }
     for (int i = 0; i < (int)engines_.size(); ++i) {
         /// TODO: make device part of core::Context
         CudaDeviceGuard device(engine_param_.devices[i]);
