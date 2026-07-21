@@ -332,6 +332,13 @@ class TurboMind:
 
         with torch.cuda.device(self.devices[0]):
             if isinstance(request.serialized_named_tensors, str):
+                # Pickle payloads are only for trusted in-process IPC. HTTP must
+                # not reach here with a string (api_server rejects them).
+                if os.environ.get('LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS', '0') != '1':
+                    raise ValueError(
+                        'Pickled serialized_named_tensors is disabled by default. '
+                        'Pass structured tensors, or set LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1 '
+                        'only for trusted local IPC.')
                 weights = ForkingPickler.loads(pybase64.b64decode(request.serialized_named_tensors))
                 weights = {k: _construct(v) for k, v in weights}
             else:

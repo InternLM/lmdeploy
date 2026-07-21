@@ -1216,6 +1216,16 @@ async def get_ppl(request: PPLRequest, raw_request: Request = None):
 @router.post('/update_weights', dependencies=[Depends(validate_json_request)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
+    # Reject request-controlled pickle payloads over HTTP. Unauthenticated
+    # pickle.loads (ForkingPickler.loads) is RCE. Only structured dict/list
+    # tensors are accepted on this public endpoint.
+    payload = request.serialized_named_tensors
+    if isinstance(payload, str) or (
+            isinstance(payload, list) and payload and isinstance(payload[0], str)):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            'serialized_named_tensors must be a structured dict/list of tensors; '
+            'pickled string payloads are not accepted over HTTP for security reasons.')
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
 
