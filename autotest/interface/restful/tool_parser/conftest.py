@@ -56,15 +56,21 @@ def _apply_marks_mm(cls):
     return cls
 
 
-def llama31_single_tool_only(model_case: str) -> bool:
-    """True when the model uses Meta-Llama-3.1 chat template (one tool call per
-    turn)."""
-    return 'llama-3.1' in model_case.lower().replace('_', '-')
+def is_single_tool_call_only(model_case: str) -> bool:
+    """True when the resolved tool parser cannot delimit multiple tool
+    calls."""
+    from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParserManager
+
+    parser_name = resolve_tool_parser_name(model_case)
+    parser_cls = ToolParserManager.module_dict.get(parser_name)
+    if parser_cls is None:
+        return False
+    return parser_cls.get_tool_close_tag() is None
 
 
-LLAMA31_SKIP_PARALLEL_REASON = (
-    'Meta-Llama 3.1 chat template allows only one tool call per turn '
-    '(apply_chat_template: single tool-calls at once)')
+SINGLE_TOOL_CALL_SKIP_REASON = (
+    'Tool parser cannot delimit multiple tool-call blocks '
+    '(get_tool_close_tag() is None; chat template is single-tool-per-turn)')
 
 MM_TOOL_CALL_SKIP_REASON = (
     'Multimodal tool-call tests require native VL models (Qwen3.5 / Intern-S2)')
@@ -75,7 +81,6 @@ MM_TEST_IMAGE_BEIJING = 'Beijing_Small.jpeg'
 MM_TEST_IMAGE_POSE = 'human-pose.jpg'
 MM_TEST_VIDEO = 'red-panda.mp4'
 MM_TEST_AUDIO = 'zh.wav'
-# Seismic npy used by Intern-S1-Pro / Intern-S2 time-series docs & model card.
 MM_TEST_TIME_SERIES = '0092638_seism.npy'
 MM_TIME_SERIES_SAMPLING_RATE = 100
 
@@ -120,9 +125,7 @@ _MM_AUDIO_TOOL_CALL_MODEL_MARKERS = (
 MM_AUDIO_TOOL_CALL_SKIP_REASON = (
     'Audio tool-call media types require native audio models '
     '(e.g. Qwen-Omni); VL-only models are skipped')
-# Time-series tool-call needs models with ts encoder (Intern-S1-Pro / Intern-S2).
-# Qwen3.5 has processor hooks in code but returns finish_reason=error
-# ("in prompt processing error") on stock weights — do not enable here.
+
 _MM_TIME_SERIES_TOOL_CALL_MODEL_MARKERS = (
     'Intern-S1-Pro',
     'Intern-S2',
@@ -149,7 +152,6 @@ def is_mm_time_series_tool_call_capable(model_case: str) -> bool:
     name = model_case.lower()
     return any(
         marker.lower() in name for marker in _MM_TIME_SERIES_TOOL_CALL_MODEL_MARKERS)
-
 
 def resolve_mm_resource_path(config, filename: str) -> str | None:
     """Return a local filesystem path for a test media file, or None if
@@ -279,8 +281,8 @@ def mm_media_part_fields_for_media_type(media_type: str) -> dict:
     return {}
 
 
-def _llama31_parallel_skip_target(item) -> bool:
-    """True for TestToolCallParallel and test_multiple_results (parametrize-
+def _parallel_tool_skip_target(item) -> bool:
+    """True for parallel-tool classes and test_multiple_results (parametrize-
     safe)."""
     cls_name = item.cls.__name__ if item.cls is not None else ''
     if cls_name in ('TestToolCallParallel', 'TestToolCallMultimodalParallel'):
@@ -319,16 +321,17 @@ def _mm_time_series_media_type_skip_target(item) -> bool:
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip parallel-tool tests on Llama 3.1; skip MM tool tests on text-only
-    models; skip audio / time_series media types when unsupported."""
+    """Skip parallel-tool tests on single-tool parsers; skip MM tool tests on
+    text-only models; skip audio / time_series media types when unsupported."""
     for item in items:
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
             continue
         model_case = callspec.params['model_case']
-        if _llama31_parallel_skip_target(item):
-            if model_case and llama31_single_tool_only(model_case):
-                item.add_marker(pytest.mark.skip(reason=LLAMA31_SKIP_PARALLEL_REASON))
+        if _parallel_tool_skip_target(item):
+            if model_case and is_single_tool_call_only(model_case):
+                item.add_marker(
+                    pytest.mark.skip(reason=SINGLE_TOOL_CALL_SKIP_REASON))
         if _mm_tool_call_skip_target(item):
             if model_case and not is_mm_tool_call_capable(model_case):
                 item.add_marker(pytest.mark.skip(reason=MM_TOOL_CALL_SKIP_REASON))
@@ -339,7 +342,6 @@ def pytest_collection_modifyitems(config, items):
             if model_case and not is_mm_time_series_tool_call_capable(model_case):
                 item.add_marker(
                     pytest.mark.skip(reason=MM_TIME_SERIES_TOOL_CALL_SKIP_REASON))
-
 
 # ---------------------------------------------------------------------------
 # Per-test API request/response logging fixtures.
