@@ -15,15 +15,29 @@ if [ ! -f "/opt/py3/bin/python" ]; then
     apt-get install -y --no-install-recommends \
         tzdata wget curl ssh sudo git-core vim libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1
 
-    if ! apt-cache show "python${PYTHON_VERSION}" >/dev/null 2>&1; then
+    # Ubuntu may expose the interpreter package without the matching -dev and
+    # -venv packages. Check the complete set before deciding whether the PPA
+    # is needed.
+    python_packages=(
+        "python${PYTHON_VERSION}"
+        "python${PYTHON_VERSION}-dev"
+        "python${PYTHON_VERSION}-venv"
+    )
+    need_python_ppa=0
+    for package in "${python_packages[@]}"; do
+        if ! apt-cache show "${package}" >/dev/null 2>&1; then
+            need_python_ppa=1
+            break
+        fi
+    done
+    if ((need_python_ppa)); then
         apt-get install -y --no-install-recommends software-properties-common
         add-apt-repository -y ppa:deadsnakes/ppa
         apt-get update -y
     fi
 
     # install python, create virtual env
-    apt-get install -y --no-install-recommends \
-        python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
+    apt-get install -y --no-install-recommends "${python_packages[@]}"
 
     pushd /opt >/dev/null
         python${PYTHON_VERSION} -m venv py3
