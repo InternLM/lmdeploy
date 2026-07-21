@@ -165,3 +165,44 @@ def test_glm_moe_dsa_builder_creates_sparse_mla_config(monkeypatch):
     assert model_config.num_key_value_heads == 1
     assert model_config.head_dim == 576
     assert model_config.use_mla_fp8_cache is True
+
+
+def test_glm_moe_dsa_draft_selects_glm_mtp_model(monkeypatch):
+    _patch_v32_base_builder(monkeypatch)
+    cfg = _make_config(architectures=['GlmMoeDsaForCausalLM'],
+                       use_flash_mla=True,
+                       index_head_dim=128,
+                       index_topk=2048,
+                       quantization_config={})
+
+    GlmMoeDsaModelConfigBuilder.build(cfg, is_draft_model=True)
+
+    assert cfg.architectures == ['GlmMoeDsaMTPModel']
+
+
+def test_glm_moe_dsa_mtp_reuses_target_dist_config(monkeypatch):
+    from lmdeploy.pytorch import transformers as pytorch_transformers
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+
+    monkeypatch.setattr(pytorch_transformers, 'config_from_pretrained',
+                        lambda *args, **kwargs: SimpleNamespace(model_type='glm_moe_dsa'))
+    captured = {}
+
+    def fake_from_config(**kwargs):
+        captured.update(kwargs)
+        return kwargs
+
+    monkeypatch.setattr(SpecDecodeConfig, 'from_config', staticmethod(fake_from_config))
+    target_dist_config = DistConfig(tp=8)
+    speculative_config = SimpleNamespace(method='deepseek_mtp', model=None, num_speculative_tokens=5)
+    engine_config = SimpleNamespace(dtype='auto', model_format=None, hf_overrides=None)
+
+    ConfigBuilder.build_specdecode_config('glm-model',
+                                          speculative_config,
+                                          engine_config,
+                                          cache_config=object(),
+                                          dist_config=target_dist_config,
+                                          trust_remote_code=True)
+
+    assert captured['dist_config'] is target_dist_config

@@ -38,24 +38,31 @@ class NSAIndicesUpdater:
         self._update_decode_func = None
         self._update_prefill_func = None
 
-    def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
+    def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
                             block_size: int) -> torch.Tensor:
         """Update for decode impl."""
+        batch_size = block_offsets.size(0)
         block_ids = nsa_indices // block_size
         block_ids = block_ids.clamp_min(0)
+        if block_ids.size(0) != batch_size:
+            block_offsets = torch.repeat_interleave(block_offsets,
+                                                    max_q_seqlen,
+                                                    dim=0,
+                                                    output_size=block_ids.size(0))
         block_ids = block_offsets.gather(1, block_ids)
         block_remain = nsa_indices % block_size
         ret = block_ids * block_size + block_remain
         ret[nsa_indices < 0] = -1
-        return ret[:, None]
+        return ret.unflatten(0, (batch_size, max_q_seqlen))
 
-    def update_decode(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, block_size: int) -> torch.Tensor:
+    def update_decode(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
+                      block_size: int) -> torch.Tensor:
         """Update for decode."""
         if self._update_decode_func is None:
             self._update_decode_func = _try_dynamic_compile(self._update_decode_impl, nsa_indices, block_offsets,
-                                                            block_size)
+                                                            max_q_seqlen, block_size)
 
-        return self._update_decode_func(nsa_indices, block_offsets, block_size)
+        return self._update_decode_func(nsa_indices, block_offsets, max_q_seqlen, block_size)
 
     def _update_prefill_impl(self, nsa_indices: torch.Tensor, q_seqlens: torch.Tensor, cu_seqlens_k: torch.Tensor):
         """Update for prefill impl."""
@@ -176,7 +183,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         # update nsa indice according to flash-mla requirement
         if nsa_indices is not None:
             block_size = k_cache.size(1)
-            nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
+            nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, max_q_seqlen, block_size)
             causal = False
 
         attn_output, _ = self.flash_mla_with_kvcache(query,

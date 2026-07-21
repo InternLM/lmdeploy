@@ -132,3 +132,34 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
         inputs_embeds=None,
     )
     assert key_hidden32 == key_qlen4
+
+
+def test_cuda_graph_key_separates_dsa_seed_and_reuse(monkeypatch):
+    from types import SimpleNamespace
+
+    import torch
+
+    from lmdeploy.pytorch.backends.cuda import graph_runner as cuda_graph_runner
+
+    runner = cuda_graph_runner.CUDAGraphRunner.__new__(cuda_graph_runner.CUDAGraphRunner)
+    runner.ctx_mgr = SimpleNamespace(current_context=lambda: SimpleNamespace(global_is_decoding=lambda: True))
+    runner.get_meta = lambda: SimpleNamespace(padding_batch_size=None)
+    runner._get_capture_tokens = lambda batch_size: batch_size
+    monkeypatch.setattr(cuda_graph_runner, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(current_context=lambda: SimpleNamespace(enable_microbatch=False)))
+
+    input_ids = torch.zeros((1, 8), dtype=torch.long)
+    kwargs = dict(
+        input_ids=input_ids,
+        position_ids=torch.zeros_like(input_ids),
+        past_key_values=[],
+        attn_metadata=SimpleNamespace(q_seqlens=torch.ones(8, dtype=torch.long)),
+        inputs_embeds=None,
+    )
+
+    seed_key = runner.get_graph_key(**kwargs, skip_topk=False)
+    reuse_key = runner.get_graph_key(**kwargs, skip_topk=True)
+
+    assert seed_key != reuse_key
+    assert seed_key[-1] is False
+    assert reuse_key[-1] is True

@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 
+import torch
 from torch import Tensor
 
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
@@ -21,6 +22,15 @@ def _get_sparse_index_topk(topk: int):
     if is_sparse_index_topk_supported(topk):
         return sparse_index_topk
     return None
+
+
+def _get_causal_k_seqlens(cu_seqlen_q: Tensor, q_seqlens: Tensor, k_seqlens: Tensor,
+                          num_tokens: int) -> Tensor:
+    """Expand final KV lengths into the causal length of each query."""
+    q_start = torch.repeat_interleave(cu_seqlen_q[:-1], q_seqlens, output_size=num_tokens)
+    history_lengths = torch.repeat_interleave(k_seqlens - q_seqlens, q_seqlens, output_size=num_tokens)
+    query_offsets = torch.arange(num_tokens, device=q_seqlens.device) - q_start
+    return history_lengths + query_offsets + 1
 
 
 class TritonNSAIndexFP8(BaseNSAIndexFP8):
@@ -52,6 +62,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                            max_q_seqlen=max_q_seqlen,
                            max_k_seqlen=max_kv_seqlen,
                            causal=True)
+        if scores.size(0) != k_seqlens.size(0):
+            k_seqlens = _get_causal_k_seqlens(cu_seqlen_q, q_seqlens, k_seqlens, scores.size(0))
         sparse_index_topk = _get_sparse_index_topk(self.topk)
         if sparse_index_topk is not None:
             return sparse_index_topk(scores,

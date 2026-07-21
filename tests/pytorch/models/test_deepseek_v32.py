@@ -210,6 +210,35 @@ def test_full_indexer_layer_writes_compact_output_and_shared_buffer(monkeypatch)
     assert torch.equal(all_indexer_topk[:, 0], computed_topk)
 
 
+def test_mtp_skips_indexer_and_reads_compacted_topk(monkeypatch):
+    attn = DeepseekV32Attention.__new__(DeepseekV32Attention)
+    nn.Module.__init__(attn)
+    attn.layer_idx = 5
+    attn.indexer_output_idx = None
+    _patch_minimal_attention(attn, monkeypatch)
+    attn.indexer = lambda *args, **kwargs: pytest.fail('recurrent MTP must reuse seed top-k')
+    seen = {}
+
+    def fake_attn_fwd(*args, **kwargs):
+        seen['nsa_indices'] = kwargs['nsa_indices']
+        return torch.zeros(args[0].size(0), 1, 1)
+
+    attn.attn_fwd = fake_attn_fwd
+    topk_buffer = DSATopKIndicesBuffer(topk=3)
+    topk_buffer.write(torch.tensor([[1, 2, 3], [11, 12, 13], [21, 22, 23]], dtype=torch.int32))
+    topk_buffer.compact(torch.tensor([2, 0]))
+
+    attn(
+        hidden_states=torch.zeros(1, 2, 2),
+        rotary_pos_emb=(torch.zeros(2, 1), torch.zeros(2, 1)),
+        past_key_value=[torch.zeros(1, 1, 2), torch.zeros(1, 1, 1)],
+        topk_indices_buffer=topk_buffer,
+        skip_topk=True,
+    )
+
+    assert torch.equal(seen['nsa_indices'], torch.tensor([[21, 22, 23], [1, 2, 3]], dtype=torch.int32))
+
+
 @pytest.mark.parametrize('dp,attn_tp,expected_num_heads', [(1, 2, 2), (2, 2, 4)])
 def test_attention_uses_dp_aware_num_heads(monkeypatch, dp, attn_tp, expected_num_heads):
     attn = DeepseekV32Attention.__new__(DeepseekV32Attention)
@@ -281,7 +310,7 @@ def test_shared_indexer_layer_reuses_shared_topk_buffer(monkeypatch):
     assert torch.all(all_indexer_topk == -1)
 
 
-def test_shared_indexer_layer_requires_shared_topk_buffer(monkeypatch):
+def test_attention_requires_shared_topk_buffer(monkeypatch):
     attn = DeepseekV32Attention.__new__(DeepseekV32Attention)
     nn.Module.__init__(attn)
     attn.layer_idx = 3
@@ -303,7 +332,7 @@ def test_shared_indexer_layer_requires_shared_topk_buffer(monkeypatch):
     )
     attn.apply_rotary_pos_emb = lambda q, k, cos, sin, inplace=False: (q, k)
 
-    with pytest.raises(RuntimeError, match='reuses DSA top-k indices'):
+    with pytest.raises(RuntimeError, match='requires a DSA top-k indices buffer'):
         attn(
             hidden_states=torch.zeros(1, 1, 2),
             rotary_pos_emb=(torch.zeros(1, 1), torch.zeros(1, 1)),

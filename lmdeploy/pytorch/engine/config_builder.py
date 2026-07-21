@@ -119,6 +119,10 @@ class ConfigBuilder:
             # TODO support tp > 1, ep > 1 for other methods
             if speculative_config.method == 'qwen3_5_mtp':
                 draft_dist_config = dist_config
+            elif speculative_config.method == 'deepseek_mtp':
+                from lmdeploy.pytorch.transformers import config_from_pretrained
+                hf_config = config_from_pretrained(target_model, trust_remote_code=trust_remote_code)
+                draft_dist_config = dist_config if hf_config.model_type == 'glm_moe_dsa' else DistConfig()
             else:
                 draft_dist_config = DistConfig()
             return draft_dist_config

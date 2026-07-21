@@ -2,17 +2,21 @@
 
 import torch
 
-from lmdeploy.utils import get_logger
-
 from ...model_inputs import ModelInputs
 from ...strategies.ar_spec.model_agent import ARSpecExtraInputs
 from .base import SPEC_PROPOSERS, BaseSpecProposer
 
-logger = get_logger('lmdeploy')
-
 
 @SPEC_PROPOSERS.register_module(name='deepseek_mtp')
 class DeepseekMTP(BaseSpecProposer):
+
+    def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
+        """Build the draft model and bind target-owned resources."""
+        super().build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
+        draft_model = self.model
+        if hasattr(draft_model, 'set_topk_indices_buffer'):
+            draft_model.set_input_embeddings(target_model.get_input_embeddings())
+            draft_model.set_topk_indices_buffer(target_model.model.topk_indices_buffer)
 
     async def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
@@ -22,15 +26,26 @@ class DeepseekMTP(BaseSpecProposer):
         """Get outputs."""
         hidden_states = model_outputs['hidden_states']
         model_metas = model_outputs['model_metas']
+        draft_model = self.model.get_model() if hasattr(self.model, 'get_model') else self.model
+        uses_topk_buffer = getattr(draft_model, 'uses_dsa_topk_buffer', False)
+
         if extra_inputs is not None:
             last_token_loc = extra_inputs.last_token_indices
             hidden_states = hidden_states[:, last_token_loc]
-            # use hidden states for draft prefill forward for next step
-            target_hidden_states = hidden_states
-        else:
-            target_hidden_states = hidden_states
+            if uses_topk_buffer:
+                draft_model.compact_topk_indices(last_token_loc)
 
-        logits = self.get_logits(hidden_states)[0]
+        if hasattr(draft_model, 'prepare_hidden_states_for_logits'):
+            logits_hidden_states = draft_model.prepare_hidden_states_for_logits(hidden_states)
+            logits = self.target_model.get_logits(logits_hidden_states)
+        else:
+            logits = self.get_logits(hidden_states)
+        target_hidden_states = hidden_states
+
+        if uses_topk_buffer:
+            model_metas = model_metas or [None] * hidden_states.size(1)
+            model_metas = [dict(meta or {}, skip_topk=True) for meta in model_metas]
+        logits = logits[0]
 
         guided_bitmask = await self.guided_helper.prepare_bitmask(logits, guided_processors)
         if guided_bitmask is not None:

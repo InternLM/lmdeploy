@@ -101,6 +101,13 @@ class DSATopKIndicesBuffer(nn.Module):
             raise RuntimeError('DSA top-k indices are reused before the shared buffer is populated.')
         return self.indices[:num_tokens]
 
+    def compact(self, row_indices: torch.Tensor) -> torch.Tensor:
+        """Move selected query rows to the front for recurrent MTP reuse."""
+        selected = self.indices.index_select(0, row_indices)
+        self.indices[:selected.size(0)].copy_(selected)
+        return self.indices[:selected.size(0)]
+
+
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
     from fast_hadamard_transform import hadamard_transform
@@ -116,6 +123,45 @@ def _dequantize_blocked_fp8(weight: torch.Tensor, scale: torch.Tensor, dtype: to
     weight = weight.reshape(dim_s0, dim_w0 // dim_s0, dim_s1, dim_w1 // dim_s1)
     weight = weight.float() * scale.reshape(dim_s0, 1, dim_s1, 1)
     return weight.to(dtype).reshape(dim_w0, dim_w1)
+
+
+def _load_fused_indexer_weight(name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               load_buffers: dict) -> bool:
+    """Load separate checkpoint projections into one fused BF16 weight."""
+    is_wk = '.self_attn.indexer.wk.' in name
+    is_gate = '.self_attn.indexer.weights_proj.' in name
+    if not (is_wk or is_gate):
+        return False
+
+    indexer_prefix = name.rsplit('.indexer.', 1)[0] + '.indexer'
+    fused_param = params_dict.get(f'{indexer_prefix}.wk_weights_proj.weight')
+    if fused_param is None:
+        return False
+
+    if is_gate:
+        if not name.endswith('.weight'):
+            return False
+        gate = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+        fused_param.data[-gate.size(0):].copy_(gate)
+        return True
+
+    if name.endswith('.weight') and loaded_weight.dtype != torch.float8_e4m3fn:
+        wk = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+        fused_param.data[:wk.size(0)].copy_(wk)
+        return True
+
+    is_weight = name.endswith('.weight')
+    is_scale = name.endswith('.weight_scale_inv')
+    if not (is_weight or is_scale):
+        return False
+
+    buffer = load_buffers.setdefault(f'{indexer_prefix}.wk', {})
+    buffer['weight' if is_weight else 'scale'] = loaded_weight.to(fused_param.device)
+    if 'weight' in buffer and 'scale' in buffer:
+        wk = _dequantize_blocked_fp8(buffer['weight'], buffer['scale'], fused_param.dtype)
+        fused_param.data[:wk.size(0)].copy_(wk)
+        load_buffers.pop(f'{indexer_prefix}.wk')
+    return True
 
 
 class LayerNorm(nn.Module):
@@ -353,7 +399,9 @@ class DeepseekV32Attention(DeepseekV2Attention):
         self.indexer = None
         self.indexer_output_idx = None
         if self.indexer_type == 'full':
-            self.indexer_output_idx = get_full_indexer_layer_ids(config).index(layer_idx)
+            full_layer_ids = get_full_indexer_layer_ids(config)
+            if layer_idx in full_layer_ids:
+                self.indexer_output_idx = full_layer_ids.index(layer_idx)
             self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
@@ -404,6 +452,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         past_key_value: Sequence[torch.Tensor] = None,
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        skip_topk: bool = False,
         all_indexer_topk: torch.Tensor | None = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -429,18 +478,19 @@ class DeepseekV32Attention(DeepseekV2Attention):
         query_states[..., nope_size:] = q_pe
         key_states[..., nope_size:] = k_pe
 
-        if self.indexer is None:
-            if topk_indices_buffer is None:
-                raise RuntimeError(f'Layer {self.layer_idx} reuses DSA top-k indices but none were provided.')
-            topk_indices = topk_indices_buffer.read(q_len, hidden_states.device)
+        if topk_indices_buffer is None:
+            raise RuntimeError(f'Layer {self.layer_idx} requires a DSA top-k indices buffer.')
+
+        should_compute_topk = self.indexer is not None and not skip_topk
+        if should_compute_topk:
+            topk_indices = topk_indices_buffer.write(
+                self.indexer(hidden_states,
+                             qr,
+                             rotary_pos_emb,
+                             past_key_value[-2:],
+                             attn_metadata=attn_metadata))
         else:
-            topk_indices = self.indexer(hidden_states,
-                                        qr,
-                                        rotary_pos_emb,
-                                        past_key_value[-2:],
-                                        attn_metadata=attn_metadata)
-            if topk_indices_buffer is not None:
-                topk_indices = topk_indices_buffer.write(topk_indices)
+            topk_indices = topk_indices_buffer.read(q_len, hidden_states.device)
 
         # Shared layers reuse the previous result, so capture only full layers.
         if all_indexer_topk is not None and self.indexer_output_idx is not None:
@@ -507,6 +557,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        skip_topk: bool = False,
         all_routed_experts: torch.Tensor | None = None,
         all_indexer_topk: torch.Tensor | None = None,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
@@ -524,6 +575,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
                 past_key_value=past_key_value,
                 attn_metadata=attn_metadata,
                 topk_indices_buffer=topk_indices_buffer,
+                skip_topk=skip_topk,
                 all_indexer_topk=all_indexer_topk,
             )
         else:
@@ -716,7 +768,8 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):
         """Load attention weights."""
-        if self._load_fused_indexer_weight(name, loaded_weight, params_dict):
+        if _load_fused_indexer_weight(name, loaded_weight, params_dict,
+                                      self._load_buffers):
             return
         if '.self_attn.indexer.' in name and name not in params_dict:
             layer_idx = get_layer_idx_from_weight_name(name)
@@ -724,45 +777,3 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
             if get_layer_indexer_type(self.config, layer_idx) == 'shared':
                 return
         return super()._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
-
-    def _load_fused_indexer_weight(self, name: str, loaded_weight: torch.Tensor,
-                                   params_dict: dict[str, nn.Parameter]) -> bool:
-        """Load separate checkpoint projections into one fused BF16 weight."""
-        is_wk = '.self_attn.indexer.wk.' in name
-        is_gate = '.self_attn.indexer.weights_proj.' in name
-        if not (is_wk or is_gate):
-            return False
-
-        indexer_prefix = name.rsplit('.indexer.', 1)[0] + '.indexer'
-        fused_name = f'{indexer_prefix}.wk_weights_proj.weight'
-        fused_param = params_dict.get(fused_name)
-        if fused_param is None:
-            return False
-
-        # The fused output layout is [K, head gates].
-        if is_gate:
-            if not name.endswith('.weight'):
-                return False
-            gate = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
-            fused_param.data[-gate.size(0):].copy_(gate)
-            return True
-
-        if name.endswith('.weight') and loaded_weight.dtype != torch.float8_e4m3fn:
-            wk = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
-            fused_param.data[:wk.size(0)].copy_(wk)
-            return True
-
-        is_weight = name.endswith('.weight')
-        is_scale = name.endswith('.weight_scale_inv')
-        if not (is_weight or is_scale):
-            return False
-
-        # Dequantize K once at load time; the runtime projection stays fused.
-        buffer_key = f'{indexer_prefix}.wk'
-        buffer = self._load_buffers.setdefault(buffer_key, {})
-        buffer['weight' if is_weight else 'scale'] = loaded_weight.to(fused_param.device)
-        if 'weight' in buffer and 'scale' in buffer:
-            wk = _dequantize_blocked_fp8(buffer['weight'], buffer['scale'], fused_param.dtype)
-            fused_param.data[:wk.size(0)].copy_(wk)
-            self._load_buffers.pop(buffer_key)
-        return True

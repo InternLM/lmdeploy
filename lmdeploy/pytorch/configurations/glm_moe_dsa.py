@@ -25,6 +25,7 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
+        is_draft_model = kwargs.get('is_draft_model', False)
         quantization_config = getattr(hf_config, 'quantization_config', None)
         is_lmdeploy_patched_fp8 = (quantization_config is not None
                                    and quantization_config.get('quant_method') == 'fp8'
@@ -35,4 +36,7 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
                         'and the FP8 quantization config is LMDeploy-synthesized.')
 
         normalize_glm_moe_dsa_config(hf_config)
-        return super().build(hf_config, model_path=model_path, **kwargs)
+        config = super().build(hf_config, model_path=model_path, **kwargs)
+        if is_draft_model:
+            hf_config.architectures[0] = 'GlmMoeDsaMTPModel'
+        return config
