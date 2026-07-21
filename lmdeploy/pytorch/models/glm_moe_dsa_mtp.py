@@ -198,9 +198,6 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
 
-    def set_topk_indices_buffer(self, topk_indices_buffer: DSATopKIndicesBuffer):
-        self.topk_indices_buffer = topk_indices_buffer
-
     def compact_topk_indices(self, row_indices: torch.Tensor):
         self.topk_indices_buffer.compact(row_indices)
 

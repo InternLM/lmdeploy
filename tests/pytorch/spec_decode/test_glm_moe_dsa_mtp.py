@@ -30,11 +30,13 @@ class _DummyDraft(nn.Module):
     def __init__(self):
         super().__init__()
         self.compacted = None
+        self.prepare_calls = 0
 
     def compact_topk_indices(self, row_indices):
         self.compacted = row_indices
 
     def prepare_hidden_states_for_logits(self, hidden_states):
+        self.prepare_calls += 1
         return hidden_states + 10
 
 
@@ -47,7 +49,7 @@ class _DummyTarget(nn.Module):
         return logits
 
 
-def test_proposer_reuses_topk_and_recycles_raw_hidden_states():
+def test_proposer_reuses_topk_and_recycles_postnorm_hidden_states():
     proposer = object.__new__(DeepseekMTP)
     proposer.model = _DummyDraft()
     proposer.target_model = _DummyTarget()
@@ -61,30 +63,30 @@ def test_proposer_reuses_topk_and_recycles_raw_hidden_states():
 
     selected_hidden = hidden_states[:, [2, 0]]
     assert draft_ids.tolist() == [[5], [5]]
-    assert torch.equal(recurrent_hidden, selected_hidden)
+    assert torch.equal(recurrent_hidden, selected_hidden + 10)
     assert torch.equal(proposer.target_model.hidden_states, selected_hidden + 10)
+    assert proposer.model.prepare_calls == 1
     assert proposer.model.compacted is extra_inputs.last_token_indices
     assert [meta['keep'] for meta in model_metas] == [1, 2]
     assert all(meta['skip_topk'] for meta in model_metas)
 
 
-def test_proposer_binds_target_embedding_and_topk_buffer(monkeypatch):
+def test_proposer_binds_target_embedding_and_keeps_draft_topk_buffer(monkeypatch):
 
     class _Draft(nn.Module):
+
+        uses_dsa_topk_buffer = True
 
         def __init__(self):
             super().__init__()
             self.embed_tokens = None
-            self.topk_indices_buffer = None
+            self.topk_indices_buffer = DSATopKIndicesBuffer(topk=2)
 
         def set_input_embeddings(self, embed_tokens):
             self.embed_tokens = embed_tokens
 
         def get_input_embeddings(self):
             return self.embed_tokens
-
-        def set_topk_indices_buffer(self, topk_indices_buffer):
-            self.topk_indices_buffer = topk_indices_buffer
 
     class _Target(nn.Module):
 
@@ -98,6 +100,7 @@ def test_proposer_binds_target_embedding_and_topk_buffer(monkeypatch):
             return self.embedding
 
     draft = _Draft()
+    draft_topk_indices_buffer = draft.topk_indices_buffer
     target = _Target()
     proposer = object.__new__(DeepseekMTP)
 
@@ -109,7 +112,8 @@ def test_proposer_binds_target_embedding_and_topk_buffer(monkeypatch):
     proposer.build_model(empty_init=True, target_model=target)
 
     assert draft.embed_tokens is target.embedding
-    assert draft.topk_indices_buffer is target.model.topk_indices_buffer
+    assert draft.topk_indices_buffer is draft_topk_indices_buffer
+    assert draft.topk_indices_buffer is not target.model.topk_indices_buffer
 
 
 def test_glm_mtp_prepares_postnorm_hidden_for_logits():

@@ -11,12 +11,11 @@ from .base import SPEC_PROPOSERS, BaseSpecProposer
 class DeepseekMTP(BaseSpecProposer):
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
-        """Build the draft model and bind target-owned resources."""
+        """Build the draft model and bind the target embedding."""
         super().build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
         draft_model = self.model
-        if hasattr(draft_model, 'set_topk_indices_buffer'):
+        if hasattr(draft_model, 'uses_dsa_topk_buffer'):
             draft_model.set_input_embeddings(target_model.get_input_embeddings())
-            draft_model.set_topk_indices_buffer(target_model.model.topk_indices_buffer)
 
     async def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
@@ -36,8 +35,8 @@ class DeepseekMTP(BaseSpecProposer):
                 draft_model.compact_topk_indices(last_token_loc)
 
         if hasattr(draft_model, 'prepare_hidden_states_for_logits'):
-            logits_hidden_states = draft_model.prepare_hidden_states_for_logits(hidden_states)
-            logits = self.target_model.get_logits(logits_hidden_states)
+            hidden_states = draft_model.prepare_hidden_states_for_logits(hidden_states)
+            logits = self.target_model.get_logits(hidden_states)
         else:
             logits = self.get_logits(hidden_states)
         target_hidden_states = hidden_states
