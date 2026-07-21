@@ -66,6 +66,8 @@ def test_prepare_dsa_indexer_q_matches_unfused_quantization(rope_interleaved, he
     torch.testing.assert_close(q_scale, scale_ref * weights.float() * score_scale, rtol=0, atol=0)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='requires device with cc>=9.0')
 @pytest.mark.parametrize('rope_interleaved', [True, False])
 @pytest.mark.parametrize('q_seqlens,kv_seqlens', [([1, 1], [3, 2]), ([3, 2], [5, 3])])
 def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqlens, rope_interleaved):
