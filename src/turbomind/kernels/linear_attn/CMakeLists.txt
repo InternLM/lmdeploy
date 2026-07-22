@@ -15,5 +15,9 @@ target_link_libraries(linear_attn PUBLIC
 
 # Registry entry translation units act as static plugins: they must be linked
 # before the host archive whose planner and registry symbols they reference.
+set(LINEAR_ATTN_GDR_WHOLE_ARCHIVES "")
+foreach(target IN LISTS LINEAR_ATTN_GDR_KERNEL_TARGETS)
+    list(APPEND LINEAR_ATTN_GDR_WHOLE_ARCHIVES "$<LINK_LIBRARY:WHOLE_ARCHIVE,${target}>")
+endforeach()
 set_property(TARGET linear_attn PROPERTY INTERFACE_LINK_LIBRARIES_DIRECT
-        $<LINK_LIBRARY:WHOLE_ARCHIVE,linear_attn_kernels>)
+        ${LINEAR_ATTN_GDR_WHOLE_ARCHIVES})
