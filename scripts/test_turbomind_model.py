@@ -10,6 +10,8 @@ Stdout is plain text in short sections, for example:
   model: <path>
   tp: <tp>
   cp: <cp>
+  ep: <ep>
+  dp: <dp>
   gpus: <gpus>
   max_new_tokens: 256
   async: 1
@@ -47,9 +49,11 @@ Usage (from repo root):
   python scripts/test_turbomind_model.py \\
       --model-id ID \\
       --cache-dir PATH \\
-      --tp N \\
-      --cp N \\
       --gpus DEVICES \\
+      [--tp N] \\
+      [--cp N] \\
+      [--ep N] \\
+      [--dp N] \\
       [--prompt TEXT ...] \\
       [--prompt-file PATH] \\
       [--prompt-ids N [N ...]] \\
@@ -92,9 +96,10 @@ Example with prefix caching and repeated prompts:
       --prompt "A" --prompt "B" \\
       --prompt-ids 0 0 1
 
-Optional engine params (defaults shown): --max-new-tokens 256, --async 1,
---session-len 16384, --max-batch-size 8. Prefix caching: pass
---enable-prefix-caching (default off).
+Optional parallelism params default to 1: --tp, --cp, --ep, --dp. Other optional
+engine params (defaults shown): --max-new-tokens 256, --async 1, --session-len
+16384, --max-batch-size 8. Prefix caching: pass --enable-prefix-caching
+(default off).
 
 Optional --debug sets CUDA_LAUNCH_BLOCKING=1 before loading TurboMind so CUDA
 kernels run synchronously and errors surface at the launch site.
@@ -189,6 +194,10 @@ def _positive_int(value: str) -> int:
 
 def _validate_engine_params(
     *,
+    tp: int,
+    cp: int,
+    ep: int,
+    dp: int,
     max_new_tokens: int,
     async_: int,
     session_len: int,
@@ -196,6 +205,9 @@ def _validate_engine_params(
     max_prefill_token_num: int,
     cache_checkpoint_interval: int,
 ) -> None:
+    for name, value in (('tp', tp), ('cp', cp), ('ep', ep), ('dp', dp)):
+        if value < 1:
+            raise ValueError(f'{name} must be >= 1, got {value}')
     if max_new_tokens < 1:
         raise ValueError(f'max_new_tokens must be >= 1, got {max_new_tokens}')
     if async_ not in (0, 1):
@@ -286,6 +298,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 stdout sections: --- setup ---, --- timing ---, --- tokens ---, --- response N begin/end ---
 Optional prompts: --prompt, --prompt-file, --prompt-ids
 Optional engine params:
+    --tp
+    --cp
+    --ep
+    --dp
     --max-new-tokens
     --async
     --session-len
@@ -300,8 +316,20 @@ Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit
     )
     parser.add_argument('--model-id', required=True, help='HuggingFace model id or local path')
     parser.add_argument('--cache-dir', required=True, help='HF hub cache directory (HF_HUB_CACHE)')
-    parser.add_argument('--tp', required=True, type=int, help='Tensor parallel size')
-    parser.add_argument('--cp', required=True, type=int, help='Context parallel size')
+    parser.add_argument(
+        '--tp', type=_positive_int, default=1, help='Tensor parallel size (default: 1)')
+    parser.add_argument(
+        '--cp', type=_positive_int, default=1, help='Context parallel size (default: 1)')
+    parser.add_argument(
+        '--ep', type=_positive_int, default=1, help='Expert parallel size (default: 1)')
+    parser.add_argument(
+        '--dp', type=_positive_int, default=1, help='Data parallel size (default: 1)')
+    parser.add_argument(
+        '--communicator',
+        default='nccl',
+        choices=['nccl', 'cuda-ipc'],
+        help='Device communicator backend (default: nccl)',
+    )
     parser.add_argument('--gpus', required=True, help='CUDA_VISIBLE_DEVICES value, e.g. "0" or "0,1"')
     parser.add_argument(
         '--max-new-tokens',
@@ -405,11 +433,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def run_smoke_infer(
     model_id: str,
     cache_dir: str,
-    tp: int,
     gpus: str,
     resolved: ResolvedPrompts,
     *,
-    cp: int,
+    tp: int = 1,
+    cp: int = 1,
+    ep: int = 1,
+    dp: int = 1,
+    communicator: str = 'nccl',
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     async_: int = DEFAULT_ASYNC,
     session_len: int = DEFAULT_SESSION_LEN,
@@ -423,6 +454,10 @@ def run_smoke_infer(
     debug: bool = False,
 ) -> SmokeResult:
     _validate_engine_params(
+        tp=tp,
+        cp=cp,
+        ep=ep,
+        dp=dp,
         max_new_tokens=max_new_tokens,
         async_=async_,
         session_len=session_len,
@@ -445,9 +480,10 @@ def run_smoke_infer(
         max_prefill_token_num=max_prefill_token_num,
         tp=tp,
         cp=cp,
-        dp=1,
+        dp=dp,
+        ep=ep,
         enable_metrics=False,
-        communicator='nccl',
+        communicator=communicator,
         enable_prefix_caching=enable_prefix_caching,
         cache_checkpoint_interval=cache_checkpoint_interval,
         cache_prompt=cache_prompt,
@@ -487,12 +523,15 @@ def run_smoke_infer(
 
 def print_report(
     model_id: str,
-    tp: int,
     gpus: str,
     resolved: ResolvedPrompts,
     result: SmokeResult,
     *,
-    cp: int,
+    tp: int = 1,
+    cp: int = 1,
+    ep: int = 1,
+    dp: int = 1,
+    communicator: str = 'nccl',
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     async_: int = DEFAULT_ASYNC,
     session_len: int = DEFAULT_SESSION_LEN,
@@ -509,7 +548,10 @@ def print_report(
     print(f'model: {model_id}')
     print(f'tp: {tp}')
     print(f'cp: {cp}')
+    print(f'ep: {ep}')
+    print(f'dp: {dp}')
     print(f'gpus: {gpus}')
+    print(f'communicator: {communicator}')
     print(f'max_new_tokens: {max_new_tokens}')
     print(f'async: {async_}')
     print(f'session_len: {session_len}')
@@ -550,9 +592,12 @@ def run_smoke_test(
     *,
     model_id: str,
     cache_dir: str,
-    tp: int,
-    cp: int,
     gpus: str,
+    tp: int = 1,
+    cp: int = 1,
+    ep: int = 1,
+    dp: int = 1,
+    communicator: str = 'nccl',
     prompts: list[str] | None = None,
     prompt_file: str | None = None,
     prompt_ids: list[int] | None = None,
@@ -577,10 +622,13 @@ def run_smoke_test(
     result = run_smoke_infer(
         model_id,
         cache_dir,
-        tp,
         gpus,
         resolved,
+        tp=tp,
         cp=cp,
+        ep=ep,
+        dp=dp,
+        communicator=communicator,
         max_new_tokens=max_new_tokens,
         async_=async_,
         session_len=session_len,
@@ -596,11 +644,14 @@ def run_smoke_test(
     if emit_report:
         print_report(
             model_id,
-            tp,
             gpus,
             resolved,
             result,
+            tp=tp,
             cp=cp,
+            ep=ep,
+            dp=dp,
+            communicator=communicator,
             max_new_tokens=max_new_tokens,
             async_=async_,
             session_len=session_len,
@@ -627,6 +678,9 @@ def main() -> None:
         prompts=args.prompt,
         prompt_file=args.prompt_file,
         prompt_ids=args.prompt_ids,
+        ep=args.ep,
+        dp=args.dp,
+        communicator=args.communicator,
         max_new_tokens=args.max_new_tokens,
         async_=args.async_,
         session_len=args.session_len,

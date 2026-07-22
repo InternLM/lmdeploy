@@ -22,6 +22,7 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
+from .parallel_config import derive_parallel_config
 from .supported_models import is_supported
 
 # TODO: find another way import _turbomind
@@ -66,9 +67,11 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
 
 
 def complete_parallel_config(cfg: TurbomindEngineConfig):
-    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
+    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.attn_cp_size, cfg.mlp_dp_size, cfg.mlp_tp_size,
+            cfg.outer_dp_size)):
         cfg.attn_dp_size = cfg.attn_dp_size or 1
         cfg.attn_tp_size = cfg.attn_tp_size or 1
+        cfg.attn_cp_size = cfg.attn_cp_size or 1
         cfg.mlp_dp_size = cfg.mlp_dp_size or 1
         cfg.mlp_tp_size = cfg.mlp_tp_size or 1
         cfg.outer_dp_size = cfg.outer_dp_size or 1
@@ -82,28 +85,18 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
-    assert cfg.ep == 1 or cfg.tp == 1
     if not complete_parallel_config(cfg):
-        total = cfg.dp * cfg.ep * cfg.tp
-        if not cfg.device_num:
-            count = torch.cuda.device_count() * cfg.nnodes
-            if total < count:
-                count = total
-            cfg.device_num = count
-        assert total % cfg.device_num == 0
-        size = max(cfg.ep, cfg.tp)
-        overlap = total // cfg.device_num
-        inner_tp_size = size // overlap
-        cfg.outer_dp_size = cfg.dp // overlap
-        cfg.attn_dp_size = overlap
-        cfg.attn_tp_size = inner_tp_size // cfg.cp
-        cfg.attn_cp_size = cfg.cp
-        comm_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
-        cfg.mlp_dp_size = 1
-        cfg.mlp_tp_size = comm_size // cfg.ep if cfg.ep > 1 else overlap * inner_tp_size
+        available = torch.cuda.device_count() * cfg.nnodes
+        parallel = derive_parallel_config(cfg.dp, cfg.tp, cfg.ep, cfg.cp, cfg.device_num, available)
+        cfg.device_num = parallel.device_num
+        cfg.outer_dp_size = parallel.outer_dp_size
+        cfg.attn_dp_size = parallel.attn_dp_size
+        cfg.attn_tp_size = parallel.attn_tp_size
+        cfg.attn_cp_size = parallel.attn_cp_size
+        cfg.mlp_dp_size = parallel.mlp_dp_size
+        cfg.mlp_tp_size = parallel.mlp_tp_size
     if cfg.ep > 1:
         assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
-        assert cfg.mlp_tp_size == 1, 'Only support mlp_tp_size == 1 when ep > 1'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
