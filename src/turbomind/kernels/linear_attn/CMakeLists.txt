@@ -15,9 +15,8 @@ target_link_libraries(linear_attn PUBLIC
 
 # Registry entry translation units act as static plugins: they must be linked
 # before the host archive whose planner and registry symbols they reference.
-set(LINEAR_ATTN_GDR_WHOLE_ARCHIVES "")
-foreach(target IN LISTS LINEAR_ATTN_GDR_KERNEL_TARGETS)
-    list(APPEND LINEAR_ATTN_GDR_WHOLE_ARCHIVES "$<LINK_LIBRARY:WHOLE_ARCHIVE,${target}>")
-endforeach()
+# Keep every archive in one feature expression: some CMake versions only apply
+# WHOLE_ARCHIVE to the first of several expressions in this direct-link list.
+list(JOIN LINEAR_ATTN_GDR_KERNEL_TARGETS "," LINEAR_ATTN_GDR_KERNEL_TARGET_LIST)
 set_property(TARGET linear_attn PROPERTY INTERFACE_LINK_LIBRARIES_DIRECT
-        ${LINEAR_ATTN_GDR_WHOLE_ARCHIVES})
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,${LINEAR_ATTN_GDR_KERNEL_TARGET_LIST}>")
