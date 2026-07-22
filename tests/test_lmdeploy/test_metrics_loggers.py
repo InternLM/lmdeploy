@@ -3,7 +3,7 @@
 import pytest
 
 from lmdeploy.metrics.loggers import PrometheusStatLogger
-from lmdeploy.metrics.stats import SpeculativeDecodingStats
+from lmdeploy.metrics.stats import SchedulerStats, SpeculativeDecodingStats
 
 prometheus_client = pytest.importorskip('prometheus_client')
 
@@ -42,3 +42,19 @@ def test_prometheus_stat_logger_records_specdecode_metrics():
     position_labels = labels | {'position': '2'}
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_per_pos_total', position_labels) == 0
     assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 0
+
+
+def test_prometheus_stat_logger_records_schedule_metrics():
+    logger = PrometheusStatLogger('test-model', max_model_len=16, dp_rank=0)
+    stats = SchedulerStats(num_running_reqs=2,
+                           num_waiting_reqs=3,
+                           gpu_cache_usage=0.375,
+                           prefix_cache_hit_rate=0.25)
+
+    logger.record_schedule(stats)
+
+    labels = {'model_name': 'test-model', 'engine': '0'}
+    assert _get_sample_value('lmdeploy:num_requests_running', labels) == 2
+    assert _get_sample_value('lmdeploy:num_requests_waiting', labels) == 3
+    assert _get_sample_value('lmdeploy:gpu_cache_usage_perc', labels) == 0.375
+    assert _get_sample_value('lmdeploy:prefix_cache_hit_rate', labels) == 0.25

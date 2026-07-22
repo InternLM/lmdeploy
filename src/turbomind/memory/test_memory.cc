@@ -1122,3 +1122,42 @@ TEST_CASE("ObjectAllocator simple/composite share one slab class", "[memory][obj
     obj.Deallocate(cidx, &comp, 1);
     obj.Deallocate(sidx, &s0, 1);
 }
+
+TEST_CASE("ObjectAllocator Stats tracks live object bytes", "[memory][object][stats]")
+{
+    using core::Allocator;
+    using core::Buffer;
+
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
+
+    Allocator alloc{kCPU};
+    Buffer    buf{kBytes, data_type_v<int8_t>, alloc};
+
+    ObjectAllocator obj{buf};
+    const int       simple_id    = obj.Register(64UL << 10, 64);
+    const int       composite_id = obj.Register({{32UL << 10, 64, 2}, {128UL << 10, 128, 1}});
+
+    object_alloc_t simple    = obj.Allocate(simple_id);
+    object_alloc_t composite = obj.Allocate(composite_id);
+    REQUIRE(simple.a);
+    REQUIRE(composite.a);
+
+    size_t expected_composite_bytes = 0;
+    for (int part = 0; part < obj.PartCount(composite_id); ++part) {
+        expected_composite_bytes += obj.PartBytes(composite_id, part);
+    }
+
+    auto stats = obj.Stats();
+    REQUIRE(stats.live_allocations == 2);
+    REQUIRE(stats.live_bytes == obj.PartBytes(simple_id, 0) + expected_composite_bytes);
+
+    obj.Deallocate(simple_id, simple);
+    stats = obj.Stats();
+    REQUIRE(stats.live_allocations == 1);
+    REQUIRE(stats.live_bytes == expected_composite_bytes);
+
+    obj.Deallocate(composite_id, composite);
+    stats = obj.Stats();
+    REQUIRE(stats.live_allocations == 0);
+    REQUIRE(stats.live_bytes == 0);
+}

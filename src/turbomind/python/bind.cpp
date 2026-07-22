@@ -475,7 +475,9 @@ PYBIND11_MODULE(_turbomind, m)
         .def_property_readonly("enqueue_time",
                                [](ft::RequestMetrics& m) { return m.enqueue_time.load(std::memory_order_relaxed); })
         .def_property_readonly("scheduled_time",
-                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); });
+                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); })
+        .def_property_readonly("cached_tokens",
+                               [](ft::RequestMetrics& m) { return m.cached_tokens.load(std::memory_order_relaxed); });
 
     py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
         .def(py::init())
@@ -486,6 +488,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("active_blocks", &ft::ScheduleMetrics::active_blocks)
         .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
         .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks)
+        .def_readonly("cache_usage", &ft::ScheduleMetrics::cache_usage)
+        .def_readonly("prefix_cache_hit_rate", &ft::ScheduleMetrics::prefix_cache_hit_rate)
         .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
 
     py::class_<ft::SessionParam>(m, "SessionParam")

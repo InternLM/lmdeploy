@@ -397,16 +397,14 @@ class TurboMind:
     def get_schedule_metrics(self):
         # TODO: support dp
         tm_metrics = self.model_comm.get_schedule_metrics(0)
-        if tm_metrics is None:
-            # ScheduleMetrics is not yet wired onto the new scheduler (metrics revival is
-            # deferred). Report no metrics so consumers (health probe / metrics logger)
-            # degrade gracefully instead of dereferencing a missing metrics object.
-            return None
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
                                active_blocks=tm_metrics.active_blocks,
+                               cached_blocks=tm_metrics.cached_blocks,
                                free_blocks=tm_metrics.free_blocks,
+                               cache_usage=tm_metrics.cache_usage,
+                               prefix_cache_hit_rate=tm_metrics.prefix_cache_hit_rate,
                                scheduler_tick=tm_metrics.scheduler_tick)
 
     def _get_health_status(self) -> dict:
@@ -523,14 +521,16 @@ def _get_metrics(metrics):
 
     def _func(out: EngineOutput, step: int, **kwargs):
         nonlocal is_first
+        cached_tokens = metrics.cached_tokens
         if not is_first:
-            out.req_metrics = RequestMetrics(token_timestamp=time.time())
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(), cached_tokens=cached_tokens)
         else:
-            events = [
-                EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000),
-                EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
-            ]
-            out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
+            events = [EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000)]
+            if metrics.scheduled_time:
+                events.append(EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000))
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(),
+                                             engine_events=events,
+                                             cached_tokens=cached_tokens)
             is_first = False
 
     return _func

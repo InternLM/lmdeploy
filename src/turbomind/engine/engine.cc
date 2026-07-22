@@ -6,6 +6,7 @@
 #include <memory>
 #include <numeric>
 #include <thread>
+#include <unordered_set>
 
 #include "nvtx3/nvToolsExt.h"
 
@@ -121,7 +122,7 @@ struct Engine::Impl {
         }
     }
 
-    void UpdateScheduleMetrics();
+    void UpdateScheduleMetrics(bool advance_scheduler = false);
 
     void MaybeLogCacheStats();
 
@@ -160,6 +161,10 @@ struct Engine::Impl {
     // int session_len_trunc_;
 
     shared_ptr<ScheduleMetrics> metrics_;
+
+    int64_t  scheduler_tick_{};
+    uint64_t prefix_query_tokens_{};
+    uint64_t prefix_hit_tokens_{};
 
     int      cache_log_interval_ = GetEnv<CACHE_LOG_INTERVAL>();  // read once (GetEnv caches statically)
     uint64_t schedule_counter_   = 0;
@@ -251,6 +256,8 @@ Engine::Impl::Impl(EngineParam                  param,
     }
 
     executor_ = ModelExecutor{model_, vision_model_.get(), ctx, device_id_, outbound_, inbound_};
+
+    UpdateScheduleMetrics();
 
     if (cache_log_interval_ && tp_rank_ == 0) {
         TM_LOG_WARN("dp{} cache stats:\n{}", dp_rank_, FormatMemoryStats(object_allocator_.Stats()));
@@ -503,9 +510,19 @@ void Engine::Impl::Schedule()
         eligible[i]->generating = {};
     }
 
-    if (param_.enable_metrics) {
-        for (auto i : swap_in) {
-            if (auto& m = eligible[i]->req->metrics; TM_LIKELY(m)) {
+    for (auto i : swap_in) {
+        auto& c = *eligible[i];
+        if (!c.first_schedule_recorded) {
+            c.first_schedule_recorded = true;
+
+            const int64_t cached_tokens = std::clamp<int64_t>(c.history_len, 0, c.prompt_len);
+            if (!is_warm_up_ && param_.enable_prefix_caching) {
+                prefix_query_tokens_ += c.prompt_len;
+                prefix_hit_tokens_ += cached_tokens;
+            }
+
+            if (auto& m = c.req->metrics; TM_LIKELY(m)) {
+                m->cached_tokens.store(cached_tokens, std::memory_order_relaxed);
                 int64_t expected = 0;
                 m->scheduled_time.compare_exchange_strong(
                     expected, RequestMetrics::timestamp(), std::memory_order_relaxed);
@@ -822,7 +839,7 @@ void Engine::Impl::InternalThreadEntry()
 
             FailStalledHeadOfLine(signals);
 
-            UpdateScheduleMetrics();
+            UpdateScheduleMetrics(true);
 
             MaybeLogCacheStats();
 
@@ -847,11 +864,16 @@ void Engine::Impl::InternalThreadEntry()
 
             Retire(st);
 
+            UpdateScheduleMetrics();
+
             gateway_.notify(std::move(signals), tp_rank_ == 0);
 
             // if (future.valid()) {
             //     future.get().Sync();
             // }
+        }
+        else {
+            UpdateScheduleMetrics();
         }
 
         // dbg("=========================================================================");
@@ -910,32 +932,55 @@ void Engine::Impl::MaybeLogCacheStats()
     TM_LOG_WARN("dp{} cache stats:\n{}", dp_rank_, FormatMemoryStats(object_allocator_.Stats()));
 }
 
-void Engine::Impl::UpdateScheduleMetrics()
+void Engine::Impl::UpdateScheduleMetrics(bool advance_scheduler)
 {
-    if (param_.enable_metrics) {
-        // const auto& [total, active, cached] = seq_mgr_->seq_stats();
-
-        // auto m = std::make_shared<ScheduleMetrics>();
-
-        // m->total_seqs   = total;
-        // m->active_seqs  = active;
-        // m->waiting_seqs = total - active;
-
-        // m->total_blocks  = seq_mgr_->total_count();
-        // m->active_blocks = seq_mgr_->active_count();
-        // m->cached_blocks = seq_mgr_->cached_count();
-        // m->free_blocks   = seq_mgr_->free_count();
-
-        // std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
+    if (advance_scheduler) {
+        ++scheduler_tick_;
     }
+
+    const auto& state = states_.at(0);
+
+    int                                   total_seqs  = 0;
+    int                                   active_seqs = 0;
+    std::unordered_set<const CacheBlock*> active_blocks;
+    for (const auto& p : state.rc) {
+        if (!p || p->retiring) {
+            continue;
+        }
+        ++total_seqs;
+        if (!p->is_active) {
+            continue;
+        }
+        ++active_seqs;
+        for (const CacheBlock* block : p->involved_blocks) {
+            if (is_valid(block)) {
+                active_blocks.insert(block);
+            }
+        }
+    }
+
+    const MemoryStats memory = object_allocator_.Stats();
+    TM_CHECK_LE(active_blocks.size(), memory.live_allocations);
+
+    auto m           = std::make_shared<ScheduleMetrics>();
+    m->total_seqs    = total_seqs;
+    m->active_seqs   = active_seqs;
+    m->waiting_seqs  = total_seqs - active_seqs;
+    m->total_blocks  = static_cast<int64_t>(memory.live_allocations);
+    m->active_blocks = static_cast<int64_t>(active_blocks.size());
+    m->cached_blocks = m->total_blocks - m->active_blocks;
+    m->free_blocks   = 0;
+    m->cache_usage   = memory.region_bytes ? static_cast<double>(memory.live_bytes) / memory.region_bytes : 0.;
+    m->prefix_cache_hit_rate =
+        prefix_query_tokens_ ? static_cast<double>(prefix_hit_tokens_) / prefix_query_tokens_ : 0.;
+    m->scheduler_tick = scheduler_tick_;
+
+    std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
 }
 
 shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 {
-    if (impl_->param_.enable_metrics) {
-        return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
-    }
-    return {};
+    return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
 }
 
 }  // namespace turbomind
