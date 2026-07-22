@@ -30,6 +30,8 @@ if ($CUDA_VERSION_FULL -eq "12.1.0") {
     $downloadUrl = "https://developer.download.nvidia.com/compute/cuda/12.6.2/local_installers/cuda_12.6.2_560.94_windows.exe"
 } elseif ($CUDA_VERSION_FULL -eq "12.8.1") {
     $downloadUrl = "https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_572.61_windows.exe"
+} elseif ($CUDA_VERSION_FULL -eq "13.0.3") {
+    $downloadUrl = "https://developer.download.nvidia.com/compute/cuda/13.0.3/local_installers/cuda_13.0.3_windows.exe"
 } else {
     Write-Output "Unsupported CUDA version specified"
     exit 1

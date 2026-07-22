@@ -3,6 +3,115 @@ import torch
 import torch.nn.functional as F
 
 
+@pytest.mark.parametrize(('num_routes', 'block_m'), [(640, 16), (512 * 24, 32), (512 * 40, 64)])
+def test_origin_blocked_fp8_small_m_configs_use_average_routes(num_routes, block_m):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=64,
+                                                               num_routes=num_routes,
+                                                               num_experts=512,
+                                                               local_experts=512)
+    assert gate_config == dict(block_m=max(64, block_m), block_n=128, num_warps=4, num_stages=3)
+    assert down_config == dict(block_m=block_m, block_n=128, num_warps=4, num_stages=3)
+
+
+def test_origin_blocked_fp8_large_m_uses_bm64_down_config():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=65,
+                                                               num_routes=650,
+                                                               num_experts=512,
+                                                               local_experts=512)
+    assert gate_config == dict(block_m=128, block_n=128, num_warps=4, num_stages=3)
+    assert down_config == dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
+
+
+def test_origin_blocked_fp8_large_m_high_avg_routes_uses_default_down_config():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=2048,
+                                                               num_routes=512 * 40,
+                                                               num_experts=512,
+                                                               local_experts=512)
+    expected = dict(block_m=128, block_n=128, num_warps=4, num_stages=3)
+    assert gate_config == expected
+    assert down_config == expected
+
+
+def test_origin_blocked_fp8_uses_average_routes_for_256_experts():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=64,
+                                                               num_routes=256 * 2,
+                                                               num_experts=256,
+                                                               local_experts=256)
+    assert gate_config == dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
+    assert down_config == dict(block_m=16, block_n=128, num_warps=4, num_stages=3)
+
+
+def test_origin_blocked_fp8_large_m_uses_average_routes_for_256_experts():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+
+    gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=512,
+                                                               num_routes=256 * 16,
+                                                               num_experts=256,
+                                                               local_experts=256)
+    assert gate_config == dict(block_m=128, block_n=128, num_warps=4, num_stages=3)
+    assert down_config == dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
+
+
+@pytest.mark.parametrize(('num_routes', 'block_m'), [(640, 64), (512 * 40, 64), (512 * 64, 128),
+                                                     (512 * 160, 128)])
+def test_compact_blocked_fp8_configs_use_average_routes(num_routes, block_m):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _compact_blocked_fp8_moe_config
+
+    assert _compact_blocked_fp8_moe_config(num_routes, num_experts=512) == dict(block_m=block_m,
+                                                                                block_n=128,
+                                                                                num_warps=4,
+                                                                                num_stages=3)
+
+
+@pytest.mark.parametrize(('num_tokens', 'num_routes', 'origin_ctas', 'compact_ctas'), [
+    (65, 650, 512 * 2 * 32, 512 * 1 * 32),
+    (1024, 512 * 20, 512 * 16 * 32, 512 * 1 * 32),
+    (4096, 512 * 80, 512 * 32 * 32, 512 * 1 * 32),
+    (8192, 512 * 160, 512 * 64 * 32, 512 * 2 * 32),
+])
+def test_blocked_fp8_moe_cta_estimates(num_tokens, num_routes, origin_ctas, compact_ctas):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _blocked_fp8_moe_cta_estimates
+
+    assert _blocked_fp8_moe_cta_estimates(num_tokens,
+                                          num_routes,
+                                          num_experts=512,
+                                          local_experts=512,
+                                          out_features=4096) == (origin_ctas, compact_ctas)
+
+
+@pytest.mark.parametrize(('num_tokens', 'num_routes', 'num_experts', 'local_experts', 'out_features', 'expected'), [
+    (64, 640, 512, 512, 4096, False),
+    (511, 512 * 10, 512, 512, 4096, False),
+    (512, 512 * 10, 512, 512, 4096, True),
+    (1024, 512 * 20, 512, 512, 4096, True),
+    (1024, 512 * 20, 512, 128, 4096, False),
+    (4096, 512 * 80, 512, 256, 128, True),
+    (2048, 256 * 64, 256, 256, 2048, False),
+    (4096, 256 * 128, 256, 256, 2048, True),
+    (512, 256 * 16, 256, 256, 7168, False),
+    (1024, 256 * 32, 256, 256, 7168, True),
+])
+def test_compact_blocked_fp8_down_policy_is_prefill_and_cta_gated(num_tokens, num_routes, num_experts, local_experts,
+                                                                  out_features, expected):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
+        _should_use_compact_blocked_fp8_moe_down_by_shape,
+    )
+
+    assert _should_use_compact_blocked_fp8_moe_down_by_shape(num_tokens,
+                                                             num_routes,
+                                                             num_experts=num_experts,
+                                                             local_experts=local_experts,
+                                                             out_features=out_features) is expected
+
+
 def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
     flatten_topk_idx = topk_idx.flatten()
     sorted_ids = flatten_topk_idx.argsort()

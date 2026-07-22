@@ -112,7 +112,7 @@ def test_sync_spec_cache_block_size_updates_kernel_block_size():
     assert spec_cache_config.kernel_block_size == 16
 
 
-def test_executor_disables_prefix_cache_with_spec_decode():
+def test_executor_keeps_prefix_cache_with_spec_decode():
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                num_cpu_blocks=0,
@@ -128,7 +128,7 @@ def test_executor_disables_prefix_cache_with_spec_decode():
                  misc_config=SimpleNamespace(),
                  specdecode_config=SimpleNamespace())
 
-    assert not cache_config.enable_prefix_caching
+    assert cache_config.enable_prefix_caching
 
 
 def test_executor_disables_prefix_cache_with_pd_role():

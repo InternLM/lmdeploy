@@ -10,6 +10,16 @@ CAMB_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP, maca=MACA_MODULE_MAP, camb=CAMB_MODULE_MAP)
 
+REMOVED_MODEL_MAP = {
+    'InternLMForCausalLM': 'InternLM',
+    'QWenLMHeadModel': 'Qwen and Qwen-VL',
+    'BaiChuanForCausalLM': 'Baichuan',
+    'BaichuanForCausalLM': 'Baichuan and Baichuan2',
+    'Starcoder2ForCausalLM': 'StarCoder2',
+    'InternLM2VEForCausalLM': 'Mono-InternVL',
+    'MllamaForConditionalGeneration': 'mllama',
+}
+
 # llama
 MODULE_MAP.update({
     'LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
@@ -19,11 +29,6 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Llama4ForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama4.Llama4ForConditionalGeneration',
-})
-
-# baichuan
-MODULE_MAP.update({
-    'BaichuanForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanForCausalLM',
 })
 
 # chatglm
@@ -59,11 +64,6 @@ MODULE_MAP.update({
 
 # glm5
 MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
-
-# internlm
-MODULE_MAP.update({
-    'InternLMForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.InternLMForCausalLM',
-})
 
 # internlm2
 MODULE_MAP.update({
@@ -123,11 +123,6 @@ MODULE_MAP.update({
     'LlavaForConditionalGeneration': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
     'LlavaNextForConditionalGeneration':  # noqa: E501
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaNextForConditionalGeneration'  # noqa: E501
-})
-
-# qwen
-MODULE_MAP.update({
-    'QWenLMHeadModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.QWenLMHeadModel',
 })
 
 # qwen1.5
@@ -205,11 +200,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_omni_moe_thinker.Qwen3OmniMoeThinkerForConditionalGeneration',
 })
 
-# starcoder2
-MODULE_MAP.update({
-    'Starcoder2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.Starcoder2ForCausalLM',
-})
-
 # phi-3
 MODULE_MAP.update({
     'Phi3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.Phi3ForCausalLM',
@@ -243,11 +233,6 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'InternS1_1_ForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_pro.InternS1ProForConditionalGeneration',
-})
-
-# mono-internvl
-MODULE_MAP.update({
-    'InternLM2VEForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_ve.InternLM2VEForCausalLM',
 })
 
 # phi3 vision

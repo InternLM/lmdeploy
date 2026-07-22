@@ -82,25 +82,28 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
+    assert cfg.ep == 1 or cfg.tp == 1
     if not complete_parallel_config(cfg):
-        total = cfg.dp * cfg.tp
+        total = cfg.dp * cfg.ep * cfg.tp
         if not cfg.device_num:
             count = torch.cuda.device_count() * cfg.nnodes
             if total < count:
                 count = total
             cfg.device_num = count
         assert total % cfg.device_num == 0
+        size = max(cfg.ep, cfg.tp)
         overlap = total // cfg.device_num
-        attn_dp_size = overlap
-        mlp_tp_size = overlap
-        inner_tp_size = cfg.tp // mlp_tp_size
-        cfg.outer_dp_size = cfg.dp // attn_dp_size
-        cfg.attn_dp_size = attn_dp_size
+        inner_tp_size = size // overlap
+        cfg.outer_dp_size = cfg.dp // overlap
+        cfg.attn_dp_size = overlap
         cfg.attn_tp_size = inner_tp_size // cfg.cp
         cfg.attn_cp_size = cfg.cp
+        comm_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
         cfg.mlp_dp_size = 1
-        cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+        cfg.mlp_tp_size = comm_size // cfg.ep if cfg.ep > 1 else overlap * inner_tp_size
+    if cfg.ep > 1:
+        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
+        assert cfg.mlp_tp_size == 1, 'Only support mlp_tp_size == 1 when ep > 1'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -173,6 +176,7 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = _engine_config.session_len
+        self.health_executor = ThreadPoolExecutor(max_workers=1)
 
     def _process_weights(self):
         """Process weight."""
@@ -238,6 +242,10 @@ class TurboMind:
         ec.cache_max_block_count = engine_config.cache_max_entry_count
         ec.cache_chunk_size = engine_config.cache_chunk_size
         ec.enable_prefix_caching = engine_config.enable_prefix_caching
+        ec.cache_checkpoint_interval = engine_config.cache_checkpoint_interval
+        ec.cache_prompt = engine_config.cache_prompt
+        ec.cache_prompt_boundary_skip = engine_config.cache_prompt_boundary_skip
+        ec.cache_generation = engine_config.cache_generation
         ec.enable_metrics = engine_config.enable_metrics
         ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
         ec.max_prefill_iters = engine_config.max_prefill_iters
@@ -247,6 +255,7 @@ class TurboMind:
         ec.attn_tp_size = engine_config.attn_tp_size
         ec.attn_cp_size = engine_config.attn_cp_size
         ec.mlp_tp_size = engine_config.mlp_tp_size
+        ec.ep_size = engine_config.ep
         ec.devices = engine_config.devices
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
@@ -279,8 +288,8 @@ class TurboMind:
         input."""
         if not multimodal:
             return None
-        if self.engine_config.disable_vision_encoder:
-            logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+        if self.engine_config.language_model_only:
+            logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
             return None
 
         parser = getattr(self.source_model, 'to_turbomind_multimodal', None)
@@ -353,11 +362,10 @@ class TurboMind:
                       ii) and iii)
                     - ii) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
-                      "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - iii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "internlm/internlm-chat-7b",
-                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      on huggingface.co, such as "internlm/internlm2-chat-7b",
+                      "Qwen/Qwen2.5-7B-Instruct"
                       and so on.
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
@@ -391,6 +399,11 @@ class TurboMind:
     def get_schedule_metrics(self):
         # TODO: support dp
         tm_metrics = self.model_comm.get_schedule_metrics(0)
+        if tm_metrics is None:
+            # ScheduleMetrics is not yet wired onto the new scheduler (metrics revival is
+            # deferred). Report no metrics so consumers (health probe / metrics logger)
+            # degrade gracefully instead of dereferencing a missing metrics object.
+            return None
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
@@ -420,7 +433,10 @@ class TurboMind:
 
     async def get_health_status(self) -> dict:
         """Get backend health status without blocking the event loop."""
-        return await asyncio.to_thread(self._get_health_status)
+        # MultimodalProcessor may submit a large number of tasks to the default thread pool, causing
+        # the _get_health_status task to be selected after the DEFAULT_PROBE_TIMEOUT has already elapsed.
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.health_executor, self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):
@@ -568,14 +584,13 @@ class TurboMindInstance:
             0: ResponseType.SUCCESS,
             1: ResponseType.SESSION_NOT_EXIST,
             2: ResponseType.SESSION_REPEAT,
-            3: ResponseType.SESSION_REPEAT,
-            4: ResponseType.INTERNAL_ENGINE_ERROR,
             5: ResponseType.INTERNAL_ENGINE_ERROR,
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
             8: ResponseType.CANCEL,
-            9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            9: ResponseType.PREFIX_CACHE_CONFLICT,
             10: ResponseType.NO_QUEUE,
+            11: ResponseType.OUT_OF_MEMORY,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 
@@ -671,15 +686,9 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
-    def async_end_cb(self, fut: asyncio.Future, status: int):
-        """Executing on engine's signaling thread."""
-        logger.info(f'[async_end_cb] session ended, status = {status}')
-        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
-
     async def async_end(self, session_id):
-        fut = asyncio.get_running_loop().create_future()
-        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
-        await fut
+        """TurboMind is stateless; there is no engine-side session to end."""
+        return
 
     def async_signal_cb(self, s: StreamingSemaphore):
         """Executing on engine's signaling thread."""
@@ -706,15 +715,21 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
+            sequence_start (bool): must be True; TurboMind is stateless-only
+            sequence_end (bool): must be True; TurboMind is stateless-only
             step (int): the offset of the k/v cache
-            stop (bool): indicator for cancelling the session
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
         logger.info(f'[async_stream_infer] session {session_id} start')
+        if not (sequence_start and sequence_end):
+            logger.error(f'[async_stream_infer] session {session_id}: TurboMind supports only '
+                         f'stateless requests; stateful/interactive inference '
+                         f'(sequence_start={sequence_start}, sequence_end={sequence_end}) is not '
+                         f'supported - use prefix caching instead')
+            yield EngineOutput(ResponseType.NOT_SUPPORTED, [])
+            return
         gen_cfg = self._get_generation_config(gen_config)
 
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
@@ -758,7 +773,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
+        session = _tm.SessionParam(id=session_id, step=step)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)

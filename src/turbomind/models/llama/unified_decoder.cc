@@ -9,7 +9,9 @@
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
+#include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
@@ -33,7 +35,8 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
+UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
+                               const EngineParam& engine,
                                const Context&     ctx,
                                int                phases,
                                const ModelWeight& model_weight):
@@ -48,56 +51,53 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
     tune_layer_num_(engine.tune_layer_num),
     is_warm_up_{*ctx.is_warm_up}
 {
-    bool has_moe = false;
+    std::vector<MoeWeight*>       moe_weights;
+    std::vector<FfnWeight*>       ffn_weights;
+    std::vector<DeltaNetWeight*>  gdn_weights;
+    std::vector<AttentionWeight*> attn_weights;
+
     for (int i = 0; i < model_weight.num_layer; ++i) {
-        if (model_weight.layer(i)->moe_ffn) {
-            has_moe = true;
-            break;
+        auto layer = model_weight.layer(i);
+        if (layer->moe_ffn) {
+            moe_weights.push_back(layer->moe_ffn.get());
+        }
+        if (layer->linear_attn) {
+            gdn_weights.push_back(layer->linear_attn.get());
+        }
+        if (layer->attention) {
+            attn_weights.push_back(layer->attention.get());
+        }
+        if (layer->feed_forward) {
+            ffn_weights.push_back(layer->feed_forward.get());
         }
     }
-    if (has_moe) {
+
+    if (!moe_weights.empty()) {
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx);
     }
 
-    std::vector<AttentionWeight*> attn_weights;
-    attn_weights.reserve(model_weight.num_layer);
-    for (int i = 0; i < model_weight.num_layer; ++i) {
-        if (auto* attn = model_weight.layer(i)->attention.get()) {
-            attn_weights.push_back(attn);
-        }
-    }
-
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(engine.quant_policy,
-                                                          model_weight.layer_types,
-                                                          model_weight.num_layer,
-                                                          attn_weights,
-                                                          engine,
-                                                          ctx,
-                                                          phases,
-                                                          (bool)moe_ffn_layer_);
-
-    bool has_linear_attn = false;
-    for (auto t : model_weight.layer_types) {
-        if (t == 1) {
-            has_linear_attn = true;
-            break;
-        }
-    }
-    if (has_linear_attn) {
-        linear_attn_layer_ =
-            std::make_unique<GatedDeltaNetLayer>(model_weight.data_type, model_weight.layer_types, engine, ctx, phases);
-    }
-
-    bool has_ffn = false;
-    for (int i = 0; i < model_weight.num_layer; ++i) {
-        if (model_weight.layer(i)->feed_forward) {
-            has_ffn = true;
-            break;
-        }
-    }
-    if (has_ffn) {
+    if (!ffn_weights.empty()) {
         ffn_layer_ = std::make_unique<LlamaFfnLayer>(ctx);
     }
+
+    if (!attn_weights.empty()) {
+        attn_layer_ = std::make_unique<UnifiedAttentionLayer>(attn_weights,  //
+                                                              registry,
+                                                              engine,
+                                                              ctx,
+                                                              phases,
+                                                              (bool)moe_ffn_layer_);
+    }
+
+    if (!gdn_weights.empty()) {
+        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(gdn_weights,  //
+                                                                  registry,
+                                                                  engine,
+                                                                  ctx,
+                                                                  phases);
+    }
+
+    TM_CHECK(!(moe_weights.empty() && engine.ep_size > 1)) << "Dense model is not supported with ep_size > 1";
 }
 
 void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
@@ -250,7 +250,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         /// self-attention or linear-attention
         if (weights.at(layer)->linear_attn) {
             linear_attn_layer_->Forward(
-                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn.get(), layer});
+                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn.get()});
         }
         else {
             auto* attn = weights.at(layer)->attention.get();
@@ -291,14 +291,18 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
                                                       global_hidden_states,
                                                       weights.at(layer)->moe_ffn.get(),
-                                                      ffn_layer_ ? 1.f : 0.f,
+                                                      weights.at(layer)->feed_forward ? 1.f : 0.f,
                                                       layer};
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
         if (ffn_layer_ && weights.at(layer)->feed_forward) {
-            ffn_layer_->forward(
-                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward.get(), (int)layer});
+            auto ffn_input_shared =
+                moe_ffn_layer_ ? moe_ffn_layer_->GetShardFfnInput(global_hidden_states) : global_hidden_states;
+            if (ffn_input_shared.shape(0) > 0) {
+                ffn_layer_->forward(
+                    {ffn_input_shared, ffn_input_shared, weights.at(layer)->feed_forward.get(), (int)layer});
+            }
         }
 
         if (moe_fwd_param) {

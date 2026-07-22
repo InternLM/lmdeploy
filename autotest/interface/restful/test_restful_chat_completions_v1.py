@@ -2,6 +2,7 @@ from typing import Literal
 
 import pytest
 from openai import OpenAI
+from utils.config_utils import get_model_path_from_config
 from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
@@ -34,7 +35,7 @@ class TestRestfulInterfaceBase:
     def test_get_model(self, config, backend, model_case):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
-        assert model_name == '/'.join([config.get('model_path'), MODEL]), api_client.available_models
+        assert model_name == get_model_path_from_config(config, MODEL), api_client.available_models
 
         model_list = get_model_list(BASE_URL + '/v1/models')
         assert model_name in model_list, model_list

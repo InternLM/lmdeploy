@@ -265,6 +265,11 @@ class CUDAGraphRunner(GraphRunner):
 
         kwargs = self._prepare_inputs(**kwargs)
         context = self.ctx_mgr.current_context()
+        if get_deepep_state().enabled():
+            from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, DeepEPMode
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
+            DeepEPBuffer.set_deepep_mode(deepep_mode)
+
         enable_graph = context.global_is_decoding() and self.enable_graph(**kwargs)
 
         if not enable_graph:
@@ -306,12 +311,6 @@ class CUDAGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """Prepare inputs."""
-
-        if get_deepep_state().enabled():
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
-            deepep_mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
-            DeepEPBuffer.set_deepep_mode(deepep_mode)
-
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
@@ -320,9 +319,10 @@ class CUDAGraphRunner(GraphRunner):
 
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
+        super().reset()
         self._runner_map.clear()
         if get_deepep_state().enabled():
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer
+            from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer
 
             if hasattr(DeepEPBuffer, 'destroy'):
                 from torch import distributed as dist

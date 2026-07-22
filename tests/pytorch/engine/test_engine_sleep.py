@@ -44,11 +44,15 @@ class _FakeEngineLoop:
     async def drain_for_sleep(self):
         assert self.engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
         assert self.engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
+        self.engine.events.append('drain')
         self.drained = True
 
     def resume_from_sleep(self):
         self.engine.events.append('resume')
         self.resumed = True
+
+    def reset_runtime_state(self):
+        self.engine.events.append('reset_engine_loop')
 
 
 class _FakeExecutor:
@@ -62,6 +66,7 @@ class _FakeExecutor:
         assert self.engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
         assert self.engine.scheduler.sessions == {}
         self.sleep_calls.append(level)
+        self.engine.events.append('sleep')
 
     def wakeup(self, tags=None):
         self.wakeup_calls.append(tags)
@@ -118,6 +123,7 @@ def test_engine_sleep_blocks_inputs_cancels_sessions_then_sleeps(event_loop):
     assert resp.event.is_set()
     assert engine.scheduler.ended_sessions == [1]
     assert engine.executor.sleep_calls == [1]
+    assert engine.events == ['drain', 'sleep', 'reset_engine_loop']
 
 
 def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):

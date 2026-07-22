@@ -168,7 +168,7 @@ EVAL_CONFIGS = {
     },
     'longtext-512k': {
         'query_per_second': 4,
-        'max_out_len': 700000,
+        'max_out_len': 4096,
         'max_seq_len': 700000,
         'batch_size': 32,
         'temperature': 1.0,
@@ -210,7 +210,7 @@ RESTFUL_MODEL_LIST_LATEST = [
     'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B-FP8', 'Qwen/Qwen3.5-122B-A10B',
     'Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-0.6B', 'OpenGVLab/InternVL3_5-30B-A3B',
     'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1', 'meta-llama/Llama-3.2-3B-Instruct',
-    'Qwen/Qwen3-VL-30B-A3B-Instruct',
+    'Qwen/Qwen3-VL-30B-A3B-Instruct', 'internlm/internlm3-8b-instruct',
 ]
 
 RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
@@ -253,7 +253,7 @@ TOOL_REASONING_MODEL_LIST = TOOL_REASONING_MODEL_LIST_LEGACY if _IS_LEGACY else 
 
 RESTFUL_BASE_MODEL_LIST = [
     'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3.5-35B-A3B-Base','Qwen/Qwen3-8B-Base',
-    'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B'
+    'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B', 'internlm/internlm3-8b-instruct'
 ]
 
 SUFFIX_INNER_AWQ = '-inner-4bits'

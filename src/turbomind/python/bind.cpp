@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <array>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -20,6 +21,7 @@
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/engine_config.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/models/attention_weight.h"
@@ -344,20 +346,41 @@ PYBIND11_MODULE(_turbomind, m)
         .value("AUDIO", MMModality::kAudio)
         .value("TIME_SERIES", MMModality::kTimeSeries)
         .export_values();
+    auto fp_from_bytes = [](const py::bytes& b) -> ft::Fingerprint {
+        ft::Fingerprint fp{};
+        char*           buf = nullptr;
+        Py_ssize_t      len = 0;
+        if (PyBytes_AsStringAndSize(b.ptr(), &buf, &len) != 0) {
+            throw py::error_already_set();
+        }
+        if (len == 0) {
+            return fp;  // empty sentinel
+        }
+        if (len != 32) {
+            throw std::invalid_argument("Qwen3_5VitItem.fingerprint must be 0 or 32 bytes (SHA-256)");
+        }
+        std::memcpy(fp.words.data(), buf, 32);
+        return fp;
+    };
+    auto fp_to_bytes = [](const ft::Fingerprint& fp) -> py::bytes {
+        return py::bytes(reinterpret_cast<const char*>(fp.words.data()), 32);
+    };
     py::class_<QwenVitItem>(multimodal, "Qwen3_5VitItem")
         .def(py::init<>())
-        .def(py::init([](MMModality              modality,
-                         std::shared_ptr<Tensor> data,
-                         int                     token_begin,
-                         int                     token_end,
-                         std::array<int, 3>      grid_thw) {
-                 return QwenVitItem{modality, *data, token_begin, token_end, grid_thw};
+        .def(py::init([fp_from_bytes](MMModality              modality,
+                                      std::shared_ptr<Tensor> data,
+                                      int                     token_begin,
+                                      int                     token_end,
+                                      std::array<int, 3>      grid_thw,
+                                      py::bytes               fingerprint) {
+                 return QwenVitItem{modality, *data, token_begin, token_end, grid_thw, fp_from_bytes(fingerprint)};
              }),
              "modality"_a,
              "data"_a,
              "token_begin"_a,
              "token_end"_a,
-             "grid_thw"_a)
+             "grid_thw"_a,
+             "fingerprint"_a = py::bytes())
         .def_readwrite("modality", &QwenVitItem::modality)
         .def_property(
             "data",
@@ -365,7 +388,11 @@ PYBIND11_MODULE(_turbomind, m)
             [](QwenVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
         .def_readwrite("token_begin", &QwenVitItem::token_begin)
         .def_readwrite("token_end", &QwenVitItem::token_end)
-        .def_readwrite("grid_thw", &QwenVitItem::grid_thw);
+        .def_readwrite("grid_thw", &QwenVitItem::grid_thw)
+        .def_property(
+            "fingerprint",
+            [fp_to_bytes](const QwenVitItem& self) { return fp_to_bytes(self.fingerprint); },
+            [fp_from_bytes](QwenVitItem& self, py::bytes b) { self.fingerprint = fp_from_bytes(b); });
     py::class_<QwenVitInput, MMInput, std::shared_ptr<QwenVitInput>>(multimodal, "Qwen3_5VitInput")
         .def(py::init<>())
         .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
@@ -390,25 +417,16 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
 
     py::class_<ft::SessionParam>(m, "SessionParam")
-        .def(py::init([](uint64_t id, int step, bool start, bool end) {
-                 if (!start && end) {
-                     throw std::logic_error("unsupported arguments: start=false, end=true");
-                 }
+        .def(py::init([](uint64_t id, int step) {
                  ft::SessionParam param{};
-                 param.id         = id;
-                 param.step       = step;
-                 param.start_flag = start;
-                 param.end_flag   = end;
+                 param.id   = id;
+                 param.step = step;
                  return param;
              }),
              "id"_a,
-             "step"_a,
-             "start"_a,
-             "end"_a)
+             "step"_a)
         .def_readwrite("id", &ft::SessionParam::id)
-        .def_readwrite("step", &ft::SessionParam::step)
-        .def_readwrite("start", &ft::SessionParam::start_flag)
-        .def_readwrite("end", &ft::SessionParam::end_flag);
+        .def_readwrite("step", &ft::SessionParam::step);
 
     py::class_<ft::GenerationConfig>(m, "GenerationConfig")
         .def(py::init())
@@ -615,14 +633,6 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::call_guard<py::gil_scoped_release>())
         .def(
-            "end",
-            [](ModelRequest* model_request, std::function<void(int)> cb, uint64_t session_id) {
-                model_request->End(std::move(cb), session_id);  //
-            },
-            py::call_guard<py::gil_scoped_release>(),
-            "cb"_a,
-            "session_id"_a)
-        .def(
             "set_grammar",
             [](ModelRequest* model_request, const xgrammar::CompiledGrammar& grammar) {
                 TM_LOG_INFO("Set grammar for model_request");
@@ -793,5 +803,6 @@ PYBIND11_MODULE(_turbomind, m)
         .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); })
         .def("attn_tp_rank", &TurboMind::GetAttnTpRank, "index"_a)
         .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a)
+        .def("ep_rank", &TurboMind::GetEpRank, "index"_a)
         .def("model_tp_rank", &TurboMind::GetModelTpRank, "index"_a);
 }

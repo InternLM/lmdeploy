@@ -10,6 +10,14 @@ from lmdeploy.vl.constants import Modality
 multimodal_module = sys.modules[MultimodalProcessor.__module__]
 
 
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 class TestMergeMessageContent:
     """Test suite for merge_message_content function."""
 
@@ -242,7 +250,7 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    def fake_load_from_url(data_src, media_io):
+    def fake_load_from_url(data_src, media_io, allowed_media_domains=None):
         load_calls.append((data_src, type(media_io).__name__))
         if isinstance(media_io, FakeVideoMediaIO):
             return f'loaded:{data_src}', {'duration': 2}
@@ -304,7 +312,7 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         ]
     }]
 
-    parsed = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+    parsed = _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
     content = parsed[0]['content']
 
     assert content[0] == {'type': 'text', 'text': 'describe'}
@@ -333,6 +341,137 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
     ]
 
 
+def test_async_parse_multimodal_item_passes_allowed_media_domains(monkeypatch):
+    """Test server-owned domain allowlist is forwarded to URL loaders."""
+    load_calls = []
+
+    class FakeVideoMediaIO:
+
+        def __init__(self, image_io=None, **kwargs):
+            self.image_io = image_io
+            self.kwargs = kwargs
+
+    def fake_load_from_url(data_src, media_io, allowed_media_domains=None):
+        load_calls.append((data_src, type(media_io).__name__, allowed_media_domains))
+        if isinstance(media_io, FakeVideoMediaIO):
+            return f'loaded:{data_src}', {'duration': 2}
+        return f'loaded:{data_src}'
+
+    monkeypatch.setattr(multimodal_module, 'VideoMediaIO', FakeVideoMediaIO)
+    monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
+
+    messages = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type': 'image_url',
+                'image_url': {
+                    'url': 'https://example.com/a.png',
+                }
+            },
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': 'https://example.com/a.mp4',
+                }
+            },
+        ]
+    }]
+
+    _run_async(MultimodalProcessor.async_parse_multimodal_item(messages, allowed_media_domains=['example.com']))
+
+    assert load_calls == [
+        ('https://example.com/a.png', 'ImageMediaIO', ['example.com']),
+        ('https://example.com/a.mp4', 'FakeVideoMediaIO', ['example.com']),
+    ]
+
+
+def test_format_prompts_passes_allowed_media_domains(monkeypatch):
+    """Tuple prompt URL loading should honor the configured domain
+    allowlist."""
+    image = Image.new('RGB', (1, 1))
+    load_calls = []
+
+    def fake_load_from_url(data_src, media_io, allowed_media_domains=None):
+        load_calls.append((data_src, type(media_io).__name__, allowed_media_domains))
+        return image
+
+    monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
+
+    prompts = MultimodalProcessor.format_prompts(('describe', 'https://example.com/a.png'),
+                                                 allowed_media_domains=['example.com'])
+
+    assert load_calls == [('https://example.com/a.png', 'ImageMediaIO', ['example.com'])]
+    assert prompts[0][0]['content'][0] == {'type': 'text', 'text': 'describe'}
+    assert prompts[0][0]['content'][1]['type'] == 'image_data'
+    assert prompts[0][0]['content'][1]['image_data']['data'] is image
+
+
+def test_async_parse_multimodal_item_preserves_tool_image_content(monkeypatch):
+    """Tool result images should be parsed in place like vLLM."""
+    load_calls = []
+
+    def fake_load_from_url(data_src, media_io, allowed_media_domains=None):
+        load_calls.append((data_src, type(media_io).__name__))
+        return f'loaded:{data_src}'
+
+    monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
+
+    image_data_url = 'data:image/png;base64,abc'
+    messages = [
+        {
+            'role': 'user',
+            'content': 'describe the image from the tool result',
+        },
+        {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [{
+                'id': 'call_read',
+                'type': 'function',
+                'function': {
+                    'name': 'file_read',
+                    'arguments': '{}',
+                },
+            }],
+        },
+        {
+            'role':
+            'tool',
+            'tool_call_id':
+            'call_read',
+            'content': [
+                {
+                    'type': 'text',
+                    'text': 'Image file read successfully: file-read-demo.png',
+                },
+                {
+                    'type': 'image_url',
+                    'image_url': {
+                        'url': image_data_url,
+                        'detail': 'auto',
+                    },
+                },
+            ],
+        },
+    ]
+
+    parsed = _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
+
+    assert len(parsed) == 3
+    assert parsed[2]['role'] == 'tool'
+    assert parsed[2]['tool_call_id'] == 'call_read'
+    assert parsed[2]['content'][0] == {
+        'type': 'text',
+        'text': 'Image file read successfully: file-read-demo.png',
+    }
+    assert parsed[2]['content'][1]['type'] == Modality.IMAGE
+    assert parsed[2]['content'][1]['data'] == f'loaded:{image_data_url}'
+    assert parsed[2]['content'][1]['detail'] == 'auto'
+    assert load_calls == [(image_data_url, 'ImageMediaIO')]
+
+
 @pytest.mark.parametrize('item', [{'type': 'image_url'}, {'type': 'image', 'image': {}},
                                   {'type': 'time_series', 'time_series': {'sr': 16000}}])
 def test_async_parse_multimodal_item_rejects_missing_payload(item):
@@ -340,7 +479,7 @@ def test_async_parse_multimodal_item_rejects_missing_payload(item):
     messages = [{'role': 'user', 'content': [item]}]
 
     with pytest.raises(ValueError, match='Expected .* direct value or a dict containing "url" or "data"'):
-        asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+        _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
 
 
 def test_async_parse_multimodal_item_rejects_unknown_type():
@@ -348,7 +487,7 @@ def test_async_parse_multimodal_item_rejects_unknown_type():
     messages = [{'role': 'user', 'content': [{'type': 'unknown_media', 'unknown_media': 'file:///tmp/a.bin'}]}]
 
     with pytest.raises(NotImplementedError, match='unknown type: unknown_media'):
-        asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+        _run_async(MultimodalProcessor.async_parse_multimodal_item(messages))
 
 
 def test_has_multimodal_input_detects_all_supported_types():
@@ -360,6 +499,7 @@ def test_has_multimodal_input_detects_all_supported_types():
             'time_series'
     ]:
         assert processor._has_multimodal_input([{'role': 'user', 'content': [{'type': item_type}]}])
+    assert processor._has_multimodal_input([{'role': 'tool', 'content': [{'type': 'image_url'}]}])
     assert not processor._has_multimodal_input([{'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]}])
 
 
