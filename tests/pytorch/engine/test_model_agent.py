@@ -604,6 +604,7 @@ class TestModelAgentWakeup:
         model_agent = BaseModelAgent.__new__(BaseModelAgent)
         model_agent.state = SleepWakeupState()
         model_agent.dist_config = SimpleNamespace(dp=1)
+        model_agent.memdecode_agent = None
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()

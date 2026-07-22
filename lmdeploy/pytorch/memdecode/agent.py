@@ -22,7 +22,7 @@ def memory_model_forward(
     inputs: ModelInputs,
     model_config: ModelConfig,
     cache_engine: CacheEngine,
-    state_cache_engine: StateCacheEngine = None,
+    state_cache_engine: StateCacheEngine | None = None,
 ):
     """Perform memory model forward."""
     state_caches = None
@@ -122,11 +122,12 @@ class MemDecodeAgent:
         kwargs = {}
         if build_model_ctx is not None:
             kwargs = dict(
-                disable_vision_encoder=build_model_ctx.disable_vision_encoder,
+                language_model_only=build_model_ctx.language_model_only,
                 dllm_config=build_model_ctx.dllm_config,
                 strategy_factory=build_model_ctx.strategy_factory,
                 enable_return_routed_experts=build_model_ctx.enable_return_routed_experts,
                 num_spec_tokens=build_model_ctx.num_spec_tokens,
+                max_batch_size=build_model_ctx.max_batch_size,
             )
         return BuildModelContext(
             **kwargs,

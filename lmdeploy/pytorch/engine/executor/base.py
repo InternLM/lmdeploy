@@ -23,7 +23,7 @@ class _CacheBlockSize(NamedTuple):
 
     @property
     def total(self) -> int:
-        """Total cache block size when target and spec caches coexist."""
+        """Total cache block size."""
         return self.target + self.spec + self.memory
 
 

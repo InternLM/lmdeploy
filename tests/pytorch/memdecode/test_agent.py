@@ -206,7 +206,7 @@ def test_async_forward_runs_memory_forward_inside_memory_context(monkeypatch):
 
 def test_build_model_honors_supplied_context_and_empty_init(monkeypatch):
     built_model = object()
-    build_model_ctx = BuildModelContext(disable_vision_encoder=True)
+    build_model_ctx = BuildModelContext(language_model_only=True)
     calls = []
     agent = MemDecodeAgent(_memdecode_config(), BackendConfig(), _dist_ctx(), device='cpu')
 
@@ -226,7 +226,7 @@ def test_build_model_honors_supplied_context_and_empty_init(monkeypatch):
     assert len(calls) == 1
     assert calls[0][:3] == ('build', agent.model_config, 'cpu')
     assert calls[0][3] is not build_model_ctx
-    assert calls[0][3].disable_vision_encoder is True
+    assert calls[0][3].language_model_only is True
 
     calls.clear()
     agent.build_model(empty_init=False, build_model_ctx=build_model_ctx)
@@ -244,10 +244,11 @@ def test_build_model_uses_memory_specific_context_without_quant_or_fp32_head(mon
     agent.model_config.tie_word_embeddings = True
     base_quant_config = QuantizationConfig(quant_method='awq')
     base_build_model_ctx = BuildModelContext(
-        disable_vision_encoder=True,
+        language_model_only=True,
         quant_config=base_quant_config,
         fp32_lm_head=True,
         tie_word_embeddings=False,
+        max_batch_size=16,
     )
 
     def fake_build_patched_model(model_config, device=None, build_model_ctx=None):
@@ -261,8 +262,9 @@ def test_build_model_uses_memory_specific_context_without_quant_or_fp32_head(mon
 
     _, _, _, memory_build_model_ctx = calls[0]
     assert memory_build_model_ctx is not base_build_model_ctx
-    assert memory_build_model_ctx.disable_vision_encoder is True
+    assert memory_build_model_ctx.language_model_only is True
     assert memory_build_model_ctx.quant_config is not base_quant_config
     assert memory_build_model_ctx.quant_config.quant_method is None
     assert memory_build_model_ctx.fp32_lm_head is False
     assert memory_build_model_ctx.tie_word_embeddings is True
+    assert memory_build_model_ctx.max_batch_size == 16

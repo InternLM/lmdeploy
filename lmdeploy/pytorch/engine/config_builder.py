@@ -123,6 +123,9 @@ class ConfigBuilder:
             return None
 
         memory_model_path = hf_overrides.pop('memory_model_path', None)
+        if memory_model_path is None:
+            return None
+
         memdecode_keys = (
             'lambda_value',
             'adaptive_router',
@@ -130,8 +133,6 @@ class ConfigBuilder:
             'lambda_base_only_threshold',
         )
         explicit_options = {key: hf_overrides.pop(key) for key in memdecode_keys if key in hf_overrides}
-        if memory_model_path is None:
-            return None
 
         if not os.path.exists(memory_model_path):
             memory_model_path = get_model(memory_model_path, engine_config.download_dir, engine_config.revision)
