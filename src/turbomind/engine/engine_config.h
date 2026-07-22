@@ -37,6 +37,7 @@ struct EngineConfig {
     X(int, attn_tp_size)                                                                                               \
     X(int, attn_cp_size)                                                                                               \
     X(int, mlp_tp_size)                                                                                                \
+    X(int, ep_size, 1)                                                                                                 \
     X(std::vector<int>, devices)                                                                                       \
     X(int, nnodes)                                                                                                     \
     X(int, node_rank)                                                                                                  \

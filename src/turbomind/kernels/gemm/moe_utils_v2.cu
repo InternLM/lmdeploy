@@ -572,17 +572,19 @@ template<int N>
 inline constexpr std::integral_constant<int, N> _Int{};
 
 void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
-                      int*         f2E,            // [e*n] -> E
+                      int*         f2E,            // [e*n] -> local E
                       int*         en2f,           // [e,n] -> n*e
-                      int*         offsets,        // [E+1]
+                      int*         offsets,        // [local E+1]
                       float*       scales,         // [e,n]
                       void*        masks,          // [E,n]
-                      int*         accum,          // [E]
-                      const float* logits,         // [e,n]
+                      int*         accum,          // [E,tiles]
+                      const float* logits,         // [n,E]
                       int          tokens,         //  n
                       int          tokens_padded,  //  round_up(n, 4)
                       int          experts,        //  E
                       int          experts_per_token,
+                      int          local_expert_offset,
+                      int          local_expert_num,
                       bool         softmax,
                       bool         norm_topk,
                       float        routed_scale,
@@ -671,19 +673,19 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 
     {
         constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;
-        const dim3    blocks(tiles, experts + 1);
+        const dim3    blocks(tiles, local_expert_num + 1);
 
         MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(f2n,  //
                                                               f2E,
                                                               en2f,
                                                               offsets,
-                                                              (int8_t*)masks,
-                                                              accum,
+                                                              (int8_t*)masks + local_expert_offset * tokens_padded,
+                                                              accum + local_expert_offset * tiles,
                                                               log_tile,
                                                               tiles,
                                                               tokens,
                                                               tokens_padded,
-                                                              experts);
+                                                              local_expert_num);
     }
     TM_CUDA_CHECK(cudaGetLastError());
 }
@@ -831,6 +833,8 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                            int          tokens_padded,
                            int          experts,
                            int          exp_per_tok,
+                           int          local_expert_offset,
+                           int          local_expert_num,
                            bool         norm_topk_prob,
                            float        routed_scale,
                            bool         use_sigmoid,
@@ -874,9 +878,19 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                                                           use_sigmoid);
 
     constexpr int scan_threads = (1 << base_log_tile) / kMoeGateVecSize;
-    const dim3    scan_blocks(tiles, experts + 1);
-    MoeScanKernel_v2<scan_threads><<<scan_blocks, scan_threads, 0, st>>>(
-        f2n, f2E, en2f, offsets, (int8_t*)masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
+    const dim3    scan_blocks(tiles, local_expert_num + 1);
+    MoeScanKernel_v2<scan_threads>
+        <<<scan_blocks, scan_threads, 0, st>>>(f2n,
+                                               f2E,
+                                               en2f,
+                                               offsets,
+                                               (int8_t*)masks + local_expert_offset * tokens_padded,
+                                               accum + local_expert_offset * tiles,
+                                               log_tile,
+                                               tiles,
+                                               tokens,
+                                               tokens_padded,
+                                               local_expert_num);
 
     TM_CUDA_CHECK(cudaGetLastError());
 }
@@ -885,8 +899,13 @@ template<int vec_size, int block_dim, class T>
 __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
                                 const T*   src,  // [  n, d]
                                 const int* f2n,  // [e*n] :: e*n -> n
+                                const int* num_valid_tokens,
                                 int        dims)
 {
+    if (num_valid_tokens && blockIdx.x >= __ldg(num_valid_tokens)) {
+        return;
+    }
+
     using Vec        = Array<T, vec_size>;
     const int64_t bi = blockIdx.x;
 
@@ -899,23 +918,32 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
     }
 }
 
-void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatch(Ref<Tensor>   out_,
+                       const Tensor& src,
+                       const int*    f2n,
+                       int           num_worst_tokens,
+                       const int*    num_valid_tokens,
+                       cudaStream_t  st)
 {
     auto& out    = out_.get();
     auto  invoke = [&](auto t) {
         using T                = decltype(t);
-        auto [num, dim]        = src.shapes(0, 1);
+        const int     dim      = src.shape(1);
         constexpr int threads  = 256;
         constexpr int vec_size = 16 / sizeof(T);
-        // std::cout << num * expert_per_token << " " << dim << "\n";
-        MoeGatherKernel<vec_size, threads><<<num * expert_per_token, threads, 0, st>>>(  //
+        // f2n/out have num_worst_tokens rows; num_valid_tokens limits rows that read f2n.
+        MoeGatherKernel<vec_size, threads><<<num_worst_tokens, threads, 0, st>>>(  //
             (T*)out.raw_data(),
             (const T*)src.raw_data(),
             f2n,
+            num_valid_tokens,
             dim / vec_size);
         TM_CUDA_CHECK(cudaGetLastError());
     };
     TM_CHECK_EQ(src.dtype(), out.dtype());
+    if (num_worst_tokens == 0) {
+        return;
+    }
     const auto elem_size = byte_size(src.dtype());
     if (elem_size == sizeof(uint16_t)) {
         invoke(uint16_t{});
@@ -958,10 +986,14 @@ __global__ void MoeDispatchScales(
 }
 
 template<class T>
-__global__ void
-MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride, const int* f2n, int dim)
+__global__ void MoeDispatchScalesNonaligned(
+    T* dst, const T* src, int dst_stride, int src_stride, const int* f2n, const int* num_valid_tokens, int dim)
 {
     const int bi = blockIdx.x;
+    if (num_valid_tokens && bi >= __ldg(num_valid_tokens)) {
+        return;
+    }
+
     const int ti = f2n[bi];
 
     if (threadIdx.x < dim) {
@@ -969,14 +1001,20 @@ MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride
     }
 }
 
-void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatchScales(Ref<Tensor>   out_,
+                             const Tensor& src,
+                             const int*    f2n,
+                             int           num_worst_tokens,
+                             const int*    num_valid_tokens,
+                             cudaStream_t  st)
 {
     using T                 = float;
     constexpr int alignment = 16 / sizeof(T);
 
-    auto [dim, num] = src.shapes(0, 1);
+    const int dim = src.shape(0);
 
-    const int size         = num * expert_per_token;
+    // Keep the scale layout aligned to num_worst_tokens; num_valid_tokens limits rows that read f2n.
+    const int size         = num_worst_tokens;
     const int aligned_size = round_up<int>(size, alignment);
 
     auto& out = out_.get();
@@ -991,6 +1029,9 @@ void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n
     }
 
     TM_CHECK_LE(dim, 1024);
+    if (size == 0) {
+        return;
+    }
     const int threads = round_up<int>(dim, WARP_SIZE);
     const int blocks  = size;
 
@@ -1001,6 +1042,7 @@ void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n
                                                             out.stride(0),
                                                             src.stride(0),
                                                             f2n,
+                                                            num_valid_tokens,
                                                             dim);
 
     TM_CUDA_CHECK(cudaGetLastError());
@@ -1022,27 +1064,29 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
         const int64_t ti = blockIdx.x;
 
-        dst += dim * ti;
+        dst += (int64_t)dim * ti;
 
         if (dst_scales) {
-            dst_scale = dst_scales[ti];
-            dst_scale = fdividef(1.f, 1.f + expf(-dst_scale));
+            const float scale = dst_scales[ti];
+            dst_scale *= fdividef(1.f, 1.f + expf(-scale));
         }
 
         // Should be warp uniforms
-        const T* src_[exp_k];
-        const T* bias_[exp_k];
+        const T* src_[exp_k]{};
+        const T* bias_[exp_k]{};
 
-        float scale[exp_k];
+        float scale[exp_k]{};
 
         PRAGMA_UNROLL
         for (int e = 0; e < exp_k; ++e) {
             int fid = __ldg(&en2f[e * tokens + ti]);
-            src_[e] = src + dim * fid;
-            if constexpr (has_bias) {
-                bias_[e] = bias + __ldg(&f2E[fid]) * dim;
+            if (fid >= 0) {
+                src_[e] = src + (int64_t)dim * fid;
+                if constexpr (has_bias) {
+                    bias_[e] = bias + __ldg(&f2E[fid]) * (int64_t)dim;
+                }
+                scale[e] = scales ? __ldg(&scales[e * tokens + ti]) : 1.f;
             }
-            scale[e] = scales ? __ldg(&scales[e * tokens + ti]) : 1.f;
         }
 
         using Vec = Array<T, vec_size>;
@@ -1057,6 +1101,9 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
             }
             PRAGMA_UNROLL
             for (int e = 0; e < exp_k; ++e) {
+                if (src_[e] == nullptr) {
+                    continue;
+                }
                 Vec v;
                 Load(v, src_[e] + i);
                 using namespace ops;

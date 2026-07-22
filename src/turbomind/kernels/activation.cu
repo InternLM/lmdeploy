@@ -1,4 +1,6 @@
 
+#include <type_traits>
+
 #include "src/turbomind/core/data_type.h"
 
 #include "src/turbomind/kernels/activation.h"
@@ -26,15 +28,26 @@ struct Silu {
     }
 };
 
-template<int vec_size, class Activation, class T>
-__global__ void ActivationKernel(
-    T* gate_buf, const T* __restrict__ up_buf, Activation activation, int64_t stride, int token_num, int dim)
+template<bool has_valid_tokens, int vec_size, class Activation, class T>
+__global__ void ActivationKernel(T* gate_buf,
+                                 const T* __restrict__ up_buf,
+                                 Activation activation,
+                                 int64_t    stride,
+                                 int        token_num,
+                                 int        dim,
+                                 const int* num_valid_tokens)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
         const int di = threadIdx.x + blockIdx.y * blockDim.x;
         const int ti = blockIdx.x;
 
         dim /= vec_size;
+
+        if constexpr (has_valid_tokens) {
+            if (ti >= __ldg(num_valid_tokens)) {
+                return;
+            }
+        }
 
         if (di >= dim) {
             return;
@@ -62,6 +75,12 @@ __global__ void ActivationKernel(
 
 void Activation(Ref<Tensor> gate_, const Tensor& up, ActivationType type, cudaStream_t stream)
 {
+    Activation(gate_, up, type, nullptr, stream);
+}
+
+void Activation(
+    Ref<Tensor> gate_, const Tensor& up, ActivationType type, const int* num_valid_tokens, cudaStream_t stream)
+{
     auto& gate = gate_.get();
 
     TM_CHECK(gate.shape() == up.shape());
@@ -69,51 +88,74 @@ void Activation(Ref<Tensor> gate_, const Tensor& up, ActivationType type, cudaSt
     int num, dim;
     std::tie(num, dim) = gate.shapes(0, 1);
 
-    auto invoke = [&](auto t, auto act) {
-        using T = decltype(t);
+    auto invoke = [&](auto t, auto act, auto has_valid_tokens) {
+        using T                        = decltype(t);
+        constexpr bool kHasValidTokens = decltype(has_valid_tokens)::value;
 
         constexpr int vec_size = 4;
         constexpr int threads  = 512;
 
         const dim3 blocks(num, cdiv(dim, threads * vec_size));
+        const int* valid_tokens = kHasValidTokens ? num_valid_tokens : nullptr;
 
-        ActivationKernel<vec_size><<<blocks, threads, 0, stream>>>(gate.data<T>(),  //
-                                                                   up.data<T>(),
-                                                                   act,
-                                                                   gate.stride(0),
-                                                                   num,
-                                                                   dim);
+        ActivationKernel<kHasValidTokens, vec_size><<<blocks, threads, 0, stream>>>(gate.data<T>(),  //
+                                                                                    up.data<T>(),
+                                                                                    act,
+                                                                                    gate.stride(0),
+                                                                                    num,
+                                                                                    dim,
+                                                                                    valid_tokens);
     };
 
-    auto dispatch = [&](auto t) {
+    auto dispatch_act = [&](auto t, auto has_valid_tokens) {
         using T = decltype(t);
         if (type == ActivationType::kSilu) {
-            return invoke(t, Silu<T>{});
+            return invoke(t, Silu<T>{}, has_valid_tokens);
         }
         else if (type == ActivationType::kSiluGptOss) {
-            return invoke(t, SiluGptOss<T>{});
+            return invoke(t, SiluGptOss<T>{}, has_valid_tokens);
         }
         else {
             TM_LOG_FATAL("unknown activation type: {}", (int)type);
         }
     };
 
+    auto dispatch = [&](auto t) {
+        if (num_valid_tokens) {
+            return dispatch_act(t, std::true_type{});
+        }
+        return dispatch_act(t, std::false_type{});
+    };
+
     TM_DISPATCH_PRIMARY_DTYPES(gate.dtype(), dispatch);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template<int vec_size, class Activation, class T>
-__global__ void ActivationKernel(
-    T* gate_up, const T* bias, const int* group_ids, int64_t stride, Activation activation, int token_num, int dim)
+template<bool has_valid_tokens, int vec_size, class Activation, class T>
+__global__ void ActivationKernel(T*         gate_up,
+                                 const T*   bias,
+                                 const int* group_ids,
+                                 int64_t    stride,
+                                 Activation activation,
+                                 int        token_num,
+                                 int        dim,
+                                 const int* num_valid_tokens)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
         const int di = (threadIdx.x + blockIdx.y * blockDim.x) * vec_size;
         const int ti = blockIdx.x;
-        const int gi = group_ids ? group_ids[ti] : 0;
+
+        if constexpr (has_valid_tokens) {
+            if (ti >= __ldg(num_valid_tokens)) {
+                return;
+            }
+        }
 
         if (di >= dim) {
             return;
         }
+
+        const int gi = group_ids ? group_ids[ti] : 0;
 
         using Vec = Array<T, vec_size>;
 
@@ -146,6 +188,16 @@ void Activation(Tensor&             gate_up,  //
                 ActivationType      type,
                 cudaStream_t        stream)
 {
+    Activation(gate_up, bias, group_ids, type, nullptr, stream);
+}
+
+void Activation(Tensor&             gate_up,  //
+                const Tensor&       bias,
+                const Buffer_<int>& group_ids,
+                ActivationType      type,
+                const int*          num_valid_tokens,
+                cudaStream_t        stream)
+{
     const int num = gate_up.shape(0);
     const int dim = gate_up.shape(1) / 2;
 
@@ -153,40 +205,51 @@ void Activation(Tensor&             gate_up,  //
         Activation(gate_up.slice({0, 0}, {-1, dim}),  //
                    gate_up.slice({0, dim}, {-1, -1}),
                    type,
+                   num_valid_tokens,
                    stream);
         return;
     }
 
     TM_CHECK_EQ(gate_up.shape(-1), bias.shape(-1));
 
-    auto invoke = [&](auto t, auto act) {
-        using T = decltype(t);
+    auto invoke = [&](auto t, auto act, auto has_valid_tokens) {
+        using T                        = decltype(t);
+        constexpr bool kHasValidTokens = decltype(has_valid_tokens)::value;
 
         constexpr int vec_size = 4;
         constexpr int threads  = 512;
 
         const dim3 blocks(num, cdiv(dim, threads * vec_size));
+        const int* valid_tokens = kHasValidTokens ? num_valid_tokens : nullptr;
 
-        ActivationKernel<vec_size><<<blocks, threads, 0, stream>>>(gate_up.data<T>(),  //
-                                                                   bias.data_or((T*)nullptr),
-                                                                   group_ids.data_or(nullptr),
-                                                                   gate_up.stride(0),
-                                                                   act,
-                                                                   num,
-                                                                   dim);
+        ActivationKernel<kHasValidTokens, vec_size><<<blocks, threads, 0, stream>>>(gate_up.data<T>(),  //
+                                                                                    bias.data_or((T*)nullptr),
+                                                                                    group_ids.data_or(nullptr),
+                                                                                    gate_up.stride(0),
+                                                                                    act,
+                                                                                    num,
+                                                                                    dim,
+                                                                                    valid_tokens);
     };
 
-    auto dispatch = [&](auto t) {
+    auto dispatch_act = [&](auto t, auto has_valid_tokens) {
         using T = decltype(t);
         if (type == ActivationType::kSilu) {
-            return invoke(t, Silu<T>{});
+            return invoke(t, Silu<T>{}, has_valid_tokens);
         }
         else if (type == ActivationType::kSiluGptOss) {
-            return invoke(t, SiluGptOss<T>{});
+            return invoke(t, SiluGptOss<T>{}, has_valid_tokens);
         }
         else {
             TM_LOG_FATAL("unknown activation type: {}", (int)type);
         }
+    };
+
+    auto dispatch = [&](auto t) {
+        if (num_valid_tokens) {
+            return dispatch_act(t, std::true_type{});
+        }
+        return dispatch_act(t, std::false_type{});
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(gate_up.dtype(), dispatch);

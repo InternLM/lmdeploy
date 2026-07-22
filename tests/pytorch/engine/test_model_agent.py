@@ -286,6 +286,102 @@ class TestDrainQueues:
         assert agent._out_que.get_nowait() == 'new'
 
 
+class TestDPForwardInputsMaker:
+
+    @staticmethod
+    def _make_ready_event():
+
+        class _ReadyEvent:
+
+            def query(self):
+                return True
+
+        return _ReadyEvent()
+
+    @staticmethod
+    def _make_maker(is_sleeping=False, dummy_forward_inputs=None):
+        from lmdeploy.pytorch.engine.model_agent.inputs_maker import DPForwardInputsMaker
+
+        maker = DPForwardInputsMaker.__new__(DPForwardInputsMaker)
+        maker.model_agent = SimpleNamespace(state=SimpleNamespace(is_sleeping=is_sleeping))
+        maker._pre_in_que = asyncio.Queue()
+        maker._in_que = asyncio.Queue()
+        maker._ready_event = TestDPForwardInputsMaker._make_ready_event()
+
+        async def _gather_has_inputs(has_inputs=False):
+            return has_inputs
+
+        def _make_dummy_forward_inputs():
+            if dummy_forward_inputs is not None:
+                return dummy_forward_inputs
+            raise AssertionError('pending real input must not be replaced with a dummy')
+
+        maker._gather_has_inputs = _gather_has_inputs
+        maker._make_dummy_forward_inputs = _make_dummy_forward_inputs
+        return maker
+
+    def test_get_waits_for_queued_preprocess_input(self):
+        async def _run():
+            maker = self._make_maker()
+            maker._pre_in_que.put_nowait({'inputs': 'queued'})
+
+            task = asyncio.create_task(maker.get())
+            await asyncio.sleep(0.01)
+            assert not task.done()
+
+            real_inputs = {'inputs': 'real'}
+            maker._pre_in_que.get_nowait()
+            maker._in_que.put_nowait(real_inputs)
+
+            assert await asyncio.wait_for(task, timeout=1.0) is real_inputs
+
+        asyncio.run(_run())
+
+    def test_get_yields_for_worker_forward_rpc_before_dummy(self):
+
+        async def _run():
+            maker = self._make_maker()
+            real_inputs = {'inputs': 'real'}
+
+            async def _enqueue_after_model_agent_yields():
+                await asyncio.sleep(0)
+                maker._pre_in_que.put_nowait({'inputs': 'queued'})
+                await asyncio.sleep(0)
+                maker._pre_in_que.get_nowait()
+                maker._in_que.put_nowait(real_inputs)
+
+            enqueue_task = asyncio.create_task(_enqueue_after_model_agent_yields())
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is real_inputs
+            await asyncio.wait_for(enqueue_task, timeout=1.0)
+
+        asyncio.run(_run())
+
+    def test_get_uses_dummy_for_sleeping_preprocess_queue(self):
+        async def _run():
+            dummy_inputs = {'inputs': 'sleep_dummy'}
+            maker = self._make_maker(is_sleeping=True, dummy_forward_inputs=dummy_inputs)
+            maker._pre_in_que.put_nowait({'inputs': 'stale'})
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is dummy_inputs
+            assert maker._pre_in_que.qsize() == 1
+            assert maker._in_que.qsize() == 0
+
+        asyncio.run(_run())
+
+    def test_get_uses_dummy_for_sleeping_ready_queue(self):
+        async def _run():
+            dummy_inputs = {'inputs': 'sleep_dummy'}
+            maker = self._make_maker(is_sleeping=True, dummy_forward_inputs=dummy_inputs)
+            maker._in_que.put_nowait({'inputs': 'stale_ready'})
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is dummy_inputs
+            assert maker._pre_in_que.qsize() == 0
+            assert maker._in_que.qsize() == 1
+
+        asyncio.run(_run())
+
+
 class TestDPForwardMeta:
 
     def test_field_names_follow_enabled_features(self):
