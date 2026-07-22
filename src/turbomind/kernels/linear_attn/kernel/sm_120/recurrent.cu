@@ -699,11 +699,10 @@ __global__ __launch_bounds__(
 template<int BlockDv, class StateT>
 void SetRecurrentGdrSharedMemoryLimit()
 {
-    using Kernel                    = Sm120GdrRecurrent<BlockDv, StateT>;
-    auto                     kernel = Sm120GdrRecurrentKernel<BlockDv, StateT>;
-    static const cudaError_t status = cudaFuncSetAttribute(
-        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(Kernel::kSharedBytes));
-    TM_CUDA_CHECK(status);
+    using Kernel = Sm120GdrRecurrent<BlockDv, StateT>;
+    auto kernel  = Sm120GdrRecurrentKernel<BlockDv, StateT>;
+    TM_CUDA_CHECK(cudaFuncSetAttribute(
+        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(Kernel::kSharedBytes)));
 }
 
 template<class StateT>

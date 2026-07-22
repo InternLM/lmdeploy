@@ -1074,11 +1074,9 @@ void LaunchKktSolveTyped(const K*            k_ptr,
     const dim3   grid(problem.hq, problem.total_chunks, 1);
     const size_t shared_bytes = Kernel::SharedBytes();
 
-    static const cudaError_t smem_attribute_status =
-        cudaFuncSetAttribute(Sm90KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(shared_bytes));
-    TM_CUDA_CHECK(smem_attribute_status);
+    TM_CUDA_CHECK(cudaFuncSetAttribute(Sm90KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>,
+                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                       static_cast<int>(shared_bytes)));
 
     const int32_t* offsets_ptr    = q_offsets.data<int32_t>();
     const bool*    finished_ptr   = finished.data<bool>();

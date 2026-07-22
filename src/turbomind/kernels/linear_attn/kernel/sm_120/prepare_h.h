@@ -1025,11 +1025,10 @@ template<int BlockDv>
 void SetFusedGdrHSharedMemoryLimit()
 {
     static_assert(BlockDv == kFusedGdrHBlockDv);
-    using Kernel                    = Sm120FusedGdrH<__nv_bfloat16, BlockDv>;
-    static const cudaError_t status = cudaFuncSetAttribute(Sm120FusedGdrHKernel<__nv_bfloat16, BlockDv>,
-                                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                                           static_cast<int>(Kernel::kSharedBytes));
-    TM_CUDA_CHECK(status);
+    using Kernel = Sm120FusedGdrH<__nv_bfloat16, BlockDv>;
+    TM_CUDA_CHECK(cudaFuncSetAttribute(Sm120FusedGdrHKernel<__nv_bfloat16, BlockDv>,
+                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                       static_cast<int>(Kernel::kSharedBytes)));
 }
 
 template<int BlockDv>

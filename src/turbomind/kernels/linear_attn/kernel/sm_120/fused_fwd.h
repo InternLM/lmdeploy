@@ -1125,11 +1125,9 @@ void SetFusedGdrFwdSharedMemoryLimit()
     static_assert(std::is_same_v<StateT, float> || std::is_same_v<StateT, __nv_bfloat16>,
                   "fused chunk GDR StateT must be float or bfloat16");
     using Kernel = Sm120FusedGdrFwd<__nv_bfloat16, StateT, BlockDv, ContextParallel>;
-    static const cudaError_t status =
-        cudaFuncSetAttribute(Sm120FusedGdrFwdKernel<__nv_bfloat16, StateT, BlockDv, ContextParallel>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(Kernel::kSharedBytes));
-    TM_CUDA_CHECK(status);
+    TM_CUDA_CHECK(cudaFuncSetAttribute(Sm120FusedGdrFwdKernel<__nv_bfloat16, StateT, BlockDv, ContextParallel>,
+                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                       static_cast<int>(Kernel::kSharedBytes)));
 }
 
 template<class StateT, int BlockDv, bool ContextParallel>

@@ -916,9 +916,8 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
 
 void SetFusedGdrHSharedMemoryLimit(size_t smem_bytes)
 {
-    static const cudaError_t status = cudaFuncSetAttribute(
-        Sm90FusedGdrHKernel<__nv_bfloat16>, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(smem_bytes));
-    TM_CUDA_CHECK(status);
+    TM_CUDA_CHECK(cudaFuncSetAttribute(
+        Sm90FusedGdrHKernel<__nv_bfloat16>, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(smem_bytes)));
 }
 
 template<int BlockDv>

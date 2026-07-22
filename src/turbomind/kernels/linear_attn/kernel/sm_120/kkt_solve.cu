@@ -589,15 +589,12 @@ void LaunchKktSolveTyped(const float*        beta_ptr,
 
     const dim3 grid(problem.hq, problem.total_chunks, 1);
 
-    static const cudaError_t smem_attribute_status = cudaFuncSetAttribute(Sm120KktSolveKernel<K, GroupsPerKHead>,
-                                                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                                                          static_cast<int>(Kernel::kSharedBytes));
-    TM_CUDA_CHECK(smem_attribute_status);
-    static const cudaError_t carveout_attribute_status =
-        cudaFuncSetAttribute(Sm120KktSolveKernel<K, GroupsPerKHead>,
-                             cudaFuncAttributePreferredSharedMemoryCarveout,
-                             cudaSharedmemCarveoutMaxShared);
-    TM_CUDA_CHECK(carveout_attribute_status);
+    TM_CUDA_CHECK(cudaFuncSetAttribute(Sm120KktSolveKernel<K, GroupsPerKHead>,
+                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                       static_cast<int>(Kernel::kSharedBytes)));
+    TM_CUDA_CHECK(cudaFuncSetAttribute(Sm120KktSolveKernel<K, GroupsPerKHead>,
+                                       cudaFuncAttributePreferredSharedMemoryCarveout,
+                                       cudaSharedmemCarveoutMaxShared));
 
     const int32_t* offsets_ptr    = q_offsets.data<int32_t>();
     const bool*    finished_ptr   = finished.data<bool>();

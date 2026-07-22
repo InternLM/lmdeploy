@@ -418,10 +418,9 @@ template<class StateT, int BlockDv>
 void SetCorrectInitialStatesSharedMemoryLimit(size_t smem_bytes)
 {
     static_assert(kFusedGdrValidStateT<StateT>, "fused chunk GDR StateT must be float or bfloat16");
-    static const cudaError_t status = cudaFuncSetAttribute(Sm90CorrectInitialStatesKernel<StateT, BlockDv>,
-                                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                                           static_cast<int>(smem_bytes));
-    TM_CUDA_CHECK(status);
+    TM_CUDA_CHECK(cudaFuncSetAttribute(Sm90CorrectInitialStatesKernel<StateT, BlockDv>,
+                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                       static_cast<int>(smem_bytes)));
 }
 
 template<class StateT>
