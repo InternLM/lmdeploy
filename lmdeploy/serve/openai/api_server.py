@@ -829,8 +829,18 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         request.prompt = [request.prompt]
         sessions.append(VariableInterface.create_session(request.session_id))
     elif isinstance(request.prompt, list):
-        for i in range(len(request.prompt)):
-            sessions.append(VariableInterface.create_session(i + 1))
+        # One session per prompt. A single-item list behaves like the ``str``
+        # branch above (honor ``request.session_id``, which auto-generates a
+        # unique id when unset/-1); a multi-prompt batch gets an auto-generated
+        # session each. The previous hardcoded ``i + 1`` mapped fixed user ids
+        # 1, 2, 3..., which collide across concurrent requests (the second
+        # raises ``ValueError`` in ``map_user_session_id``) and ignore
+        # ``request.session_id`` (#4773).
+        if len(request.prompt) == 1:
+            sessions.append(VariableInterface.create_session(request.session_id))
+        else:
+            for _ in request.prompt:
+                sessions.append(VariableInterface.create_session())
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 

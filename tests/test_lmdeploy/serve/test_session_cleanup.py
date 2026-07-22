@@ -257,3 +257,34 @@ async def _run_max_new_tokens_zero_cleans_up_session():
 
 def test_max_new_tokens_zero_cleans_up_session():
     asyncio.run(_run_max_new_tokens_zero_cleans_up_session())
+
+
+def test_batch_completions_sessions_auto_generate_without_collision():
+    """Regression for #4773.
+
+    The legacy ``/v1/completions`` list-prompt path used to assign one session
+    per prompt with hardcoded user ids ``1, 2, 3...`` via
+    ``create_session(i + 1)``.  Because ``map_user_session_id`` raises when a
+    user id is already mapped, two concurrent batch requests (even single-item
+    lists with the default ``session_id``) both requested id ``1`` and the
+    second crashed with ``ValueError: User session id 1 already exists``.
+
+    The fix creates batch sessions by auto-generation (``session_id`` None/-1),
+    which hands out distinct internal ids and never touches the user map, so
+    concurrent batches cannot collide.
+    """
+    session_mgr = SessionManager()
+
+    # Old behavior: mapping a fixed user id twice raises.
+    session_mgr.map_user_session_id(1)
+    raised = False
+    try:
+        session_mgr.map_user_session_id(1)
+    except ValueError:
+        raised = True
+    assert raised, 'mapping a duplicate user id should raise'
+
+    # Fixed behavior: auto-generation (``get()`` with no id) yields distinct,
+    # non-colliding sessions for every prompt across every request.
+    ids = [session_mgr.get().session_id for _ in range(6)]
+    assert len(set(ids)) == len(ids), 'auto-generated session ids must be unique'
