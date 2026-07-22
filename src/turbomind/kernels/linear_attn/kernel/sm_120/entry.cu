@@ -4,13 +4,12 @@
 #include "src/turbomind/kernels/linear_attn/kernel/sm_120/cp_fwd.h"
 #include "src/turbomind/kernels/linear_attn/kernel/sm_120/fused_fwd.h"
 #include "src/turbomind/kernels/linear_attn/kernel/sm_120/prepare_h.h"
-#include "src/turbomind/kernels/linear_attn/registry.h"
+#include "src/turbomind/kernels/linear_attn/registrar.h"
 
 #include <cuda_bf16.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <memory>
 #include <type_traits>
 
 namespace turbomind::linear_attn::delta_rule {
@@ -257,23 +256,12 @@ public:
     }
 };
 
-template<GdrMode Mode, DataType StateType>
-void Add(GdrKernelRegistry& registry)
-{
-    registry.Add(std::make_unique<Sm120GdrKernel<Mode, StateType>>());
-}
-
-bool RegisterSm120GdrOperations()
-{
-    auto& registry = GdrKernelRegistry::instance();
-    Add<GdrMode::kRecurrent, kFloat32>(registry);
-    Add<GdrMode::kRecurrent, kBfloat16>(registry);
-    Add<GdrMode::kChunked, kFloat32>(registry);
-    Add<GdrMode::kChunked, kBfloat16>(registry);
-    return true;
-}
-
-[[maybe_unused]] const bool kSm120GdrOperationsRegistered = RegisterSm120GdrOperations();
+Registrar reg([](Collector& c) {
+    c.add<Sm120GdrKernel<GdrMode::kRecurrent, kFloat32>>();
+    c.add<Sm120GdrKernel<GdrMode::kRecurrent, kBfloat16>>();
+    c.add<Sm120GdrKernel<GdrMode::kChunked, kFloat32>>();
+    c.add<Sm120GdrKernel<GdrMode::kChunked, kBfloat16>>();
+});
 
 }  // namespace
 

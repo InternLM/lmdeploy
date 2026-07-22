@@ -25,11 +25,14 @@ public:
 
 class GdrKernelRegistry {
 public:
-    bool                      Add(std::unique_ptr<GdrKernel> kernel);
+    GdrKernelRegistry();
+
     const GdrKernel*          Find(const Operation&, const PlanningContext&) const;
     static GdrKernelRegistry& instance();
 
 private:
+    bool Add(std::unique_ptr<GdrKernel> kernel);
+
     std::vector<std::unique_ptr<GdrKernel>> kernels_;
 };
 

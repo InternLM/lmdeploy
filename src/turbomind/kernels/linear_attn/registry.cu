@@ -1,8 +1,22 @@
 #include "src/turbomind/kernels/linear_attn/registry.h"
 
+#include "src/turbomind/kernels/linear_attn/registrar.h"
+
 #include <utility>
 
 namespace turbomind::linear_attn::delta_rule {
+
+GdrKernelRegistry::GdrKernelRegistry()
+{
+    for (auto& register_fn : gKernelFactories()) {
+        Collector collector;
+        register_fn(collector);
+        for (auto& kernel : collector.release()) {
+            Add(std::move(kernel));
+        }
+    }
+}
+
 bool GdrKernelRegistry::Add(std::unique_ptr<GdrKernel> kernel)
 {
     kernels_.push_back(std::move(kernel));
