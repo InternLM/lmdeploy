@@ -16,6 +16,28 @@ class IndexerTopKFP8(nn.Module):
         self.index_impl = index_builder.build(topk, softmax_scale, block_size, fill)
 
     @staticmethod
+    def _get_max_q_seqlen(q: Tensor,
+                          attn_metadata: AttentionMetadata) -> int:
+        """Get the query width used by the index and cache-fill kernels.
+
+        Speculative target verification remains a decoding step, but its
+        flattened Q contains ``num_spec_tokens + 1`` rows per request. The
+        kernels need that real width to process every verification row.
+        """
+        batch_size = attn_metadata.kv_seqlens.size(0)
+        # fp8_index also identifies one row per request as decode layout, so
+        # keep its metadata consistent when the phase flag has not changed yet.
+        is_decoding = attn_metadata.is_decoding or q.size(0) == batch_size
+        # Prefer a width prepared by the attention backend; otherwise derive it
+        # from the flattened query rows.
+        max_q_seqlen = attn_metadata.max_q_seqlen
+        if max_q_seqlen is None:
+            max_q_seqlen = q.size(0)
+            if is_decoding:
+                max_q_seqlen //= batch_size
+        return max_q_seqlen
+
+    @staticmethod
     def _build_meta(q: Tensor, attn_metadata: AttentionMetadata) -> NSAIndexMeta:
         step_ctx = get_step_ctx_manager().current_context()
         cache_config = step_ctx.cache_config
@@ -23,8 +45,8 @@ class IndexerTopKFP8(nn.Module):
         is_decoding = attn_metadata.is_decoding
         if q.size(0) == attn_metadata.kv_seqlens.size(0):
             is_decoding = True
-        max_q_seqlen = 1 if is_decoding else (attn_metadata.max_q_seqlen or q.size(0))
-        # we need to make max_kv_seqlen=max_allocated_cache_len to enable cudagraph
+        max_q_seqlen = IndexerTopKFP8._get_max_q_seqlen(q, attn_metadata)
+        # Decode uses the full cache capacity to keep CUDA graph shapes stable.
         max_kv_seqlen = max_tokens if is_decoding else attn_metadata.kv_flatten_size
         return NSAIndexMeta(cu_seqlen_q=attn_metadata.cu_seqlens_q,
                             q_seqlens=attn_metadata.q_seqlens,
