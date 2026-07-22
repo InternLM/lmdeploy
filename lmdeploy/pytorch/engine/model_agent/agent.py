@@ -22,6 +22,7 @@ from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -263,6 +264,9 @@ class BaseModelAgent:
 
         self.model_config = model_config
         self.cache_config = cache_config
+        memdecode_config = misc_config.memdecode_config
+        if memdecode_config is not None and specdecode_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         # use raw tokenizer
         if dist_ctx.dist_config.world_size > 1:
             monkey_patch_hf_modules_cache()
@@ -343,6 +347,13 @@ class BaseModelAgent:
                                            misc_config=misc_config,
                                            device=device,
                                            guided_decoding_manager=self.guided_decoding_manager)
+        self.memdecode_agent = build_memdecode_agent(
+            memdecode_config,
+            backend_config,
+            dist_ctx,
+            device=device,
+            base_model_config=model_config,
+        )
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
@@ -377,6 +388,8 @@ class BaseModelAgent:
         """Set all cache config."""
         self.cache_config = cache_config
         self.spec_agent.set_cache_config(spec_cache_config)
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig | None = None):
         """Set model config."""
@@ -474,10 +487,24 @@ class BaseModelAgent:
         return_logits: bool,
     ):
         """Model forward."""
+        if self.memdecode_agent is not None and return_logits:
+            raise RuntimeError('MemDecode does not support returned prompt logits yet.')
+
         ret = await self.async_forward(inputs)
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
+
+        if self.memdecode_agent is not None:
+            base_hidden_states = ret['hidden_states']
+            base_logits = self.get_logits(base_hidden_states)
+
+            return await self.memdecode_agent.fuse_with_base(
+                inputs=inputs,
+                base_output=ret,
+                base_logits=base_logits,
+                postprocess_output=self._postprocess_forward_output,
+            )
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
@@ -822,6 +849,8 @@ class BaseModelAgent:
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        if self.memdecode_agent is not None:
+            cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
@@ -1139,6 +1168,8 @@ class BaseModelAgent:
             self.spec_agent.build_model(self.misc_config.empty_init,
                                         self.patched_model,
                                         build_model_ctx=self.build_model_ctx)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -1150,6 +1181,8 @@ class BaseModelAgent:
                                                             backend_config=self.backend_config,
                                                             device=self.device)
             self.spec_agent.build_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_graph_runner()
 
     def build_cache_engine(self):
         """Build cache engine."""
@@ -1167,6 +1200,9 @@ class BaseModelAgent:
             self.state_cache_engine = StateCacheEngine(self.cache_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.set_cache_config(self.cache_config)
+                self.memdecode_agent.build_cache_engine(self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
@@ -1208,6 +1244,8 @@ class BaseModelAgent:
                 self.patched_model.reset()
 
             self.spec_agent.reset_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
@@ -1421,6 +1459,8 @@ class BaseModelAgent:
     @torch.inference_mode()
     async def sleep(self, level: int = 1):
         """Sleep."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
@@ -1448,6 +1488,8 @@ class BaseModelAgent:
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         if tags is None:
             tags = ['weights', 'kv_cache']
 
@@ -1479,6 +1521,8 @@ class BaseModelAgent:
     def release(self):
         """release."""
         self.reset_graph_runner()
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None

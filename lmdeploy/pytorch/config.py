@@ -339,6 +339,26 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
 
 
 @dataclass
+class MemDecodeConfig:
+    """Configuration for MemDecode auxiliary memory model and fusion."""
+
+    memory_model_path: str
+    memory_model_config: 'ModelConfig'
+    lambda_value: float = 1.0
+    adaptive_router: bool = False
+    router_path: str | None = None
+    lambda_base_only_threshold: float = -1.0
+
+    def __post_init__(self):
+        self.lambda_value = float(self.lambda_value)
+        self.lambda_base_only_threshold = float(self.lambda_base_only_threshold)
+        if not 0.0 <= self.lambda_value <= 1.0:
+            raise ValueError(f'lambda_value must be in [0, 1], got {self.lambda_value}')
+        if self.adaptive_router and self.router_path is None:
+            raise ValueError('router_path is required when adaptive_router is enabled.')
+
+
+@dataclass
 class ModelConfig:
     """Config of model."""
 
@@ -573,6 +593,7 @@ class MiscConfig:
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
     enable_chunked_prefill: bool = False
+    memdecode_config: MemDecodeConfig = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):

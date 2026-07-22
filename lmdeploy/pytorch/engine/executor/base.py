@@ -19,11 +19,12 @@ class _CacheBlockSize(NamedTuple):
 
     target: int
     spec: int = 0
+    memory: int = 0
 
     @property
     def total(self) -> int:
-        """Total cache block size when target and spec caches coexist."""
-        return self.target + self.spec
+        """Total cache block size."""
+        return self.target + self.spec + self.memory
 
 
 class ExecutorBase:
@@ -192,7 +193,7 @@ class ExecutorBase:
     def _get_rank_cache_block_sizes(self, num_ranks: int, cache_block_size: _CacheBlockSize) -> list[int]:
         """Get per-rank KV cache block sizes."""
         if cache_block_size.spec == 0:
-            return [cache_block_size.target] * num_ranks
+            return [cache_block_size.target + cache_block_size.memory] * num_ranks
 
         attn_tp = self.dist_config.attn_tp
         draft_tp = self._get_spec_attn_tp()
@@ -205,7 +206,7 @@ class ExecutorBase:
         # attention-TP group. Other ranks can use the memory that would have
         # gone to spec cache for additional target KV blocks.
         return [
-            cache_block_size.total if rank % attn_tp == 0 else cache_block_size.target
+            cache_block_size.total if rank % attn_tp == 0 else cache_block_size.target + cache_block_size.memory
             for rank in range(num_ranks)
         ]
 
@@ -256,10 +257,11 @@ class ExecutorBase:
                 f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
             )
 
-    def _get_state_cache_mem(self):
+    def _get_state_cache_mem(self, states_shapes=None, cache_config=None):
         """Get state cache mem usage."""
-        cache_config = self.cache_config
-        if len(cache_config.states_shapes) == 0:
+        cache_config = cache_config or self.cache_config
+        states_shapes = states_shapes if states_shapes is not None else cache_config.states_shapes
+        if len(states_shapes) == 0:
             return 0
 
         from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
@@ -273,10 +275,43 @@ class ExecutorBase:
             num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
-        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
+        mems = StateCacheEngine.get_cache_state_size(states_shapes)
         mems *= num_state_caches
 
         return mems
+
+    def _get_mem_state_cache_mem(self) -> int:
+        """Get memory-model state cache mem usage for memdecode."""
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is None:
+            return 0
+        memory_model_config = memdecode_config.memory_model_config
+        if len(memory_model_config.states_shapes) == 0:
+            return 0
+        return self._get_state_cache_mem(memory_model_config.states_shapes, self.cache_config)
+
+    def _validate_memdecode_configs(self):
+        """Validate MemDecode config compatibility."""
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is None:
+            return
+        memory_model_config = memdecode_config.memory_model_config
+
+        if self.specdecode_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
+
+        base_has_states = bool(self.model_config.states_shapes)
+        memory_has_states = bool(memory_model_config.states_shapes)
+        if base_has_states != memory_has_states:
+            raise ValueError('Base and memory model must both use SSM state caches or both not use them.')
+
+        base_vocab_size = self.model_config.vocab_size
+        memory_vocab_size = memory_model_config.vocab_size
+        if memory_vocab_size != base_vocab_size:
+            logger.warning(
+                f'Memory model vocab_size ({memory_vocab_size}) differs from base vocab_size ({base_vocab_size}); '
+                'fusion logits will be aligned to the base vocab before sampling.'
+            )
 
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""
@@ -296,7 +331,7 @@ class ExecutorBase:
 
     def _reserve_state_cache_mem(self, free_mems: list[int]) -> list[int]:
         """Reserve non-pageable state cache memory from free memory."""
-        state_cache_mem = self._get_state_cache_mem()
+        state_cache_mem = self._get_state_cache_mem() + self._get_mem_state_cache_mem()
         # State cache is allocated as a separate pool and is not governed by
         # cache_max_entry_count, so subtract it from every rank first.
         free_mems = [free_mem - state_cache_mem for free_mem in free_mems]
@@ -314,13 +349,26 @@ class ExecutorBase:
         """Get per-block KV cache memory for target and spec models."""
         cache_block_size = CacheEngine.get_cache_block_size(self.cache_config, self.model_config,
                                                             self.dist_config.attn_tp)
+        memory_cache_block_size = 0
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is not None:
+            memory_model_config = memdecode_config.memory_model_config
+            memory_cache_block_size = CacheEngine.get_cache_block_size(
+                self.cache_config,
+                memory_model_config,
+                self.dist_config.attn_tp,
+            )
 
         spec_cache_block_size = 0
         if spec_cache_config is not None:
             draft_tp = self._get_spec_attn_tp()
             spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, draft_tp)
 
-        return _CacheBlockSize(target=cache_block_size, spec=spec_cache_block_size)
+        return _CacheBlockSize(
+            target=cache_block_size,
+            spec=spec_cache_block_size,
+            memory=memory_cache_block_size,
+        )
 
     def _reserve_runtime_mem(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
                              spec_cache_config: CacheConfig | None) -> list[int]:
@@ -362,6 +410,7 @@ class ExecutorBase:
         """Update cache config."""
         self._adjust_block_size()
         self._sync_spec_cache_block_size()
+        self._validate_memdecode_configs()
         self.cache_config.states_shapes = self.model_config.states_shapes
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
@@ -387,6 +436,8 @@ class ExecutorBase:
         if self.specdecode_config:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
+        if self.misc_config.memdecode_config is not None:
+            logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
         if self.misc_config.empty_init:
             logger.info('Skip warming up model during empty init.')
