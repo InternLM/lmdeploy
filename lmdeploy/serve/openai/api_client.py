@@ -74,8 +74,8 @@ class APIClient:
         Args:
             input: the prompt to be encoded. In str or list[str] format.
             do_preprocess: whether do preprocess or not. Default to False.
-            add_bos: True when it is the beginning of a conversation. False
-                when it is not. Default to True.
+            add_bos: Whether to prepend the tokenizer BOS token. Default to
+                True.
         Return: (input_ids, length)
         """
         response = requests.post(self.encode_v1_url,

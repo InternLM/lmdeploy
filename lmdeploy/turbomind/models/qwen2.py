@@ -110,12 +110,12 @@ class Qwen2Model(TextModel):
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(self.cfg.num_experts):
+        for e in m.range(self.cfg.num_experts):
             experts[e] = self.ffn(pfx + 'experts' + e,
                                   self.cfg.moe_intermediate_size,
                                   is_expert=True)

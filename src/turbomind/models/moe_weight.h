@@ -26,6 +26,8 @@ struct MoeConfig: ModuleConfig {
     X(int, n_group)                                                                                                    \
     X(int, router_n_groups)                                                                                            \
     X(double, routed_scale)                                                                                            \
+    X(int, ep_size, 1)                                                                                                 \
+    X(int, ep_rank, 0)                                                                                                 \
     X(DataType, data_type)
 
     MOE_FIELDS(TM_MEMBER)
@@ -53,6 +55,14 @@ public:
     int  num_experts() const
     {
         return expert_num;
+    }
+    int num_local_experts() const
+    {
+        return expert_num / ep_size;
+    }
+    int local_expert_offset() const
+    {
+        return ep_rank * num_local_experts();
     }
 
     // --- X-macro child members ---
@@ -82,6 +92,8 @@ public:
     int         n_group{};
     std::string scoring_func;
     int         router_n_groups{};
+    int         ep_size{1};
+    int         ep_rank{0};
 
 private:
     ActivationType act_type_{};

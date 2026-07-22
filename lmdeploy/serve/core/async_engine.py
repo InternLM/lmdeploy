@@ -44,7 +44,6 @@ logger = get_logger('lmdeploy')
 class GenOut:
     """Pack all response information together."""
     response: str
-    history_token_len: int
     input_token_len: int
     generate_token_len: int
     finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
@@ -116,6 +115,7 @@ class AsyncEngine:
                  max_log_len: int | None = None,
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'speculative_config={speculative_config}')
@@ -124,7 +124,9 @@ class AsyncEngine:
         self.model_name = model_name if model_name else model_path
         self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
-        self.prompt_processor = MultimodalProcessor(self.tokenizer, self.chat_template)
+        self.prompt_processor = MultimodalProcessor(self.tokenizer,
+                                                    self.chat_template,
+                                                    allowed_media_domains=allowed_media_domains)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path, trust_remote_code=trust_remote_code)
         self.arch, self.hf_cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
@@ -239,7 +241,6 @@ class AsyncEngine:
         logger.info(f'[generate] drop stale session {session.session_id} '
                     f'(session.epoch={epoch}, async_engine.epoch={self.epoch})')
         return GenOut(response='',
-                      history_token_len=session.step,
                       input_token_len=input_token_len,
                       generate_token_len=0,
                       finish_reason='abort',
@@ -416,14 +417,13 @@ class AsyncEngine:
             # avoid unnecessary process
             gen_config.temperature = 1.0
             gen_config.repetition_penalty = 1.0
-        # set random if it is not set and sequence_start is True
-        elif gen_config.random_seed is None and session.step == 0:
+        elif gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
             logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
         if gen_config.max_new_tokens is None:
-            gen_config.max_new_tokens = max(0, self.session_len - session.step - len(input_ids))
+            gen_config.max_new_tokens = max(0, self.session_len - len(input_ids))
         return gen_config
 
     @asynccontextmanager
@@ -442,14 +442,6 @@ class AsyncEngine:
                 pass
             except Exception:
                 logger.exception(f'[safe_run] session {session.session_id} async_cancel failed.')
-            if self.backend == 'pytorch':
-                logger.info(f'[safe_run] session {session.session_id} ending session')
-                try:
-                    await asyncio.shield(handle.async_end(session.session_id))
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    logger.exception(f'[safe_run] session {session.session_id} async_end failed.')
 
         try:
             metrics_processor.increase_api_routed_requests()
@@ -486,9 +478,6 @@ class AsyncEngine:
             tools: list[object] | None = None,
             reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
             stream_response: bool = True,
-            sequence_start: bool = True,
-            sequence_end: bool = True,  # no interactive mode by default
-            step: int = 0,
             do_preprocess: bool = True,
             adapter_name: str | None = None,
             rewind_stop_tokens: bool = False,
@@ -506,9 +495,6 @@ class AsyncEngine:
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
             stream_response (bool): whether return responses streamingly
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            step (int): the offset of the k/v cache
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
@@ -519,7 +505,7 @@ class AsyncEngine:
         if isinstance(session_id, Session):
             session = session_id
         elif isinstance(session_id, int):
-            session = self.session_mgr.get(session_id, step=step)
+            session = self.session_mgr.get(session_id)
         else:
             raise ValueError(f'Invalid session_id: {session_id}. It should be an instance of Session or an integer.')
         session_id = session.session_id
@@ -527,7 +513,7 @@ class AsyncEngine:
 
         def remove_session_once():
             nonlocal session_removed
-            if sequence_end and not session_removed:
+            if not session_removed:
                 self.session_mgr.remove(session)
                 session_removed = True
 
@@ -545,7 +531,6 @@ class AsyncEngine:
                 self.request_logger.log_prompt(session, prompt=prompt)
                 prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
                                                                             do_preprocess=do_preprocess,
-                                                                            sequence_start=sequence_start,
                                                                             adapter_name=adapter_name,
                                                                             tools=tools,
                                                                             reasoning_effort=reasoning_effort,
@@ -569,7 +554,6 @@ class AsyncEngine:
                 metrics_processor.increase_failed_requests('error')
                 remove_session_once()
                 yield GenOut(response='in prompt processing error',
-                             history_token_len=session.step,
                              input_token_len=len(input_ids) if input_ids is not None else 0,
                              generate_token_len=0,
                              finish_reason='error',
@@ -581,17 +565,14 @@ class AsyncEngine:
             prompt_input = dict(input_ids=input_ids)
 
         gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
+        input_len = len(input_ids)
 
         if gen_config.max_new_tokens == 0:
             logger.info(f'run out of tokens. session={session_id}.')
             metrics_processor.increase_failed_requests('error')
-            history_len = session.step
-            if sequence_end is True and sequence_start is False:
-                await session.async_close()
             remove_session_once()
             yield GenOut(response='',
-                         history_token_len=history_len,
-                         input_token_len=len(input_ids),
+                         input_token_len=input_len,
                          generate_token_len=0,
                          finish_reason='length',
                          token_ids=[])
@@ -604,18 +585,15 @@ class AsyncEngine:
             metrics_processor.increase_failed_requests('error')
             remove_session_once()
             yield GenOut(response=errmsg,
-                         history_token_len=session.step,
-                         input_token_len=len(input_ids),
+                         input_token_len=input_len,
                          generate_token_len=0,
                          finish_reason='error',
                          token_ids=[])
             return
         logger.info(f'session={session_id}, '
-                    f'history_tokens={session.step}, '
-                    f'input_tokens={len(input_ids)}, '
+                    f'input_tokens={input_len}, '
                     f'max_new_tokens={gen_config.max_new_tokens}, '
-                    f'seq_start={sequence_start}, seq_end={sequence_end}, '
-                    f'step={step}, prep={do_preprocess}')
+                    f'prep={do_preprocess}')
 
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
@@ -625,13 +603,13 @@ class AsyncEngine:
             stop_ids = gen_config.stop_token_ids or []
 
 
-        stale = self._if_session_stale(session, len(prompt_input['input_ids']))
+        stale = self._if_session_stale(session, input_len)
         if stale is not None:
             metrics_processor.increase_failed_requests('abort')
             remove_session_once()
             yield stale
             return
-        session._remove_on_request_exit = sequence_end
+        session._remove_on_request_exit = True
         async with session.request_handle() as handle:
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
@@ -639,15 +617,12 @@ class AsyncEngine:
                 metrics_processor.increase_failed_requests('abort')
                 remove_session_once()
                 yield GenOut(response='',
-                             history_token_len=0,
-                             input_token_len=len(input_ids),
+                             input_token_len=input_len,
                              generate_token_len=0,
                              finish_reason='abort',
                              token_ids=[])
                 return
             token_ids = input_ids.copy()
-            history_len = session.step
-            input_len = len(input_ids)
             output_len, gen_len = 0, 0
             state = DetokenizeState(input_len)
             response = ''
@@ -659,10 +634,7 @@ class AsyncEngine:
                                      **prompt_input,
                                      gen_config=gen_config,
                                      adapter_name=adapter_name,
-                                     stream_output=stream_response,
-                                     sequence_start=sequence_start,
-                                     sequence_end=sequence_end,
-                                     step=history_len) as gen:
+                                     stream_output=stream_response) as gen:
                 # The engine has accepted multimodal data; avoid retaining preprocessed tensors here.
                 prompt_input.pop('multimodal', None)
                 logger.debug(f'[generate] session {session_id} started')
@@ -704,7 +676,6 @@ class AsyncEngine:
                     res = token_ids[ids_offset:]
 
                     out = GenOut(response,
-                                 history_len,
                                  input_len,
                                  gen_len,
                                  finish_reason,
@@ -758,10 +729,9 @@ class AsyncEngine:
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, output_tokens {gen_len}')
+                                f'{input_len}, output_tokens {gen_len}')
                     yield GenOut(response,
-                                 session.step,
-                                 len(input_ids),
+                                 input_len,
                                  gen_len,
                                  finish_reason,
                                  token_ids=token_ids,
@@ -772,32 +742,16 @@ class AsyncEngine:
                                  indexer_topk=indexer_topk,
                                  cache_block_ids=outputs.cache_block_ids,
                                  cached_tokens=cached_tokens)
-                    # Note: We remove the session step update here. Let the caller(e.g., pipeline.chat) take care of it.
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
                     metrics_processor.increase_failed_requests('error')
                     yield GenOut(response=f'internal error happened, status code {outputs.status}',
-                                 history_token_len=session.step,
-                                 input_token_len=len(input_ids),
+                                 input_token_len=input_len,
                                  generate_token_len=0,
                                  finish_reason='error',
                                  token_ids=[])
-            # update step
-            if sequence_end:
-                if self.backend == 'pytorch':
-                    # manually end pytorch session
-                    # note: Using session.async_abort() here results in deadlock
-                    # because it waits for session's _active event to be set, but the event won't be set
-                    # until the session is finished, i.e., session.request_handle() context exits.
-                    await handle.async_end(session.session_id)
-                remove_session_once()
-        # if sequence_end:
-        #     if self.backend == 'pytorch':
-        #         # manually end pytorch session. session cannot be ended until session.request_handle()
-        #         # context exits
-        #         await session.async_close()
-        #     self.session_mgr.remove(session)
+            remove_session_once()
 
     def start_loop(self, loop, use_async_api=False):
         """Start engine loop.
@@ -862,9 +816,7 @@ class AsyncEngine:
 
     async def async_get_logits(self,
                                input_ids,
-                               sessions: list['Session'] | None = None,
-                               sequence_start: bool = True,
-                               sequence_end: bool = True) -> list[torch.Tensor]:
+                               sessions: list['Session'] | None = None) -> list[torch.Tensor]:
         assert input_ids and all(isinstance(_, list) for _ in input_ids)
         assert sessions is None or (len(sessions) == len(input_ids))
 
@@ -882,15 +834,10 @@ class AsyncEngine:
                                          session=session,
                                          input_ids=input_ids[i],
                                          gen_config=gen_config,
-                                         stream_output=False,
-                                         sequence_start=sequence_start,
-                                         sequence_end=sequence_end,
-                                         step=session.step) as gen:
+                                         stream_output=False) as gen:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
-                if sequence_end and self.backend == 'pytorch':
-                    await handle.async_end(session.session_id)
 
         create_sessions = False
         if sessions is None:
@@ -898,7 +845,7 @@ class AsyncEngine:
             sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
-        if sequence_end and create_sessions:
+        if create_sessions:
             for session in sessions:
                 self.session_mgr.remove(session)
         return logits
@@ -934,15 +881,10 @@ class AsyncEngine:
                                          session=session,
                                          input_ids=input_ids,
                                          gen_config=gen_config,
-                                         stream_output=False,
-                                         sequence_start=True,
-                                         sequence_end=True,
-                                         step=session.step) as gen:
+                                         stream_output=False) as gen:
                     async for outputs in gen:
                         pass
                     ce_loss = outputs.ce_loss
-                if self.backend == 'pytorch':
-                    await handle.async_end(session.session_id)
         finally:
             self.session_mgr.remove(session)
         if ce_loss is None:

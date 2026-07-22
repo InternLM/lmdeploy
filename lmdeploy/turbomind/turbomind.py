@@ -82,25 +82,28 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
+    assert cfg.ep == 1 or cfg.tp == 1
     if not complete_parallel_config(cfg):
-        total = cfg.dp * cfg.tp
+        total = cfg.dp * cfg.ep * cfg.tp
         if not cfg.device_num:
             count = torch.cuda.device_count() * cfg.nnodes
             if total < count:
                 count = total
             cfg.device_num = count
         assert total % cfg.device_num == 0
+        size = max(cfg.ep, cfg.tp)
         overlap = total // cfg.device_num
-        attn_dp_size = overlap
-        mlp_tp_size = overlap
-        inner_tp_size = cfg.tp // mlp_tp_size
-        cfg.outer_dp_size = cfg.dp // attn_dp_size
-        cfg.attn_dp_size = attn_dp_size
+        inner_tp_size = size // overlap
+        cfg.outer_dp_size = cfg.dp // overlap
+        cfg.attn_dp_size = overlap
         cfg.attn_tp_size = inner_tp_size // cfg.cp
         cfg.attn_cp_size = cfg.cp
+        comm_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
         cfg.mlp_dp_size = 1
-        cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+        cfg.mlp_tp_size = comm_size // cfg.ep if cfg.ep > 1 else overlap * inner_tp_size
+    if cfg.ep > 1:
+        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
+        assert cfg.mlp_tp_size == 1, 'Only support mlp_tp_size == 1 when ep > 1'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -173,6 +176,7 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = _engine_config.session_len
+        self.health_executor = ThreadPoolExecutor(max_workers=1)
 
     def _process_weights(self):
         """Process weight."""
@@ -251,6 +255,7 @@ class TurboMind:
         ec.attn_tp_size = engine_config.attn_tp_size
         ec.attn_cp_size = engine_config.attn_cp_size
         ec.mlp_tp_size = engine_config.mlp_tp_size
+        ec.ep_size = engine_config.ep
         ec.devices = engine_config.devices
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
@@ -428,7 +433,10 @@ class TurboMind:
 
     async def get_health_status(self) -> dict:
         """Get backend health status without blocking the event loop."""
-        return await asyncio.to_thread(self._get_health_status)
+        # MultimodalProcessor may submit a large number of tasks to the default thread pool, causing
+        # the _get_health_status task to be selected after the DEFAULT_PROBE_TIMEOUT has already elapsed.
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.health_executor, self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):
@@ -693,9 +701,6 @@ class TurboMindInstance:
                                  input_embedding_ranges=None,
                                  input_meta: dict[str, Any] = None,
                                  multimodal: list[dict[str, Any]] = None,
-                                 sequence_start: bool = True,
-                                 sequence_end: bool = False,
-                                 step=0,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
@@ -707,21 +712,11 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            sequence_start (bool): must be True; TurboMind is stateless-only
-            sequence_end (bool): must be True; TurboMind is stateless-only
-            step (int): the offset of the k/v cache
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
         logger.info(f'[async_stream_infer] session {session_id} start')
-        if not (sequence_start and sequence_end):
-            logger.error(f'[async_stream_infer] session {session_id}: TurboMind supports only '
-                         f'stateless requests; stateful/interactive inference '
-                         f'(sequence_start={sequence_start}, sequence_end={sequence_end}) is not '
-                         f'supported - use prefix caching instead')
-            yield EngineOutput(ResponseType.NOT_SUPPORTED, [])
-            return
         gen_cfg = self._get_generation_config(gen_config)
 
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
@@ -765,7 +760,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step)
+        session = _tm.SessionParam(id=session_id, step=0)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)
@@ -786,7 +781,7 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        prev_len = step + input_len
+        prev_len = input_len
         try:
             while True:
                 await sem.acquire()

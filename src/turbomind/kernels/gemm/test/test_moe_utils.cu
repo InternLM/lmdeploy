@@ -233,6 +233,8 @@ bool test_moe_gate(int                     tokens,  //
                          tokens_padded,
                          expert_num,
                          experts_per_token,
+                         0,
+                         expert_num,
                          softmax,
                          false,
                          1.f,

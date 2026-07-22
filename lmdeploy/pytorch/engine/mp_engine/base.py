@@ -146,6 +146,8 @@ class MPEngineInstance(EngineInstanceBase):
         state = self.session_states[session_id]
         if state.cancelled or session_id in self.engine.pending_cancel_sessions:
             state.init_done.set()
+            self.session_states.pop(session_id, None)
+            self.engine.pending_cancel_sessions.discard(session_id)
             yield EngineOutput(ResponseType.CANCEL, [])
             return
         kwargs['session_id'] = session_id
@@ -162,3 +164,7 @@ class MPEngineInstance(EngineInstanceBase):
         except Exception:
             logger.exception(f'MPEngine session {session_id} stream inference failed.')
             raise
+        finally:
+            if state.init_done.is_set():
+                self.session_states.pop(session_id, None)
+                self.engine.pending_cancel_sessions.discard(session_id)

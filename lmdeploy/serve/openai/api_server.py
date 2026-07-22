@@ -539,8 +539,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         tools=request.tools,
         reasoning_effort=request.reasoning_effort,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
@@ -856,8 +854,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             session,
             gen_config=gen_config,
             stream_response=True,  # always use stream to enable batching
-            sequence_start=True,
-            sequence_end=True,
             do_preprocess=False,
             adapter_name=adapter_name)
         generators.append(result_generator)
@@ -1023,8 +1019,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
         do_preprocess=False,
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
@@ -1121,13 +1115,12 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     - **input**: the prompt to be encoded. In str or list[str] format.
     - **do_preprocess**: whether do preprocess or not. Default to False.
-    - **add_bos**: True when it is the beginning of a conversation. False when it
-      is not. Default to True.
+    - **add_bos**: Whether to add a BOS token when encoding. Default to True.
     """
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt, sequence_start=add_bos)
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt)
         input_ids = VariableInterface.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
         return input_ids
 
@@ -1542,6 +1535,7 @@ def serve(model_path: str,
           allow_terminate_by_client: bool = False,
           enable_abort_handling: bool = False,
           speculative_config: SpeculativeConfig | None = None,
+          allowed_media_domains: list[str] | None = None,
           generation_config: str = 'auto',
           **kwargs):
     """An example to perform model inference through the command line
@@ -1594,6 +1588,8 @@ def serve(model_path: str,
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
         allow_terminate_by_client (bool): Allow request from client to terminate server.
+        allowed_media_domains (list[str] | None): Optional exact hostname
+            allowlist for HTTP(S) media URLs.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1639,6 +1635,7 @@ def serve(model_path: str,
                                                     max_log_len=max_log_len,
                                                     trust_remote_code=trust_remote_code,
                                                     speculative_config=speculative_config,
+                                                    allowed_media_domains=allowed_media_domains,
                                                     **kwargs)
     set_parsers(reasoning_parser, tool_call_parser)
 
