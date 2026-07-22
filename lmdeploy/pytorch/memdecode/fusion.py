@@ -114,7 +114,7 @@ class RouterNetwork(nn.Module):
 
 
 class MemDecodeFusion(nn.Module):
-    """Fuse base and memory model logits into log probabilities."""
+    """Fuse base and memory model logits into logits-like scores."""
 
     def __init__(
         self,
@@ -155,26 +155,31 @@ class MemDecodeFusion(nn.Module):
     ) -> torch.Tensor:
         base_logits = align_logits_to_base(base_logits, self.base_vocab_size)
         memory_logits = align_logits_to_base(memory_logits, self.base_vocab_size)
+        base_logit_normalizer = torch.logsumexp(base_logits, dim=-1, keepdim=True)
         base_log_probs = torch.log_softmax(base_logits, dim=-1)
         memory_log_probs = torch.log_softmax(memory_logits, dim=-1)
 
         if self.adaptive_router:
-            return self._adaptive_fusion(
+            fused = self._adaptive_fusion(
                 base_log_probs,
                 memory_log_probs,
                 base_hidden_states=base_hidden_states,
                 memory_hidden_states=memory_hidden_states,
             )
-
-        if self.lambda_value == 0.0:
-            return base_log_probs
-        if self.lambda_value == 1.0:
-            return memory_log_probs
-
-        base_log_weight = base_log_probs.new_tensor(math.log1p(-self.lambda_value))
-        memory_log_weight = memory_log_probs.new_tensor(math.log(self.lambda_value))
-        fused = torch.logaddexp(base_log_probs + base_log_weight, memory_log_probs + memory_log_weight)
-        return fused
+        elif self.lambda_value == 0.0:
+            return base_logits
+        elif self.lambda_value == 1.0:
+            return memory_logits
+        else:
+            base_log_weight = base_log_probs.new_tensor(math.log1p(-self.lambda_value))
+            memory_log_weight = memory_log_probs.new_tensor(math.log(self.lambda_value))
+            fused = torch.logaddexp(base_log_probs + base_log_weight, memory_log_probs + memory_log_weight)
+        # `fused` contains normalized log-probabilities, which do not affect top-p, top-k, or temperature sampling.
+        # They are almost always non-positive, however, so LMDeploy's repetition penalty would multiply nearly every
+        # repeated-token score by the penalty. Original logits can be positive, in which case the penalty divides the
+        # score instead. Restore the base model's row-wise log normalizer so the fused distribution is unchanged while
+        # its scores remain on a base-logit-like scale.
+        return fused + base_logit_normalizer
 
     def _adaptive_fusion(
         self,

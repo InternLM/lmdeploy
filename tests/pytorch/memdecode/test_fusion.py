@@ -85,24 +85,24 @@ def test_align_logits_to_base_pads_smaller_vocab_with_negative_infinity():
     assert torch.isneginf(aligned[:, 2:]).all()
 
 
-def test_fixed_lambda_zero_returns_base_log_softmax():
+def test_fixed_lambda_zero_returns_base_logits():
     fusion = _fusion(_memdecode_config(lambda_value=0.0))
     base_logits = torch.tensor([[1.0, 3.0, -1.0, 0.5]])
     memory_logits = torch.tensor([[4.0, -2.0, 8.0, 1.0]])
 
     fused = fusion(base_logits, memory_logits)
 
-    torch.testing.assert_close(fused, torch.log_softmax(base_logits, dim=-1))
+    torch.testing.assert_close(fused, base_logits)
 
 
-def test_fixed_lambda_one_returns_memory_log_softmax():
+def test_fixed_lambda_one_returns_memory_logits():
     fusion = _fusion(_memdecode_config(lambda_value=1.0))
     base_logits = torch.tensor([[1.0, 3.0, -1.0, 0.5]])
     memory_logits = torch.tensor([[4.0, -2.0, 8.0, 1.0]])
 
     fused = fusion(base_logits, memory_logits)
 
-    torch.testing.assert_close(fused, torch.log_softmax(memory_logits, dim=-1))
+    torch.testing.assert_close(fused, memory_logits)
 
 
 def test_fixed_intermediate_lambda_combines_log_probabilities():
@@ -116,6 +116,7 @@ def test_fixed_intermediate_lambda_combines_log_probabilities():
         torch.log_softmax(base_logits, dim=-1) + torch.log(torch.tensor(0.75)),
         torch.log_softmax(memory_logits, dim=-1) + torch.log(torch.tensor(0.25)),
     )
+    expected += torch.logsumexp(base_logits, dim=-1, keepdim=True)
     torch.testing.assert_close(fused, expected)
 
 
@@ -132,6 +133,7 @@ def test_fixed_fusion_aligns_mismatched_vocab_sizes_before_fusion():
         torch.log_softmax(aligned_base, dim=-1) + torch.log(torch.tensor(0.75)),
         torch.log_softmax(aligned_memory, dim=-1) + torch.log(torch.tensor(0.25)),
     )
+    expected += torch.logsumexp(aligned_base, dim=-1, keepdim=True)
     torch.testing.assert_close(fused, expected)
 
 
@@ -171,6 +173,7 @@ def test_adaptive_router_loads_state_dict_and_fuses(tmp_path):
         torch.log_softmax(base_logits, dim=-1) + log_weights[:, 0:1],
         torch.log_softmax(memory_logits, dim=-1) + log_weights[:, 1:2],
     )
+    expected += torch.logsumexp(base_logits, dim=-1, keepdim=True)
     torch.testing.assert_close(fused, expected)
 
 
@@ -210,6 +213,7 @@ def test_adaptive_router_loads_safetensors_state_dict(tmp_path):
         torch.log_softmax(base_logits, dim=-1) + log_weights[:, 0:1],
         torch.log_softmax(memory_logits, dim=-1) + log_weights[:, 1:2],
     )
+    expected += torch.logsumexp(base_logits, dim=-1, keepdim=True)
     torch.testing.assert_close(fused, expected)
 
 
@@ -261,6 +265,7 @@ def test_adaptive_router_loads_planned_scalar_projector_checkpoint(tmp_path):
         torch.log_softmax(base_logits, dim=-1) + log_weights[:, 0:1],
         torch.log_softmax(memory_logits, dim=-1) + log_weights[:, 1:2],
     )
+    expected += torch.logsumexp(base_logits, dim=-1, keepdim=True)
     torch.testing.assert_close(fused, expected)
 
 
@@ -288,7 +293,7 @@ def test_lambda_base_only_threshold_gates_to_base_only(tmp_path):
         memory_hidden_states=torch.randn(1, 3),
     )
 
-    torch.testing.assert_close(fused, torch.log_softmax(base_logits, dim=-1))
+    torch.testing.assert_close(fused, base_logits)
 
 
 def test_adaptive_scalar_features_ignore_padded_negative_infinity(tmp_path):
@@ -323,6 +328,7 @@ def test_adaptive_scalar_features_ignore_padded_negative_infinity(tmp_path):
         torch.log_softmax(base_logits, dim=-1) + log_weights[:, 0:1],
         torch.log_softmax(aligned_memory, dim=-1) + log_weights[:, 1:2],
     )
+    expected += torch.logsumexp(base_logits, dim=-1, keepdim=True)
     torch.testing.assert_close(fused, expected)
 
 
@@ -356,6 +362,7 @@ def test_mem_hidden_both_scalars_uses_implicit_scalar_architecture(tmp_path):
         torch.log_softmax(base_logits, dim=-1) + log_weights[:, 0:1],
         torch.log_softmax(memory_logits, dim=-1) + log_weights[:, 1:2],
     )
+    expected += torch.logsumexp(base_logits, dim=-1, keepdim=True)
     torch.testing.assert_close(fused, expected)
     assert torch.isfinite(fused).all()
 
