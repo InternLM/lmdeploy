@@ -77,7 +77,7 @@ lmdeploy serve api_server \
     --enable-metrics
 ```
 
-You should be able to see multiple API servers added to the proxy server list. Details can be found in `lmdeploy/serve/proxy/proxy_config.json`.
+You should be able to see multiple API servers added to the proxy server list. Query `GET /nodes/status` on the proxy for the current replica set.
 
 For example, you may have the following API servers:
 
