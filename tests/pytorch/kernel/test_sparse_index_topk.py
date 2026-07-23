@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import sys
+
 import pytest
 import torch
 
@@ -15,6 +17,18 @@ def test_nsa_backend_selects_sparse_topk_for_glm52():
 
     assert _get_sparse_index_topk(2048).__name__ == 'sparse_index_topk'
     assert _get_sparse_index_topk(1024) is None
+
+
+def test_nsa_backend_falls_back_without_tilelang(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda import nsa
+
+    nsa._get_sparse_index_topk.cache_clear()
+    monkeypatch.setitem(sys.modules,
+                        'lmdeploy.pytorch.kernels.cuda.sparse_index_topk', None)
+    try:
+        assert nsa._get_sparse_index_topk(2048) is None
+    finally:
+        nsa._get_sparse_index_topk.cache_clear()
 
 
 def _assert_topk_ids(scores: torch.Tensor,

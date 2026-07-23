@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 
+import pytest
 import torch
 from torch import nn
 
@@ -114,6 +115,29 @@ def test_proposer_binds_target_embedding_and_keeps_draft_topk_buffer(monkeypatch
     assert draft.embed_tokens is target.embedding
     assert draft.topk_indices_buffer is draft_topk_indices_buffer
     assert draft.topk_indices_buffer is not target.model.topk_indices_buffer
+
+
+@pytest.mark.parametrize(('uses_topk_buffer', 'supports_binding'),
+                         [(False, True), (True, False)])
+def test_proposer_skips_unsupported_target_embedding_binding(
+        monkeypatch, uses_topk_buffer, supports_binding):
+
+    class _Draft(nn.Module):
+
+        uses_dsa_topk_buffer = uses_topk_buffer
+
+    proposer = object.__new__(DeepseekMTP)
+    draft = _Draft()
+    if supports_binding:
+        draft.set_input_embeddings = lambda _: pytest.fail(
+            'disabled top-k sharing must not bind embeddings')
+
+    def build_model(self, empty_init, target_model=None, build_model_ctx=None):
+        self.model = draft
+        self.target_model = target_model
+
+    monkeypatch.setattr(BaseSpecProposer, 'build_model', build_model)
+    proposer.build_model(empty_init=True, target_model=nn.Module())
 
 
 def test_glm_mtp_prepares_postnorm_hidden_for_logits():

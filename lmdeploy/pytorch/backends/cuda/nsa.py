@@ -15,10 +15,13 @@ from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta
 
 @functools.lru_cache
 def _get_sparse_index_topk(topk: int):
-    from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
-        is_sparse_index_topk_supported,
-        sparse_index_topk,
-    )
+    try:
+        from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
+            is_sparse_index_topk_supported,
+            sparse_index_topk,
+        )
+    except ImportError:
+        return None
     if is_sparse_index_topk_supported(topk):
         return sparse_index_topk
     return None
