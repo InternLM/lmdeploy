@@ -15,8 +15,15 @@ from .blocked_gemm_fp8 import fast_round_scale
 
 
 @triton.jit
-def _apply_rope_first(x, x_pair, cos, sin, feat_off, rope_dim: tl.constexpr,
-                      rope_interleaved: tl.constexpr):
+def _apply_rope_first(
+    x,
+    x_pair,
+    cos,
+    sin,
+    feat_off,
+    rope_dim: tl.constexpr,
+    rope_interleaved: tl.constexpr,
+):
     """Apply RoPE to the leading dimensions for both supported pair layouts."""
     prod_cos = x * cos + 0
     prod_sin = x_pair * sin + 0
@@ -29,14 +36,34 @@ def _apply_rope_first(x, x_pair, cos, sin, feat_off, rope_dim: tl.constexpr,
 
 
 @triton.jit
-def _prepare_dsa_indexer_q_kernel(Q, Weights, Cos, Sin, QOut, QScaleOut, num_heads: tl.constexpr,
-                                  score_scale: tl.constexpr, fp8_min: tl.constexpr, fp8_max: tl.constexpr,
-                                  stride_qt: tl.constexpr, stride_qh: tl.constexpr, stride_qd: tl.constexpr,
-                                  stride_wt: tl.constexpr, stride_wh: tl.constexpr, stride_cs: tl.constexpr,
-                                  stride_cd: tl.constexpr, stride_ot: tl.constexpr, stride_oh: tl.constexpr,
-                                  stride_od: tl.constexpr, stride_st: tl.constexpr, stride_sh: tl.constexpr,
-                                  head_dim: tl.constexpr, rope_dim: tl.constexpr, rope_interleaved: tl.constexpr,
-                                  BLOCK_D: tl.constexpr):
+def _prepare_dsa_indexer_q_kernel(
+    Q,
+    Weights,
+    Cos,
+    Sin,
+    QOut,
+    QScaleOut,
+    num_heads: tl.constexpr,
+    score_scale: tl.constexpr,
+    fp8_min: tl.constexpr,
+    fp8_max: tl.constexpr,
+    stride_qt: tl.constexpr,
+    stride_qh: tl.constexpr,
+    stride_qd: tl.constexpr,
+    stride_wt: tl.constexpr,
+    stride_wh: tl.constexpr,
+    stride_cs: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_ot: tl.constexpr,
+    stride_oh: tl.constexpr,
+    stride_od: tl.constexpr,
+    stride_st: tl.constexpr,
+    stride_sh: tl.constexpr,
+    head_dim: tl.constexpr,
+    rope_dim: tl.constexpr,
+    rope_interleaved: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
     row_id = tl.program_id(0)
     token_id = row_id // num_heads
     head_id = row_id % num_heads
@@ -76,10 +103,25 @@ def _prepare_dsa_indexer_q_kernel(Q, Weights, Cos, Sin, QOut, QScaleOut, num_hea
 
 
 @triton.jit
-def _prepare_dsa_indexer_k_kernel(K, NormWeight, NormBias, Cos, Sin, KOut, eps: tl.constexpr, stride_kt: tl.constexpr,
-                                  stride_kd: tl.constexpr, stride_cs: tl.constexpr, stride_cd: tl.constexpr,
-                                  stride_ot: tl.constexpr, stride_od: tl.constexpr, head_dim: tl.constexpr,
-                                  rope_dim: tl.constexpr, rope_interleaved: tl.constexpr, BLOCK_D: tl.constexpr):
+def _prepare_dsa_indexer_k_kernel(
+    K,
+    NormWeight,
+    NormBias,
+    Cos,
+    Sin,
+    KOut,
+    eps: tl.constexpr,
+    stride_kt: tl.constexpr,
+    stride_kd: tl.constexpr,
+    stride_cs: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_ot: tl.constexpr,
+    stride_od: tl.constexpr,
+    head_dim: tl.constexpr,
+    rope_dim: tl.constexpr,
+    rope_interleaved: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
     token_id = tl.program_id(0)
     feat_off = tl.arange(0, BLOCK_D)
     feat_mask = feat_off < head_dim
@@ -115,14 +157,36 @@ def _prepare_dsa_indexer_k_kernel(K, NormWeight, NormBias, Cos, Sin, KOut, eps: 
 
 
 @triton.jit
-def _prepare_dsa_indexer_k_cache_kernel(K, NormWeight, NormBias, Cos, Sin, KCache, KSCache, CuSeqLenQ, KVSeqLens,
-                                        BlockOffsets, eps: tl.constexpr, fp8_min: tl.constexpr, fp8_max: tl.constexpr,
-                                        stride_kt: tl.constexpr, stride_kd: tl.constexpr, stride_cs: tl.constexpr,
-                                        stride_cd: tl.constexpr, stride_kcb: tl.constexpr, stride_kcs: tl.constexpr,
-                                        stride_kcd: tl.constexpr, stride_ksb: tl.constexpr, stride_kss: tl.constexpr,
-                                        stride_boff: tl.constexpr, block_size: tl.constexpr, head_dim: tl.constexpr,
-                                        rope_dim: tl.constexpr, rope_interleaved: tl.constexpr,
-                                        BLOCK_D: tl.constexpr):
+def _prepare_dsa_indexer_k_cache_kernel(
+    K,
+    NormWeight,
+    NormBias,
+    Cos,
+    Sin,
+    KCache,
+    KSCache,
+    CuSeqLenQ,
+    KVSeqLens,
+    BlockOffsets,
+    eps: tl.constexpr,
+    fp8_min: tl.constexpr,
+    fp8_max: tl.constexpr,
+    stride_kt: tl.constexpr,
+    stride_kd: tl.constexpr,
+    stride_cs: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_kcb: tl.constexpr,
+    stride_kcs: tl.constexpr,
+    stride_kcd: tl.constexpr,
+    stride_ksb: tl.constexpr,
+    stride_kss: tl.constexpr,
+    stride_boff: tl.constexpr,
+    block_size: tl.constexpr,
+    head_dim: tl.constexpr,
+    rope_dim: tl.constexpr,
+    rope_interleaved: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
     q_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     q_start = tl.load(CuSeqLenQ + batch_id)
@@ -180,8 +244,15 @@ def _prepare_dsa_indexer_k_cache_kernel(K, NormWeight, NormBias, Cos, Sin, KCach
     tl.store(KSCache + physical_block * stride_ksb + page_off * stride_kss, scale)
 
 
-def prepare_dsa_indexer_q(q: Tensor, weights: Tensor, cos: Tensor, sin: Tensor, score_scale: float,
-                          out_dtype: torch.dtype, rope_interleaved: bool) -> tuple[Tensor, Tensor]:
+def prepare_dsa_indexer_q(
+    q: Tensor,
+    weights: Tensor,
+    cos: Tensor,
+    sin: Tensor,
+    score_scale: float,
+    out_dtype: torch.dtype,
+    rope_interleaved: bool,
+) -> tuple[Tensor, Tensor]:
     """Fuse RoPE, FP8 quantization, and head-gate scaling."""
     assert q.dtype == torch.bfloat16 and q.dim() == 3
     assert q.size(-1) == 128 and cos.size(-1) == 64 and sin.shape == cos.shape
@@ -223,8 +294,15 @@ def prepare_dsa_indexer_q(q: Tensor, weights: Tensor, cos: Tensor, sin: Tensor, 
     return q_out, q_scale
 
 
-def prepare_dsa_indexer_k(k: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor, sin: Tensor, eps: float,
-                          rope_interleaved: bool) -> Tensor:
+def prepare_dsa_indexer_k(
+    k: Tensor,
+    norm_weight: Tensor,
+    norm_bias: Tensor,
+    cos: Tensor,
+    sin: Tensor,
+    eps: float,
+    rope_interleaved: bool,
+) -> Tensor:
     """Reference fused LayerNorm and RoPE K preparation."""
     assert k.dtype == torch.bfloat16 and k.dim() == 2 and k.size(-1) == 128
     assert norm_weight.shape == norm_bias.shape == (128, )
@@ -252,10 +330,21 @@ def prepare_dsa_indexer_k(k: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos
     return k_out
 
 
-def prepare_dsa_indexer_k_cache(k: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor, sin: Tensor,
-                                k_cache: Tensor, k_s_cache: Tensor, cu_seqlen_q: Tensor, kv_seqlens: Tensor,
-                                block_offsets: Tensor, max_q_seqlen: int, eps: float,
-                                rope_interleaved: bool) -> None:
+def prepare_dsa_indexer_k_cache(
+    k: Tensor,
+    norm_weight: Tensor,
+    norm_bias: Tensor,
+    cos: Tensor,
+    sin: Tensor,
+    k_cache: Tensor,
+    k_s_cache: Tensor,
+    cu_seqlen_q: Tensor,
+    kv_seqlens: Tensor,
+    block_offsets: Tensor,
+    max_q_seqlen: int,
+    eps: float,
+    rope_interleaved: bool,
+) -> None:
     """Fuse K LayerNorm, RoPE, FP8 quantization, and cache fill."""
     assert k.dtype == torch.bfloat16 and k.dim() == 2 and k.size(-1) == 128
     assert k_cache.dim() == 3 and k_cache.size(-1) == 128

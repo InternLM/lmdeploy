@@ -7,14 +7,6 @@ from .deepseek_v32 import DeepseekV32ModelConfigBuilder
 
 logger = get_logger('lmdeploy')
 
-
-def normalize_glm_moe_dsa_config(hf_config):
-    """Normalize GLM-MoE-DSA checkpoint fields for the PyTorch runtime."""
-    if hf_config.qk_head_dim != hf_config.qk_nope_head_dim + hf_config.qk_rope_head_dim:
-        hf_config.qk_rope_head_dim = hf_config.qk_head_dim - hf_config.qk_nope_head_dim
-    hf_config.head_dim = hf_config.qk_rope_head_dim
-
-
 class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
 
     @classmethod
@@ -35,7 +27,10 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
             logger.info('Enable fp8_quant_scope=moe_only for glm_moe_dsa because LMDEPLOY_FP8_MOE_ONLY=1 '
                         'and the FP8 quantization config is LMDeploy-synthesized.')
 
-        normalize_glm_moe_dsa_config(hf_config)
+        if hf_config.qk_head_dim != hf_config.qk_nope_head_dim + hf_config.qk_rope_head_dim:
+            hf_config.qk_rope_head_dim = hf_config.qk_head_dim - hf_config.qk_nope_head_dim
+        hf_config.head_dim = hf_config.qk_rope_head_dim
+
         config = super().build(hf_config, model_path=model_path, **kwargs)
         if is_draft_model:
             hf_config.architectures[0] = 'GlmMoeDsaMTPModel'
