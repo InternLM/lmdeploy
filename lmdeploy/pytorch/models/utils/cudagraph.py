@@ -265,23 +265,28 @@ class CudaGraphMixin:
         use_flash_mla_meta = (graph_meta.use_flash_mla
                               and (graph_meta.use_mla_fp8_cache or graph_meta.mla_index_topk is None))
         if use_flash_mla_meta:
-            import flash_mla
-            step_ctx = get_step_ctx_manager().current_context()
-            model_config = step_ctx.model_config
-            num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
-            index_topk = graph_meta.mla_index_topk
-            num_heads_q = None if index_topk is None else num_attention_heads
-            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
-                attn_metadata.kv_seqlens.to(torch.int32),
-                num_attention_heads * decode_query_len,
-                num_heads_k=1,
-                num_heads_q=num_heads_q,
-                is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
-                topk=index_topk)
-            # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
-            input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
-            input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
-            attn_metadata.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
+            scheduler_buffer = input_buffers['tile_scheduler_metadata']
+            # The old API returns tensor metadata that must be refreshed while
+            # preserving its CUDA graph address. The new FlashMLASchedMeta API
+            # owns and initializes its metadata object on first use.
+            if isinstance(scheduler_buffer, torch.Tensor):
+                import flash_mla
+                step_ctx = get_step_ctx_manager().current_context()
+                model_config = step_ctx.model_config
+                num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
+                index_topk = graph_meta.mla_index_topk
+                num_heads_q = None if index_topk is None else num_attention_heads
+                tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
+                    attn_metadata.kv_seqlens.to(torch.int32),
+                    num_attention_heads * decode_query_len,
+                    num_heads_k=1,
+                    num_heads_q=num_heads_q,
+                    is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
+                    topk=index_topk)
+                # Keep graph input addresses stable for the old FlashMLA metadata API.
+                scheduler_buffer.copy_(tile_scheduler_metadata)
+                input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
+            attn_metadata.tile_scheduler_metadata = scheduler_buffer
             attn_metadata.num_splits = input_buffers['num_splits']
 
         # use fa3 decode kernel for spec decode

@@ -179,6 +179,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         max_q_seqlen = max_q_seqlen // batch_size
         query = query.unflatten(0, (batch_size, max_q_seqlen))
+        num_q_heads = query.size(2)
         if kv_seqlens.dtype == torch.int64:
             kv_seqlens = kv_seqlens.to(torch.int32)
 
@@ -187,6 +188,13 @@ class FlashMLAImpl(TritonAttentionImpl):
             block_size = k_cache.size(1)
             nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, max_q_seqlen, block_size)
             causal = False
+            # The new FlashMLASchedMeta API uses a sparse decoder that only
+            # accepts 64 or 128 query heads. The old API stores metadata in a
+            # tensor and supports the unpadded TP head count.
+            if not isinstance(attn_metadata.tile_scheduler_metadata, torch.Tensor):
+                pad_heads = -num_q_heads % self._MLA_HEAD_ALIGNMENT
+                if pad_heads:
+                    query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
 
         attn_output, _ = self.flash_mla_with_kvcache(query,
                                                      k_cache=k_cache,
@@ -200,6 +208,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                                                      is_fp8_kvcache=is_fp8_kvcache,
                                                      indices=nsa_indices)
 
+        attn_output = attn_output[:, :, :num_q_heads]
         attn_output = attn_output.flatten(0, 1)
         return attn_output
 
