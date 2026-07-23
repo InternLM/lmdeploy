@@ -101,7 +101,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 FetchContent_Declare(
   xgrammar
   GIT_REPOSITORY          https://github.com/mlc-ai/xgrammar.git
-  GIT_TAG                 v0.1.27
+  GIT_TAG                 v0.2.1
   GIT_SUBMODULES          "3rdparty/dlpack"
   GIT_PROGRESS            TRUE
   USES_TERMINAL_DOWNLOAD  TRUE
