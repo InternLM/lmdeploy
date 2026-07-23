@@ -136,22 +136,6 @@ def mm_file_to_data_url(path: str, *, mime: str | None = None) -> str:
     return f'data:{mime};base64,{b64}'
 
 
-def build_multimodal_user_message(
-        text: str,
-        image_url: str | list[str],
-        *,
-        image_first: bool = False) -> dict:
-    """OpenAI-compatible user message with text + one or more image_url
-    parts."""
-    urls = [image_url] if isinstance(image_url, str) else list(image_url)
-    image_parts = [
-        {'type': 'image_url', 'image_url': {'url': url}} for url in urls
-    ]
-    text_part = {'type': 'text', 'text': text}
-    parts = image_parts + [text_part] if image_first else [text_part] + image_parts
-    return {'role': 'user', 'content': parts}
-
-
 def build_multimodal_media_part(
         media_type: str,
         source,
@@ -162,33 +146,33 @@ def build_multimodal_media_part(
     raise ValueError(f'Unsupported multimodal media type: {media_type!r}')
 
 
-def build_multimodal_user_message_media(
+def build_multimodal_user_message(
         text: str,
-        media_type: str,
-        source,
+        media: str | list[str] | list[tuple[str, object]],
         *,
+        media_type: str = 'image_url',
         media_first: bool = False,
         **media_fields) -> dict:
-    """User message with text + one multimodal part (any MULTIMODAL_TYPES)."""
-    text_part = {'type': 'text', 'text': text}
-    media_part = build_multimodal_media_part(
-        media_type, source, **media_fields)
-    parts = [media_part, text_part] if media_first else [text_part, media_part]
-    return {'role': 'user', 'content': parts}
+    """OpenAI-compatible user message with text + one or more media parts.
 
-
-def build_multimodal_user_message_mixed_media(
-        text: str,
-        media_parts: list[tuple[str, object]],
-) -> dict:
-    """User message with text followed by multiple multimodal parts.
-
-    ``media_parts`` entries are ``(media_type, source)`` pairs, e.g.
-    ``[('image_url', path), ('video_url', path)]``.
+    ``media`` may be:
+    - ``str``: one source for ``media_type`` (default ``image_url``)
+    - ``list[str]``: multiple sources for ``media_type``
+    - ``list[tuple[str, object]]``: explicit ``(media_type, source)`` pairs
     """
-    parts: list[dict] = [{'type': 'text', 'text': text}]
-    for media_type, source in media_parts:
-        parts.append(build_multimodal_media_part(media_type, source))
+    if isinstance(media, str):
+        pairs: list[tuple[str, object]] = [(media_type, media)]
+    elif media and isinstance(media[0], tuple):
+        pairs = list(media)  # type: ignore[arg-type]
+    else:
+        pairs = [(media_type, src) for src in media]  # type: ignore[union-attr]
+
+    media_parts = [
+        build_multimodal_media_part(mt, src, **media_fields)
+        for mt, src in pairs
+    ]
+    text_part = {'type': 'text', 'text': text}
+    parts = media_parts + [text_part] if media_first else [text_part] + media_parts
     return {'role': 'user', 'content': parts}
 
 
@@ -230,13 +214,15 @@ def pytest_collection_modifyitems(config, items):
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
             continue
-        model_case = callspec.params['model_case']
+        model_case = callspec.params.get('model_case')
+        if model_case is None:
+            continue
         if _parallel_tool_skip_target(item):
-            if model_case and is_single_tool_call_only(model_case):
+            if is_single_tool_call_only(model_case):
                 item.add_marker(
                     pytest.mark.skip(reason=SINGLE_TOOL_CALL_SKIP_REASON))
         if _mm_tool_call_skip_target(item):
-            if model_case and not is_mm_tool_call_capable(model_case):
+            if not is_mm_tool_call_capable(model_case):
                 item.add_marker(pytest.mark.skip(reason=MM_TOOL_CALL_SKIP_REASON))
 
 # ---------------------------------------------------------------------------
@@ -506,10 +492,10 @@ def mm_weather_messages_for_media_type(
     )
     return [
         MESSAGES_ASKING_FOR_WEATHER[0],
-        build_multimodal_user_message_media(
+        build_multimodal_user_message(
             text,
-            media_type,
             source,
+            media_type=media_type,
             media_first=media_first,
         ),
     ]
@@ -526,7 +512,7 @@ def build_mm_weather_messages(
     return [
         MESSAGES_ASKING_FOR_WEATHER[0],
         build_multimodal_user_message(
-            text, image_url, image_first=image_first),
+            text, image_url, media_first=image_first),
     ]
 
 
@@ -535,7 +521,7 @@ def build_mm_dallas_weather_user_message(
     text = _mm_user_text(
         MESSAGES_ASKING_FOR_WEATHER[1]['content'], scene=MM_SCENE_DALLAS)
     return build_multimodal_user_message(
-        text, image_url, image_first=image_first)
+        text, image_url, media_first=image_first)
 
 
 def mm_dallas_weather_messages(
@@ -608,7 +594,7 @@ def build_mm_image_and_video_dallas_messages(
     )
     return [
         MESSAGES_ASKING_FOR_WEATHER[0],
-        build_multimodal_user_message_mixed_media(
+        build_multimodal_user_message(
             text,
             [('image_url', image_url), ('video_url', video_url)],
         ),
