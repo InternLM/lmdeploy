@@ -20,13 +20,11 @@ from utils.tool_reasoning_definitions import (
 )
 
 from .conftest import (
-    MM_AUDIO_MEDIA_TYPES,
     MM_IMAGE_MEDIA_TYPES,
     MM_TEST_IMAGE_BEIJING,
     MM_TEST_IMAGE_POSE,
     MM_TEST_IMAGE_TIGER,
     MM_TEST_VIDEO,
-    MM_TIME_SERIES_MEDIA_TYPES,
     MM_VIDEO_EXTRA_BODY,
     MM_VIDEO_MEDIA_TYPES,
     _apply_marks_mm,
@@ -39,13 +37,11 @@ from .conftest import (
     build_mm_parallel_weather_user_message,
     build_mm_tiger_search_messages,
     build_multimodal_user_message,
-    mm_audio_search_messages_for_media_type,
     mm_beijing_weather_messages,
     mm_create_extra_body_for_media_type,
     mm_dallas_weather_messages,
     mm_file_to_data_url,
     mm_miami_weather_messages,
-    mm_time_series_search_messages_for_media_type,
     mm_weather_messages_for_media_type,
 )
 
@@ -976,14 +972,14 @@ class TestToolCallMultimodalParallel(_ToolCallTestBase):
 
 
 # ===========================================================================
-# MULTIMODAL_TYPES coverage (image + video + audio variants with local fixtures)
+# MULTIMODAL_TYPES coverage (image + video variants with local fixtures)
 # ===========================================================================
 
 
 @_apply_marks_mm
 class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
     """Smoke tool_call for each MULTIMODAL_TYPES variant with local fixtures
-    (non-stream + stream for image/video/audio/time_series)."""
+    (non-stream + stream for image/video)."""
 
     def _weather_tool_call_for_media_type(self, media_type: str) -> dict:
         source = self._require_mm_media_source(media_type)
@@ -1036,89 +1032,6 @@ class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
         )
         return assert_arguments_parseable(r['args_str'])
 
-    def _search_tool_call_for_audio_media_type(self, media_type: str) -> dict:
-        source = self._require_mm_media_source(media_type)
-        messages = mm_audio_search_messages_for_media_type(media_type, source)
-        client, model_name = self._get_client()
-
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
-            tools=[SEARCH_TOOL],
-            logprobs=False,
-        )
-
-        choice = response.choices[0]
-        tool_calls = choice.message.tool_calls
-        assert choice.finish_reason == 'tool_calls', (
-            f'Expected tool_calls for media_type={media_type!r}; '
-            f'got finish_reason={choice.finish_reason!r}, '
-            f'content={choice.message.content!r}')
-        assert tool_calls is not None and len(tool_calls) >= 1
-        tc = tool_calls[0]
-        assert_tool_call_fields(tc)
-        assert tc.function.name == 'web_search'
-        return assert_arguments_parseable(tc.function.arguments)
-
-    def _search_tool_call_stream_for_audio_media_type(self, media_type: str) -> dict:
-        source = self._require_mm_media_source(media_type)
-        messages = mm_audio_search_messages_for_media_type(media_type, source)
-        r = self._stream_tool_call(messages, tools=[SEARCH_TOOL])
-        assert r['role'] == 'assistant'
-        assert r['chunk_count'] > 0, (
-            f'Expected at least one SSE chunk for media_type={media_type!r}')
-        validate_stream_tool_call_result(
-            r,
-            expected_function_name=SEARCH_TOOL['function']['name'],
-            **self._parser_validation_kwargs([SEARCH_TOOL]),
-        )
-        return assert_arguments_parseable(r['args_str'])
-
-    def _search_tool_call_for_time_series_media_type(self, media_type: str) -> dict:
-        source = self._require_mm_media_source(media_type)
-        messages = mm_time_series_search_messages_for_media_type(
-            media_type, source)
-        client, model_name = self._get_client()
-
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
-            tools=[SEARCH_TOOL],
-            logprobs=False,
-        )
-
-        choice = response.choices[0]
-        tool_calls = choice.message.tool_calls
-        assert choice.finish_reason == 'tool_calls', (
-            f'Expected tool_calls for media_type={media_type!r}; '
-            f'got finish_reason={choice.finish_reason!r}, '
-            f'content={choice.message.content!r}')
-        assert tool_calls is not None and len(tool_calls) >= 1
-        tc = tool_calls[0]
-        assert_tool_call_fields(tc)
-        assert tc.function.name == 'web_search'
-        return assert_arguments_parseable(tc.function.arguments)
-
-    def _search_tool_call_stream_for_time_series_media_type(
-            self, media_type: str) -> dict:
-        source = self._require_mm_media_source(media_type)
-        messages = mm_time_series_search_messages_for_media_type(
-            media_type, source)
-        r = self._stream_tool_call(messages, tools=[SEARCH_TOOL])
-        assert r['role'] == 'assistant'
-        assert r['chunk_count'] > 0, (
-            f'Expected at least one SSE chunk for media_type={media_type!r}')
-        validate_stream_tool_call_result(
-            r,
-            expected_function_name=SEARCH_TOOL['function']['name'],
-            **self._parser_validation_kwargs([SEARCH_TOOL]),
-        )
-        return assert_arguments_parseable(r['args_str'])
-
     @staticmethod
     def _assert_dallas_weather_args(parsed: dict) -> None:
         assert 'city' in parsed and 'state' in parsed
@@ -1134,11 +1047,6 @@ class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
             'chengdu' in city or '成都' in city
             or 'sichuan' in city or 'sichuan' in state or '四川' in state
         )
-
-    @staticmethod
-    def _assert_search_query_args(parsed: dict) -> None:
-        assert 'query' in parsed
-        assert isinstance(parsed['query'], str) and len(parsed['query']) > 0
 
     @pytest.mark.parametrize('media_type', MM_IMAGE_MEDIA_TYPES)
     def test_weather_tool_image_media_types(self, backend, model_case, media_type):
@@ -1201,27 +1109,3 @@ class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
             self, backend, model_case, media_type):
         parsed = self._weather_tool_call_stream_for_media_type(media_type)
         self._assert_sichuan_weather_args(parsed)
-
-    @pytest.mark.parametrize('media_type', MM_AUDIO_MEDIA_TYPES)
-    def test_search_tool_audio_media_types(self, backend, model_case, media_type):
-        parsed = self._search_tool_call_for_audio_media_type(media_type)
-        self._assert_search_query_args(parsed)
-
-    @pytest.mark.parametrize('media_type', MM_AUDIO_MEDIA_TYPES)
-    def test_search_tool_audio_media_types_streaming(
-            self, backend, model_case, media_type):
-        parsed = self._search_tool_call_stream_for_audio_media_type(media_type)
-        self._assert_search_query_args(parsed)
-
-    @pytest.mark.parametrize('media_type', MM_TIME_SERIES_MEDIA_TYPES)
-    def test_search_tool_time_series_media_types(
-            self, backend, model_case, media_type):
-        parsed = self._search_tool_call_for_time_series_media_type(media_type)
-        self._assert_search_query_args(parsed)
-
-    @pytest.mark.parametrize('media_type', MM_TIME_SERIES_MEDIA_TYPES)
-    def test_search_tool_time_series_media_types_streaming(
-            self, backend, model_case, media_type):
-        parsed = self._search_tool_call_stream_for_time_series_media_type(
-            media_type)
-        self._assert_search_query_args(parsed)

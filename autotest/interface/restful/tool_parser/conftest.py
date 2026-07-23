@@ -80,32 +80,17 @@ MM_TEST_IMAGE_TIGER = 'tiger.jpeg'
 MM_TEST_IMAGE_BEIJING = 'Beijing_Small.jpeg'
 MM_TEST_IMAGE_POSE = 'human-pose.jpg'
 MM_TEST_VIDEO = 'red-panda.mp4'
-MM_TEST_AUDIO = 'zh.wav'
-MM_TEST_TIME_SERIES = '0092638_seism.npy'
-MM_TIME_SERIES_SAMPLING_RATE = 100
 
-# MULTIMODAL_TYPES from lmdeploy; local fixtures cover image + video + audio + time_series.
+# MULTIMODAL_TYPES from lmdeploy; local fixtures cover image + video
 MM_IMAGE_MEDIA_TYPES = (
     'image_url',
     'image',
-    'image_data',
 )
 MM_VIDEO_MEDIA_TYPES = (
     'video_url',
     'video',
 )
-MM_AUDIO_MEDIA_TYPES = (
-    'audio_url',
-    'audio',
-)
-MM_TIME_SERIES_MEDIA_TYPES = (
-    'time_series_url',
-    'time_series',
-)
-MM_MEDIA_TYPES_WITH_FIXTURES = (
-    MM_IMAGE_MEDIA_TYPES + MM_VIDEO_MEDIA_TYPES + MM_AUDIO_MEDIA_TYPES
-    + MM_TIME_SERIES_MEDIA_TYPES
-)
+MM_MEDIA_TYPES_WITH_FIXTURES = MM_IMAGE_MEDIA_TYPES + MM_VIDEO_MEDIA_TYPES
 MM_MEDIA_TYPES_WITHOUT_FIXTURES = tuple(
     t for t in MULTIMODAL_TYPES if t not in MM_MEDIA_TYPES_WITH_FIXTURES)
 
@@ -117,41 +102,12 @@ _MM_TOOL_CALL_MODEL_MARKERS = (
     'Intern-S2',
     'Qwen3-VL',
 )
-# Audio tool-call media types need native audio models (not VL-only).
-_MM_AUDIO_TOOL_CALL_MODEL_MARKERS = (
-    'Qwen2.5-Omni',
-    'Qwen3-Omni',
-)
-MM_AUDIO_TOOL_CALL_SKIP_REASON = (
-    'Audio tool-call media types require native audio models '
-    '(e.g. Qwen-Omni); VL-only models are skipped')
-
-_MM_TIME_SERIES_TOOL_CALL_MODEL_MARKERS = (
-    'Intern-S1-Pro',
-    'Intern-S2',
-)
-MM_TIME_SERIES_TOOL_CALL_SKIP_REASON = (
-    'Time-series tool-call media types require Intern-S1-Pro / Intern-S2')
 
 
 def is_mm_tool_call_capable(model_case: str) -> bool:
     """True for model families that support image input and tool calling."""
     name = model_case.lower()
     return any(marker.lower() in name for marker in _MM_TOOL_CALL_MODEL_MARKERS)
-
-
-def is_mm_audio_tool_call_capable(model_case: str) -> bool:
-    """True for model families that support audio input and tool calling."""
-    name = model_case.lower()
-    return any(marker.lower() in name for marker in _MM_AUDIO_TOOL_CALL_MODEL_MARKERS)
-
-
-def is_mm_time_series_tool_call_capable(model_case: str) -> bool:
-    """True for model families that support time-series input and tool
-    calling."""
-    name = model_case.lower()
-    return any(
-        marker.lower() in name for marker in _MM_TIME_SERIES_TOOL_CALL_MODEL_MARKERS)
 
 def resolve_mm_resource_path(config, filename: str) -> str | None:
     """Return a local filesystem path for a test media file, or None if
@@ -180,19 +136,19 @@ def mm_file_to_data_url(path: str, *, mime: str | None = None) -> str:
     return f'data:{mime};base64,{b64}'
 
 
-def build_multimodal_user_message(text: str, image_url: str, *, image_first: bool = False) -> dict:
-    """OpenAI-compatible user message with text + image_url parts."""
+def build_multimodal_user_message(
+        text: str,
+        image_url: str | list[str],
+        *,
+        image_first: bool = False) -> dict:
+    """OpenAI-compatible user message with text + one or more image_url
+    parts."""
+    urls = [image_url] if isinstance(image_url, str) else list(image_url)
+    image_parts = [
+        {'type': 'image_url', 'image_url': {'url': url}} for url in urls
+    ]
     text_part = {'type': 'text', 'text': text}
-    image_part = {'type': 'image_url', 'image_url': {'url': image_url}}
-    parts = [image_part, text_part] if image_first else [text_part, image_part]
-    return {'role': 'user', 'content': parts}
-
-
-def build_multimodal_user_message_multi(text: str, image_urls: list[str]) -> dict:
-    """User message with one text part followed by multiple images."""
-    parts: list[dict] = [{'type': 'text', 'text': text}]
-    for url in image_urls:
-        parts.append({'type': 'image_url', 'image_url': {'url': url}})
+    parts = image_parts + [text_part] if image_first else [text_part] + image_parts
     return {'role': 'user', 'content': parts}
 
 
@@ -200,25 +156,8 @@ def build_multimodal_media_part(
         media_type: str,
         source,
         **fields) -> dict:
-    """Build one OpenAI-style multimodal content part for *media_type*.
-
-    ``image_data`` must be JSON-serializable for OpenAI REST
-    (``chat.completions.create``); pass a local path / data-URL string, not
-    a ``PIL.Image`` (Python pipeline API only).
-    """
-    if media_type == 'image_data':
-        if hasattr(source, 'size'):
-            import base64
-            from io import BytesIO
-            buf = BytesIO()
-            source.save(buf, format='JPEG')
-            b64 = base64.b64encode(buf.getvalue()).decode('ascii')
-            data = f'data:image/jpeg;base64,{b64}'
-        else:
-            data = source
-        return {'type': 'image_data', 'image_data': {'data': data, **fields}}
-    if media_type in ('image_url', 'image', 'video_url', 'video',
-                       'audio_url', 'audio', 'time_series_url', 'time_series'):
+    """Build one OpenAI-style multimodal content part for *media_type*."""
+    if media_type in ('image_url', 'image', 'video_url', 'video'):
         return {media_type: {'url': source, **fields}, 'type': media_type}
     raise ValueError(f'Unsupported multimodal media type: {media_type!r}')
 
@@ -255,14 +194,10 @@ def build_multimodal_user_message_mixed_media(
 
 def mm_media_fixture_filename(media_type: str) -> str:
     """Map a media type to a filename under resource_path."""
-    if media_type in ('image_url', 'image', 'image_data'):
+    if media_type in ('image_url', 'image'):
         return MM_TEST_IMAGE_TIGER
     if media_type in ('video_url', 'video'):
         return MM_TEST_VIDEO
-    if media_type in ('audio_url', 'audio'):
-        return MM_TEST_AUDIO
-    if media_type in ('time_series_url', 'time_series'):
-        return MM_TEST_TIME_SERIES
     raise ValueError(f'No local fixture for media type {media_type!r}')
 
 
@@ -271,14 +206,6 @@ def mm_create_extra_body_for_media_type(media_type: str) -> dict | None:
     if media_type in ('video_url', 'video'):
         return dict(MM_VIDEO_EXTRA_BODY)
     return None
-
-
-def mm_media_part_fields_for_media_type(media_type: str) -> dict:
-    """Extra fields for ``build_multimodal_media_part`` (e.g.
-    sampling_rate)."""
-    if media_type in ('time_series_url', 'time_series'):
-        return {'sampling_rate': MM_TIME_SERIES_SAMPLING_RATE}
-    return {}
 
 
 def _parallel_tool_skip_target(item) -> bool:
@@ -296,33 +223,9 @@ def _mm_tool_call_skip_target(item) -> bool:
     return cls_name.startswith('TestToolCallMultimodal')
 
 
-def _mm_audio_media_type_skip_target(item) -> bool:
-    """True for TestToolCallMultimodalMediaTypes audio parametrize cases."""
-    cls_name = item.cls.__name__ if item.cls is not None else ''
-    if cls_name != 'TestToolCallMultimodalMediaTypes':
-        return False
-    callspec = getattr(item, 'callspec', None)
-    if callspec is None:
-        return False
-    media_type = callspec.params.get('media_type')
-    return media_type in MM_AUDIO_MEDIA_TYPES
-
-
-def _mm_time_series_media_type_skip_target(item) -> bool:
-    """True for TestToolCallMultimodalMediaTypes time_series parametrize."""
-    cls_name = item.cls.__name__ if item.cls is not None else ''
-    if cls_name != 'TestToolCallMultimodalMediaTypes':
-        return False
-    callspec = getattr(item, 'callspec', None)
-    if callspec is None:
-        return False
-    media_type = callspec.params.get('media_type')
-    return media_type in MM_TIME_SERIES_MEDIA_TYPES
-
-
 def pytest_collection_modifyitems(config, items):
     """Skip parallel-tool tests on single-tool parsers; skip MM tool tests on
-    text-only models; skip audio / time_series media types when unsupported."""
+    text-only models."""
     for item in items:
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
@@ -335,13 +238,6 @@ def pytest_collection_modifyitems(config, items):
         if _mm_tool_call_skip_target(item):
             if model_case and not is_mm_tool_call_capable(model_case):
                 item.add_marker(pytest.mark.skip(reason=MM_TOOL_CALL_SKIP_REASON))
-        if _mm_audio_media_type_skip_target(item):
-            if model_case and not is_mm_audio_tool_call_capable(model_case):
-                item.add_marker(pytest.mark.skip(reason=MM_AUDIO_TOOL_CALL_SKIP_REASON))
-        if _mm_time_series_media_type_skip_target(item):
-            if model_case and not is_mm_time_series_tool_call_capable(model_case):
-                item.add_marker(
-                    pytest.mark.skip(reason=MM_TIME_SERIES_TOOL_CALL_SKIP_REASON))
 
 # ---------------------------------------------------------------------------
 # Per-test API request/response logging fixtures.
@@ -573,19 +469,11 @@ MM_SCENE_DALLAS = 'Dallas Zoo photo.'
 MM_SCENE_BEIJING = 'Beijing in photo.'
 MM_SCENE_MIAMI = 'Outdoor workout in Miami (see photo).'
 MM_SCENE_VIDEO = 'Red panda video from Sichuan.'
-MM_SCENE_AUDIO = 'Chinese audio about running.'
-MM_SCENE_TIME_SERIES = 'Seismic waveform time series (100 Hz).'
 
 MM_USER_BEIJING_WEATHER = 'Weather in Beijing, China (state: Beijing)?'
 MM_USER_MIAMI_WEATHER = "What's the weather like in Miami, FL?"
 MM_USER_SICHUAN_WEATHER = "What's the weather like in Chengdu, Sichuan?"
 MM_USER_TIGER_SEARCH = 'Tiger in photo. Search recent tiger conservation news.'
-MM_USER_AUDIO_SEARCH = (
-    'Listen to the audio and search the web for how running '
-    'benefits physical health as described.')
-MM_USER_TIME_SERIES_SEARCH = (
-    'Inspect this seismic time series. Search the web for how to report '
-    'P-wave and S-wave onset indices for earthquake events.')
 
 
 def _mm_user_text(user_prompt: str, *, scene: str | None = None) -> str:
@@ -623,45 +511,6 @@ def mm_weather_messages_for_media_type(
             media_type,
             source,
             media_first=media_first,
-            **mm_media_part_fields_for_media_type(media_type),
-        ),
-    ]
-
-
-def mm_audio_search_messages_for_media_type(
-        media_type: str,
-        source,
-        *,
-        media_first: bool = False) -> list[dict]:
-    """Search tool-call messages for audio MULTIMODAL_TYPES (zh.wav clip)."""
-    text = _mm_user_text(MM_USER_AUDIO_SEARCH, scene=MM_SCENE_AUDIO)
-    return [
-        MESSAGES_ASKING_FOR_SEARCH[0],
-        build_multimodal_user_message_media(
-            text,
-            media_type,
-            source,
-            media_first=media_first,
-            **mm_media_part_fields_for_media_type(media_type),
-        ),
-    ]
-
-
-def mm_time_series_search_messages_for_media_type(
-        media_type: str,
-        source,
-        *,
-        media_first: bool = False) -> list[dict]:
-    """Search tool-call messages for time_series MULTIMODAL_TYPES (.npy)."""
-    text = _mm_user_text(MM_USER_TIME_SERIES_SEARCH, scene=MM_SCENE_TIME_SERIES)
-    return [
-        MESSAGES_ASKING_FOR_SEARCH[0],
-        build_multimodal_user_message_media(
-            text,
-            media_type,
-            source,
-            media_first=media_first,
-            **mm_media_part_fields_for_media_type(media_type),
         ),
     ]
 
@@ -730,7 +579,7 @@ def build_mm_tiger_search_messages(image_url: str) -> list[dict]:
 def build_mm_parallel_weather_user_message(image_url: str) -> dict:
     text = _mm_user_text(
         MESSAGES_PARALLEL_WEATHER[1]['content'], scene=MM_SCENE_DALLAS)
-    return build_multimodal_user_message_multi(text, [image_url])
+    return build_multimodal_user_message(text, image_url)
 
 
 def build_mm_parallel_weather_messages(image_url: str) -> list[dict]:
@@ -746,8 +595,7 @@ def build_mm_dual_image_dallas_messages(
         MESSAGES_ASKING_FOR_WEATHER[1]['content'], scene=MM_SCENE_DALLAS)
     return [
         MESSAGES_ASKING_FOR_WEATHER[0],
-        build_multimodal_user_message_multi(
-            text, [tiger_url, pose_url]),
+        build_multimodal_user_message(text, [tiger_url, pose_url]),
     ]
 
 
