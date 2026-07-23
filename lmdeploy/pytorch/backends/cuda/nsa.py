@@ -7,7 +7,7 @@ from torch import Tensor
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
-from lmdeploy.pytorch.kernels.cuda.dsa_indexer import prepare_dsa_indexer_k_cache, prepare_dsa_indexer_q
+from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k_cache, prepare_dsa_indexer_q
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 
 from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta

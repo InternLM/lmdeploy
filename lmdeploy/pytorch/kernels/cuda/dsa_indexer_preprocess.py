@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+"""Fused Q/K preprocessing and cache writes for the DSA FP8 indexer."""
+
 import torch
 import triton
 import triton.language as tl

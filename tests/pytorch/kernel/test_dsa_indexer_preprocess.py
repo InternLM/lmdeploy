@@ -34,7 +34,7 @@ def _apply_rope_first(x, cos, sin, rope_interleaved):
 def test_prepare_dsa_indexer_q_matches_unfused_quantization(rope_interleaved, heads):
     from lmdeploy.pytorch.kernels.cuda.apply_rotary_pos_emb import apply_rotary_pos_emb
     from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import per_token_group_quant_fp8
-    from lmdeploy.pytorch.kernels.cuda.dsa_indexer import prepare_dsa_indexer_q
+    from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_q
 
     torch.manual_seed(0)
     tokens = 11
@@ -71,7 +71,7 @@ def test_prepare_dsa_indexer_q_matches_unfused_quantization(rope_interleaved, he
 @pytest.mark.parametrize('rope_interleaved', [True, False])
 @pytest.mark.parametrize('q_seqlens,kv_seqlens', [([1, 1], [3, 2]), ([3, 2], [5, 3])])
 def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqlens, rope_interleaved):
-    from lmdeploy.pytorch.kernels.cuda.dsa_indexer import prepare_dsa_indexer_k, prepare_dsa_indexer_k_cache
+    from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k, prepare_dsa_indexer_k_cache
     from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 
     torch.manual_seed(1)
