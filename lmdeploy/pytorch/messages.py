@@ -593,7 +593,6 @@ class HistoryRouterExperts(_HistoryDataBase):
 
 class HistoryIndexerTopK(_HistoryDataBase):
     """History of full-layer sparse-attention indexer results."""
-    ALLOC_SIZE = 1
 
     def __init__(self, indexer_topk: np.ndarray = None, dtype: np.dtype = np.int32):
         super().__init__(indexer_topk, dtype)
@@ -601,24 +600,23 @@ class HistoryIndexerTopK(_HistoryDataBase):
     def _create_empty_array(self, dtype):
         return None
 
-    def _get_pad_width(self, reserve_size: int):
-        return ((0, reserve_size), (0, 0), (0, 0))
+    def reserve(self, size: int):
+        """Grow geometrically without reserving the request token limit."""
+        if self._data is None or len(self._data) >= size:
+            return
+        capacity = max(size, max(1, len(self._data) * 2))
+        data = np.empty((capacity, *self._data.shape[1:]), dtype=self.dtype)
+        data[:self._num_real] = self._data[:self._num_real]
+        self._data = data
 
-    def append(self, new_data: np.ndarray, reserve_size: int | None = None):
-        """Append results, reserving the expected request length once."""
+    def append(self, new_data: np.ndarray):
+        """Append indexer results."""
         new_data = np.asarray(new_data)
         if new_data.ndim != 3:
             raise ValueError(f'indexer_topk must be a 3D array, got shape {new_data.shape}.')
-        if self._data is None:
-            capacity = len(new_data)
-            if reserve_size is not None:
-                capacity = max(capacity, reserve_size)
-            self._data = np.empty((capacity, *new_data.shape[1:]), dtype=self.dtype)
-        elif self._data.shape[1:] != new_data.shape[1:]:
+        if self._data is not None and self._data.shape[1:] != new_data.shape[1:]:
             raise ValueError(
                 f'indexer_topk shape changed from {self._data.shape[1:]} to {new_data.shape[1:]}.')
-        if reserve_size is not None:
-            self.reserve(reserve_size)
         super().append(new_data)
 
 
@@ -897,9 +895,7 @@ class SchedulerSequence:
             return
         if isinstance(indexer_topk, Tensor):
             indexer_topk = indexer_topk.cpu().numpy()
-        reserve_size = self.output_start_pos + self.sampling_param.max_new_tokens
-        reserve_size = max(reserve_size, len(self.all_indexer_topk) + len(indexer_topk))
-        self.all_indexer_topk.append(indexer_topk, reserve_size=reserve_size)
+        self.all_indexer_topk.append(indexer_topk)
 
     @property
     def num_history_ids(self):
