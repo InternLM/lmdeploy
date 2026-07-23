@@ -257,3 +257,103 @@ async def _run_max_new_tokens_zero_cleans_up_session():
 
 def test_max_new_tokens_zero_cleans_up_session():
     asyncio.run(_run_max_new_tokens_zero_cleans_up_session())
+
+
+async def _run_completions_v1_disconnect_aborts_active_handle():
+    from types import SimpleNamespace
+
+    from lmdeploy.serve.core.async_engine import GenOut
+    from lmdeploy.serve.openai.api_server import VariableInterface, completions_v1
+    from lmdeploy.serve.openai.protocol import CompletionRequest
+
+    class _SpyHandle(_FakeHandle):
+
+        def __init__(self):
+            self.cancelled_session_ids = []
+
+        async def async_cancel(self, session_id: int):
+            self.cancelled_session_ids.append(session_id)
+
+    class _FakeAsyncEngine:
+        model_name = 'test-model'
+        epoch = 0
+
+        def __init__(self):
+            self.backend_config = SimpleNamespace()
+            self.session_mgr = SessionManager()
+            self.handle = _SpyHandle()
+
+        async def generate(self, prompt, session, **kwargs):
+            # Mirror the real AsyncEngine: a handle is held for the duration of generation.
+            session._handle = self.handle
+            yield GenOut(response='hi', input_token_len=1, generate_token_len=1, finish_reason=None)
+            await asyncio.Event().wait()
+
+    class _FakeRawRequest:
+
+        async def json(self):
+            return {}
+
+        async def is_disconnected(self):
+            return True
+
+    engine = _FakeAsyncEngine()
+    origin_async_engine = VariableInterface.async_engine
+    VariableInterface.async_engine = engine
+    try:
+        request = CompletionRequest(model='test-model', prompt='hello', stream=False)
+        await completions_v1(request, _FakeRawRequest())
+    finally:
+        VariableInterface.async_engine = origin_async_engine
+
+    assert engine.handle.cancelled_session_ids == [0]
+
+
+def test_completions_v1_disconnect_aborts_active_handle():
+    asyncio.run(_run_completions_v1_disconnect_aborts_active_handle())
+
+
+async def _run_completions_v1_disconnect_returns_client_disconnected_response():
+    from types import SimpleNamespace
+
+    from fastapi.responses import JSONResponse
+
+    from lmdeploy.serve.core.async_engine import GenOut
+    from lmdeploy.serve.openai.api_server import VariableInterface, completions_v1
+    from lmdeploy.serve.openai.protocol import CompletionRequest
+
+    class _FakeAsyncEngine:
+        model_name = 'test-model'
+        epoch = 0
+
+        def __init__(self):
+            self.backend_config = SimpleNamespace()
+            self.session_mgr = SessionManager()
+
+        async def generate(self, prompt, session, **kwargs):
+            yield GenOut(response='hi', input_token_len=1, generate_token_len=1, finish_reason=None)
+            await asyncio.Event().wait()
+
+    class _FakeRawRequest:
+
+        async def json(self):
+            return {}
+
+        async def is_disconnected(self):
+            return True
+
+    origin_async_engine = VariableInterface.async_engine
+    VariableInterface.async_engine = _FakeAsyncEngine()
+    try:
+        request = CompletionRequest(model='test-model', prompt='hello', stream=False)
+        result = await completions_v1(request, _FakeRawRequest())
+    finally:
+        VariableInterface.async_engine = origin_async_engine
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 400
+    assert b'Client disconnected' in result.body
+
+
+def test_completions_v1_disconnect_returns_client_disconnected_response():
+    asyncio.run(_run_completions_v1_disconnect_returns_client_disconnected_response())
