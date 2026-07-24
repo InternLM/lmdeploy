@@ -22,7 +22,7 @@ def _create_fake_bias_for_whisper_k_proj(weights: Iterable[tuple[str, torch.Tens
     for name, loaded_weight in weights:
         yield name, loaded_weight
         if 'time_series.' in name and name.endswith(fake_bias_key_name):
-            yield name.replace('weight', 'bias'), torch.zeros(loaded_weight.size(0))
+            yield name.replace('weight', 'bias'), loaded_weight.new_zeros(loaded_weight.size(0))
 
 
 class WhisperAttention(nn.Module):
