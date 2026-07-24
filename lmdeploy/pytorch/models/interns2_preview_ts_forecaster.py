@@ -283,7 +283,7 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = in_features // num_heads
 
         if self.in_features % self.num_heads != 0:
-            raise ValueError(f"Memory dimension ({self.in_features}) must be divisible by "
+            raise ValueError(f'Memory dimension ({self.in_features}) must be divisible by '
                              f"'num_heads' heads ({self.num_heads}).")
 
         self.qkv_proj = build_colwise_linear(
@@ -414,7 +414,7 @@ class MultiHeadCrossAttention(nn.Module):
         self.head_dim = in_features // num_heads
 
         if self.in_features % self.num_heads != 0:
-            raise ValueError(f"Memory dimension ({self.in_features}) must be divisible by"
+            raise ValueError(f'Memory dimension ({self.in_features}) must be divisible by'
                              f" 'num_heads' heads ({self.num_heads}).")
 
         self.q_proj = build_colwise_linear(
@@ -838,7 +838,7 @@ class QFormerAttention(nn.Module):
     ):
         super().__init__()
         if embed_dim % num_heads != 0:
-            raise ValueError(f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})")
+            raise ValueError(f'embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})')
 
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -1002,11 +1002,11 @@ class QFormer(nn.Module):
     ):
         super().__init__()
         if num_query_tokens <= 0:
-            raise ValueError(f"num_query_tokens must be positive, got {num_query_tokens}")
+            raise ValueError(f'num_query_tokens must be positive, got {num_query_tokens}')
         if num_layers <= 0:
-            raise ValueError(f"num_layers must be positive, got {num_layers}")
+            raise ValueError(f'num_layers must be positive, got {num_layers}')
         if out_dim % num_heads != 0:
-            raise ValueError(f"out_dim ({out_dim}) must be divisible by num_heads ({num_heads})")
+            raise ValueError(f'out_dim ({out_dim}) must be divisible by num_heads ({num_heads})')
 
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -1051,16 +1051,16 @@ class QFormer(nn.Module):
             (B, num_query_tokens, out_dim) query outputs.
         """
         if src.dim() != 3:
-            raise ValueError(f"src must be (B, T, D), got shape {tuple(src.shape)}")
+            raise ValueError(f'src must be (B, T, D), got shape {tuple(src.shape)}')
         if src.size(-1) != self.in_dim:
-            raise ValueError(f"src last dim ({src.size(-1)}) does not match in_dim ({self.in_dim})")
+            raise ValueError(f'src last dim ({src.size(-1)}) does not match in_dim ({self.in_dim})')
 
         kv = self.input_ln(self.input_proj(src))
 
         if src_key_padding_mask is not None:
             if src_key_padding_mask.shape != src.shape[:2]:
                 raise ValueError('src_key_padding_mask shape must equal src.shape[:2]:'
-                                 f" {tuple(src_key_padding_mask.shape)} != {tuple(src.shape[:2])}")
+                                 f' {tuple(src_key_padding_mask.shape)} != {tuple(src.shape[:2])}')
             kpm = src_key_padding_mask.to(dtype=torch.bool, device=kv.device)
             # Avoid fully padded attention rows.
             all_padded = kpm.all(dim=1)
@@ -1109,8 +1109,8 @@ class Aligner(nn.Module):
             horizon_hidden_dim = config.qformer_hidden_dim
             if horizon_hidden_dim % config.qformer_num_heads != 0:
                 raise ValueError(
-                    f"horizon_hidden_dim ({horizon_hidden_dim}) must be divisible by qformer_num_heads "
-                    f"({config.qformer_num_heads}) for the horizon Transformer encoder.")
+                    f'horizon_hidden_dim ({horizon_hidden_dim}) must be divisible by qformer_num_heads '
+                    f'({config.qformer_num_heads}) for the horizon Transformer encoder.')
             self.horizon_input_proj = build_colwise_linear(
                 config.d_llm,
                 horizon_hidden_dim,
@@ -1212,8 +1212,8 @@ class Aligner(nn.Module):
                 or self.horizon_head is None):
             raise RuntimeError('horizon_head is not enabled but predict_horizon was called')
         if llm_embedding_input.dim() != 3:
-            raise ValueError(f"Expected llm_embedding_input with shape (B, T, D), "
-                             f"got {tuple(llm_embedding_input.shape)}")
+            raise ValueError(f'Expected llm_embedding_input with shape (B, T, D), '
+                             f'got {tuple(llm_embedding_input.shape)}')
         head_param = next(self.horizon_head.parameters())
         llm_hidden = llm_embedding_input.to(device=head_param.device, dtype=head_param.dtype)
 
@@ -1223,7 +1223,7 @@ class Aligner(nn.Module):
             valid_mask = llm_embedding_mask.to(device=llm_hidden.device, dtype=torch.bool)
             if valid_mask.shape != llm_hidden.shape[:2]:
                 raise ValueError('llm_embedding_mask shape must equal llm_embedding_input.shape[:2]:'
-                                 f" {tuple(valid_mask.shape)} != {tuple(llm_hidden.shape[:2])}")
+                                 f' {tuple(valid_mask.shape)} != {tuple(llm_hidden.shape[:2])}')
         if not valid_mask.any(dim=1).all():
             raise ValueError('Each llm_embedding_mask row must contain at least one valid token.')
 
@@ -1360,9 +1360,9 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
             config.max_horizon = math.ceil(config.max_horizon / self.forecaster.o) * self.forecaster.o
         if config.max_context + config.max_horizon > self.forecaster.context_limit:
             raise ValueError('Context + horizon must be less than the context limit.'
-                             f" {config.max_context} + {config.max_horizon} > {self.forecaster.context_limit}.")
+                             f' {config.max_context} + {config.max_horizon} > {self.forecaster.context_limit}.')
         if config.use_continuous_quantile_head and config.max_horizon > self.forecaster.os:
-            raise ValueError(f"Continuous quantile head is not supported for horizons > {self.forecaster.os}.")
+            raise ValueError(f'Continuous quantile head is not supported for horizons > {self.forecaster.os}.')
 
         self._horizon_max_length = (int(config.horizon_max_length) or int(config.max_horizon))
 
@@ -1378,7 +1378,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         fc = self.config
         module = self.forecaster
         if horizon > fc.max_horizon:
-            raise ValueError(f"Horizon must be less than the max horizon. {horizon} > {fc.max_horizon}.")
+            raise ValueError(f'Horizon must be less than the max horizon. {horizon} > {fc.max_horizon}.')
 
         with torch.no_grad():
             target_device = next(module.parameters()).device
@@ -1391,7 +1391,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
                 cross_kv_t = torch.as_tensor(cross_kv, dtype=torch.float32, device=target_device)
                 if cross_kv_t.shape[0] != batch_size:
                     raise ValueError('Batch size mismatch between cross_kv and inputs:'
-                                     f" {cross_kv_t.shape[0]} != {batch_size}")
+                                     f' {cross_kv_t.shape[0]} != {batch_size}')
 
             if fc.infer_is_positive:
                 is_positive = torch.all(inputs >= 0, dim=-1, keepdim=True)
@@ -1484,7 +1484,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         max_context = self.config.max_context
         num_inputs = len(inputs)
         if cross_kv is not None and len(cross_kv) != num_inputs:
-            raise ValueError(f"cross_kv length must match inputs length: {len(cross_kv)} != {num_inputs}")
+            raise ValueError(f'cross_kv length must match inputs length: {len(cross_kv)} != {num_inputs}')
 
         output_points = []
         output_quantiles = []
@@ -1549,7 +1549,7 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         flattened_prefix = []
         for sample_idx, ts in enumerate(history):
             if ts.dim() != 2:
-                raise ValueError(f"Each history series must be 2D (T, C), got shape {tuple(ts.shape)}")
+                raise ValueError(f'Each history series must be 2D (T, C), got shape {tuple(ts.shape)}')
             channels = ts.shape[1]
             channel_counts.append(channels)
             for channel_idx in range(channels):
@@ -1589,8 +1589,8 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
         batch_size = len(history)
         if llm_embedding_input.size(0) != batch_size or ts_encoder_embedding_input.size(0) != batch_size:
             raise ValueError('Batch size mismatch: len(history)='
-                             f"{batch_size}, llm_embedding_input={llm_embedding_input.size(0)},"
-                             f" ts_encoder_embedding_input={ts_encoder_embedding_input.size(0)}")
+                             f'{batch_size}, llm_embedding_input={llm_embedding_input.size(0)},'
+                             f' ts_encoder_embedding_input={ts_encoder_embedding_input.size(0)}')
 
         ctx = self.aligner(
             llm_embedding_input,
@@ -1621,8 +1621,8 @@ class InternS2PreviewTimeSeriesForecaster(nn.Module):
             per_sample_horizons = [int(self.config.default_pred_len)] * batch_size
 
         if len(per_sample_horizons) != batch_size:
-            raise ValueError(f"per-sample horizon count ({len(per_sample_horizons)}) does not match"
-                             f" batch size ({batch_size})")
+            raise ValueError(f'per-sample horizon count ({len(per_sample_horizons)}) does not match'
+                             f' batch size ({batch_size})')
         # Decode once at max horizon, then slice per sample.
         horizon = max(per_sample_horizons) if per_sample_horizons else 1
 
