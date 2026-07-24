@@ -60,6 +60,19 @@ def test_sparse_index_topk_matches_torch_topk_and_fill():
     _assert_topk_ids(scores, out, seqlens, k, fill=fill)
 
 
+def test_sparse_index_topk_glm52_int64_seqlens():
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
+
+    k = 2048
+    seqlens = [2049, 3072]
+    scores = torch.randn(len(seqlens), 4096, device='cuda')
+    q_seqlens = torch.ones(len(seqlens), device='cuda', dtype=torch.int64)
+    kv_seqlens = torch.tensor(seqlens, device='cuda', dtype=torch.int64)
+
+    out = sparse_index_topk(scores, q_seqlens, kv_seqlens, k=k)
+    _assert_topk_ids(scores, out, seqlens, k)
+
+
 def test_sparse_index_topk_accepts_padded_score_stride():
     from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
 

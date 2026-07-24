@@ -137,23 +137,41 @@ class EngineInstance(EngineInstanceBase):
         """Destructor."""
         self.engine.req_manager.senders.pop(self.req_sender.sender_id)
 
-    def _get_extra_outputs(self, resp: Response, num_all_ids: int):
+    def _get_extra_outputs(self, resp: Response, num_all_ids: int, gen_config: GenerationConfig = None):
         """Get extra outputs."""
         outputs = dict(routed_experts=None)
+        if resp.type not in [ResponseType.FINISH, ResponseType.CANCEL]:
+            return outputs
+
+        def _validate_num_tokens(name: str, data):
+            num_expected = num_all_ids - 1
+            if data.shape[0] != num_expected:
+                logger.warning(f'Expected number of {name}: {num_expected}, but got {data.shape[0]}')
+                data = data[:num_expected]
+            return data
+
+        def _trim_stop_token(data):
+            if (not self._enable_transfer_obj_ref or gen_config is None or gen_config.include_stop_str_in_output
+                    or gen_config.ignore_eos):
+                return data
+            token_ids = resp.data.get('token_ids', None) if resp.data else None
+            stop_token_ids = gen_config.stop_token_ids or []
+            if resp.type == ResponseType.FINISH and token_ids is not None and len(token_ids) > 0:
+                if token_ids[-1] in stop_token_ids:
+                    return data[:-1]
+            return data
+
+        def _maybe_transfer(data):
+            if not self._enable_transfer_obj_ref:
+                return data
+            import ray
+            data = _trim_stop_token(data)
+            return ray.get(_SHARED_STORE.put.remote(data))
+
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
-        if routed_experts is not None and resp.type in [ResponseType.FINISH, ResponseType.CANCEL]:
-            if self._enable_transfer_obj_ref:
-                import ray
-                # validate experts
-                num_expected_experts = num_all_ids - 1
-                if routed_experts.shape[0] != num_expected_experts:
-                    logger.warning(f'Expected number of routed_experts: {num_expected_experts}, '
-                                   f'but got {routed_experts.shape[0]}')
-                    routed_experts = routed_experts[:num_expected_experts]
-                key = ray.get(_SHARED_STORE.put.remote(routed_experts))
-                outputs['routed_experts'] = key
-            else:
-                outputs['routed_experts'] = routed_experts
+        if routed_experts is not None:
+            routed_experts = _validate_num_tokens('routed_experts', routed_experts)
+            outputs['routed_experts'] = _maybe_transfer(routed_experts)
         return outputs
 
     async def _async_try_add_session(self, session_id: int):
@@ -255,7 +273,7 @@ class EngineInstance(EngineInstanceBase):
 
                     num_ids = len(token_ids)
                     num_all_ids = prompt_ids_len + output_offset + num_ids
-                    extra_outputs = self._get_extra_outputs(resp, num_all_ids)
+                    extra_outputs = self._get_extra_outputs(resp, num_all_ids, gen_config=gen_config)
                     routed_experts = extra_outputs.get('routed_experts', None)
 
                     logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')

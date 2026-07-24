@@ -6,8 +6,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
-from lmdeploy.pytorch.model_inputs import StepContextManager
+from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
@@ -31,6 +32,75 @@ from .deepseek_v2 import (
     DeepseekV2MoE,
     yarn_get_mscale,
 )
+from .patch import get_build_model_context
+
+
+def get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
+    """Return whether a DSA layer computes or reuses top-k indices."""
+    indexer_types = getattr(config, 'indexer_types', None)
+    if indexer_types is None or layer_idx is None or layer_idx >= len(indexer_types):
+        return 'full'
+    return indexer_types[layer_idx]
+
+
+def get_layer_idx_from_weight_name(name: str) -> int | None:
+    """Parse a transformer layer index from a checkpoint parameter name."""
+    for marker in ('.layers.', 'layers.'):
+        if marker not in name:
+            continue
+        try:
+            return int(name.split(marker, 1)[1].split('.', 1)[0])
+        except ValueError:
+            return None
+    return None
+
+
+class DSATopKIndicesBuffer(nn.Module):
+    """Persistent DSA top-k buffer shared by full and reuse layers."""
+
+    def __init__(self, topk: int):
+        super().__init__()
+        self.topk = topk
+        self.register_buffer('indices', None, persistent=False)
+
+    def _target_capacity(self, num_tokens: int) -> int:
+        capacity = num_tokens
+        ctx_mgr = get_step_ctx_manager()
+        if ctx_mgr is None:
+            return capacity
+
+        context = ctx_mgr.current_context()
+        cache_config = getattr(context, 'cache_config', None)
+        max_prefill_token_num = getattr(cache_config, 'max_prefill_token_num', None)
+        if max_prefill_token_num is not None:
+            capacity = max(capacity, max_prefill_token_num)
+        return capacity
+
+    def ensure(self, num_tokens: int, device: torch.device) -> torch.Tensor:
+        """Return a stable top-k slice with enough capacity for the current
+        forward."""
+        capacity = self._target_capacity(num_tokens)
+        if (self.indices is None or self.indices.size(0) < capacity or self.indices.device != device):
+            self.indices = torch.empty(capacity, self.topk, dtype=torch.int32, device=device)
+        return self.indices[:num_tokens]
+
+    def write(self, topk_indices: torch.Tensor) -> torch.Tensor:
+        """Copy freshly computed top-k indices into the shared buffer."""
+        buffer = self.ensure(topk_indices.size(0), topk_indices.device)
+        buffer.copy_(topk_indices)
+        return buffer
+
+    def read(self, num_tokens: int, device: torch.device) -> torch.Tensor:
+        """Read top-k indices previously written by a full indexer layer."""
+        if self.indices is None or self.indices.size(0) < num_tokens or self.indices.device != device:
+            raise RuntimeError('DSA top-k indices are reused before the shared buffer is populated.')
+        return self.indices[:num_tokens]
+
+    def compact(self, row_indices: torch.Tensor) -> torch.Tensor:
+        """Copy selected rows to the prefix for recurrent MTP reuse."""
+        selected = self.indices.index_select(0, row_indices)
+        self.indices[:selected.size(0)].copy_(selected)
+        return self.indices[:selected.size(0)]
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
@@ -38,6 +108,55 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     from fast_hadamard_transform import hadamard_transform
     hidden_size = x.size(-1)
     return hadamard_transform(x, scale=hidden_size**-0.5)
+
+
+def _dequantize_blocked_fp8(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Dequantize a 2D block-FP8 checkpoint tensor."""
+    dim_w0, dim_w1 = weight.shape
+    dim_s0, dim_s1 = scale.shape
+    assert dim_w0 % dim_s0 == 0 and dim_w1 % dim_s1 == 0
+    weight = weight.reshape(dim_s0, dim_w0 // dim_s0, dim_s1, dim_w1 // dim_s1)
+    weight = weight.float() * scale.reshape(dim_s0, 1, dim_s1, 1)
+    return weight.to(dtype).reshape(dim_w0, dim_w1)
+
+
+def _load_fused_indexer_weight(name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               load_buffers: dict) -> bool:
+    """Load separate checkpoint projections into one fused BF16 weight."""
+    is_wk = '.self_attn.indexer.wk.' in name
+    is_gate = '.self_attn.indexer.weights_proj.' in name
+    if not (is_wk or is_gate):
+        return False
+
+    indexer_prefix = name.rsplit('.indexer.', 1)[0] + '.indexer'
+    fused_param = params_dict.get(f'{indexer_prefix}.wk_weights_proj.weight')
+    if fused_param is None:
+        return False
+
+    if is_gate:
+        if not name.endswith('.weight'):
+            return False
+        gate = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+        fused_param.data[-gate.size(0):].copy_(gate)
+        return True
+
+    if name.endswith('.weight') and loaded_weight.dtype != torch.float8_e4m3fn:
+        wk = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+        fused_param.data[:wk.size(0)].copy_(wk)
+        return True
+
+    is_weight = name.endswith('.weight')
+    is_scale = name.endswith('.weight_scale_inv')
+    if not (is_weight or is_scale):
+        return False
+
+    buffer = load_buffers.setdefault(f'{indexer_prefix}.wk', {})
+    buffer['weight' if is_weight else 'scale'] = loaded_weight.to(fused_param.device)
+    if 'weight' in buffer and 'scale' in buffer:
+        wk = _dequantize_blocked_fp8(buffer['weight'], buffer['scale'], fused_param.dtype)
+        fused_param.data[:wk.size(0)].copy_(wk)
+        load_buffers.pop(f'{indexer_prefix}.wk')
+    return True
 
 
 class LayerNorm(nn.Module):
@@ -60,10 +179,6 @@ class Indexer(nn.Module):
 
     def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        try:
-            import fast_hadamard_transform  # noqa: F401
-        except ImportError:
-            raise ImportError('Please install fast_hadamard_transform package.')
         quant_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         # self.dim: int = 2048
@@ -72,6 +187,7 @@ class Indexer(nn.Module):
         self.n_local_heads = config.index_n_heads
         self.head_dim: int = config.index_head_dim
         self.rope_head_dim: int = config.qk_rope_head_dim
+        self.rope_interleave: bool = getattr(config, 'indexer_rope_interleave', False)
         self.index_topk: int = config.index_topk
         self.q_lora_rank: int = config.q_lora_rank
         self.wq_b = build_colwise_linear(self.q_lora_rank,
@@ -81,23 +197,51 @@ class Indexer(nn.Module):
                                          device=device,
                                          is_tp=False,
                                          quant_config=quant_config)
-        self.wk = build_colwise_linear(self.dim,
-                                       self.head_dim,
-                                       bias=False,
-                                       dtype=dtype,
-                                       device=device,
-                                       is_tp=False,
-                                       quant_config=quant_config)
+        self.use_fusion = not _envs.disable_dsa_indexer_fusion
+        if self.use_fusion:
+            # Merge K and head-gate projections into one BF16 GEMM.
+            self.wk_weights_proj = build_colwise_linear(self.dim,
+                                                        self.head_dim + self.n_heads,
+                                                        bias=False,
+                                                        dtype=torch.bfloat16,
+                                                        device=device,
+                                                        is_tp=False)
+        else:
+            self.wk = build_colwise_linear(self.dim,
+                                           self.head_dim,
+                                           bias=False,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=False,
+                                           quant_config=quant_config)
+            self.weights_proj = build_colwise_linear(self.dim,
+                                                     self.n_heads,
+                                                     bias=False,
+                                                     dtype=dtype,
+                                                     device=device,
+                                                     is_tp=False)
         self.k_norm = LayerNorm(self.head_dim, device=device)
-        self.weights_proj = build_colwise_linear(self.dim,
-                                                 self.n_heads,
-                                                 bias=False,
-                                                 dtype=dtype,
-                                                 device=device,
-                                                 is_tp=False)
         self.softmax_scale = self.head_dim**-0.5
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
         self.indexer_topk = IndexerTopKFP8(self.index_topk, self.softmax_scale, block_size=128, fill=-1)
+
+    def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
+                              freqs_cis: tuple[torch.Tensor, torch.Tensor]):
+        """Apply the indexer's RoPE layout."""
+        cos, sin = freqs_cis
+        if self.rope_interleave:
+            half_size = cos.size(-1) // 2
+            cos = cos[..., :half_size]
+            sin = sin[..., :half_size]
+        k_pe = k_pe[..., None, :]
+        return self.apply_rotary_pos_emb(
+            q_pe,
+            k_pe,
+            cos,
+            sin,
+            inplace=False,
+            complex_mode=self.rope_interleave,
+        )
 
     def forward(self,
                 x: torch.Tensor,
@@ -107,20 +251,32 @@ class Indexer(nn.Module):
                 attn_metadata: Any = None):
         q = self.wq_b(qr)
         q = q.unflatten(-1, (-1, self.head_dim))
+        if self.use_fusion:
+            # Fused kernels consume these projections without rotated BF16 Q/K temporaries.
+            kw = self.wk_weights_proj(x)
+            k, weights = kw.split([self.head_dim, self.n_heads], dim=-1)
+            cos, sin = freqs_cis
+            return self.indexer_topk.forward_fused(q[0],
+                                                   k[0],
+                                                   weights[0],
+                                                   self.k_norm.weight,
+                                                   self.k_norm.bias,
+                                                   cos,
+                                                   sin,
+                                                   index_cache[0],
+                                                   index_cache[1],
+                                                   norm_eps=self.k_norm.eps,
+                                                   head_gate_scale=self.n_heads**-0.5,
+                                                   rope_interleaved=self.rope_interleave,
+                                                   attn_metadata=attn_metadata)
+
         q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         k = self.wk(x)
         k = self.k_norm(k)
         k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
 
         # apply rotary embedding
-        cos, sin = freqs_cis
-        q_pe, k_pe = self.apply_rotary_pos_emb(
-            q_pe,
-            k_pe[..., None, :],
-            cos,
-            sin,
-            inplace=False,
-        )
+        q_pe, k_pe = self._apply_rotary_pos_emb(q_pe, k_pe, freqs_cis)
         k_pe = k_pe[0, :]
         k_nope = k_nope[0, :, None]
         q = torch.cat([q_pe, q_nope], dim=-1)
@@ -239,7 +395,10 @@ class DeepseekV32Attention(DeepseekV2Attention):
             quant_config=quantization_config,
         )
 
-        self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
+        self.indexer_type = get_layer_indexer_type(config, layer_idx)
+        self.indexer = None
+        if self.indexer_type == 'full':
+            self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
         """Q proj."""
@@ -288,11 +447,15 @@ class DeepseekV32Attention(DeepseekV2Attention):
         rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Sequence[torch.Tensor] = None,
         attn_metadata: Any = None,
+        topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        skip_topk: bool = False,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_ctx = get_dist_manager().current_context()
-        tp_world_size = dist_ctx.dist_config.attn_tp
-        num_heads = self.num_heads // tp_world_size
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
+            num_heads = self.num_heads
+        else:
+            num_heads = self.num_heads // dist_config.attn_tp
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
@@ -310,7 +473,19 @@ class DeepseekV32Attention(DeepseekV2Attention):
         query_states[..., nope_size:] = q_pe
         key_states[..., nope_size:] = k_pe
 
-        topk_indices = self.indexer(hidden_states, qr, rotary_pos_emb, past_key_value[-2:], attn_metadata=attn_metadata)
+        if topk_indices_buffer is None:
+            raise RuntimeError(f'Layer {self.layer_idx} requires a DSA top-k indices buffer.')
+
+        should_compute_topk = self.indexer is not None and not skip_topk
+        if should_compute_topk:
+            topk_indices = topk_indices_buffer.write(
+                self.indexer(hidden_states,
+                             qr,
+                             rotary_pos_emb,
+                             past_key_value[-2:],
+                             attn_metadata=attn_metadata))
+        else:
+            topk_indices = topk_indices_buffer.read(q_len, hidden_states.device)
 
         attn_output = self.attn_fwd(
             query_states,
@@ -365,6 +540,49 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
                                                 dtype=torch.float32,
                                                 device=device)
 
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
+        attn_metadata: Any = None,
+        topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        skip_topk: bool = False,
+        all_routed_experts: torch.Tensor | None = None,
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
+
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        if isinstance(self.self_attn, DeepseekV32Attention):
+            hidden_states = self.self_attn(
+                hidden_states=hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                attn_metadata=attn_metadata,
+                topk_indices_buffer=topk_indices_buffer,
+                skip_topk=skip_topk,
+            )
+        else:
+            hidden_states = self.self_attn(
+                hidden_states=hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                attn_metadata=attn_metadata,
+            )
+
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        if isinstance(self.mlp, DeepseekV2MoE):
+            hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
+        else:
+            hidden_states = self.mlp(hidden_states)
+
+        return hidden_states, residual
+
 
 class DeepseekV32Model(DeepseekV2Model):
 
@@ -385,6 +603,7 @@ class DeepseekV32Model(DeepseekV2Model):
             DeepseekV32DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
+        self.topk_indices_buffer = DSATopKIndicesBuffer(config.index_topk)
 
         # build norm
         self.norm = RMSNorm(config.hidden_size,
@@ -403,6 +622,61 @@ class DeepseekV32Model(DeepseekV2Model):
         update_params = build_rotary_params(config)
         rope_params.update(update_params)
         self.rotary_emb = build_rotary_embedding(**rope_params)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        attn_metadata: Any = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
+    ):
+        """forward."""
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+        residual = None
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+        for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                residual=residual,
+                attn_metadata=attn_metadata,
+                topk_indices_buffer=self.topk_indices_buffer,
+                all_routed_experts=all_routed_experts,
+            )
+
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def forward_microbatch(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        attn_metadata: Any = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
+    ):
+        """forward_microbatch."""
+        # DSA shared top-k indices are model-global; use normal forward until
+        # microbatching has per-microbatch top-k buffers.
+        return self.forward(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
+        )
 
 
 class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
@@ -425,3 +699,52 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
+        bm_ctx = get_build_model_context()
+        self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """Model forward."""
+        step_ctx = get_step_ctx_manager().current_context()
+        num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            # Dense layers do not produce routed expert IDs. Keep their slots at an out-of-range sentinel;
+            # MoE layers overwrite their own slots below.
+            all_routed_experts = position_ids.new_full(
+                (num_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok),
+                torch.iinfo(torch.uint16).max,
+                dtype=torch.uint16,
+            )
+        forward = self.model.forward_microbatch if step_ctx.enable_microbatch else self.model.forward
+        hidden_states = forward(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
+        )
+        if all_routed_experts is None:
+            return hidden_states
+        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+
+    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               update_pe_mapping: list):
+        """Load attention weights."""
+        if _load_fused_indexer_weight(name, loaded_weight, params_dict,
+                                      self._load_buffers):
+            return
+        if '.self_attn.indexer.' in name and name not in params_dict:
+            layer_idx = get_layer_idx_from_weight_name(name)
+            # Shared DSA layers reuse cached top-k indices and have no local indexer.
+            if get_layer_indexer_type(self.config, layer_idx) == 'shared':
+                return
+        return super()._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)

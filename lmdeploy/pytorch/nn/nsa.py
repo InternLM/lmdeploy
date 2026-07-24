@@ -15,6 +15,46 @@ class IndexerTopKFP8(nn.Module):
         index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
         self.index_impl = index_builder.build(topk, softmax_scale, block_size, fill)
 
+    @staticmethod
+    def _get_max_q_seqlen(q: Tensor,
+                          attn_metadata: AttentionMetadata) -> int:
+        """Get the query width used by the index and cache-fill kernels.
+
+        Speculative target verification remains a decoding step, but its
+        flattened Q contains ``num_spec_tokens + 1`` rows per request. The
+        kernels need that real width to process every verification row.
+        """
+        batch_size = attn_metadata.kv_seqlens.size(0)
+        # fp8_index also identifies one row per request as decode layout, so
+        # keep its metadata consistent when the phase flag has not changed yet.
+        is_decoding = attn_metadata.is_decoding or q.size(0) == batch_size
+        # Prefer a width prepared by the attention backend; otherwise derive it
+        # from the flattened query rows.
+        max_q_seqlen = attn_metadata.max_q_seqlen
+        if max_q_seqlen is None:
+            max_q_seqlen = q.size(0)
+            if is_decoding:
+                max_q_seqlen //= batch_size
+        return max_q_seqlen
+
+    @staticmethod
+    def _build_meta(q: Tensor, attn_metadata: AttentionMetadata) -> NSAIndexMeta:
+        step_ctx = get_step_ctx_manager().current_context()
+        cache_config = step_ctx.cache_config
+        max_tokens = cache_config.block_size * cache_config.num_gpu_blocks
+        is_decoding = attn_metadata.is_decoding
+        if q.size(0) == attn_metadata.kv_seqlens.size(0):
+            is_decoding = True
+        max_q_seqlen = IndexerTopKFP8._get_max_q_seqlen(q, attn_metadata)
+        # Decode uses the full cache capacity to keep CUDA graph shapes stable.
+        max_kv_seqlen = max_tokens if is_decoding else attn_metadata.kv_flatten_size
+        return NSAIndexMeta(cu_seqlen_q=attn_metadata.cu_seqlens_q,
+                            q_seqlens=attn_metadata.q_seqlens,
+                            k_seqlens=attn_metadata.kv_seqlens,
+                            block_offset=attn_metadata.block_offsets,
+                            max_q_seqlen=max_q_seqlen,
+                            max_kv_seqlen=max_kv_seqlen)
+
     def forward(
         self,
         q: Tensor,
@@ -25,20 +65,36 @@ class IndexerTopKFP8(nn.Module):
         attn_metadata: AttentionMetadata = None,
     ):
         """forward."""
-        step_ctx = get_step_ctx_manager().current_context()
-        cache_config = step_ctx.cache_config
-        max_tokens = cache_config.block_size * cache_config.num_gpu_blocks
-        is_decoding = attn_metadata.is_decoding
-        if q.size(0) == attn_metadata.kv_seqlens.size(0):
-            is_decoding = True
-        max_q_seqlen = 1 if is_decoding else q.size(0)
-        # we need to make max_kv_seqlen=max_allocated_cache_len to enable cudagraph
-        max_kv_seqlen = max_tokens if is_decoding else attn_metadata.kv_flatten_size
-        meta = NSAIndexMeta(cu_seqlen_q=attn_metadata.cu_seqlens_q,
-                            q_seqlens=attn_metadata.q_seqlens,
-                            k_seqlens=attn_metadata.kv_seqlens,
-                            block_offset=attn_metadata.block_offsets,
-                            max_q_seqlen=max_q_seqlen,
-                            max_kv_seqlen=max_kv_seqlen)
+        meta = self._build_meta(q, attn_metadata)
         ret = self.index_impl.forward(q, k, weights, k_cache, k_s_cache, meta=meta)
         return ret
+
+    def forward_fused(self,
+                      q: Tensor,
+                      k: Tensor,
+                      weights: Tensor,
+                      norm_weight: Tensor,
+                      norm_bias: Tensor,
+                      cos: Tensor,
+                      sin: Tensor,
+                      k_cache: Tensor,
+                      k_s_cache: Tensor,
+                      norm_eps: float,
+                      head_gate_scale: float,
+                      rope_interleaved: bool,
+                      attn_metadata: AttentionMetadata = None):
+        """Forward with fused DSA indexer preparation."""
+        meta = self._build_meta(q, attn_metadata)
+        return self.index_impl.forward_fused(q,
+                                             k,
+                                             weights,
+                                             norm_weight,
+                                             norm_bias,
+                                             cos,
+                                             sin,
+                                             k_cache,
+                                             k_s_cache,
+                                             norm_eps=norm_eps,
+                                             head_gate_scale=head_gate_scale,
+                                             rope_interleaved=rope_interleaved,
+                                             meta=meta)

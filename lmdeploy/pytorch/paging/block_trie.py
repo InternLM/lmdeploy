@@ -1024,6 +1024,9 @@ class BlockTrie:
             if not self._match_node(block_node, tokens, extra_hashes):
                 return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
                                                    reason=f'block payload mismatch at block {idx}')
+            if seq.return_routed_experts and block_node.routed_experts is None:
+                return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
+                                                   reason=f'routed experts missing at block {idx}')
             matched_blocks.append(block_node.block)
 
         return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.HIT,
@@ -1159,6 +1162,8 @@ class BlockTrie:
             child = curr.children[key]
             if not self._match_node(child, curr_tokens, extra_hashes):
                 break
+            if seq.return_routed_experts and child.routed_experts is None:
+                break
 
             matched_nodes.append(child)
             __match_success(child)
@@ -1181,8 +1186,9 @@ class BlockTrie:
                 num_matched = init_num_matched
 
         max_match_step = seq.get_prefix_cache_max_match_step()
-        raw_num_matched = num_matched
-        effective_num_matched = seq.clamp_prefix_cache_match_step(min(raw_num_matched, max_match_step))
+        candidate_num_matched = num_matched
+        raw_num_matched = self._find_raw_block_match_step(seq, init_curr)
+        effective_num_matched = seq.clamp_prefix_cache_match_step(min(candidate_num_matched, max_match_step))
         __clamp_match_step(effective_num_matched)
         self._set_private_recompute_range(seq, num_matched, raw_num_matched)
 

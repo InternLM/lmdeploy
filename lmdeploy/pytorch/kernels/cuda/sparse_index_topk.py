@@ -38,9 +38,9 @@ def _ordered_fp32_key(score):
     bits = T.reinterpret(score, T.uint32)
     sign_mask = T.cast(2147483648, T.uint32)
     all_ones = T.cast(4294967295, T.uint32)
-    return T.if_then_else(T.bitwise_and(bits, sign_mask) == T.cast(0, T.uint32),
-                          T.bitwise_xor(bits, sign_mask),
-                          T.bitwise_xor(bits, all_ones))
+    return T.if_then_else(
+        T.bitwise_and(bits, sign_mask) == T.cast(0, T.uint32),
+        T.bitwise_xor(bits, sign_mask), T.bitwise_xor(bits, all_ones))
 
 
 def is_sparse_index_topk_supported(k: int) -> bool:
@@ -59,18 +59,20 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
 
     @T.prim_func
     def sparse_index_topk_byte_radix_kernel_(
-        Scores: T.StridedTensor[(num_tokens, score_width), (score_stride, 1), T.float32],
-        Seqlens: T.Tensor[(num_tokens,), T.int32],
+        Scores: T.StridedTensor[(num_tokens, score_width), (score_stride, 1),
+                                T.float32],
+        Seqlens: T.Tensor[(num_tokens, ), T.int32],
         Out: T.Tensor[(num_tokens, top_k), T.int32],
     ):
         _ = score_stride
         with T.Kernel(num_tokens, threads=threads) as row:
             tidx = T.get_thread_binding(0)
-            histogram = T.alloc_shared((_RADIX_SIZE,), T.int32)
-            shared_state = T.alloc_shared((2,), T.int32)
+            histogram = T.alloc_shared((_RADIX_SIZE, ), T.int32)
+            shared_state = T.alloc_shared((2, ), T.int32)
 
             raw_seqlen = Seqlens[row]
-            seqlen = T.if_then_else(raw_seqlen < score_width, raw_seqlen, score_width)
+            seqlen = T.if_then_else(raw_seqlen < score_width, raw_seqlen,
+                                    score_width)
 
             # If the real row length fits inside top_k, every valid position
             # is selected.
@@ -78,7 +80,7 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                 for i in T.Parallel(top_k):
                     Out[row, i] = T.if_then_else(i < seqlen, i, fill)
             else:
-                # Byte-radix threshold search.  Each round fixes one byte of the
+                # Byte-radix threshold search. Each round fixes one byte of the
                 # fp32-order key and narrows the selected prefix until the final
                 # threshold key is known.
                 prefix_key = T.alloc_var(T.uint32)
@@ -100,8 +102,10 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                     while pos < seqlen:
                         key = _ordered_fp32_key(Scores[row, pos])
                         if T.bitwise_and(key, prefix_mask) == prefix_key:
-                            bin_u32 = T.bitwise_and(key >> shift, T.cast(255, T.uint32))
-                            T.atomic_add(histogram[T.cast(bin_u32, T.int32)], 1)
+                            bin_u32 = T.bitwise_and(key >> shift,
+                                                    T.cast(255, T.uint32))
+                            T.atomic_add(histogram[T.cast(bin_u32, T.int32)],
+                                         1)
                         pos += threads
 
                     T.sync_threads()
@@ -120,7 +124,9 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                     T.sync_threads()
 
                     threshold_bin = shared_state[_STATE_SELECTED_BIN]
-                    prefix_key = T.bitwise_or(prefix_key, T.cast(threshold_bin, T.uint32) << shift)
+                    prefix_key = T.bitwise_or(
+                        prefix_key,
+                        T.cast(threshold_bin, T.uint32) << shift)
                     prefix_mask = T.bitwise_or(prefix_mask, byte_mask)
                     rank -= shared_state[_STATE_COUNT_ABOVE]
 
@@ -133,7 +139,7 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                     shared_state[_STATE_EMIT_EQ_COUNT] = 0
                 T.sync_threads()
 
-                out_pos_buf = T.alloc_local((1,), T.int32)
+                out_pos_buf = T.alloc_local((1, ), T.int32)
                 # First emit all scores strictly greater than the threshold.
                 pos_emit_gt = T.alloc_var(T.int32)
                 pos_emit_gt = tidx
@@ -141,7 +147,9 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                     key = _ordered_fp32_key(Scores[row, pos_emit_gt])
                     if key > threshold_key:
                         out_pos_buf[0] = T.atomic_add(
-                            shared_state[_STATE_EMIT_GT_COUNT], 1, return_prev=True)
+                            shared_state[_STATE_EMIT_GT_COUNT],
+                            1,
+                            return_prev=True)
                         if out_pos_buf[0] < top_k:
                             Out[row, out_pos_buf[0]] = pos_emit_gt
                     pos_emit_gt += threads
@@ -159,7 +167,9 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                     key = _ordered_fp32_key(Scores[row, pos_emit_eq])
                     if key == threshold_key:
                         out_pos_buf[0] = gt_count + T.atomic_add(
-                            shared_state[_STATE_EMIT_EQ_COUNT], 1, return_prev=True)
+                            shared_state[_STATE_EMIT_EQ_COUNT],
+                            1,
+                            return_prev=True)
                         if out_pos_buf[0] < top_k:
                             Out[row, out_pos_buf[0]] = pos_emit_eq
                     pos_emit_eq += threads
@@ -176,7 +186,7 @@ def sparse_index_topk(scores: torch.Tensor,
                       sorted: bool = False) -> torch.Tensor:
     """Return top-k score indices for padded sparse-index score rows.
 
-    The returned ids are packed but not score-sorted.  Sparse attention
+    The returned ids are packed but not score-sorted. Sparse attention
     consumes them as a set of valid KV positions; avoiding final sorting is the
     point of this selector. Rows shorter than ``k`` are padded with ``fill``.
     """
@@ -185,19 +195,24 @@ def sparse_index_topk(scores: torch.Tensor,
     if sorted:
         raise ValueError('sparse_index_topk does not support sorted output.')
     if not is_sparse_index_topk_supported(k):
-        raise ValueError(f'sparse_index_topk supports k in {_SUPPORTED_TOPK}, got {k}.')
+        raise ValueError(
+            f'sparse_index_topk supports k in {_SUPPORTED_TOPK}, got {k}.')
     assert scores.is_cuda and q_seqlens.is_cuda and kv_seqlens.is_cuda
     assert scores.dtype == torch.float32
     assert q_seqlens.dtype in (torch.int32, torch.int64)
-    assert kv_seqlens.dtype == torch.int32
+    assert kv_seqlens.dtype in (torch.int32, torch.int64)
     assert scores.stride(-1) == 1
 
+    kv_seqlens = kv_seqlens.to(torch.int32)
     num_tokens = scores.size(0)
     if num_tokens != kv_seqlens.size(0):
-        kv_seqlens = torch.repeat_interleave(kv_seqlens, q_seqlens, output_size=num_tokens)
+        kv_seqlens = torch.repeat_interleave(kv_seqlens,
+                                             q_seqlens,
+                                             output_size=num_tokens)
     else:
         kv_seqlens = kv_seqlens.contiguous()
 
     out = torch.empty((num_tokens, k), device=scores.device, dtype=torch.int32)
-    _sparse_index_topk_byte_radix_kernel(k, fill, _THREADS)(scores, kv_seqlens, out)
+    _sparse_index_topk_byte_radix_kernel(k, fill, _THREADS)(scores, kv_seqlens,
+                                                            out)
     return out

@@ -358,6 +358,11 @@ class DeepseekV2BMM(nn.Module):
 
     def _update_batch(self, batch: int):
         """Update out features."""
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
+            # MLA Q projections use dp_disable_tp=True, so DP mode keeps
+            # q_nope full-head; absorb BMM weights must use the same layout.
+            return batch
         world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
@@ -368,8 +373,10 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank('attn')
-        weight = weight.chunk(world_size, 0)[rank]
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp == 1:
+            world_size, rank = get_tp_world_rank('attn')
+            weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
     def forward(self, x: torch.Tensor, output: torch.Tensor):
@@ -636,7 +643,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight * self.routed_scaling_factor
         return topk_weight
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, routed_experts: torch.Tensor = None):
         """forward."""
         router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
         if self.fake_eplb:
@@ -666,6 +673,9 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
+        if routed_experts is not None:
+            routed_experts.copy_(topk_idx)
+
         if self.eplb_dispatch_info is not None:
             topk_idx = EPLBManager.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
 
@@ -677,6 +687,7 @@ class DeepseekV2MoE(nn.Module):
 
     def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
+        self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
@@ -731,11 +742,14 @@ class DeepseekV2MoE(nn.Module):
         else:
             self._all_reduce = False
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor = None):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        topk_weights, topk_ids = self.gate(hidden_states)
+        routed_experts = None
+        if all_routed_experts is not None:
+            routed_experts = all_routed_experts[:, self.layer_idx, :]
+        topk_weights, topk_ids = self.gate(hidden_states, routed_experts=routed_experts)
 
         out_states = self.experts(
             hidden_states,
@@ -1278,11 +1292,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if '.kv_b_proj' in name:
                 quantization_config = self.quantization_config
                 quant_method = None
+                fp8_quant_scope = None
                 if quantization_config is not None:
                     quant_method = quantization_config.get('quant_method')
+                    fp8_quant_scope = quantization_config.get('fp8_quant_scope')
 
                 loaded_weight = loaded_weight.to(device)
-                if quant_method == 'fp8':
+                if quant_method == 'fp8' and fp8_quant_scope != 'moe_only':
                     # update blocked fp8 weight
                     __load_kcvc_blocked_fp8(name, loaded_weight)
                 else:

@@ -19,6 +19,10 @@ def check_request(request: GenerateReqInput, server_context: 'VariableInterface'
     except AttributeError:
         pass
 
+    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
+        return ('routed experts requested but not configured in engine configuration. '
+                'May start api_server with --enable-return-routed-experts flag.')
+
     if (request.prompt is not None) ^ (request.input_ids is None):
         return 'You must specify exactly one of prompt or input_ids'
 

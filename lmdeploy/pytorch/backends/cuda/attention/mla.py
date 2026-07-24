@@ -38,24 +38,32 @@ class NSAIndicesUpdater:
         self._update_decode_func = None
         self._update_prefill_func = None
 
-    def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
+    def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
                             block_size: int) -> torch.Tensor:
         """Update for decode impl."""
+        batch_size = block_offsets.size(0)
         block_ids = nsa_indices // block_size
         block_ids = block_ids.clamp_min(0)
+        # MTP flattens the query dimension, so repeat each request's block table.
+        if block_ids.size(0) != batch_size:
+            block_offsets = torch.repeat_interleave(block_offsets,
+                                                    max_q_seqlen,
+                                                    dim=0,
+                                                    output_size=block_ids.size(0))
         block_ids = block_offsets.gather(1, block_ids)
         block_remain = nsa_indices % block_size
         ret = block_ids * block_size + block_remain
         ret[nsa_indices < 0] = -1
-        return ret[:, None]
+        return ret.unflatten(0, (batch_size, max_q_seqlen))
 
-    def update_decode(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, block_size: int) -> torch.Tensor:
+    def update_decode(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
+                      block_size: int) -> torch.Tensor:
         """Update for decode."""
         if self._update_decode_func is None:
             self._update_decode_func = _try_dynamic_compile(self._update_decode_impl, nsa_indices, block_offsets,
-                                                            block_size)
+                                                            max_q_seqlen, block_size)
 
-        return self._update_decode_func(nsa_indices, block_offsets, block_size)
+        return self._update_decode_func(nsa_indices, block_offsets, max_q_seqlen, block_size)
 
     def _update_prefill_impl(self, nsa_indices: torch.Tensor, q_seqlens: torch.Tensor, cu_seqlens_k: torch.Tensor):
         """Update for prefill impl."""
@@ -84,8 +92,9 @@ class FlashMLAImpl(TritonAttentionImpl):
     """Flash MLA (Multi-head Latent Attention) implementation.
 
     This implementation supports multiple execution paths:
-    - Decoding: Uses flash_mla_with_kvcache with paged KV cache
-    - Prefill with NSA: Uses flash_mla_sparse_fwd for sparse attention
+    - Paged FlashMLA decode: Uses flash_mla_with_kvcache with FP8 paged KV cache
+    - Sparse FlashMLA decode: Uses flash_mla_sparse_fwd over the BF16 global cache view
+    - Sparse FlashMLA prefill: Uses flash_mla_sparse_fwd for NSA attention
     - Prefill with FA3: Uses flash_attn_varlen_func with split q_rope/q_nope
     - Prefill fallback: Uses custom Triton kernel
     """
@@ -152,7 +161,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         except Exception:
             logger.exception('Can not import flash_mla_sparse_fwd from flash_mla.')
 
-    def flash_mla_decoding(
+    def _decode_paged_flash_mla(
         self,
         query: torch.Tensor,
         k_cache: torch.Tensor,
@@ -170,14 +179,22 @@ class FlashMLAImpl(TritonAttentionImpl):
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         max_q_seqlen = max_q_seqlen // batch_size
         query = query.unflatten(0, (batch_size, max_q_seqlen))
+        num_q_heads = query.size(2)
         if kv_seqlens.dtype == torch.int64:
             kv_seqlens = kv_seqlens.to(torch.int32)
 
         # update nsa indice according to flash-mla requirement
         if nsa_indices is not None:
             block_size = k_cache.size(1)
-            nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
+            nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, max_q_seqlen, block_size)
             causal = False
+            # The new FlashMLASchedMeta API uses a sparse decoder that only
+            # accepts 64 or 128 query heads. The old API stores metadata in a
+            # tensor and supports the unpadded TP head count.
+            if not isinstance(attn_metadata.tile_scheduler_metadata, torch.Tensor):
+                pad_heads = -num_q_heads % self._MLA_HEAD_ALIGNMENT
+                if pad_heads:
+                    query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
 
         attn_output, _ = self.flash_mla_with_kvcache(query,
                                                      k_cache=k_cache,
@@ -191,35 +208,20 @@ class FlashMLAImpl(TritonAttentionImpl):
                                                      is_fp8_kvcache=is_fp8_kvcache,
                                                      indices=nsa_indices)
 
+        attn_output = attn_output[:, :, :num_q_heads]
         attn_output = attn_output.flatten(0, 1)
         return attn_output
 
-    def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor, nsa_indices: torch.Tensor,
-                        attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
-        """Sparse prefill using flash_mla_sparse_fwd.
-
-        This path is used when NSA (Non-contiguous Sparse Attention) indices are provided.
-        Requires FP8 KV cache and flash_mla library.
-
-        Args:
-            query: Query tensor.
-            flatten_k: Flattened key cache.
-            nsa_indices: Sparse attention indices.
-            attn_metadata: Attention metadata.
-
-        Returns:
-            Attention output tensor.
-        """
-        q_seqlens = attn_metadata.q_seqlens
+    def _flash_mla_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor,
+                          nsa_indices: torch.Tensor) -> torch.Tensor:
+        """Run sparse FlashMLA over a BF16 flat KV view."""
         flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
-
         num_q_heads = query.size(1)
         # flash_mla_sparse_fwd requires query heads to be multiple of alignment
         if num_q_heads % self._MLA_HEAD_ALIGNMENT != 0:
             padding = self._MLA_HEAD_ALIGNMENT - num_q_heads % self._MLA_HEAD_ALIGNMENT
             query = torch.nn.functional.pad(query, (0, 0, 0, padding))
 
-        nsa_indices = self.nsa_updater.update_prefill(nsa_indices, q_seqlens, attn_metadata.cu_seqlens_k)
         output = flash_mla_sparse_fwd(
             query,
             flatten_k,
@@ -229,6 +231,27 @@ class FlashMLAImpl(TritonAttentionImpl):
         attn_output = output[0]
         attn_output = attn_output[:, :num_q_heads]
         return attn_output
+
+    def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor, nsa_indices: torch.Tensor,
+                        attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+        """Run sparse prefill over the flattened BF16 KV cache."""
+        nsa_indices = self.nsa_updater.update_prefill(nsa_indices, attn_metadata.q_seqlens,
+                                                      attn_metadata.cu_seqlens_k)
+        return self._flash_mla_sparse(query, flatten_k, nsa_indices)
+
+    def _decode_bf16_sparse_flash_mla(self, query: torch.Tensor, k_cache: torch.Tensor, nsa_indices: torch.Tensor,
+                                      attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+        """Run sparse decode over the global BF16 paged-cache view."""
+        assert query.dtype == torch.bfloat16, 'BF16 sparse MLA requires a bfloat16 query'
+        assert k_cache.dtype == torch.bfloat16, 'BF16 sparse MLA requires a bfloat16 KV cache'
+        block_size = k_cache.size(1)
+        max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
+        # sparse_fwd addresses a flat cache, so map paged positions to physical slots.
+        nsa_indices = self.nsa_updater.update_decode(nsa_indices, attn_metadata.block_offsets, max_q_seqlen,
+                                                     block_size)
+        nsa_indices = nsa_indices.flatten(0, 1)[:, None]
+        flatten_k = k_cache.flatten(0, 1)
+        return self._flash_mla_sparse(query, flatten_k, nsa_indices)
 
     def _prefill_triton(
         self,
@@ -392,6 +415,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Fill kv cache."""
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         if not is_fp8_kvcache:
+            # The BF16 MLA V cache aliases K, and the base writer skips its duplicate store.
             return super()._fill_kv_cache_impl(
                 key,
                 value,
@@ -456,8 +480,8 @@ class FlashMLAImpl(TritonAttentionImpl):
     ) -> torch.Tensor:
         """Forward pass for decoding stage.
 
-        Uses flash_mla_with_kvcache for efficient decoding with paged KV cache.
-        Supports both regular and sparse (NSA) attention patterns.
+        Uses paged FlashMLA decode by default. Sparse NSA with BF16 cache uses
+        sparse FlashMLA decode.
 
         Args:
             query: Query tensor.
@@ -468,7 +492,9 @@ class FlashMLAImpl(TritonAttentionImpl):
         Returns:
             Attention output tensor.
         """
-        return self.flash_mla_decoding(query, k_cache, nsa_indices, attn_metadata)
+        if nsa_indices is not None and k_cache.dtype != torch.float8_e4m3fn:
+            return self._decode_bf16_sparse_flash_mla(query, k_cache, nsa_indices, attn_metadata)
+        return self._decode_paged_flash_mla(query, k_cache, nsa_indices, attn_metadata)
 
     def _forward_prefill(
         self,
@@ -483,7 +509,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Forward pass for prefill stage.
 
         Supports three execution paths:
-        1. Sparse (NSA + FP8): flash_mla_sparse_fwd for sparse attention
+        1. Sparse FlashMLA: flash_mla_sparse_fwd over BF16 flattened KV
         2. FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
         3. Triton fallback: Custom Triton kernel implementation
 
@@ -534,15 +560,15 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Forward pass for MLA attention computation.
 
         This method handles both prefill and decoding stages by:
-        1. Validating NSA requirements (FP8 KV cache)
-        2. Computing max query sequence length
-        3. Filling KV cache if new key/value are provided
-        4. Dispatching to appropriate stage-specific method
+        1. Computing max query sequence length
+        2. Filling KV cache if new key/value are provided
+        3. Dispatching to the cache-specific stage implementation
 
         Architecture:
-        - Decoding: Uses flash_mla_with_kvcache with paged KV cache
+        - Paged FlashMLA decode: Uses flash_mla_with_kvcache with FP8 paged KV cache
+        - Sparse FlashMLA decode: Uses flash_mla_sparse_fwd over the BF16 global cache
         - Prefill: Three paths based on availability and requirements
-          * Sparse (NSA + FP8): flash_mla_sparse_fwd
+          * Sparse FlashMLA: flash_mla_sparse_fwd
           * FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
           * Triton fallback: Custom triton kernel
 
@@ -560,12 +586,6 @@ class FlashMLAImpl(TritonAttentionImpl):
         Returns:
             Attention output tensor.
         """
-        # Validate NSA requirements
-        is_nsa = nsa_indices is not None
-        if is_nsa:
-            is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
-            assert is_fp8_kvcache, 'NSA sparse attention requires FP8 KV cache'
-
         # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 

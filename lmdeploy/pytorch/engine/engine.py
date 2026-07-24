@@ -59,7 +59,7 @@ class InferOutput:
     req_metrics: RequestMetrics = None
 
     # expert ids
-    routed_experts: torch.Tensor = None
+    routed_experts: np.ndarray = None
 
     # summed, unnormalized cross-entropy (NLL) of the input prompt
     ce_loss: float = None
