@@ -23,7 +23,6 @@ class Session:
         self.response: Response | None = None
         self.history: list[tuple[Any, str]] = []
         self.gen_config: GenerationConfig | None = None
-        self.step: int = 0
         # Set by api_server to AsyncEngine.epoch when a request binds a session;
         # generate() drops work if stop_all_session() bumped epoch after bind.
         self.epoch: int | None = None
@@ -37,19 +36,19 @@ class Session:
     def update(self, **kwargs):
         """Update the session."""
         self.prompt = kwargs.get('prompt', self.prompt)
+        self.response = kwargs.get('response', self.response)
         self.gen_config = kwargs.get('gen_config', self.gen_config)
-        self.step = kwargs.get('step', self.step)
 
     def __repr__(self) -> str:
         """Return a string representation of the Session object."""
         return (f'Session(session_id={self.session_id}, '
-                f'step={self.step}, history_len={len(self.history)}, '
+                f'history_len={len(self.history)}, '
                 f'has_response={self.response is not None}, '
                 f'has_gen_config={self.gen_config is not None})')
 
     def __str__(self) -> str:
         """Return a human-readable string representation of the Session."""
-        res = f'Session(id={self.session_id}, step={self.step})'
+        res = f'Session(id={self.session_id})'
         if self.history:
             res += '\nHistory:\n'
             for user, assistant in self.history:
@@ -67,7 +66,6 @@ class Session:
         self.response = None
         self.history = []
         self.gen_config = None
-        self.step = 0
         self.epoch = None
         self._active = None
         self._handle = None
@@ -102,7 +100,6 @@ class Session:
                 hnd_pool.put(self._handle)
                 self._handle = None
             # MUST set the signal after releasing the instance to avoid race condition
-            # refer to async_end method
             self._active.set()
             if self._remove_on_request_exit and self._session_mgr is not None:
                 self._remove_on_request_exit = False
@@ -117,17 +114,15 @@ class Session:
             await self._handle.async_cancel(self.session_id)
 
     async def async_close(self):
-        """End the session."""
+        """Close request bookkeeping for the session."""
         logger.info(f'[session] Ending session {self.session_id}')
-        if self._handle is None and self.step == 0:
-            return
         if self._handle is not None:
+            await self.async_abort()
             await self._active.wait()
-        async with self.request_handle() as handle:
-            try:
-                await handle.async_end(self.session_id)
-            except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-                logger.exception(f'[async_close] exception caught: {e}')
+        session_mgr_ref = self._session_mgr
+        session_mgr = session_mgr_ref() if session_mgr_ref is not None else None
+        if session_mgr is not None:
+            session_mgr.remove(self)
         self.reset()
 
     def abort(self):

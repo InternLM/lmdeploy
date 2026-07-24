@@ -13,6 +13,7 @@ namespace turbomind {
 struct EngineConfig {
 #define ENGINE_FIELDS(X)                                                                                               \
     X(DataType, data_type)                                                                                             \
+    X(DataType, state_dtype, kNull)                                                                                    \
     X(int, cache_block_seq_len, 0)                                                                                     \
     X(int, quant_policy, 0)                                                                                            \
     X(int, tune_layer_num, 1)                                                                                          \
@@ -23,6 +24,10 @@ struct EngineConfig {
     X(float, cache_max_block_count, 0)                                                                                 \
     X(int, cache_chunk_size, 0)                                                                                        \
     X(bool, enable_prefix_caching, false)                                                                              \
+    X(int, cache_checkpoint_interval, 4096)                                                                            \
+    X(std::string, cache_prompt, "auto")                                                                               \
+    X(int, cache_prompt_boundary_skip, 1)                                                                              \
+    X(std::string, cache_generation, "auto")                                                                           \
     X(bool, enable_metrics, false)                                                                                     \
     X(int, num_tokens_per_iter, 0)                                                                                     \
     X(int, max_prefill_iters, 1)                                                                                       \
@@ -32,6 +37,7 @@ struct EngineConfig {
     X(int, attn_tp_size)                                                                                               \
     X(int, attn_cp_size)                                                                                               \
     X(int, mlp_tp_size)                                                                                                \
+    X(int, ep_size, 1)                                                                                                 \
     X(std::vector<int>, devices)                                                                                       \
     X(int, nnodes)                                                                                                     \
     X(int, node_rank)                                                                                                  \

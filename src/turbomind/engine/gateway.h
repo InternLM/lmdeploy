@@ -17,49 +17,6 @@
 
 namespace turbomind {
 
-class SequenceBinding {
-public:
-    int find(uint64_t seq_id)
-    {
-        std::lock_guard lock{mutex_};
-        if (auto it = map_.find(seq_id); it != map_.end()) {
-            return it->second;
-        }
-        return -1;
-    }
-
-    void bind(const std::vector<uint64_t>& seq_ids, int rank)
-    {
-        std::lock_guard lock{mutex_};
-        for (const auto& x : seq_ids) {
-            if (auto [it, success] = map_.emplace(x, rank); !success) {
-                TM_LOG_WARN("Duplicated binding for {}, {} vs {}", x, rank, it->second);
-            }
-        }
-    }
-
-    void unbind(const std::vector<uint64_t>& seq_ids, int rank)
-    {
-        std::lock_guard lock{mutex_};
-        for (const auto& x : seq_ids) {
-            auto it = map_.find(x);
-            if (it == map_.end()) {
-                TM_LOG_WARN("No entry found for unbinding {}, {}", x, rank);
-            }
-            else if (it->second != rank) {
-                TM_LOG_WARN("Mismatched entry for unbinding {}, {} vs {}", x, rank, it->second);
-            }
-            else {
-                map_.erase(it);
-            }
-        }
-    }
-
-private:
-    std::mutex                        mutex_;
-    std::unordered_map<uint64_t, int> map_;
-};
-
 class Gateway {
 public:
     Gateway(int size, std::function<std::shared_ptr<void>()> ctx_factory);
@@ -69,7 +26,6 @@ public:
     void push(std::shared_ptr<Request> r);
 
     void pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-             std::vector<std::shared_ptr<Request>>& kill_reqs,
              unsigned                               max_infer,
              bool                                   blocking,
              bool&                                  abort,
@@ -77,8 +33,6 @@ public:
              int                                    qid);
 
     void cancel(std::shared_ptr<Request> r);
-
-    void kill(std::shared_ptr<Request> r);
 
     void notify(std::vector<Signal> signals, bool pred = true);
 
@@ -102,8 +56,6 @@ private:
 
     SignalBuffer signal_buffer_;
     std::thread  signal_thread_;
-
-    SequenceBinding binding_;
 
     std::atomic<uint32_t> next_;
 };

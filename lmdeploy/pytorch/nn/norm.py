@@ -10,6 +10,21 @@ from ..backends import OpType, get_backend
 from .utils import chunk_aligned, get_distribute_size
 
 
+@torch.compile(dynamic=True)
+def rms_scale(a: torch.Tensor, b: torch.Tensor, dim: int = -1, eps: float = 1e-6,
+              out_dtype: torch.dtype | None = None, use_fp32: bool = True) -> torch.Tensor:
+    """A * rsqrt(B.square().mean(dim, keepdim=True) + eps).
+
+    Computation is done in float32. Output dtype is out_dtype if given, else b.dtype.
+    """
+    result_dtype = out_dtype if out_dtype is not None else b.dtype
+    if use_fp32:
+        a = a.float()
+        b = b.float()
+    out = a * torch.rsqrt(b.square().mean(dim, keepdim=True) + eps)
+    return out.to(result_dtype)
+
+
 class RMSNorm(nn.Module):
     """RMS Norm with add residual."""
 
@@ -30,7 +45,7 @@ class RMSNorm(nn.Module):
         quant_method = None
         if quant_config is not None:
             quant_config = get_build_model_context().quant_config
-            quant_method = quant_config.get_quant_method(prefix)
+            quant_method = quant_config.get_quant_method(prefix, module_kind='norm')
 
         w8a8_flag = quant_method == 'smooth_quant'
 

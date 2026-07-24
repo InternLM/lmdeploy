@@ -48,6 +48,10 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
 )
 from lmdeploy.serve.anthropic import create_anthropic_router
 from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
+from lmdeploy.serve.core.generation_config import (
+    build_generation_config,
+    resolve_default_gen_config,
+)
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
     ChatCompletionRequest,
@@ -111,6 +115,7 @@ class VariableInterface:
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
     response_parser_cls: type[ResponseParser] | None = None
+    default_gen_config: dict = {}
 
     @classmethod
     def create_session(cls, user_session_id: int | None = None) -> Session:
@@ -146,6 +151,23 @@ class VariableInterface:
     @classmethod
     def get_engine_config(cls):
         return cls.async_engine.backend_config
+
+
+def _build_serving_generation_config(request, **extra_kwargs) -> GenerationConfig:
+    """Build ``GenerationConfig`` with server and request sampling merge.
+
+    Same-name request fields are extracted automatically; ``extra_kwargs`` is
+    for renamed, computed, or raw-json fields only.
+    """
+    max_new_tokens = getattr(request, 'max_completion_tokens', None)
+    if max_new_tokens is None:
+        max_new_tokens = getattr(request, 'max_tokens', None)
+    return build_generation_config(
+        request,
+        VariableInterface.default_gen_config,
+        max_new_tokens=max_new_tokens,
+        **extra_kwargs,
+    )
 
 
 async def _with_request_cleanup(generator, result_generators, sessions):
@@ -480,8 +502,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-    random_seed = request.seed if request.seed is not None else None
-
     parser_cls = VariableInterface.response_parser_cls
     try:
         response_parser = parser_cls(request)
@@ -491,32 +511,15 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     # (e.g. GPT-OSS clears response_format and injects the schema into messages)
     request = response_parser.request
 
-    gen_config = GenerationConfig(
-        max_new_tokens=request.max_completion_tokens,
-        do_sample=True,
+    gen_config = _build_serving_generation_config(
+        request,
         logprobs=gen_logprobs,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        include_stop_str_in_output=request.include_stop_str_in_output,
-        skip_special_tokens=request.skip_special_tokens,
-        response_format=request.response_format,
         logits_processors=logits_processors,
-        min_new_tokens=request.min_new_tokens,
-        min_p=request.min_p,
-        random_seed=random_seed,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
+        random_seed=request.seed,
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
-        return_routed_experts=request.return_routed_experts,
-        forecast_horizon=request.forecast_horizon,
-        enable_forecasting=request.enable_forecasting,
     )
 
     # text completion for string input or input_ids
@@ -538,8 +541,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         tools=request.tools,
         reasoning_effort=request.reasoning_effort,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
@@ -848,28 +849,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             sessions.append(VariableInterface.create_session(i + 1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
-    random_seed = request.seed if request.seed is not None else None
-    max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
-    gen_config = GenerationConfig(
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        logprobs=request.logprobs,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
+    gen_config = _build_serving_generation_config(
+        request,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens,
-        min_p=request.min_p,
-        random_seed=random_seed,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
+        random_seed=request.seed,
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
     generators = []
     for prompt, session in zip(request.prompt, sessions):
@@ -878,8 +865,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             session,
             gen_config=gen_config,
             stream_response=True,  # always use stream to enable batching
-            sequence_start=True,
-            sequence_end=True,
             do_preprocess=False,
             adapter_name=adapter_name)
         generators.append(result_generator)
@@ -1033,24 +1018,10 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         prompt = [dict(role='user', content=[text_input] + image_input)]
         input_ids = None
 
-    gen_config = GenerationConfig(
-        max_new_tokens=request.max_tokens,
-        do_sample=True,
+    gen_config = _build_serving_generation_config(
+        request,
         logprobs=1 if request.return_logprob else None,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        min_p=request.min_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        stop_token_ids=request.stop_token_ids,
-        skip_special_tokens=request.skip_special_tokens,
-        spaces_between_special_tokens=request.spaces_between_special_tokens,
-        include_stop_str_in_output=request.include_stop_str_in_output,
-        return_routed_experts=request.return_routed_experts,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
 
     result_generator = VariableInterface.async_engine.generate(
@@ -1059,8 +1030,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
         do_preprocess=False,
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
@@ -1146,13 +1115,12 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     - **input**: the prompt to be encoded. In str or list[str] format.
     - **do_preprocess**: whether do preprocess or not. Default to False.
-    - **add_bos**: True when it is the beginning of a conversation. False when it
-      is not. Default to True.
+    - **add_bos**: Whether to add a BOS token when encoding. Default to True.
     """
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt, sequence_start=add_bos)
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt)
         input_ids = VariableInterface.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
         return input_ids
 
@@ -1567,6 +1535,8 @@ def serve(model_path: str,
           allow_terminate_by_client: bool = False,
           enable_abort_handling: bool = False,
           speculative_config: SpeculativeConfig | None = None,
+          allowed_media_domains: list[str] | None = None,
+          generation_config: str = 'auto',
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1618,6 +1588,8 @@ def serve(model_path: str,
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
         allow_terminate_by_client (bool): Allow request from client to terminate server.
+        allowed_media_domains (list[str] | None): Optional exact hostname
+            allowlist for HTTP(S) media URLs.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1627,6 +1599,12 @@ def serve(model_path: str,
     VariableInterface.enable_abort_handling = enable_abort_handling
     from lmdeploy.serve.parsers import validate_parser_names
     reasoning_parser, tool_call_parser = validate_parser_names(reasoning_parser, tool_call_parser)
+
+    VariableInterface.default_gen_config = resolve_default_gen_config(
+        generation_config,
+        model_path,
+        trust_remote_code,
+    )
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
@@ -1652,6 +1630,7 @@ def serve(model_path: str,
                                                     max_log_len=max_log_len,
                                                     trust_remote_code=trust_remote_code,
                                                     speculative_config=speculative_config,
+                                                    allowed_media_domains=allowed_media_domains,
                                                     **kwargs)
     set_parsers(reasoning_parser, tool_call_parser)
 

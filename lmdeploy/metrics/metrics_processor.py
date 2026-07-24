@@ -83,6 +83,10 @@ class MetricsProcessor:
 
     async def update_schedule_stats(self, schedule_metrics: ScheduleMetrics):
         """Update schedule stats."""
+        if schedule_metrics is None:
+            # Backend scheduler metrics unavailable (e.g. TurboMind metrics revival is
+            # deferred); skip the schedule-stat update rather than crash the logger loop.
+            return
         self.scheduler_stats.update_from_schedule_metrics(schedule_metrics)
         # record schedule stats
         for stat_logger in self.stat_loggers:

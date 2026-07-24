@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -301,6 +301,7 @@ class StepContext:
     is_decoding: bool
     sum_kv_seqlen: int
     max_kv_seqlen: int | None = None
+    max_q_seqlen: int | None = None
     local_adapter_ids: torch.LongTensor | None = None
     input_embeddings: torch.Tensor | None = None
     input_embedding_indexing: torch.Tensor | None = None
@@ -320,6 +321,10 @@ class StepContext:
     state_caches: list | None = None
     state_offsets: torch.LongTensor | None = None
 
+    # named cache views for models with block_cache_specs / state_cache_specs
+    block_caches: Mapping[str, torch.Tensor] | None = None
+    named_state_caches: Mapping[str, torch.Tensor] | None = None
+
     # mrope
     mrope_position_ids: torch.Tensor | None = None
 
@@ -327,6 +332,10 @@ class StepContext:
 
     # chunk with multimodal
     is_chunk_multimodal: bool = False
+    is_dummy: bool = False
+    is_chunk: bool = False
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
 
     @classmethod
     def new(
@@ -382,6 +391,7 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
             max_kv_seqlen=inputs.max_kv_seqlen,
+            max_q_seqlen=inputs.max_q_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
@@ -395,6 +405,10 @@ class StepContext:
             target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
             is_chunk_multimodal=inputs.is_chunk_multimodal,
+            is_dummy=inputs.is_dummy,
+            is_chunk=inputs.is_chunk,
+            is_first_chunk=inputs.is_first_chunk,
+            is_last_chunk=inputs.is_last_chunk,
         )
 
         ret = get_backend().update_step_context(ret)

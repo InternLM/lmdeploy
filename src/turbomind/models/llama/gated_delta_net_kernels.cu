@@ -5,984 +5,146 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cuda_bf16.h>
 #include <type_traits>
 
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
-#include "src/turbomind/kernels/core/layout.h"
-#include "src/turbomind/kernels/gemm/thread_map.h"
 
 namespace turbomind {
 
-using namespace gemm;
-
-template<int k_head_dim, int v_head_dim, int block_dim, class T, class S>
-__global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
-                                                     const T*   qkv_in,
-                                                     const T*   beta_in,
-                                                     const T*   g_in,
-                                                     S* const*  state_ptrs,
-                                                     const int* q_offsets,
-                                                     int        num_v_heads,
-                                                     int        num_k_heads,
-                                                     int        k_dim_total,
-                                                     int        state_layer_offset)
+template<class T>
+__global__ void ComputeBetaGKernel(float*   beta,
+                                   float*   g,
+                                   int64_t  gate_token_stride,
+                                   const T* b,
+                                   int64_t  b_token_stride,
+                                   const T* a,
+                                   int64_t  a_token_stride,
+                                   const T* A_log,
+                                   const T* dt_bias,
+                                   int      token_num,
+                                   int      hv)
 {
-    const int bh    = blockIdx.x;
-    const int b     = bh / num_v_heads;
-    const int h     = bh % num_v_heads;
-    const int ratio = num_v_heads / num_k_heads;
-    const int kh    = h / ratio;
-
-    const int tok_off    = q_offsets[b];
-    const int seq_len    = q_offsets[b + 1] - tok_off;
-    const int state_size = k_head_dim * v_head_dim;
-    const int conv_dim   = 2 * k_dim_total + num_v_heads * v_head_dim;
-    const int v_dim      = num_v_heads * v_head_dim;
-
-    S* s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
-
-    const float scale = rsqrtf((float)k_head_dim);
-
-    // DimC = v_head_dim (memory-contiguous), DimS = k_head_dim (strided)
-    using Map_S = ThreadMap_V2<v_head_dim, k_head_dim, sizeof(uint4) / sizeof(S), Raked, block_dim / WARP_SIZE>;
-
-    extern __shared__ __align__(16) char smem_buf[];
-
-    // XOR swizzle: bits [10,13] (offset_k) XOR into column access-group index
-    constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;  // log2(kAccessC)
-    constexpr int kShift = 10 - kBase;
-    using Layout         = SmemLayoutV2<k_head_dim, v_head_dim, -1, -1, Swizzle<4, kBase, kShift>>;
-    SmemAccessor<S, Layout> smem_S{(S*)smem_buf};
-
-    const int warp_id = threadIdx.x / WARP_SIZE;
-    const int lane_id = threadIdx.x % WARP_SIZE;
-
-    constexpr int tile_k = 16;
-    constexpr int tile_v = 4;
-
-    constexpr int k_tiles = k_head_dim / tile_k;  // 8
-    constexpr int v_tiles = v_head_dim / tile_v;  // 32
-
-    constexpr int k_threads = k_tiles;
-    constexpr int v_threads = block_dim / k_threads;
-
-    constexpr int v_iters = cdiv(v_tiles, v_threads);
-
-    Array<float, tile_v> vec_S[v_iters][tile_k];
-
-    const int offset_k = threadIdx.x % k_tiles;
-    const int offset_v = threadIdx.x / k_tiles;
-
-    constexpr int kAccessC = Map_S::kAccessC;
-
-    PRAGMA_UNROLL
-    for (int s = 0; s < Map_S::kIterS; ++s) {
-        Array<S, kAccessC> vec;
-        PRAGMA_UNROLL
-        for (int c = 0; c < Map_S::kIterC; ++c) {
-            const auto [vd, kd] = Map_S::get_offset(warp_id, lane_id);
-            const int final_vd  = vd + c * Map_S::kDeltaC;
-            const int final_kd  = kd + s * Map_S::kDeltaS;
-            Load(vec, s_ptr + final_kd * v_head_dim + final_vd);
-            Store(&smem_S(final_kd, final_vd), vec);
-        }
+    const int64_t index = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t total = int64_t(token_num) * gate_token_stride;
+    if (index >= total) {
+        return;
     }
-
-    __syncthreads();
-
-    PRAGMA_UNROLL
-    for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
-        PRAGMA_UNROLL
-        for (int k = 0; k < tile_k; ++k) {
-            constexpr int kTileAccessC = (tile_v >= kAccessC) ? kAccessC : tile_v;
-            static_assert(tile_v % kTileAccessC == 0);
-            PRAGMA_UNROLL
-            for (int c = 0; c < tile_v / kTileAccessC; ++c) {
-                Array<S, kTileAccessC> tmp;
-                Load(tmp, &smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kTileAccessC));
-                (Array<float, kTileAccessC>&)vec_S[v_iter][k][c * kTileAccessC] = cast<float>(tmp);
-            }
-        }
+    const int token = static_cast<int>(index / gate_token_stride);
+    const int head  = static_cast<int>(index % gate_token_stride);
+    if (head >= hv) {
+        beta[index] = 0.f;
+        g[index]    = 0.f;
+        return;
     }
-
-    for (int t = 0; t < seq_len; ++t) {
-        const int global_t = tok_off + t;
-
-        const T* q_ptr = qkv_in + global_t * conv_dim + kh * k_head_dim;
-        const T* k_ptr = qkv_in + global_t * conv_dim + k_dim_total + kh * k_head_dim;
-        const T* v_ptr = qkv_in + global_t * conv_dim + 2 * k_dim_total + h * v_head_dim;
-        T*       o_ptr = v_out + global_t * v_dim + h * v_head_dim;
-
-        const float beta_val = (float)beta_in[global_t * num_v_heads + h];
-        const float decay    = expf((float)g_in[global_t * num_v_heads + h]);
-
-        Array<float, tile_k> vec_K;
-        Array<float, tile_k> vec_Q;
-
-        // --- In-kernel L2-normalize K/Q (Vectorized) ---
-        {
-            {
-                Array<T, tile_k> tmp_K;
-                Array<T, tile_k> tmp_Q;
-                Load(tmp_K, &k_ptr[offset_k * tile_k]);
-                Load(tmp_Q, &q_ptr[offset_k * tile_k]);
-                vec_K = cast<float>(tmp_K);
-                vec_Q = cast<float>(tmp_Q);
-            }
-
-            float k_sum = 0.f;
-            float q_sum = 0.f;
-
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                k_sum += vec_K[k] * vec_K[k];
-                q_sum += vec_Q[k] * vec_Q[k];
-            }
-
-            PRAGMA_UNROLL
-            for (int mask = k_threads / 2; mask > 0; mask /= 2) {
-                k_sum += __shfl_xor_sync(0xffffffff, k_sum, mask);
-                q_sum += __shfl_xor_sync(0xffffffff, q_sum, mask);
-            }
-
-            const float k_inv_norm = rsqrtf(k_sum + 1e-6f);
-            const float q_inv_norm = rsqrtf(q_sum + 1e-6f);
-
-            PRAGMA_UNROLL
-            for (int i = 0; i < tile_k; ++i) {
-                vec_K[i] = vec_K[i] * k_inv_norm;
-                vec_Q[i] = vec_Q[i] * q_inv_norm;
-            }
-        }
-
-        // Precompute KQ = dot(K, Q) — invariant across all v elements
-        float KQ = 0.f;
-        PRAGMA_UNROLL
-        for (int k = 0; k < tile_k; ++k)
-            KQ += vec_K[k] * vec_Q[k];
-        PRAGMA_UNROLL
-        for (int mask = k_threads / 2; mask > 0; mask /= 2)
-            KQ += __shfl_xor_sync(0xffffffff, KQ, mask);
-
-        Array<T, tile_v> vec_V[v_iters];
-
-        PRAGMA_UNROLL
-        for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
-            Load(vec_V[v_iter], &v_ptr[(offset_v + v_iter * v_threads) * tile_v]);
-        }
-
-        PRAGMA_UNROLL
-        for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
-            Array<T, tile_v> vec_O;
-            PRAGMA_UNROLL
-            for (int v = 0; v < tile_v; ++v) {
-                // Fused: decay + dual dot product (kv_mem and SQ simultaneously)
-                float kv_mem = 0.f, SQ = 0.f;
-                PRAGMA_UNROLL
-                for (int k = 0; k < tile_k; ++k) {
-                    float s_decayed     = vec_S[v_iter][k][v] * decay;
-                    vec_S[v_iter][k][v] = s_decayed;
-                    kv_mem += s_decayed * vec_K[k];
-                    SQ += s_decayed * vec_Q[k];
-                }
-
-                // Single interleaved reduction (2 independent values -> good ILP)
-                PRAGMA_UNROLL
-                for (int mask = k_threads / 2; mask > 0; mask /= 2) {
-                    kv_mem += __shfl_xor_sync(0xffffffff, kv_mem, mask);
-                    SQ += __shfl_xor_sync(0xffffffff, SQ, mask);
-                }
-
-                const float delta = ((float)vec_V[v_iter][v] - kv_mem) * beta_val;
-
-                // State update
-                PRAGMA_UNROLL
-                for (int k = 0; k < tile_k; ++k) {
-                    vec_S[v_iter][k][v] += vec_K[k] * delta;
-                }
-
-                // Output: algebraic computation, NO reduction needed
-                vec_O[v] = static_cast<T>((SQ + delta * KQ) * scale);
-            }
-            if (offset_k == 0)
-                Store(&o_ptr[(offset_v + v_iter * v_threads) * tile_v], vec_O);
-        }
-    }
-
-    __syncthreads();
-
-    PRAGMA_UNROLL
-    for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
-        PRAGMA_UNROLL
-        for (int k = 0; k < tile_k; ++k) {
-            constexpr int kTileAccessC = (tile_v >= kAccessC) ? kAccessC : tile_v;
-            PRAGMA_UNROLL
-            for (int c = 0; c < tile_v / kTileAccessC; ++c) {
-                auto tmp = cast<S>((Array<float, kTileAccessC>&)vec_S[v_iter][k][c * kTileAccessC]);
-                Store(&smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kTileAccessC), tmp);
-            }
-        }
-    }
-
-    __syncthreads();
-
-    PRAGMA_UNROLL
-    for (int s = 0; s < Map_S::kIterS; ++s) {
-        Array<S, Map_S::kAccessC> vec;
-        PRAGMA_UNROLL
-        for (int c = 0; c < Map_S::kIterC; ++c) {
-            const auto [vd, kd] = Map_S::get_offset(warp_id, lane_id);
-            const int final_vd  = vd + c * Map_S::kDeltaC;
-            const int final_kd  = kd + s * Map_S::kDeltaS;
-            Load(vec, &smem_S(final_kd, final_vd));
-            Store(s_ptr + final_kd * v_head_dim + final_vd, vec);
-        }
-    }
+    const float b_value  = static_cast<float>(b[token * b_token_stride + head]);
+    const float a_value  = static_cast<float>(a[token * a_token_stride + head]);
+    beta[index]          = 1.f / (1.f + expf(-b_value));
+    const float x        = a_value + static_cast<float>(dt_bias[head]);
+    const float softplus = x > 20.f ? x : log1pf(expf(x));
+    g[index]             = -expf(static_cast<float>(A_log[head])) * softplus;
 }
 
-void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
-                                    const Tensor&         qkv_in,
-                                    const Tensor&         beta,
-                                    const Tensor&         g,
-                                    const Buffer_<void*>& state_ptrs,
-                                    const Buffer_<int>&   q_offsets,
-                                    int                   batch_size,
-                                    int                   num_k_heads,
-                                    int                   state_layer_offset,
-                                    DataType              state_dtype,
-                                    int /*sm_count*/,
-                                    int* /*work_counter*/,
-                                    cudaStream_t stream)
+void ComputeBetaG(core::Tensor&       beta,
+                  core::Tensor&       g,
+                  const core::Tensor& b,
+                  const core::Tensor& a,
+                  const core::Tensor& A_log,
+                  const core::Tensor& dt_bias,
+                  cudaStream_t        stream)
 {
-    auto& v_out = v_out_.get();
-
-    const int num_v_heads    = beta.shape(1);
-    const int v_dim          = v_out.shape(1);
-    const int value_head_dim = v_dim / num_v_heads;
-    const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
-
-    if (batch_size == 0 || num_v_heads == 0)
-        return;
-
-    constexpr int kHeadDim  = 128;
-    constexpr int kBlockDim = 256;
-
-    TM_CHECK_EQ(value_head_dim, kHeadDim);
-    TM_CHECK_EQ(k_dim_total / num_k_heads, kHeadDim);
-
-    const int num_blocks = batch_size * num_v_heads;
+    const int     token_num     = static_cast<int>(b.shape(0));
+    const int     hv            = static_cast<int>(A_log.size());
+    constexpr int kBlockThreads = 256;
+    const int64_t gate_capacity = int64_t(token_num) * beta.stride(1);
+    const int     gate_blocks   = static_cast<int>((gate_capacity + kBlockThreads - 1) / kBlockThreads);
 
     auto invoke = [&](auto t) {
-        using T     = decltype(t);
-        auto launch = [&](auto s) {
-            using S = decltype(s);
-
-            auto kernel = recurrent_gated_delta_rule_kernel_v2<kHeadDim, kHeadDim, kBlockDim, T, S>;
-
-            const size_t smem_sz = kHeadDim * kHeadDim * sizeof(S);
-            if (smem_sz > 48 << 10) {
-                cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
-            }
-
-            kernel<<<num_blocks, kBlockDim, smem_sz, stream>>>(v_out.data<T>(),
-                                                               qkv_in.data<T>(),
-                                                               beta.data<T>(),
-                                                               g.data<T>(),
-                                                               (S* const*)state_ptrs.data(),
-                                                               q_offsets.data(),
-                                                               num_v_heads,
-                                                               num_k_heads,
-                                                               k_dim_total,
-                                                               state_layer_offset);
-        };
-        if (state_dtype == kFloat32) {
-            launch(float{});
-        }
-        else {
-            launch(T{});
-        }
+        using T = decltype(t);
+        ComputeBetaGKernel<T><<<gate_blocks, kBlockThreads, 0, stream>>>(beta.data<float>(),
+                                                                         g.data<float>(),
+                                                                         beta.stride(1),
+                                                                         b.data<T>(),
+                                                                         b.stride(0),
+                                                                         a.data<T>(),
+                                                                         a.stride(0),
+                                                                         A_log.data<T>(),
+                                                                         dt_bias.data<T>(),
+                                                                         token_num,
+                                                                         hv);
     };
-    TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
-// =============================================================================
-// Recurrent Gated Delta Rule — Persistent decode kernel (seq_len == 1 only).
-//
-// Designed for large-batch decode (e.g., bs=1024, 64 heads = 65536 work-items).
-// Instead of launching one block per (b, h) pair, we launch only as many blocks
-// as can be simultaneously resident (determined via the CUDA occupancy API), and
-// each block iterates over multiple (b, h) work-items in a persistent loop.
-//
-// State is loaded/stored directly between global memory and registers (no smem
-// staging), eliminating all __syncthreads() from the loop body. Each thread
-// owns a [tile_k, tile_v] register tile and issues strided 8-byte tile loads
-// directly from global memory. smem_sz = 0 in the host launcher.
-// =============================================================================
-template<int k_head_dim, int v_head_dim, int block_dim, class T, class S>
-__global__ __launch_bounds__(block_dim, 2) void recurrent_gated_delta_rule_kernel_v3(T*         v_out,
-                                                                                     const T*   qkv_in,
-                                                                                     const T*   beta_in,
-                                                                                     const T*   g_in,
-                                                                                     S* const*  state_ptrs,
-                                                                                     const int* q_offsets,
-                                                                                     int*       work_counter,
-                                                                                     int        total_work,
-                                                                                     int        num_v_heads,
-                                                                                     int        num_k_heads,
-                                                                                     int        k_dim_total,
-                                                                                     int        state_layer_offset)
-{
-    constexpr int state_size = k_head_dim * v_head_dim;
-    const int     conv_dim   = 2 * k_dim_total + num_v_heads * v_head_dim;
-    const int     v_dim      = num_v_heads * v_head_dim;
-    const float   scale      = rsqrtf((float)k_head_dim);
-
-    // Compile-time thread partition (identical to v2)
-    constexpr int tile_k    = 16;
-    constexpr int tile_v    = 4;
-    constexpr int k_tiles   = k_head_dim / tile_k;
-    constexpr int v_tiles   = v_head_dim / tile_v;
-    constexpr int k_threads = k_tiles;
-    constexpr int v_threads = block_dim / k_threads;
-    constexpr int v_iters   = cdiv(v_tiles, v_threads);
-
-    const int offset_k = threadIdx.x % k_tiles;
-    const int offset_v = threadIdx.x / k_tiles;
-
-    // Persistent loop: each block atomically claims the next (b, h) work-item.
-    // Thread 0 issues the atomic; result is broadcast to all threads via smem.
-    __shared__ int s_work_idx;
-    while (true) {
-        if (threadIdx.x == 0)
-            s_work_idx = atomicAdd(work_counter, 1);
-        __syncthreads();
-        const int work_idx = s_work_idx;
-        if (work_idx >= total_work)
-            break;
-        const int b     = work_idx / num_v_heads;
-        const int h     = work_idx % num_v_heads;
-        const int ratio = num_v_heads / num_k_heads;
-        const int kh    = h / ratio;
-
-        const int global_t = q_offsets[b];  // seq_len == 1 guaranteed
-
-        S* s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
-
-        // --- Load state: global → registers (direct strided tile loads, tile_v contiguous) ---
-        Array<float, tile_v> vec_S[v_iters][tile_k];
-
-        PRAGMA_UNROLL
-        for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                Array<S, tile_v> tmp;
-                Load(tmp, &s_ptr[(offset_k * tile_k + k) * v_head_dim + (offset_v + v_iter * v_threads) * tile_v]);
-                vec_S[v_iter][k] = cast<float>(tmp);
-            }
-        }
-
-        // --- Process single token (seq_len == 1) ---
-        {
-            const T* q_ptr = qkv_in + global_t * conv_dim + kh * k_head_dim;
-            const T* k_ptr = qkv_in + global_t * conv_dim + k_dim_total + kh * k_head_dim;
-            const T* v_ptr = qkv_in + global_t * conv_dim + 2 * k_dim_total + h * v_head_dim;
-            T*       o_ptr = v_out + global_t * v_dim + h * v_head_dim;
-
-            const float beta_val = (float)beta_in[global_t * num_v_heads + h];
-            const float decay    = expf((float)g_in[global_t * num_v_heads + h]);
-
-            Array<float, tile_k> vec_K;
-            Array<float, tile_k> vec_Q;
-
-            // L2-normalize K and Q in registers
-            {
-                Array<T, tile_k> tmp_K;
-                Array<T, tile_k> tmp_Q;
-                Load(tmp_K, &k_ptr[offset_k * tile_k]);
-                Load(tmp_Q, &q_ptr[offset_k * tile_k]);
-                vec_K = cast<float>(tmp_K);
-                vec_Q = cast<float>(tmp_Q);
-            }
-
-            float k_sum = 0.f, q_sum = 0.f;
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                k_sum += vec_K[k] * vec_K[k];
-                q_sum += vec_Q[k] * vec_Q[k];
-            }
-            PRAGMA_UNROLL
-            for (int mask = k_threads / 2; mask > 0; mask /= 2) {
-                k_sum += __shfl_xor_sync(0xffffffff, k_sum, mask);
-                q_sum += __shfl_xor_sync(0xffffffff, q_sum, mask);
-            }
-            const float k_inv_norm = rsqrtf(k_sum + 1e-6f);
-            const float q_inv_norm = rsqrtf(q_sum + 1e-6f);
-            PRAGMA_UNROLL
-            for (int i = 0; i < tile_k; ++i) {
-                vec_K[i] *= k_inv_norm;
-                vec_Q[i] *= q_inv_norm;
-            }
-
-            // KQ dot product (invariant across v elements)
-            float KQ = 0.f;
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k)
-                KQ += vec_K[k] * vec_Q[k];
-            PRAGMA_UNROLL
-            for (int mask = k_threads / 2; mask > 0; mask /= 2)
-                KQ += __shfl_xor_sync(0xffffffff, KQ, mask);
-
-            Array<T, tile_v> vec_V[v_iters];
-            PRAGMA_UNROLL
-            for (int v_iter = 0; v_iter < v_iters; ++v_iter)
-                Load(vec_V[v_iter], &v_ptr[(offset_v + v_iter * v_threads) * tile_v]);
-
-            PRAGMA_UNROLL
-            for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
-                Array<T, tile_v> vec_O;
-                PRAGMA_UNROLL
-                for (int v = 0; v < tile_v; ++v) {
-                    // Fused: decay + dual dot product (kv_mem and SQ simultaneously)
-                    float kv_mem = 0.f, SQ = 0.f;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k) {
-                        float s_decayed     = vec_S[v_iter][k][v] * decay;
-                        vec_S[v_iter][k][v] = s_decayed;
-                        kv_mem += s_decayed * vec_K[k];
-                        SQ += s_decayed * vec_Q[k];
-                    }
-                    PRAGMA_UNROLL
-                    for (int mask = k_threads / 2; mask > 0; mask /= 2) {
-                        kv_mem += __shfl_xor_sync(0xffffffff, kv_mem, mask);
-                        SQ += __shfl_xor_sync(0xffffffff, SQ, mask);
-                    }
-                    const float delta = ((float)vec_V[v_iter][v] - kv_mem) * beta_val;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        vec_S[v_iter][k][v] += vec_K[k] * delta;
-                    vec_O[v] = static_cast<T>((SQ + delta * KQ) * scale);
-                }
-                if (offset_k == 0)
-                    Store(&o_ptr[(offset_v + v_iter * v_threads) * tile_v], vec_O);
-            }
-        }
-
-        // --- Store state: registers → global (direct strided tile stores, tile_v contiguous) ---
-        PRAGMA_UNROLL
-        for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                auto tmp = cast<S>(vec_S[v_iter][k]);
-                Store(&s_ptr[(offset_k * tile_k + k) * v_head_dim + (offset_v + v_iter * v_threads) * tile_v], tmp);
-            }
-        }
-    }
-}
-
-void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
-                                    const Tensor&         qkv_in,
-                                    const Tensor&         beta,
-                                    const Tensor&         g,
-                                    const Buffer_<void*>& state_ptrs,
-                                    const Buffer_<int>&   q_offsets,
-                                    int                   batch_size,
-                                    int                   num_k_heads,
-                                    int                   state_layer_offset,
-                                    DataType              state_dtype,
-                                    int                   sm_count,
-                                    int*                  work_counter,
-                                    cudaStream_t          stream)
-{
-    auto& v_out = v_out_.get();
-
-    const int num_v_heads = beta.shape(1);
-    const int v_dim       = v_out.shape(1);
-    const int k_dim_total = (qkv_in.shape(1) - v_dim) / 2;
-
-    if (batch_size == 0 || num_v_heads == 0)
-        return;
-
-    constexpr int kHeadDim  = 128;
-    constexpr int kBlockDim = 256;
-
-    TM_CHECK_EQ(v_dim / num_v_heads, kHeadDim);
-    TM_CHECK_EQ(k_dim_total / num_k_heads, kHeadDim);
-
-    const int total_work = batch_size * num_v_heads;
-
-    auto invoke = [&](auto t) {
-        using T     = decltype(t);
-        auto launch = [&](auto s) {
-            using S = decltype(s);
-
-            auto         kernel        = recurrent_gated_delta_rule_kernel_v3<kHeadDim, kHeadDim, kBlockDim, T, S>;
-            const size_t smem_sz       = sizeof(int);  // s_work_idx
-            int          blocks_per_sm = 1;
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, kBlockDim, smem_sz);
-            const int grid_blocks = min(total_work, blocks_per_sm * sm_count);
-
-            cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
-            kernel<<<grid_blocks, kBlockDim, smem_sz, stream>>>(v_out.data<T>(),
-                                                                qkv_in.data<T>(),
-                                                                beta.data<T>(),
-                                                                g.data<T>(),
-                                                                (S* const*)state_ptrs.data(),
-                                                                q_offsets.data(),
-                                                                work_counter,
-                                                                total_work,
-                                                                num_v_heads,
-                                                                num_k_heads,
-                                                                k_dim_total,
-                                                                state_layer_offset);
-        };
-        if (state_dtype == kFloat32)
-            launch(float{});
-        else
-            launch(T{});
-    };
-    TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
-// =============================================================================
-// Chunked Gated Delta Rule kernel — register-centric, small chunk size.
-//
-// Grid = batch_size * num_v_heads blocks, one block per (b, h) pair.
-// Cooperative QKV load to smem per chunk, then sequential per-token
-// processing (same recurrence as v2) reading from smem.
-// State load/store uses the full swizzled smem buffer (same as v2).
-// =============================================================================
-template<int kHeadDim, int kChunkSize, int kBlockDim, class T, class S>
-__global__ void chunked_gated_delta_rule_kernel(T*         v_out,
-                                                const T*   qkv_in,
-                                                const T*   beta_in,
-                                                const T*   g_in,
-                                                S* const*  state_ptrs,
-                                                const int* q_offsets,
-                                                int        num_v_heads,
-                                                int        num_k_heads,
-                                                int        k_dim_total,
-                                                int        state_layer_offset)
-{
-    constexpr int C = kChunkSize;
-    constexpr int D = kHeadDim;
-
-    const int bh    = blockIdx.x;
-    const int b     = bh / num_v_heads;
-    const int h     = bh % num_v_heads;
-    const int ratio = num_v_heads / num_k_heads;
-    const int kh    = h / ratio;
-
-    const int tok_off    = q_offsets[b];
-    const int seq_len    = q_offsets[b + 1] - tok_off;
-    const int state_size = D * D;
-    const int conv_dim   = 2 * k_dim_total + num_v_heads * D;
-    const int v_dim      = num_v_heads * D;
-
-    if (seq_len == 0)
-        return;
-
-    S*          s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
-    const float scale = rsqrtf((float)D);
-
-    // ── State tiling (same as v2) ──
-    constexpr int tile_k    = 8;
-    constexpr int tile_v    = 8;
-    constexpr int k_tiles   = D / tile_k;                // 16
-    constexpr int k_threads = k_tiles;                   // 16
-    constexpr int v_threads = kBlockDim / k_threads;     // 16
-    constexpr int v_tiles   = D / tile_v;                // 16
-    constexpr int v_iters   = cdiv(v_tiles, v_threads);  // 1
-
-    const int offset_k = threadIdx.x % k_threads;
-    const int offset_v = threadIdx.x / k_threads;
-
-    Array<float, tile_v> vec_S[v_iters][tile_k];
-
-    extern __shared__ __align__(16) char smem_buf[];
-
-    // ================================================================
-    //  LOAD STATE  global → smem (swizzled) → registers   (same as v2)
-    // ================================================================
-    {
-        using Map_S          = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
-        constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;
-        constexpr int kShift = 10 - kBase;
-        using Layout         = SmemLayoutV2<D, D, -1, -1, Swizzle<4, kBase, kShift>>;
-        SmemAccessor<S, Layout> smem_S{(S*)smem_buf};
-
-        const int     warp_id  = threadIdx.x / WARP_SIZE;
-        const int     lane_id  = threadIdx.x % WARP_SIZE;
-        constexpr int kAccessC = Map_S::kAccessC;
-
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map_S::kIterS; ++s) {
-            Array<S, kAccessC> vec;
-            PRAGMA_UNROLL
-            for (int c = 0; c < Map_S::kIterC; ++c) {
-                const auto [vd, kd] = Map_S::get_offset(warp_id, lane_id);
-                const int fvd       = vd + c * Map_S::kDeltaC;
-                const int fkd       = kd + s * Map_S::kDeltaS;
-                Load(vec, s_ptr + fkd * D + fvd);
-                Store(&smem_S(fkd, fvd), vec);
-            }
-        }
-        __syncthreads();
-
-        PRAGMA_UNROLL
-        for (int vi = 0; vi < v_iters; ++vi) {
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                static_assert(tile_v % Map_S::kAccessC == 0);
-                PRAGMA_UNROLL
-                for (int c = 0; c < tile_v / Map_S::kAccessC; ++c) {
-                    Array<S, Map_S::kAccessC> tmp;
-                    Load(tmp,
-                         &smem_S(offset_k * tile_k + k, (offset_v + vi * v_threads) * tile_v + c * Map_S::kAccessC));
-                    (Array<float, Map_S::kAccessC>&)vec_S[vi][k][c * Map_S::kAccessC] = cast<float>(tmp);
-                }
-            }
-        }
-    }
-    __syncthreads();
-
-    // ================================================================
-    //  CHUNK PROCESSING  — sequential per-token (same as v2) with
-    //  smem-cached QKV.  Eliminates resolvent/intra-attention overhead.
-    // ================================================================
-    // Shared memory layout for chunk processing (overlaps state staging buffer):
-    //   k_norm_smem[C][kSmemStride]  — pre-normalized K
-    //   q_norm_smem[C][kSmemStride]  — pre-normalized Q
-    //   v_smem[C][kSmemStride]       — raw V (as float)
-    //   scalars[3*C]                 — beta[C], g[C], scratch[C]
-    constexpr int kSmemStride = D + 4;  // pad rows by 4 to avoid 4-way bank conflicts
-
-    float* k_norm_smem = (float*)smem_buf;
-    float* q_norm_smem = k_norm_smem + C * kSmemStride;
-    float* v_smem      = q_norm_smem + C * kSmemStride;
-    float* beta_vals   = v_smem + C * kSmemStride;
-    float* g_vals      = beta_vals + C;
-
-    // Thread-to-token mapping for cooperative loads: 1 warp per token
-    constexpr int kThreadsPerTok = kBlockDim / C;                 // 256/8 = 32
-    constexpr int kElemsPerThr   = D / kThreadsPerTok;            // 128/32 = 4
-    const int     load_tok       = threadIdx.x / kThreadsPerTok;  // which token (0..C-1)
-    const int     load_lane      = threadIdx.x % kThreadsPerTok;  // lane within token's warp
-
-    const int num_chunks = (seq_len + C - 1) / C;
-
-    for (int ci = 0; ci < num_chunks; ++ci) {
-        const int chunk_start = tok_off + ci * C;
-        const int valid_len   = min(C, seq_len - ci * C);
-
-        // ────────────────────────────────────────────────────
-        //  Phase 0: Cooperative load K, Q, V → smem (pre-normalized)
-        //  32 threads (1 warp) per token, 4 elements per thread.
-        //  Norms computed via warp shuffle, K/Q normalized in registers
-        //  before writing to smem → eliminates one __syncthreads.
-        // ────────────────────────────────────────────────────
-        {
-            float K_reg[kElemsPerThr], Q_reg[kElemsPerThr];
-            float k_sq = 0.f, q_sq = 0.f;
-            if (load_tok < valid_len) {
-                const int gt    = chunk_start + load_tok;
-                const T*  k_ptr = qkv_in + gt * conv_dim + k_dim_total + kh * D;
-                const T*  q_ptr = qkv_in + gt * conv_dim + kh * D;
-                const T*  v_ptr = qkv_in + gt * conv_dim + 2 * k_dim_total + h * D;
-                PRAGMA_UNROLL
-                for (int e = 0; e < kElemsPerThr; ++e) {
-                    const int d = load_lane * kElemsPerThr + e;
-                    K_reg[e]    = (float)k_ptr[d];
-                    Q_reg[e]    = (float)q_ptr[d];
-                    k_sq += K_reg[e] * K_reg[e];
-                    q_sq += Q_reg[e] * Q_reg[e];
-                    v_smem[load_tok * kSmemStride + d] = (float)v_ptr[d];
-                }
-                if (load_lane == 0) {
-                    beta_vals[load_tok] = (float)beta_in[gt * num_v_heads + h];
-                    g_vals[load_tok]    = (float)g_in[gt * num_v_heads + h];
-                }
-            }
-            else {
-                PRAGMA_UNROLL
-                for (int e = 0; e < kElemsPerThr; ++e) {
-                    K_reg[e]                                                      = 0.f;
-                    Q_reg[e]                                                      = 0.f;
-                    v_smem[load_tok * kSmemStride + load_lane * kElemsPerThr + e] = 0.f;
-                }
-            }
-            // Warp-reduce norms (32-thread warp per token)
-            PRAGMA_UNROLL
-            for (int mask = kThreadsPerTok / 2; mask > 0; mask >>= 1) {
-                k_sq += __shfl_xor_sync(0xffffffff, k_sq, mask);
-                q_sq += __shfl_xor_sync(0xffffffff, q_sq, mask);
-            }
-            const float k_inv = (load_tok < valid_len) ? rsqrtf(k_sq + 1e-6f) : 0.f;
-            const float q_inv = (load_tok < valid_len) ? rsqrtf(q_sq + 1e-6f) : 0.f;
-            // Write normalized K, Q to smem
-            PRAGMA_UNROLL
-            for (int e = 0; e < kElemsPerThr; ++e) {
-                const int d                             = load_lane * kElemsPerThr + e;
-                k_norm_smem[load_tok * kSmemStride + d] = K_reg[e] * k_inv;
-                q_norm_smem[load_tok * kSmemStride + d] = Q_reg[e] * q_inv;
-            }
-        }
-        __syncthreads();  // [sync 1] all smem data ready
-
-        // ────────────────────────────────────────────────────
-        //  Sequential per-token loop (same computation as v2)
-        //  Reads K, Q, V from smem instead of global memory.
-        // ────────────────────────────────────────────────────
-        PRAGMA_UNROLL
-        for (int t = 0; t < C; ++t) {
-            if (t >= valid_len)
-                break;
-
-            const int   gt       = chunk_start + t;
-            const float beta_val = beta_vals[t];
-            const float decay    = expf(g_vals[t]);
-
-            float vec_K[tile_k];
-            float vec_Q[tile_k];
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                vec_K[k] = k_norm_smem[t * kSmemStride + offset_k * tile_k + k];
-                vec_Q[k] = q_norm_smem[t * kSmemStride + offset_k * tile_k + k];
-            }
-
-            PRAGMA_UNROLL
-            for (int vi = 0; vi < v_iters; ++vi) {
-                const int v_base = (offset_v + vi * v_threads) * tile_v;
-
-                float vec_V[tile_v];
-                PRAGMA_UNROLL
-                for (int v = 0; v < tile_v; ++v)
-                    vec_V[v] = v_smem[t * kSmemStride + v_base + v];
-
-                Array<T, tile_v> vec_O;
-                PRAGMA_UNROLL
-                for (int v = 0; v < tile_v; ++v) {
-                    // Step 1: state *= decay
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        vec_S[vi][k][v] *= decay;
-
-                    // Step 2: delta rule update
-                    float kv_mem = 0.f;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        kv_mem += vec_S[vi][k][v] * vec_K[k];
-                    PRAGMA_UNROLL
-                    for (int mask = k_threads / 2; mask > 0; mask /= 2)
-                        kv_mem += __shfl_xor_sync(0xffffffff, kv_mem, mask);
-                    const float delta = (vec_V[v] - kv_mem) * beta_val;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        vec_S[vi][k][v] += vec_K[k] * delta;
-
-                    // Step 3: output = (S^T @ q) * scale
-                    float O = 0.f;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        O += vec_S[vi][k][v] * vec_Q[k];
-                    PRAGMA_UNROLL
-                    for (int mask = k_threads / 2; mask > 0; mask /= 2)
-                        O += __shfl_xor_sync(0xffffffff, O, mask);
-                    vec_O[v] = static_cast<T>(O * scale);
-                }
-                if (offset_k == 0)
-                    Store(&v_out[gt * v_dim + h * D + v_base], vec_O);
-            }
-        }
-        __syncthreads();  // [sync 2] ensure all reads done before next chunk overwrites smem
-    }                     // chunk loop
-
-    // ================================================================
-    //  STORE STATE  registers → smem (swizzled) → global   (same as v2)
-    // ================================================================
-    {
-        using Map_S          = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
-        constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;
-        constexpr int kShift = 10 - kBase;
-        using Layout         = SmemLayoutV2<D, D, -1, -1, Swizzle<4, kBase, kShift>>;
-        SmemAccessor<S, Layout> smem_S{(S*)smem_buf};
-        constexpr int           kAccessC = Map_S::kAccessC;
-
-        PRAGMA_UNROLL
-        for (int vi = 0; vi < v_iters; ++vi) {
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k) {
-                PRAGMA_UNROLL
-                for (int c = 0; c < tile_v / kAccessC; ++c) {
-                    auto tmp = cast<S>((Array<float, kAccessC>&)vec_S[vi][k][c * kAccessC]);
-                    Store(&smem_S(offset_k * tile_k + k, (offset_v + vi * v_threads) * tile_v + c * kAccessC), tmp);
-                }
-            }
-        }
-        __syncthreads();
-
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map_S::kIterS; ++s) {
-            Array<S, Map_S::kAccessC> vec;
-            PRAGMA_UNROLL
-            for (int c = 0; c < Map_S::kIterC; ++c) {
-                const auto [vd, kd] = Map_S::get_offset(warp_id, lane_id);
-                const int fvd       = vd + c * Map_S::kDeltaC;
-                const int fkd       = kd + s * Map_S::kDeltaS;
-                Load(vec, &smem_S(fkd, fvd));
-                Store(s_ptr + fkd * D + fvd, vec);
-            }
-        }
-    }
-}
-
-// Host-side launcher
-void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
-                                        const Tensor&         qkv_in,
-                                        const Tensor&         beta,
-                                        const Tensor&         g,
-                                        const Buffer_<void*>& state_ptrs,
-                                        const Buffer_<int>&   q_offsets,
-                                        int                   batch_size,
-                                        int                   num_k_heads,
-                                        int                   state_layer_offset,
-                                        DataType              state_dtype,
-                                        int /*sm_count*/,
-                                        int* /*work_counter*/,
-                                        cudaStream_t stream)
-{
-    auto& v_out = v_out_.get();
-
-    const int num_v_heads    = beta.shape(1);
-    const int v_dim          = v_out.shape(1);
-    const int value_head_dim = v_dim / num_v_heads;
-    const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
-
-    if (batch_size == 0 || num_v_heads == 0)
-        return;
-
-    constexpr int kHeadDim   = 128;
-    constexpr int kChunkSize = 16;
-    constexpr int kBlockDim  = 256;
-
-    TM_CHECK_EQ(value_head_dim, kHeadDim);
-    TM_CHECK_EQ(k_dim_total / num_k_heads, kHeadDim);
-
-    const int num_blocks = batch_size * num_v_heads;
-
-    auto invoke = [&](auto t) {
-        using T     = decltype(t);
-        auto launch = [&](auto s) {
-            using S = decltype(s);
-
-            auto kernel = chunked_gated_delta_rule_kernel<kHeadDim, kChunkSize, kBlockDim, T, S>;
-
-            // smem = max(state staging, chunk working buffers)
-            // State staging: D*D*sizeof(S) (64KB for fp32)
-            // Chunk buffers: QKV cache [3*C*(D+4)] + scalars[2*C]
-            const size_t state_smem  = kHeadDim * kHeadDim * sizeof(S);
-            const int    kSmemStride = kHeadDim + 4;
-            const size_t chunk_smem  = 3 * kChunkSize * kSmemStride * sizeof(float)  // k_norm, q_norm, v
-                                      + 2 * kChunkSize * sizeof(float);              // beta, g
-            const size_t smem_sz = state_smem > chunk_smem ? state_smem : chunk_smem;
-
-            if (smem_sz > 48 << 10) {
-                cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
-            }
-
-            kernel<<<num_blocks, kBlockDim, smem_sz, stream>>>(v_out.data<T>(),
-                                                               qkv_in.data<T>(),
-                                                               beta.data<T>(),
-                                                               g.data<T>(),
-                                                               (S* const*)state_ptrs.data(),
-                                                               q_offsets.data(),
-                                                               num_v_heads,
-                                                               num_k_heads,
-                                                               k_dim_total,
-                                                               state_layer_offset);
-        };
-        if (state_dtype == kFloat32) {
-            launch(float{});
-        }
-        else {
-            launch(T{});
-        }
-    };
-    TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+    TM_DISPATCH_PRIMARY_DTYPES(b.dtype(), invoke);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T>
-__global__ void compute_beta_g_kernel_v2(T*       beta_out,
-                                         T*       g_out,
-                                         const T* b_in,
-                                         int      b_stride,
-                                         const T* a_in,
-                                         int      a_stride,
-                                         const T* A_log,
-                                         const T* dt_bias,
-                                         int      total,
-                                         int      num_v_heads)
+__global__ void L2NormalizeQKKernel(T*      q,
+                                    int64_t q_batch_stride,
+                                    int64_t q_token_stride,
+                                    T*      k,
+                                    int64_t k_batch_stride,
+                                    int64_t k_token_stride,
+                                    int     token_num,
+                                    int     hq,
+                                    float   epsilon)
 {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    constexpr int kHeadDim   = 128;
+    const int     lane       = threadIdx.x;
+    const int     work       = int(blockIdx.x);
+    const int     batch      = work / (token_num * hq);
+    const int     token_head = work % (token_num * hq);
+    const int     token      = token_head / hq;
+    const int     head       = token_head % hq;
+    T* q_ptr = q + int64_t(batch) * q_batch_stride + int64_t(token) * q_token_stride + int64_t(head) * kHeadDim;
+    T* k_ptr = k + int64_t(batch) * k_batch_stride + int64_t(token) * k_token_stride + int64_t(head) * kHeadDim;
 
-    if (idx >= total)
-        return;
-
-    const int hi = idx % num_v_heads;
-    const int ti = idx / num_v_heads;
-
-    float b_val       = static_cast<float>(b_in[ti * b_stride + hi]);
-    float a_val       = static_cast<float>(a_in[ti * a_stride + hi]);
-    float A_log_val   = static_cast<float>(A_log[hi]);
-    float dt_bias_val = static_cast<float>(dt_bias[hi]);
-
-    float beta  = 1.0f / (1.0f + expf(-b_val));
-    float sum   = a_val + dt_bias_val;
-    float sp    = sum > 20.0f ? sum : logf(1.0f + expf(sum));
-    float g_val = -expf(A_log_val) * sp;
-
-    beta_out[idx] = static_cast<T>(beta);
-    g_out[idx]    = static_cast<T>(g_val);
+    float q_values[4];
+    float k_values[4];
+    float q_sum = 0.f;
+    float k_sum = 0.f;
+    PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+        const int d = lane + i * WARP_SIZE;
+        q_values[i] = static_cast<float>(q_ptr[d]);
+        k_values[i] = static_cast<float>(k_ptr[d]);
+        q_sum += q_values[i] * q_values[i];
+        k_sum += k_values[i] * k_values[i];
+    }
+    PRAGMA_UNROLL
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        q_sum += __shfl_xor_sync(0xffffffff, q_sum, mask);
+        k_sum += __shfl_xor_sync(0xffffffff, k_sum, mask);
+    }
+    const float q_inv = rsqrtf(q_sum + epsilon);
+    const float k_inv = rsqrtf(k_sum + epsilon);
+    PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+        const int d = lane + i * WARP_SIZE;
+        q_ptr[d]    = T(q_values[i] * q_inv);
+        k_ptr[d]    = T(k_values[i] * k_inv);
+    }
 }
 
-void ComputeBetaG_v2(Ref<Tensor>   beta_out_,
-                     Ref<Tensor>   g_out_,
-                     const Tensor& b_in,
-                     const Tensor& a_in,
-                     const Tensor& A_log,
-                     const Tensor& dt_bias,
-                     cudaStream_t  stream)
+void invokeL2NormalizeQK(core::Tensor& q, core::Tensor& k, float epsilon, cudaStream_t stream)
 {
-
-    auto& beta_out = beta_out_.get();
-    auto& g_out    = g_out_.get();
-
-    const int threads = 256;
-    const int blocks  = cdiv<ssize_t>(beta_out.size(), threads);
-
-    auto invoke = [&](auto t) {
+    constexpr int kWarpThreads = WARP_SIZE;
+    const int     work         = static_cast<int>(q.shape(0) * q.shape(1) * q.shape(2));
+    auto          invoke       = [&](auto t) {
         using T = decltype(t);
-        compute_beta_g_kernel_v2<<<blocks, threads, 0, stream>>>(beta_out.data<T>(),
-                                                                 g_out.data<T>(),
-                                                                 b_in.data<T>(),
-                                                                 b_in.stride(0),
-                                                                 a_in.data<T>(),
-                                                                 a_in.stride(0),
-                                                                 A_log.data<T>(),
-                                                                 dt_bias.data<T>(),
-                                                                 beta_out.size(),
-                                                                 A_log.size());
+        L2NormalizeQKKernel<T><<<work, kWarpThreads, 0, stream>>>(q.data<T>(),
+                                                                  q.stride(0),
+                                                                  q.stride(1),
+                                                                  k.data<T>(),
+                                                                  k.stride(0),
+                                                                  k.stride(1),
+                                                                  static_cast<int>(q.shape(1)),
+                                                                  static_cast<int>(q.shape(2)),
+                                                                  epsilon);
     };
-
-    TM_DISPATCH_PRIMARY_DTYPES(beta_out.dtype(), invoke);
+    TM_DISPATCH_PRIMARY_DTYPES(q.dtype(), invoke);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -1075,6 +237,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                                                                             void* const* conv_state_ptrs,
                                                                             const int*   q_offsets,
                                                                             const int*   k_offsets,
+                                                                            const bool*  finished,
                                                                             int*         work_counter,
                                                                             int          batch_size,
                                                                             int          conv_dim,
@@ -1176,8 +339,9 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
             n_tokens = min(NUM_TOKENS, seq_len - t_local_start);
         }
 
-        const int ring_start = (history_len + t_local_start + 1) % D_CONV;
-        T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
+        const bool skip_state_store = finished != nullptr && finished[b];
+        const int  ring_start       = (history_len + t_local_start + 1) % D_CONV;
+        T*         state_base       = (T*)conv_state_ptrs[b] + state_layer_offset;
 
         if (ch_active) {
             constexpr int                 VALS_SIZE = NUM_TOKENS + D_CONV - 1;
@@ -1222,7 +386,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                 }
             }
 
-            if (t_local_start + n_tokens >= seq_len) {
+            if (!skip_state_store && t_local_start + n_tokens >= seq_len) {
                 PRAGMA_UNROLL
                 for (int i = 0; i < VALS_SIZE; ++i) {
                     int pos = t_local_start - (D_CONV - 1) + i;
@@ -1243,6 +407,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                            const Buffer_<void*>& conv_state_ptrs,
                            const Buffer_<int>&   q_offsets,
                            const Buffer_<int>&   k_offsets,
+                           const Buffer_<bool>&  finished,
                            int                   batch_size,
                            int                   state_layer_offset,
                            int                   sm_count,
@@ -1285,6 +450,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                                                      conv_state_ptrs.data(),
                                                      q_offsets.data(),
                                                      k_offsets.data(),
+                                                     finished ? finished.data() : nullptr,
                                                      work_counter,
                                                      batch_size,
                                                      conv_dim,

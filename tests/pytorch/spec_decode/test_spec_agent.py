@@ -1,8 +1,10 @@
 import asyncio
+from types import SimpleNamespace
 
 import torch
 
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
+from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
 from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent, _expand_sampling_inputs
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
@@ -46,12 +48,15 @@ class _DummyDraftModel:
     def __init__(self):
         self.meta = self.Meta()
         self.update_inputs_calls = 0
+        self.update_inputs_dp_is_decoding = []
 
     def get_meta(self):
         return self.meta
 
     def update_inputs(self, inputs):
         self.update_inputs_calls += 1
+        if inputs.dp_meta is not None:
+            self.update_inputs_dp_is_decoding.append(inputs.dp_meta.dp_is_decoding)
         return inputs
 
 
@@ -62,7 +67,7 @@ class _DummyProposer:
         self.update_inputs_decoding_calls = 0
         self.model = _DummyDraftModel()
 
-    def get_outputs(self, outputs, inputs, extra_inputs=None):
+    async def get_outputs(self, outputs, inputs, extra_inputs=None, guided_processors=None):
         batch_size = inputs.seq_length.size(0)
         draft_token_ids = inputs.input_ids.new_full((batch_size, 1), self.get_outputs_calls)
         self.get_outputs_calls += 1
@@ -70,7 +75,77 @@ class _DummyProposer:
 
     def update_inputs_decoding(self, inputs, extra_inputs, draft_token_ids, target_hidden_states, model_metas):
         self.update_inputs_decoding_calls += 1
-        return inputs
+        batch_size = inputs.seq_length.size(0)
+        return inputs.clone(
+            input_ids=draft_token_ids,
+            seq_length=inputs.seq_length.new_ones(batch_size),
+            history_lengths=inputs.history_lengths + inputs.seq_length,
+            is_decoding=True,
+            max_q_seqlen=1,
+            max_kv_seqlen=inputs.max_kv_seqlen + 1,
+            sum_kv_seqlen=inputs.sum_kv_seqlen + batch_size,
+            target_hidden_states=target_hidden_states,
+            model_metas=model_metas,
+        )
+
+
+def test_guided_serial_bitmask_updates_inference_tensor():
+    """Serial guided masking can update logits produced under inference
+    mode."""
+
+    class _Processor:
+
+        def fork(self):
+            return _Processor()
+
+    class _GuidedManager:
+
+        def __init__(self):
+            self.accepted = []
+            self.seen_is_contiguous = []
+            self.seen_is_inference = []
+            self.seen_inference_mode = []
+
+        def allocate_batched_bitmap(self, batch_size):
+            return torch.zeros(batch_size, 1, dtype=torch.int32)
+
+        def fill_bitmap(self, processor, guided_bitmask, index):
+            return None
+
+        def apply_batched_bitmap(self, logits, guided_bitmask):
+            self.seen_is_contiguous.append(logits.is_contiguous())
+            self.seen_is_inference.append(logits.is_inference())
+            self.seen_inference_mode.append(torch.is_inference_mode_enabled())
+            logits[:, 0] = -123.0
+
+        def is_terminated(self, processor):
+            return False
+
+        def accept_token(self, processor, token):
+            self.accepted.append(token)
+
+    manager = _GuidedManager()
+    helper = GuidedSpecHelper(manager)
+    batch_size = 2
+    num_spec_tokens = 2
+    num_expand = num_spec_tokens + 1
+    vocab_size = 4
+    with torch.inference_mode():
+        scores_3d = torch.zeros(batch_size, num_expand, vocab_size)
+
+    asyncio.run(
+        helper.apply_serial_bitmask(
+            scores_3d,
+            processors={0: _Processor(), 1: _Processor()},
+            draft_token_ids=torch.tensor([[10, 11], [20, 21]], dtype=torch.long),
+            num_spec_tokens=num_spec_tokens,
+        ))
+
+    torch.testing.assert_close(scores_3d[:, :, 0], torch.full((batch_size, num_expand), -123.0))
+    assert manager.seen_is_contiguous == [False, False, False]
+    assert manager.seen_is_inference == [True, True, True]
+    assert manager.seen_inference_mode == [True, True, True]
+    assert manager.accepted == [10, 20, 11, 21]
 
 
 def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indices():
@@ -200,6 +275,54 @@ def test_spec_model_agent_method_when_enabled():
     assert agent.method == specdecode_config.method
 
 
+def test_qwen35_mtp_reuses_main_dist_context(monkeypatch):
+    """Qwen3.5 MTP mirrors the target topology, so it should share groups."""
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import base as base_mod
+
+    dist_config = DistConfig(dp=2, ep=2)
+    dist_ctx = DistContext(rank=1, dp_rank=1, dist_config=dist_config, ep_gpu_group=object())
+    specdecode_config = SpecDecodeConfig(model='draft-model',
+                                         method='qwen3_5_mtp',
+                                         dist_config=DistConfig(dp=2, ep=2),
+                                         num_speculative_tokens=3)
+
+    def fail_build(*args, **kwargs):
+        raise AssertionError('qwen3_5_mtp should not build a separate draft DistContext')
+
+    monkeypatch.setattr(base_mod.DistContext, 'build', staticmethod(fail_build))
+
+    assert base_mod._build_draft_dist_ctx(dist_ctx, specdecode_config) is dist_ctx
+
+
+def test_non_qwen35_mtp_builds_draft_dist_context(monkeypatch):
+    """Other speculative methods keep their separate draft distribution
+    path."""
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import base as base_mod
+
+    main_dist_config = DistConfig(dp=2, ep=2)
+    draft_dist_config = DistConfig()
+    dist_ctx = DistContext(rank=1, dp_rank=1, dist_config=main_dist_config)
+    specdecode_config = SpecDecodeConfig(model='draft-model',
+                                         method='mtp',
+                                         dist_config=draft_dist_config,
+                                         num_speculative_tokens=3)
+    draft_dist_ctx = DistContext(rank=1, dist_config=draft_dist_config)
+    build_calls = []
+
+    def fake_build(*, rank, dist_config):
+        build_calls.append((rank, dist_config))
+        return draft_dist_ctx
+
+    monkeypatch.setattr(base_mod.DistContext, 'build', staticmethod(fake_build))
+
+    assert base_mod._build_draft_dist_ctx(dist_ctx, specdecode_config) is draft_dist_ctx
+    assert build_calls == [(dist_ctx.rank, draft_dist_config)]
+
+
 def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     """DP=1 non-last chunks should keep the local shortcut."""
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
@@ -210,6 +333,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
     forward_calls = 0
 
     def _forward_impl(_inputs):
@@ -228,8 +352,8 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     assert agent.proposer.update_inputs_decoding_calls == 0
 
 
-def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatch):
-    """DP non-last chunks should still execute the full draft-forward loop."""
+def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
+    """DP non-last chunks should pad block offsets for draft decodes."""
     import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
     from lmdeploy.pytorch.model_inputs import DPMeta
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
@@ -241,11 +365,15 @@ def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatc
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
+    agent.cache_config = SimpleNamespace(kernel_block_size=1, num_reserved_gpu_blocks=1)
     forward_calls = 0
+    forwarded_inputs = []
 
     def _forward_impl(_inputs):
         nonlocal forward_calls
         forward_calls += 1
+        forwarded_inputs.append(_inputs)
         return {'call': forward_calls}
 
     agent._forward_impl = _forward_impl
@@ -258,6 +386,167 @@ def test_async_model_forward_dp_non_last_chunk_runs_all_spec_forwards(monkeypatc
     assert agent.proposer.get_outputs_calls == agent.num_spec_tokens
     assert agent.proposer.update_inputs_decoding_calls == 1
     assert agent.proposer.model.update_inputs_calls == agent.num_spec_tokens - 1
+    assert forwarded_inputs[0] is inputs
+    assert [inp.block_offsets.size(1) for inp in forwarded_inputs] == [1, 2, 2]
+    torch.testing.assert_close(forwarded_inputs[1].block_offsets[:, 1], torch.zeros(2, dtype=torch.long))
+    torch.testing.assert_close(forwarded_inputs[2].block_offsets[:, 1], torch.zeros(2, dtype=torch.long))
+    assert all(not inp.is_dummy for inp in forwarded_inputs)
+    assert all(inp.is_decoding for inp in forwarded_inputs[1:])
+
+
+def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypatch):
+    """Rebuilt draft-loop DPMeta must keep DP-global decode state."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.model_inputs import DPMeta
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(lambda seqlen, num_tokens: DPMeta()))
+    inputs, extra_inputs = _make_non_last_chunk_inputs(dp_meta=DPMeta(dp_batches=[2, 2], dp_is_decoding=True))
+    inputs.is_chunk = False
+
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _DummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
+    forward_calls = 0
+
+    def _forward_impl(_inputs):
+        nonlocal forward_calls
+        forward_calls += 1
+        return {'call': forward_calls}
+
+    agent._forward_impl = _forward_impl
+
+    asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
+
+
+def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
+    """Draft warmup must mark decode graph captures as DP-global decode."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup
+    from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    class DummyInputsStrategy:
+
+        def make_dummy(self,
+                       batch_size: int,
+                       is_decoding: bool,
+                       device: str = 'cpu',
+                       vocab_size: int = 1,
+                       max_q_seqlen: int = 1,
+                       target_hidden_size: int = None,
+                       target_dtype: torch.dtype = torch.float32,
+                       meta=None):
+            input_ids = torch.zeros((1, batch_size * max_q_seqlen), dtype=torch.long)
+            seq_length = torch.full((batch_size, ), max_q_seqlen, dtype=torch.long)
+            inputs = ModelInputs(input_ids=input_ids,
+                                 seq_length=seq_length,
+                                 history_lengths=torch.zeros(batch_size, dtype=torch.long),
+                                 block_offsets=torch.zeros((batch_size, 1), dtype=torch.long),
+                                 is_decoding=is_decoding,
+                                 num_ignored_history=torch.zeros(batch_size, dtype=torch.long),
+                                 max_q_seqlen=max_q_seqlen,
+                                 max_kv_seqlen=max_q_seqlen,
+                                 sum_kv_seqlen=batch_size * max_q_seqlen)
+            if target_hidden_size is not None:
+                inputs.target_hidden_states = torch.zeros((1, batch_size * max_q_seqlen, target_hidden_size),
+                                                          dtype=target_dtype)
+            return inputs
+
+    class DummyDraftModel:
+
+        def get_capture_batch_sizes(self):
+            return [2]
+
+    class DummyProposer:
+
+        def __init__(self):
+            self.model = DummyDraftModel()
+
+        def get_target_hidden_size(self, target_model_config):
+            return 4
+
+    build_calls = []
+
+    def fake_dp_meta_build(seqlen, num_tokens):
+        build_calls.append((seqlen, list(num_tokens)))
+        return DPMeta(tp_sizes=[seqlen], moe_tp_sizes=[seqlen])
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(fake_dp_meta_build))
+
+    dist_config = DistConfig(dp=2, ep=2)
+    cpu_group = object()
+    draft_dist_ctx = DistContext(rank=0,
+                                 dp_rank=0,
+                                 dist_config=dist_config,
+                                 cpu_group=cpu_group,
+                                 attn_tp_group=DistGroup(rank=0),
+                                 mlp_tp_group=DistGroup(rank=0),
+                                 moe_tp_group=DistGroup(rank=0),
+                                 tp_group=DistGroup(rank=0))
+    barrier_calls = []
+    sync_calls = []
+    monkeypatch.setattr(spec_agent_mod.dist, 'barrier', lambda group=None: barrier_calls.append(group))
+    monkeypatch.setattr(spec_agent_mod.torch.cuda, 'synchronize', lambda: sync_calls.append(True))
+
+    agent = object.__new__(SpecModelAgent)
+    agent.draft_dist_ctx = draft_dist_ctx
+    agent.inputs_strategy = DummyInputsStrategy()
+    agent.proposer = DummyProposer()
+    agent.model_config = SimpleNamespace(vocab_size=11, dtype=torch.float32, hidden_size=8)
+    agent.num_spec_tokens = 3
+    agent.make_dummy_meta = None
+
+    forwarded = []
+
+    def forward_impl(inputs):
+        forwarded.append({
+            'num_tokens': inputs.input_ids.numel(),
+            'batch_size': inputs.seq_length.numel(),
+            'is_decoding': inputs.is_decoding,
+            'dp_batches': inputs.dp_meta.dp_batches,
+            'dp_is_decoding': inputs.dp_meta.dp_is_decoding,
+            'global_is_decoding': inputs.global_is_decoding(),
+        })
+
+    agent._forward_impl = forward_impl
+
+    agent.warmup(max_batches=4, target_model_config=SimpleNamespace())
+
+    assert barrier_calls == [cpu_group]
+    assert len(sync_calls) == 3
+    assert build_calls == [(4, [4, 4]), (8, [8, 8]), (2, [2, 2])]
+    assert forwarded == [
+        {
+            'num_tokens': 4,
+            'batch_size': 4,
+            'is_decoding': False,
+            'dp_batches': [4, 4],
+            'dp_is_decoding': False,
+            'global_is_decoding': False,
+        },
+        {
+            'num_tokens': 8,
+            'batch_size': 2,
+            'is_decoding': True,
+            'dp_batches': [2, 2],
+            'dp_is_decoding': True,
+            'global_is_decoding': True,
+        },
+        {
+            'num_tokens': 2,
+            'batch_size': 2,
+            'is_decoding': True,
+            'dp_batches': [2, 2],
+            'dp_is_decoding': True,
+            'global_is_decoding': True,
+        },
+    ]
 
 
 def test_slice_sampling_inputs_decode():

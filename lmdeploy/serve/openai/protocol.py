@@ -144,8 +144,8 @@ class ChatCompletionRequest(BaseModel):
     model: str
 
     messages: str | list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
-    temperature: float | None = 0.7
-    top_p: float | None = 1.0
+    temperature: float | None = None
+    top_p: float | None = None
     tools: list[Tool] | None = Field(default=None, examples=[None])
     tool_choice: ToolChoice | AllowedToolChoice | Literal[
         'auto', 'required', 'none'] = Field(default='auto', examples=['none'])
@@ -172,21 +172,21 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float | None = 0.0
     frequency_penalty: float | None = 0.0
     user: str | None = None
-    reasoning_effort: Literal['low', 'medium', 'high'] | None = None
+    reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
     do_preprocess: bool | None = True
-    repetition_penalty: float | None = 1.0
+    repetition_penalty: float | None = None
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
-    top_k: int | None = 40
+    top_k: int | None = None
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
-    min_p: float = 0.0
+    min_p: float | None = None
     forecast_horizon: int | None = Field(
         default=None,
         ge=1,
@@ -364,7 +364,7 @@ class CompletionRequest(BaseModel):
     model: str
     prompt: str | list[Any]
     suffix: str | None = None
-    temperature: float | None = 0.7
+    temperature: float | None = None
     n: int | None = 1
     logprobs: int | None = None
     max_completion_tokens: int | None = Field(
@@ -374,29 +374,29 @@ class CompletionRequest(BaseModel):
                      'including visible output tokens and reasoning tokens'),
     )
     max_tokens: int | None = Field(
-        default=16,
-        examples=[16],
+        default=None,
+        examples=[None],
         deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
     )
     stop: str | list[str] | None = Field(default=None, examples=[None])
     stream: bool | None = False
     stream_options: StreamOptions | None = Field(default=None, examples=[None])
-    top_p: float | None = 1.0
+    top_p: float | None = None
     echo: bool | None = False
     presence_penalty: float | None = 0.0
     frequency_penalty: float | None = 0.0
     user: str | None = None
     # additional argument of lmdeploy
-    repetition_penalty: float | None = 1.0
+    repetition_penalty: float | None = None
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
-    top_k: int | None = 40  # for opencompass
+    top_k: int | None = None  # for opencompass
     seed: int | None = None
-    min_p: float = 0.0
+    min_p: float | None = None
 
 
 class CompletionResponseChoice(BaseModel):
@@ -561,12 +561,12 @@ class GenerateReqInput(BaseModel):
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
     stream: bool | None = False
-    temperature: float = 1.0
-    repetition_penalty: float | None = 1.0
+    temperature: float | None = None
+    repetition_penalty: float | None = None
     ignore_eos: bool | None = False
-    top_p: float = 1.0
-    top_k: int = 0
-    min_p: float = 0.0
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False

@@ -498,6 +498,12 @@ ______________________________________________________________________
 
 ## Local Files and Base64
 
+When the API server is exposed to untrusted clients, use `--allowed-media-domains` at startup to restrict which hostnames HTTP(S) media URLs can fetch from and reduce SSRF risk. The option matches exact hostnames; for example, `--allowed-media-domains example.com` allows `https://example.com/...` but not `https://cdn.example.com/...`.
+
+```shell
+lmdeploy serve api_server <model_path> --allowed-media-domains example.com
+```
+
 In addition to HTTP URLs, lmdeploy accepts:
 
 - **Local file paths** via `file://` scheme: `file:///absolute/path/to/file.jpg`

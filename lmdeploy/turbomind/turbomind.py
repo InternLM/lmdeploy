@@ -22,6 +22,7 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
+from .parallel_config import derive_parallel_config
 from .supported_models import is_supported
 
 # TODO: find another way import _turbomind
@@ -35,6 +36,7 @@ from .tokenizer_info import TokenizerInfo  # noqa: E402
 logger = get_logger('lmdeploy')
 
 MAX_LOGPROBS = 1024
+_FP32_MAMBA_SSM_DTYPE = os.getenv('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', '0') == '1'
 
 
 def _construct_stop_or_bad_words(words: list[int] = None):
@@ -66,9 +68,11 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
 
 
 def complete_parallel_config(cfg: TurbomindEngineConfig):
-    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
+    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.attn_cp_size, cfg.mlp_dp_size, cfg.mlp_tp_size,
+            cfg.outer_dp_size)):
         cfg.attn_dp_size = cfg.attn_dp_size or 1
         cfg.attn_tp_size = cfg.attn_tp_size or 1
+        cfg.attn_cp_size = cfg.attn_cp_size or 1
         cfg.mlp_dp_size = cfg.mlp_dp_size or 1
         cfg.mlp_tp_size = cfg.mlp_tp_size or 1
         cfg.outer_dp_size = cfg.outer_dp_size or 1
@@ -83,24 +87,17 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
     if not complete_parallel_config(cfg):
-        total = cfg.dp * cfg.tp
-        if not cfg.device_num:
-            count = torch.cuda.device_count() * cfg.nnodes
-            if total < count:
-                count = total
-            cfg.device_num = count
-        assert total % cfg.device_num == 0
-        overlap = total // cfg.device_num
-        attn_dp_size = overlap
-        mlp_tp_size = overlap
-        inner_tp_size = cfg.tp // mlp_tp_size
-        cfg.outer_dp_size = cfg.dp // attn_dp_size
-        cfg.attn_dp_size = attn_dp_size
-        cfg.attn_tp_size = inner_tp_size // cfg.cp
-        cfg.attn_cp_size = cfg.cp
-        cfg.mlp_dp_size = 1
-        cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+        available = torch.cuda.device_count() * cfg.nnodes
+        parallel = derive_parallel_config(cfg.dp, cfg.tp, cfg.ep, cfg.cp, cfg.device_num, available)
+        cfg.device_num = parallel.device_num
+        cfg.outer_dp_size = parallel.outer_dp_size
+        cfg.attn_dp_size = parallel.attn_dp_size
+        cfg.attn_tp_size = parallel.attn_tp_size
+        cfg.attn_cp_size = parallel.attn_cp_size
+        cfg.mlp_dp_size = parallel.mlp_dp_size
+        cfg.mlp_tp_size = parallel.mlp_tp_size
+    if cfg.ep > 1:
+        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -173,6 +170,7 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = _engine_config.session_len
+        self.health_executor = ThreadPoolExecutor(max_workers=1)
 
     def _process_weights(self):
         """Process weight."""
@@ -227,9 +225,12 @@ class TurboMind:
         dtype_map = {
             'bfloat16': _tm.DataType.TYPE_BF16,
             'float16': _tm.DataType.TYPE_FP16,
+            'float32': _tm.DataType.TYPE_FP32,
         }
+        state_dtype = 'float32' if _FP32_MAMBA_SSM_DTYPE else engine_config.dtype
         ec = _tm.EngineConfig()
         ec.data_type = dtype_map[engine_config.dtype]
+        ec.state_dtype = dtype_map[state_dtype]
         ec.cache_block_seq_len = engine_config.cache_block_seq_len
         ec.quant_policy = engine_config.quant_policy
         ec.max_batch_size = engine_config.max_batch_size
@@ -238,6 +239,10 @@ class TurboMind:
         ec.cache_max_block_count = engine_config.cache_max_entry_count
         ec.cache_chunk_size = engine_config.cache_chunk_size
         ec.enable_prefix_caching = engine_config.enable_prefix_caching
+        ec.cache_checkpoint_interval = engine_config.cache_checkpoint_interval
+        ec.cache_prompt = engine_config.cache_prompt
+        ec.cache_prompt_boundary_skip = engine_config.cache_prompt_boundary_skip
+        ec.cache_generation = engine_config.cache_generation
         ec.enable_metrics = engine_config.enable_metrics
         ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
         ec.max_prefill_iters = engine_config.max_prefill_iters
@@ -247,13 +252,15 @@ class TurboMind:
         ec.attn_tp_size = engine_config.attn_tp_size
         ec.attn_cp_size = engine_config.attn_cp_size
         ec.mlp_tp_size = engine_config.mlp_tp_size
+        ec.ep_size = engine_config.ep
         ec.devices = engine_config.devices
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
         ec.communicator = engine_config.communicator
 
         logger.info(f'turbomind engine config:\n\n'
-                    f'dtype={engine_config.dtype}, session_len={engine_config.session_len}, '
+                    f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
+                    f'session_len={engine_config.session_len}, '
                     f'max_batch_size={engine_config.max_batch_size}, '
                     f'devices={engine_config.devices}, '
                     f'tp={engine_config.attn_tp_size}, '
@@ -390,6 +397,11 @@ class TurboMind:
     def get_schedule_metrics(self):
         # TODO: support dp
         tm_metrics = self.model_comm.get_schedule_metrics(0)
+        if tm_metrics is None:
+            # ScheduleMetrics is not yet wired onto the new scheduler (metrics revival is
+            # deferred). Report no metrics so consumers (health probe / metrics logger)
+            # degrade gracefully instead of dereferencing a missing metrics object.
+            return None
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
@@ -419,7 +431,10 @@ class TurboMind:
 
     async def get_health_status(self) -> dict:
         """Get backend health status without blocking the event loop."""
-        return await asyncio.to_thread(self._get_health_status)
+        # MultimodalProcessor may submit a large number of tasks to the default thread pool, causing
+        # the _get_health_status task to be selected after the DEFAULT_PROBE_TIMEOUT has already elapsed.
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.health_executor, self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):
@@ -567,14 +582,13 @@ class TurboMindInstance:
             0: ResponseType.SUCCESS,
             1: ResponseType.SESSION_NOT_EXIST,
             2: ResponseType.SESSION_REPEAT,
-            3: ResponseType.SESSION_REPEAT,
-            4: ResponseType.INTERNAL_ENGINE_ERROR,
             5: ResponseType.INTERNAL_ENGINE_ERROR,
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
             8: ResponseType.CANCEL,
-            9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            9: ResponseType.PREFIX_CACHE_CONFLICT,
             10: ResponseType.NO_QUEUE,
+            11: ResponseType.OUT_OF_MEMORY,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 
@@ -670,15 +684,9 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
-    def async_end_cb(self, fut: asyncio.Future, status: int):
-        """Executing on engine's signaling thread."""
-        logger.info(f'[async_end_cb] session ended, status = {status}')
-        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
-
     async def async_end(self, session_id):
-        fut = asyncio.get_running_loop().create_future()
-        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
-        await fut
+        """TurboMind is stateless; there is no engine-side session to end."""
+        return
 
     def async_signal_cb(self, s: StreamingSemaphore):
         """Executing on engine's signaling thread."""
@@ -691,9 +699,6 @@ class TurboMindInstance:
                                  input_embedding_ranges=None,
                                  input_meta: dict[str, Any] = None,
                                  multimodal: list[dict[str, Any]] = None,
-                                 sequence_start: bool = True,
-                                 sequence_end: bool = False,
-                                 step=0,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
@@ -705,10 +710,6 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            step (int): the offset of the k/v cache
-            stop (bool): indicator for cancelling the session
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
@@ -757,7 +758,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
+        session = _tm.SessionParam(id=session_id, step=0)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)
@@ -778,7 +779,7 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        prev_len = step + input_len
+        prev_len = input_len
         try:
             while True:
                 await sem.acquire()

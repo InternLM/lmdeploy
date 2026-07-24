@@ -6,6 +6,7 @@ import torch
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .base import MoeType, SoftmaxTopK  # noqa: F401
+from .v4_fp4 import FusedMoEV4FP4  # noqa: F401
 
 
 def build_fused_moe(
@@ -28,7 +29,7 @@ def build_fused_moe(
     quant_method = None
     if quant_config is not None:
         quant_config = get_build_model_context().quant_config
-        quant_method = quant_config.get_quant_method(prefix)
+        quant_method = quant_config.get_quant_method(prefix, module_kind='moe')
 
     if quant_method is None:
         from .default import FusedMoE

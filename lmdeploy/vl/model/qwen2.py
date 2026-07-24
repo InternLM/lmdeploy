@@ -122,7 +122,7 @@ class Qwen2VLModel(VisionModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    def proc_messages(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
+    def proc_messages(self, messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
         chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
@@ -155,7 +155,7 @@ class Qwen2VLModel(VisionModel):
                         raise ValueError(f'Unsupported message type: {item["type"]}')
                 message = dict(role=role, content=''.join(_content))
                 prompt_messages.append(message)
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, self.image_token
 
     @staticmethod
@@ -183,14 +183,26 @@ class Qwen2VLModel(VisionModel):
         mrope_position_delta = torch.tensor([st_idx - seq_len], dtype=torch.long)
         return mrope_position_ids, mrope_position_delta
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
+    def to_pytorch(self,
+                   messages,
+                   chat_template,
+                   tokenizer,
+                   tools=None,
+                   chat_template_kwargs=None,
+                   **kwargs):
         """Return to the information needed by pytorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
-        info = super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_turbomind(self,
+                     messages,
+                     chat_template,
+                     tokenizer,
+                     tools=None,
+                     chat_template_kwargs=None,
+                     **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        info = super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess'][0]
         grid_thws = [x['image_grid_thw'].tolist()[0] for x in inputs]
         seq_len = len(info['input_ids'])

@@ -198,79 +198,86 @@ class EngineInstance(EngineInstanceBase):
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        logger.debug(f'session[{session_id}] try add session.')
-        self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False))
-        msg = dict(
-            token_ids=input_ids,
-            session_id=session_id,
-            sampling_param=sampling_param,
-            adapter_name=adapter_name,
-            input_multimodals=multimodal,
-            migration_request=gen_config.migration_request,
-            with_cache=gen_config.with_cache,
-            preserve_cache=gen_config.preserve_cache,
-        )
-        logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
-        resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
-        # notify add msg
-        if notify_add_msg_func is not None:
-            notify_add_msg_func()
+        session_added = False
+        try:
+            logger.debug(f'session[{session_id}] try add session.')
+            add_session_resp = self.req_sender.send_async(RequestType.ADD_SESSION,
+                                                          dict(session_id=session_id, response=False))
+            session_added = not add_session_resp.is_done
+            msg = dict(
+                token_ids=input_ids,
+                session_id=session_id,
+                sampling_param=sampling_param,
+                adapter_name=adapter_name,
+                input_multimodals=multimodal,
+                migration_request=gen_config.migration_request,
+                with_cache=gen_config.with_cache,
+                preserve_cache=gen_config.preserve_cache,
+            )
+            logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
+            resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+            # notify add msg
+            if notify_add_msg_func is not None:
+                notify_add_msg_func()
 
-        output_offset = 0
-        prompt_ids_len = len(input_ids)
+            output_offset = 0
+            prompt_ids_len = len(input_ids)
 
-        while True:
-            resp = await self.req_sender.async_recv(resp, wait_main=True)
+            while True:
+                resp = await self.req_sender.async_recv(resp, wait_main=True)
 
-            cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
-            req_metrics = resp.data.get('req_metrics', None) if resp.data else None
-            multimodal_outputs = resp.data.get('multimodal_outputs', None) if resp.data else None
-            logprobs = resp.data.pop('logprobs', None) if resp.data else None
+                cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
+                req_metrics = resp.data.get('req_metrics', None) if resp.data else None
+                multimodal_outputs = resp.data.get('multimodal_outputs', None) if resp.data else None
+                logprobs = resp.data.pop('logprobs', None) if resp.data else None
 
-            if resp.type == ResponseType.SUCCESS:
-                token_ids = resp.data['token_ids']
-                num_ids = len(token_ids) - output_offset
-                logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type,
-                                   token_ids[output_offset:].tolist(),
-                                   cache_block_ids=cache_block_ids,
-                                   req_metrics=req_metrics,
-                                   multimodal_outputs=multimodal_outputs,
-                                   logprobs=logprobs)
-                output_offset = len(token_ids)
-            elif resp.type in (ResponseType.FINISH, ResponseType.CANCEL):
-                resp_data = resp.data
-                token_ids = []
-                logits = None
-                ce_loss = None
-                if resp_data is not None:
-                    # request might be cancelled before any output
-                    logits = resp_data.get('logits', None)
-                    ce_loss = resp_data.get('ce_loss', None)
-                    gen_token_ids = resp_data.get('token_ids', None)
-                    if gen_token_ids is not None:
-                        token_ids = gen_token_ids[output_offset:].tolist()
+                if resp.type == ResponseType.SUCCESS:
+                    token_ids = resp.data['token_ids']
+                    num_ids = len(token_ids) - output_offset
+                    logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
+                    yield EngineOutput(resp.type,
+                                       token_ids[output_offset:].tolist(),
+                                       cache_block_ids=cache_block_ids,
+                                       req_metrics=req_metrics,
+                                       multimodal_outputs=multimodal_outputs,
+                                       logprobs=logprobs)
+                    output_offset = len(token_ids)
+                elif resp.type in (ResponseType.FINISH, ResponseType.CANCEL):
+                    resp_data = resp.data
+                    token_ids = []
+                    logits = None
+                    ce_loss = None
+                    if resp_data is not None:
+                        # request might be cancelled before any output
+                        logits = resp_data.get('logits', None)
+                        ce_loss = resp_data.get('ce_loss', None)
+                        gen_token_ids = resp_data.get('token_ids', None)
+                        if gen_token_ids is not None:
+                            token_ids = gen_token_ids[output_offset:].tolist()
 
-                num_ids = len(token_ids)
-                num_all_ids = prompt_ids_len + output_offset + num_ids
-                extra_outputs = self._get_extra_outputs(resp, num_all_ids)
-                routed_experts = extra_outputs.get('routed_experts', None)
+                    num_ids = len(token_ids)
+                    num_all_ids = prompt_ids_len + output_offset + num_ids
+                    extra_outputs = self._get_extra_outputs(resp, num_all_ids)
+                    routed_experts = extra_outputs.get('routed_experts', None)
 
-                logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type,
-                                   token_ids,
-                                   logits=logits,
-                                   cache_block_ids=cache_block_ids,
-                                   req_metrics=req_metrics,
-                                   routed_experts=routed_experts,
-                                   multimodal_outputs=multimodal_outputs,
-                                   logprobs=logprobs,
-                                   ce_loss=ce_loss)
-                break
-            else:
-                logger.debug(f'session[{session_id}] failed.')
-                yield EngineOutput(resp.type, [])
-                break
+                    logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
+                    yield EngineOutput(resp.type,
+                                       token_ids,
+                                       logits=logits,
+                                       cache_block_ids=cache_block_ids,
+                                       req_metrics=req_metrics,
+                                       routed_experts=routed_experts,
+                                       multimodal_outputs=multimodal_outputs,
+                                       logprobs=logprobs,
+                                       ce_loss=ce_loss)
+                    break
+                else:
+                    logger.debug(f'session[{session_id}] failed.')
+                    yield EngineOutput(resp.type, [])
+                    break
+        finally:
+            if session_added:
+                await self.async_end(session_id)
 
     async def async_infer(self,
                           session_id: int,
@@ -361,7 +368,17 @@ class EngineInstance(EngineInstanceBase):
 
     async def async_end(self, session_id: int):
         """End the given session."""
-        return end(self.req_sender, session_id)
+        logger.debug(f'session[{session_id}] try end session.')
+        resp = await self.req_sender.async_send(
+            RequestType.END_SESSION,
+            dict(session_id=session_id),
+        )
+        _check_resp(
+            resp,
+            [ResponseType.SUCCESS, ResponseType.SESSION_NOT_EXIST],
+            f'Failed to end session {session_id}: {resp.type}',
+        )
+        return resp.type
 
     def end(self, session_id: int):
         """End the given session."""

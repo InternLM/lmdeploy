@@ -257,6 +257,13 @@ class TestFillKVCacheInt8(TestFillKVCache):
 
 class TestFillKVCacheInt4(TestFillKVCacheInt8):
 
+    @pytest.fixture(autouse=True)
+    def initialize(self):
+        # Exact int4 packed-byte checks are brittle when random inputs land on
+        # affine quantization thresholds. Keep this path deterministic.
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+
     @pytest.fixture
     def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
         shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim // 2)

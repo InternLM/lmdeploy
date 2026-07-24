@@ -25,13 +25,12 @@ add_library(core STATIC
         layout.cc
         data_format.cc
         tensor.cc
-        tensor.cu
         module.cc
         registry.cc
         copy.cc
         logger.cc)
 
-target_link_libraries(core PUBLIC cuda_utils CUDA::cudart CUDA::cuda_driver fmt::fmt concurrentqueue)
+target_link_libraries(core PUBLIC cuda_utils CUDA::cudart CUDA::cuda_driver fmt::fmt concurrentqueue nvidia::cutlass::cutlass)
 
 set_property(TARGET core PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET core PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

@@ -71,6 +71,17 @@ In the following sections, we will focus on introducing the inference parameters
 
 The maximum batch size is still set through `max_batch_size`. But its default value has been changed from 32 to 64, and `max_batch_size` is no longer related to `cache_max_entry_count`.
 
+### recurrent state data type
+
+For models with GatedDeltaNet layers, TurboMind stores the recurrent state in the model activation data type by default.
+Set `LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1` before starting LMDeploy to store the recurrent state in FP32 instead. The
+convolution state remains in the model activation data type. FP32 recurrent state can improve numerical precision but
+uses twice the recurrent-state memory of FP16 or BF16.
+
+```bash
+LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1 lmdeploy serve api_server <model-path> --backend turbomind
+```
+
 ### k/v cache size
 
 k/v cache memory is determined by `cache_block_seq_len` and `cache_max_entry_count`.
@@ -82,6 +93,8 @@ TurboMind 2.x has implemented Paged Attention, managing the k/v cache in blocks.
 ```
 cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_data_type)
 ```
+
+With context parallelism, this formula remains the physical per-rank block size. The matching scheduler block spans `cache_block_seq_len * cp` global tokens because those tokens are interleaved across the CP ranks.
 
 For the llama2-7b model, when storing k/v as the `half` type, the memory of a k/v block is: `128 * 32 * 32 * 128 * 2 * sizeof(half) = 64MB`
 
@@ -103,7 +116,28 @@ Prefix caching feature can be controlled by setting the `enable_prefix_caching` 
 
 Prefix caching feature is mainly applicable to scenarios where multiple requests have the same prompt prefix (such as system prompt). The k/v blocks of this identical prefix part will be cached and reused by multiple requests, thereby saving the overhead of redundant computations and improving inference performance. The longer the identical prompt prefix, the greater the performance improvement.
 
-Since k/v block is the smallest granularity for reuse in prefix caching, if the identical prompt prefix is less than one block (prefix length \< cache_block_seq_len), there will be no improvement in inference performance.
+Since a full k/v block is the smallest granularity for full-block reuse in prefix caching, its prefix length threshold is `cache_block_seq_len` without context parallelism and `cache_block_seq_len * cp` with context parallelism.
+
+### Partial-block boundary reuse
+
+Two mode knobs control whether partial-block prefix nodes are published at the prompt and generation boundaries: `cache_prompt` (`'all'` or `'auto'`, default `'auto'`) and `cache_generation` (`'all'`, `'auto'`, or `'none'`, default `'auto'`). Both require `enable_prefix_caching` and apply to any prefix-cached model: the published node carries the partial block's k/v, and on a recurrent/hybrid model (e.g. those with GatedDeltaNet layers) it additionally carries a recurrent-state checkpoint.
+
+Set `cache_prompt='all'` when the same prompt is processed repeatedly (multi-sample decoding, shared/system prompts) so a duplicate prompt skips prefill; the default `'auto'` does this only for image-bearing partial prompt blocks (reusing vision-encoded KV) and is inert for text-only prompts. Set `cache_generation='all'` when you need to resume from the exact generation end (e.g. multi-turn chat); `'auto'` (default) caches full generated blocks only; `'none'` caches no generated blocks. The partial-block node costs extra VRAM and copy bandwidth, so prefer `'auto'` unless the reuse pays off.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(
+    enable_prefix_caching=True,
+    cache_prompt='all',
+    cache_generation='all',
+)
+pipe = pipeline('your-model', backend_config=backend_config)
+```
+
+- `cache_prompt`: partial prompt-boundary publication mode, `'all'` or `'auto'` (default `'auto'`). `'all'` publishes a reusable prompt-boundary node at `B = prompt_len - cache_prompt_boundary_skip` whenever `B` is mid-block (and arms a recurrent-state checkpoint clamp when `B` is block-aligned), so a duplicate prompt skips prefill. `'auto'` does that only when the partial block holds image tokens (reusing vision-encoded KV) and is inert for text-only prompts. Costs one extra prefill forward for the producing request and (when `B` is mid-block) one partial cache block.
+- `cache_prompt_boundary_skip`: number of trailing prompt tokens treated as the volatile generation-prompt suffix (e.g. a chat template's `<think>\n`) and excluded from the reusable prompt-boundary node, moving it to `prompt_len - cache_prompt_boundary_skip`. Applies when `cache_prompt` is `'all'` or `'auto'`. Default 1 (exclude only the last token). Increase it for thinking models whose chat template appends a multi-token suffix that the next turn drops from history.
+- `cache_generation`: generated-block caching mode, `'all'`, `'auto'` (default), or `'none'`. `'all'` indexes full generated blocks and the terminal partial block, and adopts the terminal recurrent frontier checkpoint (exact multi-turn resume). `'auto'` indexes full generated blocks only. `'none'` indexes no generated blocks. Costs one partial cache block when `'all'` indexes a terminal partial block. Full-block checkpoints at block boundaries are always published regardless of this setting.
 
 ### kv quantization and inference switch
 

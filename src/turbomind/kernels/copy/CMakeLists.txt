@@ -1,0 +1,5 @@
+add_library(copy STATIC copy.cc copy.cu transpose.cu)
+set_property(TARGET copy PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET copy PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_compile_options(copy PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>)
+target_link_libraries(copy PUBLIC nvidia::cutlass::cutlass)

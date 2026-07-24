@@ -185,6 +185,10 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
+        # Attach named cache views for models that declare block_cache_specs / state_cache_specs.
+        context.block_caches = cache_engine.block_caches
+        context.named_state_caches = state_cache_engine.named_state_caches
+
         with ctx_mgr.context(context):
             if (not inputs.is_dummy and inputs.state_offsets is not None
                     and inputs.state_prefix_cache_offsets is not None):
@@ -343,14 +347,19 @@ class BaseModelAgent:
                                            self.inputs_strategy,
                                            self.agent_strategy,
                                            misc_config=misc_config,
-                                           device=device)
+                                           device=device,
+                                           guided_decoding_manager=self.guided_decoding_manager)
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
-        # decoding inputs
-        self.step_inputs = self.strategy_factory.build_step_inputs()
+        self._init_runtime_state()
 
-        # long context
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+
+    def _init_runtime_state(self):
+        """Initialize request-local decode and chunk state."""
+        self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output: dict = None
         # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
         self._prev_chunk_last_logit: torch.Tensor | None = None
@@ -358,8 +367,11 @@ class BaseModelAgent:
         # time series forecast postprocessor
         self.ts_forecast_postprocessor = TSForecastPostprocessor()
 
-        # make dummy meta
-        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+    def reset_runtime_state(self):
+        """Discard request-local decode and chunk state after sleep cancels
+        sessions."""
+        self._init_runtime_state()
+        self.spec_agent.reset_runtime_state()
 
     @contextmanager
     def all_context(self):
@@ -969,7 +981,13 @@ class BaseModelAgent:
             self._pending_h2d_transfers.popleft()
 
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
-        """Async loop inputs preprocess."""
+        """Move queued CPU-side forward inputs to the CUDA-ready queue.
+
+        ``set_forward_inputs`` writes to ``_pre_in_que``. Until this coroutine
+        finishes H2D/preprocessing and pushes the item to ``_in_que``, the DP
+        input maker treats ``_pre_in_que`` as pending real work and avoids
+        falling back to dummy inputs.
+        """
         non_blocking = True
         keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
@@ -1169,7 +1187,7 @@ class BaseModelAgent:
                                             tp_rank=dist_ctx.attn_tp_group.rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
-            self.state_cache_engine = StateCacheEngine(self.cache_config)
+            self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
 
@@ -1207,6 +1225,8 @@ class BaseModelAgent:
     def reset_graph_runner(self):
         """Reset graph runner to prevent tp hanging."""
         with self.all_context():
+            self._prev_chunk_output = None
+            self._prev_chunk_last_logit = None
             if hasattr(self.patched_model, 'reset'):
                 self.patched_model.reset()
 
@@ -1441,6 +1461,7 @@ class BaseModelAgent:
         self._drain_queues()
         torch.cuda.synchronize()
         self._release_completed_h2d_transfers()
+        self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
         self._update_params_ipc_event = None
