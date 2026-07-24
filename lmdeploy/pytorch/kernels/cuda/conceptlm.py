@@ -81,6 +81,167 @@ def _decode_chunk_state_update_kernel(
         tl.store(update_mask + batch_id, valid_state & is_boundary)
 
 
+@triton.jit
+def _decode_kv_cache_snapshot_kernel(
+    k_cache,
+    v_cache,
+    block_offsets,
+    kv_seqlens,
+    saved_k,
+    saved_v,
+    k_stride_n,
+    k_stride_b,
+    k_stride_h,
+    k_stride_d,
+    v_stride_n,
+    v_stride_b,
+    v_stride_h,
+    v_stride_d,
+    boff_stride_b,
+    boff_stride_n,
+    sk_stride_b,
+    sk_stride_h,
+    sk_stride_d,
+    sv_stride_b,
+    sv_stride_h,
+    sv_stride_d,
+    HEAD_DIM: tl.constexpr,
+    TOTAL_ELEMS: tl.constexpr,
+    KV_BLOCK_SIZE: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    """Snapshot one paged decode KV slot per batch row."""
+    tile_id = tl.program_id(0)
+    batch_id = tl.program_id(1)
+    offs = tile_id * BLOCK + tl.arange(0, BLOCK)
+    valid_elem = offs < TOTAL_ELEMS
+
+    head_id = offs // HEAD_DIM
+    dim_id = offs - head_id * HEAD_DIM
+
+    kv_seqlen = tl.maximum(tl.load(kv_seqlens + batch_id), 1)
+    slot_id = kv_seqlen - 1
+    block_idx = slot_id // KV_BLOCK_SIZE
+    page_offset = slot_id - block_idx * KV_BLOCK_SIZE
+    block_id = tl.load(block_offsets + batch_id * boff_stride_b + block_idx * boff_stride_n).to(tl.int64)
+
+    k_ptrs = (k_cache + block_id * k_stride_n + page_offset * k_stride_b + head_id * k_stride_h +
+              dim_id * k_stride_d)
+    v_ptrs = (v_cache + block_id * v_stride_n + page_offset * v_stride_b + head_id * v_stride_h +
+              dim_id * v_stride_d)
+    sk_ptrs = saved_k + batch_id * sk_stride_b + head_id * sk_stride_h + dim_id * sk_stride_d
+    sv_ptrs = saved_v + batch_id * sv_stride_b + head_id * sv_stride_h + dim_id * sv_stride_d
+    tl.store(sk_ptrs, tl.load(k_ptrs, mask=valid_elem), mask=valid_elem)
+    tl.store(sv_ptrs, tl.load(v_ptrs, mask=valid_elem), mask=valid_elem)
+
+
+@triton.jit
+def _decode_kv_cache_restore_kernel(
+    k_cache,
+    v_cache,
+    saved_k,
+    saved_v,
+    block_offsets,
+    kv_seqlens,
+    restore_mask,
+    k_stride_n,
+    k_stride_b,
+    k_stride_h,
+    k_stride_d,
+    v_stride_n,
+    v_stride_b,
+    v_stride_h,
+    v_stride_d,
+    sk_stride_b,
+    sk_stride_h,
+    sk_stride_d,
+    sv_stride_b,
+    sv_stride_h,
+    sv_stride_d,
+    boff_stride_b,
+    boff_stride_n,
+    HEAD_DIM: tl.constexpr,
+    TOTAL_ELEMS: tl.constexpr,
+    KV_BLOCK_SIZE: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    """Restore one paged decode KV slot for masked batch rows."""
+    tile_id = tl.program_id(0)
+    batch_id = tl.program_id(1)
+    do_restore = tl.load(restore_mask + batch_id)
+    if not do_restore:
+        return
+
+    offs = tile_id * BLOCK + tl.arange(0, BLOCK)
+    valid_elem = offs < TOTAL_ELEMS
+
+    head_id = offs // HEAD_DIM
+    dim_id = offs - head_id * HEAD_DIM
+
+    kv_seqlen = tl.maximum(tl.load(kv_seqlens + batch_id), 1)
+    slot_id = kv_seqlen - 1
+    block_idx = slot_id // KV_BLOCK_SIZE
+    page_offset = slot_id - block_idx * KV_BLOCK_SIZE
+    block_id = tl.load(block_offsets + batch_id * boff_stride_b + block_idx * boff_stride_n).to(tl.int64)
+
+    k_ptrs = (k_cache + block_id * k_stride_n + page_offset * k_stride_b + head_id * k_stride_h +
+              dim_id * k_stride_d)
+    v_ptrs = (v_cache + block_id * v_stride_n + page_offset * v_stride_b + head_id * v_stride_h +
+              dim_id * v_stride_d)
+    sk_ptrs = saved_k + batch_id * sk_stride_b + head_id * sk_stride_h + dim_id * sk_stride_d
+    sv_ptrs = saved_v + batch_id * sv_stride_b + head_id * sv_stride_h + dim_id * sv_stride_d
+    tl.store(k_ptrs, tl.load(sk_ptrs, mask=valid_elem), mask=valid_elem)
+    tl.store(v_ptrs, tl.load(sv_ptrs, mask=valid_elem), mask=valid_elem)
+
+
+@triton.jit
+def _decode_concept_state_update_kernel(
+    last_raw_state_cache,
+    last_final_state_cache,
+    predicted_vectors,
+    raw_states,
+    state_ids,
+    update_mask,
+    raw_cache_stride_n,
+    raw_cache_stride_l,
+    raw_cache_stride_h,
+    final_cache_stride_n,
+    final_cache_stride_h,
+    pred_stride_b,
+    pred_stride_h,
+    raw_stride_b,
+    raw_stride_l,
+    raw_stride_h,
+    HIDDEN: tl.constexpr,
+    RAW_ELEMS: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    """Write final/raw concept state caches for valid boundary rows."""
+    tile_id = tl.program_id(0)
+    batch_id = tl.program_id(1)
+    state_id = tl.load(state_ids + batch_id)
+    do_update = (state_id >= 0) & tl.load(update_mask + batch_id)
+    if not do_update:
+        return
+
+    offs = tile_id * BLOCK + tl.arange(0, BLOCK)
+    hidden_id = offs % HIDDEN
+
+    final_mask = offs < HIDDEN
+    pred_ptrs = predicted_vectors + batch_id * pred_stride_b + hidden_id * pred_stride_h
+    final_ptrs = last_final_state_cache + state_id * final_cache_stride_n + hidden_id * final_cache_stride_h
+    final_values = tl.load(pred_ptrs, mask=final_mask)
+    tl.store(final_ptrs, final_values, mask=final_mask)
+
+    raw_mask = offs < RAW_ELEMS
+    layer_id = offs // HIDDEN
+    raw_ptrs = raw_states + batch_id * raw_stride_b + layer_id * raw_stride_l + hidden_id * raw_stride_h
+    raw_cache_ptrs = (last_raw_state_cache + state_id * raw_cache_stride_n + layer_id * raw_cache_stride_l +
+                      hidden_id * raw_cache_stride_h)
+    raw_values = tl.load(raw_ptrs, mask=raw_mask)
+    tl.store(raw_cache_ptrs, raw_values, mask=raw_mask)
+
+
 def _flatten_decode_position_ids(position_ids: torch.Tensor, batch_size: int, device: torch.device) -> torch.Tensor:
     """Normalize decode position ids to one absolute position per batch row."""
     if position_ids.dim() == 0:
@@ -165,3 +326,137 @@ def decode_chunk_state_update(
         num_warps=8,
     )
     return concept_inputs, next_rows, update_mask
+
+
+def decode_kv_cache_snapshot(
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    block_offsets: torch.Tensor,
+    kv_seqlens: torch.Tensor,
+    block: int = 1024,
+):
+    """Snapshot the current decode KV slot for each batch row.
+
+    The slot is ``max(kv_seqlen, 1) - 1`` in the paged cache. This is used by
+    ConceptLM graph-safe decode to undo dummy all-row concept predictor writes
+    for non-boundary rows.
+    """
+    assert k_cache.is_cuda and v_cache.is_cuda, 'ConceptLM KV snapshot requires CUDA caches.'
+    assert k_cache.dim() == 4 and v_cache.dim() == 4
+    assert k_cache.shape[:3] == v_cache.shape[:3]
+    assert k_cache.shape[-1] == v_cache.shape[-1]
+    assert block_offsets.is_cuda and kv_seqlens.is_cuda
+
+    batch_size = kv_seqlens.numel()
+    num_heads = k_cache.size(2)
+    head_dim = k_cache.size(3)
+    total_elems = num_heads * head_dim
+    saved_k = torch.empty((batch_size, num_heads, head_dim), dtype=k_cache.dtype, device=k_cache.device)
+    saved_v = torch.empty((batch_size, num_heads, head_dim), dtype=v_cache.dtype, device=v_cache.device)
+    grid = (triton.cdiv(total_elems, block), batch_size)
+    _decode_kv_cache_snapshot_kernel[grid](
+        k_cache,
+        v_cache,
+        block_offsets,
+        kv_seqlens,
+        saved_k,
+        saved_v,
+        *k_cache.stride(),
+        *v_cache.stride(),
+        *block_offsets.stride(),
+        *saved_k.stride(),
+        *saved_v.stride(),
+        HEAD_DIM=head_dim,
+        TOTAL_ELEMS=total_elems,
+        KV_BLOCK_SIZE=k_cache.size(1),
+        BLOCK=block,
+        num_warps=8,
+    )
+    return saved_k, saved_v
+
+
+def decode_kv_cache_restore(
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    saved_k: torch.Tensor,
+    saved_v: torch.Tensor,
+    block_offsets: torch.Tensor,
+    kv_seqlens: torch.Tensor,
+    restore_mask: torch.Tensor,
+    block: int = 1024,
+) -> None:
+    """Restore the current decode KV slot for masked batch rows."""
+    assert k_cache.is_cuda and v_cache.is_cuda, 'ConceptLM KV restore requires CUDA caches.'
+    assert saved_k.is_cuda and saved_v.is_cuda
+    assert saved_k.shape == (kv_seqlens.numel(), k_cache.size(2), k_cache.size(3))
+    assert saved_v.shape == (kv_seqlens.numel(), v_cache.size(2), v_cache.size(3))
+    assert restore_mask.numel() == kv_seqlens.numel()
+
+    batch_size = kv_seqlens.numel()
+    num_heads = k_cache.size(2)
+    head_dim = k_cache.size(3)
+    total_elems = num_heads * head_dim
+    restore_mask = restore_mask.to(device=k_cache.device, dtype=torch.bool)
+    grid = (triton.cdiv(total_elems, block), batch_size)
+    _decode_kv_cache_restore_kernel[grid](
+        k_cache,
+        v_cache,
+        saved_k,
+        saved_v,
+        block_offsets,
+        kv_seqlens,
+        restore_mask,
+        *k_cache.stride(),
+        *v_cache.stride(),
+        *saved_k.stride(),
+        *saved_v.stride(),
+        *block_offsets.stride(),
+        HEAD_DIM=head_dim,
+        TOTAL_ELEMS=total_elems,
+        KV_BLOCK_SIZE=k_cache.size(1),
+        BLOCK=block,
+        num_warps=8,
+    )
+
+
+def decode_concept_state_update(
+    last_raw_state_cache: torch.Tensor,
+    last_final_state_cache: torch.Tensor,
+    predicted_vectors: torch.Tensor,
+    raw_states: torch.Tensor,
+    state_ids: torch.Tensor,
+    update_mask: torch.Tensor,
+    block: int = 1024,
+) -> None:
+    """Write final/raw concept states for valid boundary rows."""
+    assert last_raw_state_cache.is_cuda, 'ConceptLM concept-state update requires CUDA caches.'
+    assert last_final_state_cache.is_cuda
+    assert predicted_vectors.is_cuda and raw_states.is_cuda
+    assert raw_states.dim() == 3
+    assert last_raw_state_cache.shape[1:] == raw_states.shape[1:]
+    assert last_final_state_cache.size(1) == predicted_vectors.size(1)
+    assert predicted_vectors.size(0) == raw_states.size(0) == state_ids.numel() == update_mask.numel()
+
+    batch_size = predicted_vectors.size(0)
+    hidden = predicted_vectors.size(1)
+    raw_elems = raw_states.size(1) * raw_states.size(2)
+    max_elems = max(hidden, raw_elems)
+    state_ids = state_ids.to(device=predicted_vectors.device, dtype=torch.long)
+    update_mask = update_mask.to(device=predicted_vectors.device, dtype=torch.bool)
+    grid = (triton.cdiv(max_elems, block), batch_size)
+    _decode_concept_state_update_kernel[grid](
+        last_raw_state_cache,
+        last_final_state_cache,
+        predicted_vectors,
+        raw_states,
+        state_ids,
+        update_mask,
+        *last_raw_state_cache.stride(),
+        *last_final_state_cache.stride(),
+        *predicted_vectors.stride(),
+        *raw_states.stride(),
+        HIDDEN=hidden,
+        RAW_ELEMS=raw_elems,
+        BLOCK=block,
+        num_warps=8,
+    )

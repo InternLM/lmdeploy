@@ -22,6 +22,19 @@ def _flatten_decode_position_ids(position_ids: Tensor, batch_size: int, device: 
 class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
     """Torch fallback implementation of ConceptLM runtime operations."""
 
+    @staticmethod
+    def _decode_kv_cache_rows(k_cache: Tensor,
+                              block_offsets: Tensor,
+                              kv_seqlens: Tensor) -> tuple[Tensor, Tensor]:
+        """Return cache block ids and page offsets for one slot per row."""
+        block_size = k_cache.size(1)
+        kv_seqlens = kv_seqlens.to(device=block_offsets.device, dtype=torch.long).clamp(min=1)
+        slot_ids = kv_seqlens - 1
+        block_idx = torch.div(slot_ids, block_size, rounding_mode='floor')
+        page_offsets = torch.remainder(slot_ids, block_size)
+        block_ids = block_offsets.to(dtype=torch.long).gather(1, block_idx.view(-1, 1)).view(-1)
+        return block_ids, page_offsets
+
     def decode_chunk_state_update(
         self,
         chunk_source_state_cache: Tensor,
@@ -77,6 +90,54 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
             if state_id >= 0:
                 chunk_source_state_cache[state_id].copy_(next_rows[batch_idx])
         return concept_input_states, next_rows, update_mask
+
+    def decode_kv_cache_snapshot(
+        self,
+        k_cache: Tensor,
+        v_cache: Tensor,
+        block_offsets: Tensor,
+        kv_seqlens: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Snapshot one decode KV slot per batch row."""
+        block_ids, page_offsets = self._decode_kv_cache_rows(k_cache, block_offsets, kv_seqlens)
+        return k_cache[block_ids, page_offsets].clone(), v_cache[block_ids, page_offsets].clone()
+
+    def decode_kv_cache_restore(
+        self,
+        k_cache: Tensor,
+        v_cache: Tensor,
+        saved_k: Tensor,
+        saved_v: Tensor,
+        block_offsets: Tensor,
+        kv_seqlens: Tensor,
+        restore_mask: Tensor,
+    ) -> None:
+        """Restore one decode KV slot for masked batch rows."""
+        block_ids, page_offsets = self._decode_kv_cache_rows(k_cache, block_offsets, kv_seqlens)
+        restore_mask = restore_mask.to(device=k_cache.device, dtype=torch.bool).view(-1, 1, 1)
+        current_k = k_cache[block_ids, page_offsets]
+        current_v = v_cache[block_ids, page_offsets]
+        k_cache[block_ids, page_offsets] = torch.where(restore_mask, saved_k, current_k)
+        v_cache[block_ids, page_offsets] = torch.where(restore_mask, saved_v, current_v)
+
+    def decode_concept_state_update(
+        self,
+        last_raw_state_cache: Tensor,
+        last_final_state_cache: Tensor,
+        predicted_vectors: Tensor,
+        raw_states: Tensor,
+        state_ids: Tensor,
+        update_mask: Tensor,
+    ) -> None:
+        """Write final/raw concept states for masked decode rows."""
+        state_ids = state_ids.to(device=predicted_vectors.device, dtype=torch.long).reshape(-1)
+        update_mask = update_mask.to(device=predicted_vectors.device, dtype=torch.bool).reshape(-1)
+        for batch_idx in range(state_ids.numel()):
+            state_id = int(state_ids[batch_idx])
+            if state_id < 0 or not bool(update_mask[batch_idx]):
+                continue
+            last_final_state_cache[state_id].copy_(predicted_vectors[batch_idx].to(last_final_state_cache.dtype))
+            last_raw_state_cache[state_id].copy_(raw_states[batch_idx].to(last_raw_state_cache.dtype))
 
 
 class DefaultConceptLMRuntimeOpsBuilder(ConceptLMRuntimeOpsBuilder):
