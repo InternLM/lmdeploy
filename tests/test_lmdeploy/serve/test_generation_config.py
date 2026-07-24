@@ -20,7 +20,6 @@ _DEFAULTS = GenerationConfig()
 
 class _FakeEngineConfig:
     logprobs_mode = None
-    enable_return_routed_experts = False
 
 
 class _FakeSessionManager:

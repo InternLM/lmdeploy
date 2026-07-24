@@ -7,7 +7,7 @@ chat ``messages``, or a string/list ``prompt`` (e.g. dapo-math-17k). List-type
 aggregates TTFT/ITL/TPOT metrics, and writes table plus report artifacts for concurrency/RPS sweeps.
 
 Generation options include ``--output-tokens`` (``max_completion_tokens``),
-``--ignore-eos``, ``--return-token-ids``, ``--return-routed-experts``, ``--return-indexer-topk``,
+``--ignore-eos``, ``--return-token-ids``, ``--return-routed-experts``,
 ``--return-logprob``, and ``--logprobs`` / ``--top-logprobs``.
 """
 
@@ -131,17 +131,13 @@ def init_shared_store() -> Any:
     return _shared_store_actor
 
 
-async def fetch_shared_output(shared_store: Any, key: str) -> Any:
-    """Fetch a large replay output without blocking the event loop."""
+async def fetch_routed_experts(shared_store: Any, key: str) -> Any:
+    """Fetch routed_experts from shared_store without blocking the event
+    loop."""
     import ray
 
     ref = shared_store.get.remote(key)
     return await asyncio.to_thread(ray.get, ref)
-
-
-async def fetch_routed_experts(shared_store: Any, key: str) -> Any:
-    """Backward-compatible routed-expert fetch helper."""
-    return await fetch_shared_output(shared_store, key)
 
 
 def _split_csv(value: str | None) -> list[str] | None:
