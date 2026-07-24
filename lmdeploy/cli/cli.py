@@ -167,7 +167,12 @@ class CLI:
 
         kwargs = convert_args(args)
         speculative_config = get_speculative_config(args)
-        to_remove = ['speculative_algorithm', 'speculative_draft_model', 'speculative_num_draft_tokens']
+        to_remove = [
+            'speculative_algorithm',
+            'speculative_draft_model',
+            'speculative_num_draft_tokens',
+            'speculative_dflash_block_size',
+        ]
         for key in to_remove:
             kwargs.pop(key)
         kwargs['speculative_config'] = speculative_config

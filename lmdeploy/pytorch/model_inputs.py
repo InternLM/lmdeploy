@@ -476,6 +476,9 @@ class BuildModelContext:
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
     max_batch_size: int = 0
+    target_aux_hidden_state_layers: tuple[int, ...] = ()
+    speculative_mask_token_id: int | None = None
+    requires_target_inputs_embeds: bool = True
 
     @property
     def deep_ep_max_tokens_per_rank(self) -> int:

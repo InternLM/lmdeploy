@@ -555,6 +555,9 @@ class ModelConfig:
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
 
+        if spec_method == 'dflash':
+            model_config.model_paradigm = 'ar_spec'
+
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):
             model_config.eos_token_id = [model_config.eos_token_id]
@@ -638,6 +641,8 @@ class SpecDecodeConfig:
     num_speculative_tokens: int = 1
     model_config: ModelConfig = None
     dist_config: DistConfig = field(default_factory=DistConfig)
+    target_layer_ids: tuple[int, ...] | None = None
+    mask_token_id: int | None = None
 
     @classmethod
     def from_config(
@@ -653,9 +658,9 @@ class SpecDecodeConfig:
         hf_overrides: dict[str, Any] = None,
         dist_config: DistConfig = None,
     ):
-        model = model or target_model
+        draft_model = model or target_model
         dist_config = dist_config or DistConfig()
-        model_config = ModelConfig.from_pretrained(model,
+        model_config = ModelConfig.from_pretrained(draft_model,
                                                    trust_remote_code=trust_remote_code,
                                                    dtype=dtype,
                                                    dist_config=dist_config,
@@ -666,6 +671,42 @@ class SpecDecodeConfig:
                                                    hf_overrides=hf_overrides,
                                                    device_type=target_cache_cfg.device_type,
                                                    )
+        target_layer_ids = None
+        mask_token_id = None
+        if method == 'dflash':
+            from lmdeploy.pytorch.spec_decode.dflash_utils import (
+                parse_dflash_config,
+                validate_dflash_cache_config,
+                validate_dflash_runtime_config,
+            )
+            validate_dflash_cache_config(target_cache_cfg)
+            validate_dflash_runtime_config(cache_config=target_cache_cfg)
+            if target_model is None:
+                raise ValueError('DFlash requires an explicit target_model for checkpoint compatibility checks.')
+            target_model_config = ModelConfig.from_pretrained(
+                target_model,
+                trust_remote_code=trust_remote_code,
+                dtype=dtype,
+                dist_config=dist_config,
+                is_draft_model=False,
+                spec_method=method,
+                num_spec_tokens=num_speculative_tokens,
+                model_format=model_format,
+                hf_overrides=hf_overrides,
+                device_type=target_cache_cfg.device_type,
+                block_size=target_cache_cfg.block_size,
+            )
+            # Hybrid target configs use ``ModelConfig.num_layers`` for the
+            # number of KV-cache attention layers, while DFlash layer ids
+            # address every transformer layer. Prefer the underlying text
+            # config depth and fall back to the generic ModelConfig field.
+            target_num_layers = getattr(target_model_config.llm_config, 'num_hidden_layers',
+                                        target_model_config.num_layers)
+            target_layer_ids, mask_token_id = parse_dflash_config(
+                model_config.hf_config,
+                num_speculative_tokens,
+                target_num_layers=target_num_layers,
+            )
         cache_config = None
         # include medusa
         no_caches = ['medusa']
@@ -682,12 +723,14 @@ class SpecDecodeConfig:
                                        quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)
         obj = cls(
-            model=model,
+            model=draft_model,
             method=method,
             cache_config=cache_config,
             model_config=model_config,
             dist_config=dist_config,
             num_speculative_tokens=num_speculative_tokens,
+            target_layer_ids=target_layer_ids,
+            mask_token_id=mask_token_id,
         )
         return obj
 

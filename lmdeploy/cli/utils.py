@@ -92,12 +92,16 @@ def get_speculative_config(args):
     """Get speculative config from args."""
     from lmdeploy.messages import SpeculativeConfig
     speculative_config = None
+    dflash_block_size = getattr(args, 'speculative_dflash_block_size', None)
     if args.speculative_algorithm is not None:
         speculative_config = SpeculativeConfig(
             method=args.speculative_algorithm,
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
+            dflash_block_size=dflash_block_size,
         )
+    elif dflash_block_size is not None:
+        raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
     return speculative_config
 
 
@@ -792,7 +796,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'qwen3_5_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'qwen3_5_mtp', 'dflash'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',
@@ -804,6 +808,14 @@ class ArgumentHelper:
                                 type=int,
                                 default=1,
                                 help='The number of speculative tokens to generate per step')
+
+        spec_group.add_argument(
+            '--speculative-dflash-block-size',
+            type=int,
+            default=None,
+            help='DFlash only. Runtime draft block length, including the current target token. '
+            'Overrides --speculative-num-draft-tokens with block_size - 1 proposed tokens and must not exceed '
+            'the DFlash checkpoint block_size.')
 
         return spec_group
 

@@ -105,6 +105,45 @@ deepseek-ai/DeepSeek-V3 \
 --enable-metrics
 ```
 
+### DFlash
+
+对于 DFlash，block size 表示完整的草稿查询/目标验证窗口，其中包含一个当前
+目标 token。因此 block size 为 8 时会提出 7 个新的草稿 token。运行时 block
+size 不能超过草稿模型 checkpoint 中声明的最大值。
+
+#### pipeline
+
+```python
+from lmdeploy import PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+spec_cfg = SpeculativeConfig(
+    method='dflash',
+    model='z-lab/Qwen3.5-35B-A3B-DFlash',
+    dflash_block_size=8,
+)
+pipe = pipeline(
+    'Qwen/Qwen3.5-35B-A3B',
+    backend_config=PytorchEngineConfig(tp=2),
+    speculative_config=spec_cfg,
+)
+```
+
+#### serving
+
+```shell
+lmdeploy serve api_server \
+Qwen/Qwen3.5-35B-A3B \
+--backend pytorch \
+--tp 2 \
+--speculative-algorithm dflash \
+--speculative-draft-model z-lab/Qwen3.5-35B-A3B-DFlash \
+--speculative-dflash-block-size 8
+```
+
+设置 DFlash block size 后，它会覆盖 `--speculative-num-draft-tokens`，
+并将新提出的 token 数设置为 `block_size - 1`。
+
 ## 投机解码与结构化输出
 
 投机解码（MTP）可以与[结构化输出](./structed_output.md)结合使用，使草稿模型提出的 token 也遵循语法约束（如 JSON Schema、正则表达式），从而显著提高接受率。

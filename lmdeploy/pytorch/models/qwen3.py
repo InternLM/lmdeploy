@@ -12,7 +12,7 @@ from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, 
 from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .patch import add_prefix
+from .patch import add_prefix, get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
@@ -265,6 +265,8 @@ class Qwen3model(nn.Module):
                               prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(config.num_hidden_layers)
         ])
+        self.aux_hidden_state_layers: tuple[int, ...] = get_build_model_context().target_aux_hidden_state_layers
+        self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
@@ -294,6 +296,7 @@ class Qwen3model(nn.Module):
         rotary_pos_emb = (cos, sin)
 
         # decoding
+        aux_hidden_states = []
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
@@ -304,10 +307,14 @@ class Qwen3model(nn.Module):
                 residual=residual,
                 attn_metadata=attn_metadata,
             )
+            if idx in self._aux_hidden_state_layers_set:
+                aux_hidden_states.append(hidden_states if residual is None else hidden_states + residual)
 
         # norm
         hidden_states, _ = self.norm(hidden_states, residual)
 
+        if len(aux_hidden_states) > 0:
+            return dict(hidden_states=hidden_states, aux_hidden_states=torch.cat(aux_hidden_states, dim=-1))
         return hidden_states
 
     def get_input_embeddings(self):
@@ -366,6 +373,14 @@ class Qwen3ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
+
+    def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor], input_ids: torch.Tensor, **kwargs):
+        """Return Qwen3 target outputs captured by a decode graph."""
+        outputs = super().get_outputs_cudagraph(output_buffers, input_ids, **kwargs)
+        aux_hidden_states = output_buffers.get('aux_hidden_states')
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states[:, :input_ids.size(-1)]
+        return outputs
 
     def prepare_inputs_for_generation(
         self,

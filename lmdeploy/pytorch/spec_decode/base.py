@@ -59,6 +59,15 @@ class BaseSpecModelAgent:
     def is_enabled(self):
         return self._enabled
 
+    def requires_target_inputs_embeds(self) -> bool:
+        """Whether the proposer reuses target multimodal input embeddings."""
+        proposer = self.proposer
+        if proposer is not None:
+            return bool(getattr(proposer, 'requires_target_inputs_embeds', True))
+        # Follower ranks do not own a proposer. Keep their target-build
+        # capability consistent with the proposer-owning rank.
+        return self.method != 'dflash'
+
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
         pass
