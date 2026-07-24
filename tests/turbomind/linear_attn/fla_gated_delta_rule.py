@@ -108,7 +108,7 @@ def make_benchmark_task(run: RunCase, inputs: InputTensors, request: BenchmarkRe
         base_row(
             run,
             'fla',
-            cp_mode=request.cp_mode,
+            cp_level=request.cp_level,
             cp_pattern=request.cp_pattern,
             cp_enabled=False,
         ),

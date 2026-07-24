@@ -114,7 +114,7 @@ def _native_plan(run: RunCase, *, chunk_size):
         state_dtype=_native_state_dtype(run.state_dtype),
         mode='recurrent' if recurrent else 'chunked',
         chunk_size=chunk_size,
-        cp_mode='auto',
+        cp_level='all',
         num_head_groups=1,
         heads_per_block=run.input.heads.hv,
     )
@@ -219,7 +219,7 @@ def test_registered_arch_matrix_matches_reference(
         state_dtype=native_state_dtype,
         mode=mode,
         chunk_size=None,
-        cp_mode='off',
+        cp_level='off',
         q_offsets=q_offsets,
         num_head_groups=1,
         heads_per_block=10,
@@ -241,7 +241,7 @@ def test_registered_arch_matrix_matches_reference(
         native_inputs.g, native_inputs.beta,
         state_ptrs=state.ptrs[:, None], q_offsets=q_offsets,
         finished=finished,
-        state_dtype=native_state_dtype, mode=mode, cp_mode='off',
+        state_dtype=native_state_dtype, mode=mode, cp_level='off',
         num_head_groups=1, heads_per_block=10, plan=plan)
     torch.testing.assert_close(actual_o, expected_o, rtol=8e-2, atol=8e-2)
     torch.testing.assert_close(state.storage.float(), expected_state, rtol=8e-2, atol=8e-2)
@@ -282,6 +282,7 @@ def test_auto_plan_binds_one_complete_registered_operation():
 def test_benchmark_chunk_size_defaults_to_auto():
     args = make_parser().parse_args([])
     assert args.chunk_size is None
+    assert args.cp_level == 'all'
     assert args.cp_pattern == 'auto'
 
 
@@ -292,10 +293,16 @@ def test_benchmark_cp_pattern_choices(cp_pattern):
 
 
 def test_cp_pattern_supports_cp_backends():
-    validate_cp_request('auto', 'alternating', 'turbomind')
-    validate_cp_request('auto', 'alternating', 'flashqla')
+    validate_cp_request('all', 'alternating', 'turbomind')
+    validate_cp_request('all', 'alternating', 'flashqla')
     with pytest.raises(ValueError, match='cp_pattern_requires_cp_backend'):
-        validate_cp_request('auto', 'alternating', 'reference')
+        validate_cp_request('all', 'alternating', 'reference')
+
+
+@pytest.mark.parametrize('cp_level', ('all', 'exact', 'off'))
+def test_benchmark_cp_level_choices(cp_level):
+    args = make_parser().parse_args(['--cp-level', cp_level])
+    assert args.cp_level == cp_level
 
 
 def _cp_pattern_inputs(case):
@@ -456,7 +463,7 @@ def test_explicit_recurrent_chunk_one_matches_reference():
         finished=torch.zeros(run.input.real_batch_size, device='cuda', dtype=torch.bool),
         state_dtype=_native_state_dtype(run.state_dtype),
         chunk_size=1,
-        cp_mode='auto',
+        cp_level='all',
     )
 
     torch.testing.assert_close(actual_o, expected_o, rtol=8e-2, atol=8e-2)
@@ -481,7 +488,7 @@ def test_omitted_run_chunk_size_reuses_explicit_chunked_plan():
         state_dtype=_native_state_dtype(run.state_dtype),
         mode='chunked',
         chunk_size=run.chunk_size,
-        cp_mode='off',
+        cp_level='off',
         num_head_groups=1,
         heads_per_block=run.input.heads.hv,
     )
@@ -506,7 +513,7 @@ def test_omitted_run_chunk_size_reuses_explicit_chunked_plan():
         finished=finished,
         state_dtype=_native_state_dtype(run.state_dtype),
         chunk_size=None,
-        cp_mode='off',
+        cp_level='off',
         plan=plan,
     )
 
@@ -545,7 +552,7 @@ def test_bound_chunked_plan_ignores_conflicting_runtime_chunk_size(monkeypatch):
         finished=finished,
         state_dtype=_native_state_dtype(run.state_dtype),
         chunk_size=1,
-        cp_mode='off',
+        cp_level='off',
         out=out,
         state_tma_descs=torch.empty(0, device=device, dtype=torch.uint8),
         plan=plan,
@@ -596,7 +603,7 @@ def test_delta_rule_wrapper_all_generated_smoke_matches_reference(run):
         q_offsets=q_offsets,
         finished=finished,
         state_dtype=state_dtype,
-        cp_mode='auto',
+        cp_level='all',
         out=actual_o,
     )
 
@@ -770,7 +777,7 @@ def test_finished_sequence_produces_output_without_storing_state(mode):
         native_inputs.q, native_inputs.k, native_inputs.v,
         native_inputs.g, native_inputs.beta,
         state_ptrs=state.ptrs[:, None], q_offsets=q_offsets, finished=finished,
-        state_dtype='f32', mode=mode, cp_mode='off',
+        state_dtype='f32', mode=mode, cp_level='off',
         num_head_groups=1, heads_per_block=10)
     torch.testing.assert_close(actual_o, expected_o, rtol=8e-2, atol=8e-2)
     torch.testing.assert_close(state.storage[0].float(), initial[0], rtol=0, atol=0)
@@ -813,7 +820,7 @@ def test_one_chunked_plan_reuses_grouped_state_across_layer_offsets():
         state_dtype='f32',
         mode='chunked',
         chunk_size=None,
-        cp_mode='off',
+        cp_level='off',
         q_offsets=q_offsets,
         num_head_groups=3,
         heads_per_block=4,
@@ -848,7 +855,8 @@ def test_one_chunked_plan_reuses_grouped_state_across_layer_offsets():
 
 @cuda_required
 @pytest.mark.skipif(non_sm90_or_sm120, reason='optimized GDR target requires SM90 or SM120')
-def test_cp_matches_normalized_reference():
+@pytest.mark.parametrize('cp_level', ('exact', 'all'))
+def test_cp_matches_normalized_reference(cp_level):
     chunk_size = 32 if is_sm120 else 64
     seq_len = 513 * chunk_size if is_sm120 else 4096
     case = InputCase(
@@ -872,13 +880,14 @@ def test_cp_matches_normalized_reference():
         state_dtype='f32',
         mode='chunked',
         chunk_size=None,
-        cp_mode='auto',
+        cp_level=cp_level,
         q_offsets=q_offsets,
         num_head_groups=1,
         heads_per_block=8,
     )
     assert plan['problem']['chunk_size'] == chunk_size
     assert plan['cp']['enabled'] is True
+    assert plan['cp']['cp_level'] == cp_level
     expected_o, expected_state = chunk_gated_delta_rule_fwd(
         inputs.q, inputs.k, inputs.v, inputs.g, inputs.beta,
         initial_state=initial, chunk_size=chunk_size)
@@ -913,3 +922,16 @@ def test_cp_matches_normalized_reference():
     )
     torch.testing.assert_close(finished_o, expected_o, rtol=8e-2, atol=8e-2)
     torch.testing.assert_close(state.storage.float(), initial, rtol=0, atol=0)
+
+    disabled_plan = bridge.plan(
+        native_inputs,
+        state_dtype='f32',
+        mode='chunked',
+        chunk_size=None,
+        cp_level='off',
+        q_offsets=q_offsets,
+        num_head_groups=1,
+        heads_per_block=8,
+    )
+    assert disabled_plan['cp']['enabled'] is False
+    assert disabled_plan['cp']['cp_level'] == 'off'
