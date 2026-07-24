@@ -559,7 +559,8 @@ class LLavaInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalData(data=pixel_values,
                                      start=offset,
                                      end=offset + num_pad,
-                                     meta=dict(image_token_id=image_token_id))
+                                     meta=dict(image_token_id=image_token_id),
+                                     content_hash=input_mm.get('content_hash'))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
@@ -838,7 +839,8 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalData(data=pixel_values,
                                      start=offset,
                                      end=offset + num_pad,
-                                     meta=dict(image_sizes=image_sizes, image_token_id=image_token_id))
+                                     meta=dict(image_sizes=image_sizes, image_token_id=image_token_id),
+                                     content_hash=input_mm.get('content_hash'))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

@@ -846,7 +846,8 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
                                  start=offset[0],
                                  end=offset[1],
                                  mrope_pos_ids=mrope_pos_ids,
-                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id),
+                                 content_hash=input_mm.get('content_hash'))
         return mm_data
 
     def _make_video_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
@@ -867,7 +868,8 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
                                      grid_thw=video_grid_thw,
                                      video_token_id=video_token_id,
                                      second_per_grid=input_mm.get('second_per_grid'),
-                                 ))
+                                 ),
+                                 content_hash=input_mm.get('content_hash'))
         return mm_data
 
     def _make_audio_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
@@ -896,7 +898,8 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
                                  meta=dict(
                                      audio_token_id=audio_token_id,
                                      audio_feature_lengths=audio_feature_lengths,
-                                 ))
+                                 ),
+                                 content_hash=input_mm.get('content_hash'))
         return mm_data
 
     def preprocess_input(self,

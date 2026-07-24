@@ -23,7 +23,6 @@ from lmdeploy.utils import get_logger, get_model
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
 from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
-from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
 from ..strategies import build_strategy_factory
 from .base import EngineBase
@@ -416,8 +415,6 @@ class Engine(EngineBase):
 
             input_ids = result.input_ids
             input_multimodals = result.input_multimodals
-            if self.cache_config.enable_prefix_caching:
-                input_multimodals = ensure_multimodal_content_hashes(input_multimodals)
 
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals

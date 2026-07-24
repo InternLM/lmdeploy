@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.hasher import make_multimodal_content_hash
 
 if TYPE_CHECKING:
     from lmdeploy.vl.model.base import MultimodalSpecialTokens
@@ -201,6 +202,26 @@ def _expand_bundled_audio_items(item: dict, token_id: int) -> list[dict]:
                 audio_token_id=token_id,
             ))
     return expanded_mm_items
+
+
+def attach_multimodal_content_hashes(result):
+    """Attach content hashes to new-style and legacy preprocess outputs."""
+    if isinstance(result, dict):
+        mm_items = result.get('multimodal') or []
+    else:
+        mm_items = result
+        if result and 'role' in result[0]:
+            mm_items = []
+            for message in result:
+                if message.get('role') == 'preprocess':
+                    mm_items = message.get('content') or []
+                    break
+
+    for item in mm_items:
+        content_view = {key: value for key, value in item.items() if key not in ('content_hash', 'offset')}
+        item['content_hash'] = make_multimodal_content_hash(content_view)
+
+    return result
 
 
 # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
