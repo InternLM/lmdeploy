@@ -53,7 +53,10 @@ def test_prepare_dsa_indexer_q_matches_unfused_quantization(rope_interleaved, he
                                            rope_interleaved=rope_interleaved)
     q_pe, q_nope = q.split([64, 64], dim=-1)
     k_pe = q.new_empty(tokens, 1, 64)
-    q_pe, _ = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, interleaved=rope_interleaved)
+    if rope_interleaved:
+        cos = cos[..., :32]
+        sin = sin[..., :32]
+    q_pe, _ = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, complex_mode=rope_interleaved)
     q_ref = torch.cat([q_pe, q_nope], dim=-1)
     q_ref, scale_ref = per_token_group_quant_fp8(q_ref.reshape(-1, 128),
                                                  128,

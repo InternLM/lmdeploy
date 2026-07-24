@@ -172,7 +172,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float | None = 0.0
     frequency_penalty: float | None = 0.0
     user: str | None = None
-    reasoning_effort: Literal['low', 'medium', 'high'] | None = None
+    reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
     do_preprocess: bool | None = True

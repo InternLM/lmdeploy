@@ -9,8 +9,24 @@ from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
 class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
-    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
+    def forward(self,
+                query: Tensor,
+                key: Tensor,
+                cos: Tensor,
+                sin: Tensor,
+                inplace: bool = True,
+                complex_mode: bool = False):
         """forward."""
+        if complex_mode:
+            from ..default.apply_rotary_emb import DefaultApplyRotaryEmbImpl
+            return DefaultApplyRotaryEmbImpl().forward(
+                query,
+                key,
+                cos,
+                sin,
+                inplace=inplace,
+                complex_mode=True,
+            )
         if inplace:
             q_embed = None
             k_embed = None
@@ -24,9 +40,6 @@ class DlinferApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
     """Apply rotary embedding implementation builder."""
 
     @staticmethod
-    def build(interleaved: bool = False):
+    def build():
         """Build implementation."""
-        if interleaved:
-            from ..default.apply_rotary_emb import DefaultApplyRotaryEmbImpl
-            return DefaultApplyRotaryEmbImpl(interleaved=True)
         return DlinferApplyRotaryEmbImpl()

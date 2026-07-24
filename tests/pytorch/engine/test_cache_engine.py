@@ -7,10 +7,23 @@ import pytest
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.config import CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BlockCacheSpec, CacheConfig, ModelConfig, StateCacheSpec
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine import CacheEngine, NamedCacheView, StateCacheEngine
+
+
+def _make_model_config(**kwargs):
+    model_config = ModelConfig(hidden_size=16,
+                               num_layers=4,
+                               num_attention_heads=2,
+                               num_key_value_heads=2,
+                               bos_token_id=1,
+                               eos_token_id=[2],
+                               head_dim=8)
+    for key, value in kwargs.items():
+        setattr(model_config, key, value)
+    return model_config
 
 
 def test_bf16_sparse_mla_cache_layout():
@@ -111,6 +124,122 @@ def test_pd_migration_rejects_split_kernel_blocks():
 
     with pytest.raises(RuntimeError, match='PD migration does not support block_size != kernel_block_size'):
         asyncio.run(cache_engine.migrate(migration_inputs))
+
+
+def test_named_block_cache_specs_allocate_only_declared_layers():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    model_config = _make_model_config(
+        use_standard_kv_cache=False,
+        block_cache_specs=[
+            BlockCacheSpec('r4', [1, 3], (40, ), torch.float32),
+            BlockCacheSpec('r128', [2], (96, ), torch.float32),
+        ],
+    )
+
+    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=3,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+
+    assert [tuple(pool.shape) for pool in mem_pool] == [(2, 3, 256), (1, 3, 512)]
+    assert [tuple(cache.shape) for cache in caches] == [(2, 3, 40), (1, 3, 96)]
+    assert CacheEngine.get_cache_block_size(cache_config, model_config) == 1024
+    assert CacheEngine._get_block_cache_layer_maps(model_config) == {
+        'r4': {
+            1: 0,
+            3: 1,
+        },
+        'r128': {
+            2: 0,
+        },
+    }
+
+
+def test_layered_state_cache_specs_allocate_only_declared_layers():
+    state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 3])]
+    state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
+
+    mem_pool, caches = StateCacheEngine.allocate_caches(num_caches=2,
+                                                        state_shapes=state_shapes,
+                                                        state_specs=state_specs,
+                                                        num_layers=4,
+                                                        device='cpu')
+
+    assert tuple(mem_pool.shape) == (2, 768)
+    assert tuple(caches[0].shape) == (2, 2, 96)
+    assert StateCacheEngine.get_cache_state_size(state_shapes, state_specs=state_specs, num_layers=4) == 768
+    assert StateCacheEngine._get_state_cache_layer_maps(state_specs, 4) == {'subset': {1: 0, 3: 1}}
+
+
+def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+
+    duplicate_layer = _make_model_config(
+        use_standard_kv_cache=False,
+        block_cache_specs=[BlockCacheSpec('dup', [1, 1], (1, ), torch.float32)],
+    )
+    with pytest.raises(ValueError, match='duplicated'):
+        CacheEngine.allocate_caches(num_blocks=1,
+                                    model_config=duplicate_layer,
+                                    cache_config=cache_config,
+                                    world_size=1,
+                                    device='meta')
+
+    out_of_range = [StateCacheSpec('bad', (1, ), torch.float32, layer_ids=[4])]
+    with pytest.raises(ValueError, match='out of range'):
+        StateCacheEngine.allocate_caches(num_caches=1,
+                                         state_shapes=[((1, ), torch.float32)],
+                                         state_specs=out_of_range,
+                                         num_layers=4,
+                                         device='meta')
+
+    empty_state_layers = [StateCacheSpec('empty', (1, ), torch.float32, layer_ids=[])]
+    with pytest.raises(ValueError, match='must not be empty'):
+        StateCacheEngine.allocate_caches(num_caches=1,
+                                         state_shapes=[((1, ), torch.float32)],
+                                         state_specs=empty_state_layers,
+                                         num_layers=4,
+                                         device='meta')
+
+
+def test_deepseek_v4_cache_accessors_resolve_layer_scoped_rows():
+    from lmdeploy.pytorch.models.deepseek_v4 import V4Caches
+
+    state_cache = torch.arange(24).view(2, 3, 4)
+    block_cache = torch.arange(40).view(2, 5, 4)
+    caches = V4Caches(
+        named_state_caches=NamedCacheView({'state': state_cache}, {'state': {1: 0, 3: 1}}),
+        block_caches=NamedCacheView({'block': block_cache}, {'block': {1: 0, 3: 1}}),
+    )
+
+    assert torch.equal(caches.state_cache('state', 3), state_cache[1])
+    assert torch.equal(caches.block_cache('block', 1), block_cache[0])
+    with pytest.raises(RuntimeError, match='does not own cache'):
+        caches.state_cache('state', 2)
+
+
+def test_named_cache_properties_return_dict_without_layer_maps():
+    block_cache_engine = object.__new__(CacheEngine)
+    block_cache_engine._cache_names = ['k_cache']
+    block_cache_engine._cache_list = [torch.empty(1)]
+    block_cache_engine._block_cache_layer_maps = {}
+
+    state_cache_engine = object.__new__(StateCacheEngine)
+    state_cache_engine._state_cache_names = ['state_0']
+    state_cache_engine._state_caches = [torch.empty(1)]
+    state_cache_engine._state_cache_layer_maps = {}
+
+    assert type(block_cache_engine.block_caches) is dict
+    assert type(state_cache_engine.named_state_caches) is dict
 
 
 def _make_state_cache_engine(num_caches: int = 4):

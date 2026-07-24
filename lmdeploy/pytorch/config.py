@@ -339,6 +339,27 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
 
 
 @dataclass
+class BlockCacheSpec:
+    """Spec for a named block-scoped cache (e.g. compressed KV)."""
+    name: str
+    layer_ids: list[int]
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    alignment: int = 256
+
+
+@dataclass
+class StateCacheSpec:
+    """Spec for a named sequence-scoped state cache (e.g. compressor
+    scratch)."""
+    name: str
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    layer_ids: list[int] | None = None
+    alignment: int = 256
+
+
+@dataclass
 class ModelConfig:
     """Config of model."""
 
@@ -380,6 +401,13 @@ class ModelConfig:
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
 
+    # Named cache specs for models that need multiple block/state caches.
+    # V4 uses these instead of cache_shapes/states_shapes for formal resource declaration.
+    block_cache_specs: list[BlockCacheSpec] = field(default_factory=list)
+    state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
+    use_standard_kv_cache: bool = True
+    post_build_func: Callable[['ModelConfig', int], None] | None = None
+
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
 
@@ -392,6 +420,9 @@ class ModelConfig:
 
     # flags mark if this model use mrope
     use_mrope: bool = False
+
+    # update cache config
+    update_cache_config_func: Any = None
 
     @property
     def use_mla_fp8_cache(self):
@@ -479,6 +510,8 @@ class ModelConfig:
         # add quant_config
         model_config.quant_config = QuantizationConfig.from_config(hf_config)
         model_config.block_size = block_size
+        if model_config.post_build_func is not None:
+            model_config.post_build_func(model_config, block_size)
         return model_config
 
     @classmethod

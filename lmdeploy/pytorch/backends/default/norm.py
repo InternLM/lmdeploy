@@ -18,9 +18,10 @@ class DefaultRMSNormImpl(RMSNormImpl):
             x = x + residual
             residual = x
         x = x.to(torch.float32)
-        variance = x.pow(2).mean(-1, keepdim=True)
+        variance = x.square().mean(-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.eps)
-        x = weight * x.to(input_dtype)
+        x = weight.to(torch.float32) * x
+        x = x.to(input_dtype)
         if residual is None:
             return x
         return x, residual

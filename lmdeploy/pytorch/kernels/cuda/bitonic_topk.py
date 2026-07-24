@@ -96,39 +96,84 @@ def argsort(x, ids, dim: tl.constexpr = None, descending: tl.constexpr = core.CO
 
 
 @triton.jit
+def _partial_argsort(x, ids, eff_n_dims: tl.constexpr, descending: tl.constexpr):
+    """Bitonic sort limited to eff_n_dims stages.
+
+    After eff_n_dims stages, the first 2^eff_n_dims elements are sorted in the specified order.  Remaining elements form
+    alternating-sorted groups of size 2^eff_n_dims (their content is irrelevant when they are all threshold padding).
+    Only safe when the consumer (kernel1) does not merge across blocks, i.e. when seqlen <= K.
+    """
+    n_dims: tl.constexpr = _log2(x.shape[-1])
+    for i in tl.static_range(1, eff_n_dims + 1):
+        x, ids = _bitonic_merge(x, ids, i, 2 if i < eff_n_dims else descending, n_dims)
+    return x, ids
+
+
+@triton.jit
 def _bitonic_topk_kernel0(score_ptr,
                           seqlen_ptr,
                           out_ptr,
                           ids_ptr,
                           stride_m,
+                          num_tokens,
+                          num_blocks_per_row,
                           K: tl.constexpr,
                           fill: tl.constexpr,
                           descending: tl.constexpr = core.CONSTEXPR_0,
                           sorted: tl.constexpr = True):
-    """kernel0."""
-    batch_id = tl.program_id(0).to(tl.int64)
-    block_id = tl.program_id(1).to(tl.int64)
+    """Kernel0 with persistent threads.
 
-    seqlen = tl.load(seqlen_ptr + batch_id)
-
-    if block_id * K >= seqlen:
-        return
-
+    Grid: (num_ctas,). Each CTA iterates over (batch_id, block_id) tasks
+    with stride = num_programs(0), so work is evenly distributed without
+    atomics. Invalid tasks (where block_id * K >= seqlen) are skipped with
+    minimal cost (one seqlen load + integer compare).
+    """
+    prog_id = tl.program_id(0).to(tl.int64)
+    prog_stride = tl.num_programs(0).to(tl.int64)
     offs_k = tl.arange(0, K)
-    origin_ids = block_id * K + offs_k
-    # num scores should less than max(int32), I guess
-    origin_ids = origin_ids.to(tl.int32)
-    mask = (origin_ids < seqlen)
-    score_ptrs = score_ptr + batch_id * stride_m + origin_ids
-    scores = tl.load(score_ptrs, mask=mask, other=-1e6)
-    ids = tl.where(mask, origin_ids, fill)
-    ids = origin_ids
+    total_work = num_tokens * num_blocks_per_row
 
-    if sorted or (seqlen > K):
-        scores, ids = argsort(scores, ids, 0, descending)
+    for task_id in tl.range(prog_id, total_work, prog_stride):
+        batch_id = task_id // num_blocks_per_row
+        block_id = task_id % num_blocks_per_row
 
-    tl.store(out_ptr + batch_id * stride_m + origin_ids, scores, mask=mask)
-    tl.store(ids_ptr + batch_id * stride_m + origin_ids, ids, mask=mask)
+        seqlen = tl.load(seqlen_ptr + batch_id)
+        if block_id * K < seqlen:
+            origin_ids = block_id * K + offs_k
+            origin_ids = origin_ids.to(tl.int32)
+            mask = origin_ids < seqlen
+            score_ptrs = score_ptr + batch_id * stride_m + origin_ids
+            scores = tl.load(score_ptrs, mask=mask, other=-1e6)
+            ids = tl.where(mask, origin_ids, fill)
+
+            if seqlen > K:
+                scores, ids = argsort(scores, ids, 0, descending)
+            elif sorted:
+                if seqlen <= 1:
+                    pass
+                elif K >= 2 and seqlen <= 2:
+                    scores, ids = _partial_argsort(scores, ids, 1, descending)
+                elif K >= 4 and seqlen <= 4:
+                    scores, ids = _partial_argsort(scores, ids, 2, descending)
+                elif K >= 8 and seqlen <= 8:
+                    scores, ids = _partial_argsort(scores, ids, 3, descending)
+                elif K >= 16 and seqlen <= 16:
+                    scores, ids = _partial_argsort(scores, ids, 4, descending)
+                elif K >= 32 and seqlen <= 32:
+                    scores, ids = _partial_argsort(scores, ids, 5, descending)
+                elif K >= 64 and seqlen <= 64:
+                    scores, ids = _partial_argsort(scores, ids, 6, descending)
+                elif K >= 128 and seqlen <= 128:
+                    scores, ids = _partial_argsort(scores, ids, 7, descending)
+                elif K >= 256 and seqlen <= 256:
+                    scores, ids = _partial_argsort(scores, ids, 8, descending)
+                elif K >= 512 and seqlen <= 512:
+                    scores, ids = _partial_argsort(scores, ids, 9, descending)
+                else:
+                    scores, ids = argsort(scores, ids, 0, descending)
+
+            tl.store(out_ptr + batch_id * stride_m + origin_ids, scores, mask=mask)
+            tl.store(ids_ptr + batch_id * stride_m + origin_ids, ids, mask=mask)
 
 
 @triton.jit
@@ -219,19 +264,27 @@ def bitonic_topk(scores: torch.Tensor,
     tmp_scores = torch.empty_like(scores)
     tmp_ids = torch.empty_like(scores, dtype=torch.int32)
     num_warps = triton.cdiv(k, 4096)
-    grid = (num_tokens, triton.cdiv(max_kv_len, k))
-    _bitonic_topk_kernel0[grid](scores,
-                                repeat_kv_seqlens,
-                                tmp_scores,
-                                tmp_ids,
-                                stride_m=scores.stride(0),
-                                K=k,
-                                fill=fill,
-                                descending=1 if descending else 0,
-                                sorted=sorted,
-                                num_warps=num_warps)
+    # Persistent kernel0: fixed grid of CTAs iterate over tasks with stride.
+    # Avoids launching num_tokens * ceil(N/K) CTAs that mostly early-return.
+    from lmdeploy.pytorch.kernels.cuda.utils import get_device_props
+    props = get_device_props(scores.device.index)
+    num_ctas = props['multi_processor_count'] * 8
+    num_blocks_per_row = triton.cdiv(max_kv_len, k)
+    _bitonic_topk_kernel0[(num_ctas, )](scores,
+                                        repeat_kv_seqlens,
+                                        tmp_scores,
+                                        tmp_ids,
+                                        stride_m=scores.stride(0),
+                                        num_tokens=num_tokens,
+                                        num_blocks_per_row=num_blocks_per_row,
+                                        K=k,
+                                        fill=fill,
+                                        descending=1 if descending else 0,
+                                        sorted=sorted,
+                                        num_warps=num_warps)
 
     out = kv_seqlens.new_empty((num_tokens, k), dtype=torch.int32)
+    num_warps_k1 = 16 if k >= 512 else triton.cdiv(k, 256) * 2
     _bitonic_topk_kernel1[(num_tokens, )](tmp_scores,
                                           tmp_ids,
                                           repeat_kv_seqlens,
@@ -241,5 +294,5 @@ def bitonic_topk(scores: torch.Tensor,
                                           fill=fill,
                                           descending=1 if descending else 0,
                                           threshold=threshold,
-                                          num_warps=num_warps * 2)
+                                          num_warps=num_warps_k1)
     return out

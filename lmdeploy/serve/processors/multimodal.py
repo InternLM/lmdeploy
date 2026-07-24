@@ -213,7 +213,7 @@ class MultimodalProcessor:
                                do_preprocess: bool,
                                adapter_name: str | None = None,
                                tools: list[object] | None = None,
-                               reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                               reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
                                chat_template_kwargs: dict | None = None,
                                media_io_kwargs: dict[str, Any] | None = None,
                                mm_processor_kwargs: dict[str, Any] | None = None,
@@ -368,7 +368,7 @@ class MultimodalProcessor:
                                      do_preprocess: bool,
                                      adapter_name: str,
                                      tools: list[object] | None = None,
-                                     reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                                     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
                                      chat_template_kwargs: dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
@@ -382,10 +382,15 @@ class MultimodalProcessor:
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        chat_template_kwargs = chat_template_kwargs or {}
+        chat_template_kwargs = dict(chat_template_kwargs or {})
+        template_reasoning_effort = reasoning_effort
+        if template_reasoning_effort is None:
+            template_reasoning_effort = chat_template_kwargs.pop('reasoning_effort', None)
+        else:
+            chat_template_kwargs.pop('reasoning_effort', None)
         prompt = chat_template.messages2prompt(prompt,
                                                tools=tools,
-                                               reasoning_effort=reasoning_effort,
+                                               reasoning_effort=template_reasoning_effort,
                                                **chat_template_kwargs)
         if prompt is None:
             raise ValueError(

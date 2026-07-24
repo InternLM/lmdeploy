@@ -13,6 +13,9 @@ def register_config(model_type: str):
     if model_type == 'deepseek_v32':
         from .configuration_deepseek_v32 import DeepseekV32Config
         AutoConfig.register(DeepseekV32Config.model_type, DeepseekV32Config)
+    elif model_type == 'deepseek_v4':
+        from .configuration_deepseek_v4 import DeepseekV4Config
+        AutoConfig.register(DeepseekV4Config.model_type, DeepseekV4Config)
     else:
         logger.debug(f'Can not register config for model_type: {model_type}')
 
@@ -32,5 +35,5 @@ def config_from_pretrained(pretrained_model_name_or_path: str, **kwargs):
         register_config(model_type)
         try:
             return AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
-        except Exception:
+        except Exception as e:
             return PretrainedConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)

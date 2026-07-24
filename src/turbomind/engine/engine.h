@@ -41,6 +41,10 @@ public:
 
     void Start();
 
+    // Wait for the engine loop to observe gateway shutdown. This intentionally
+    // leaves the executor queues open until every TP peer has exited its loop.
+    void Join();
+
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics();
 
 private:

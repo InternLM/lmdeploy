@@ -222,13 +222,17 @@ class Indexer(nn.Module):
                                                      is_tp=False)
         self.k_norm = LayerNorm(self.head_dim, device=device)
         self.softmax_scale = self.head_dim**-0.5
-        self.apply_rotary_pos_emb = ApplyRotaryEmb(interleaved=self.rope_interleave)
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
         self.indexer_topk = IndexerTopKFP8(self.index_topk, self.softmax_scale, block_size=128, fill=-1)
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
         """Apply the indexer's RoPE layout."""
         cos, sin = freqs_cis
+        if self.rope_interleave:
+            half_size = cos.size(-1) // 2
+            cos = cos[..., :half_size]
+            sin = sin[..., :half_size]
         k_pe = k_pe[..., None, :]
         return self.apply_rotary_pos_emb(
             q_pe,
@@ -236,6 +240,7 @@ class Indexer(nn.Module):
             cos,
             sin,
             inplace=False,
+            complex_mode=self.rope_interleave,
         )
 
     def forward(self,

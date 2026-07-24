@@ -16,43 +16,63 @@ def rotate_half(x):
     return out
 
 
-def rotate_interleaved(x):
-    """Rotate adjacent pairs of hidden dimensions."""
+def rotate_complex(x):
+    """Rotates adjacent element pairs for complex-number RoPE."""
+    x_even = x[..., 0::2]
+    x_odd = x[..., 1::2]
     out = torch.empty_like(x)
-    out[..., ::2] = -x[..., 1::2]
-    out[..., 1::2] = x[..., ::2]
+    out[..., 0::2] = -x_odd
+    out[..., 1::2] = x_even
     return out
+
+
+def _prepare_cos_sin(query: Tensor, cos: Tensor, sin: Tensor, complex_mode: bool):
+    """Prepare cos/sin tables for broadcasting over attention heads."""
+    if complex_mode:
+        feature_dim = query.size(-1)
+        if cos.size(-1) * 2 == feature_dim:
+            cos = cos.repeat_interleave(2, dim=-1)
+        if sin.size(-1) * 2 == feature_dim:
+            sin = sin.repeat_interleave(2, dim=-1)
+        if cos.size(-1) != feature_dim or sin.size(-1) != feature_dim:
+            raise ValueError('complex RoPE expects cos/sin width to be head_dim or head_dim // 2, '
+                             f'but got cos={cos.size(-1)}, sin={sin.size(-1)}, head_dim={feature_dim}.')
+
+    if cos.dim() == query.dim() - 1:
+        cos = cos.unsqueeze(-2)
+    if sin.dim() == query.dim() - 1:
+        sin = sin.unsqueeze(-2)
+    return cos, sin
 
 
 class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
-    def __init__(self, interleaved: bool = False):
-        self.interleaved = interleaved
-
-    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
+    def forward(self,
+                query: Tensor,
+                key: Tensor,
+                cos: Tensor,
+                sin: Tensor,
+                inplace: bool = True,
+                complex_mode: bool = False):
         """forward."""
-        unsqueeze_dim = -2
-        rotate = rotate_half
-        if self.interleaved:
-            half_size = cos.size(-1) // 2
-            cos = cos[..., :half_size].repeat_interleave(2, dim=-1)
-            sin = sin[..., :half_size].repeat_interleave(2, dim=-1)
-            rotate = rotate_interleaved
-        cos = cos.unsqueeze(unsqueeze_dim)
-        sin = sin.unsqueeze(unsqueeze_dim)
+        if complex_mode:
+            rotate_fn = rotate_complex
+        else:
+            rotate_fn = rotate_half
+        cos, sin = _prepare_cos_sin(query, cos, sin, complex_mode)
         if inplace:
             q_embed = query
             k_embed = key
-            q_sin = rotate(query) * sin
+            q_sin = rotate_fn(query) * sin
             q_embed.mul_(cos)
             q_embed.add_(q_sin)
-            k_sin = rotate(key) * sin
+            k_sin = rotate_fn(key) * sin
             k_embed.mul_(cos)
             k_embed.add_(k_sin)
         else:
-            q_embed = (query * cos) + (rotate(query) * sin)
-            k_embed = (key * cos) + (rotate(key) * sin)
+            q_embed = (query * cos) + (rotate_fn(query) * sin)
+            k_embed = (key * cos) + (rotate_fn(key) * sin)
         return q_embed, k_embed
 
 
@@ -60,6 +80,6 @@ class DefaultApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
     """Apply rotary embedding implementation builder."""
 
     @staticmethod
-    def build(interleaved: bool = False):
+    def build():
         """Build implementation."""
-        return DefaultApplyRotaryEmbImpl(interleaved=interleaved)
+        return DefaultApplyRotaryEmbImpl()
