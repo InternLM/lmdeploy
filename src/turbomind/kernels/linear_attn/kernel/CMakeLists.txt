@@ -19,15 +19,13 @@ set(LINEAR_ATTN_GDR_SM120_KERNEL_SOURCES
         sm_120/kkt_solve.cu
         sm_120/recurrent.cu)
 
-set(LINEAR_ATTN_GDR_PRE_SM90_ARCHS "")
+set(LINEAR_ATTN_GDR_PRE_SM90_ARCHS "${CMAKE_CUDA_ARCHITECTURES}")
 set(LINEAR_ATTN_GDR_SM90_ARCHS "")
 set(LINEAR_ATTN_GDR_SM100_PLUS_ARCHS "")
 foreach(arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
     if(arch MATCHES "^([0-9]+)(a)?(-real)?$")
         set(arch_number "${CMAKE_MATCH_1}")
-        if(arch_number LESS 90)
-            list(APPEND LINEAR_ATTN_GDR_PRE_SM90_ARCHS "${arch}")
-        elseif(arch_number EQUAL 90)
+        if(arch_number EQUAL 90)
             list(APPEND LINEAR_ATTN_GDR_SM90_ARCHS "${arch}")
         elseif(arch_number GREATER_EQUAL 100 AND arch_number LESS 1000)
             list(APPEND LINEAR_ATTN_GDR_SM100_PLUS_ARCHS "${arch}")
