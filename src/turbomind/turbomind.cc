@@ -164,6 +164,9 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
 
     // Copy config into the EngineConfig base of engine_param_
     static_cast<EngineConfig&>(engine_param_) = config;
+    if (engine_param_.state_dtype == kNull) {
+        engine_param_.state_dtype = engine_param_.data_type;
+    }
 
     phases_ = config.async_ ? 2 : 1;
 
