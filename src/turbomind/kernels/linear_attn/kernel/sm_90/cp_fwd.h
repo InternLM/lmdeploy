@@ -4,6 +4,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/common.h"
+#include "src/turbomind/kernels/linear_attn/kernel/sm_90/pdl.h"
 
 namespace turbomind::linear_attn::delta_rule {
 namespace {
@@ -213,6 +214,7 @@ struct Sm90CorrectInitialStates {
             if (tid != kCorrectInitialStatesProducerTid0) {
                 return;
             }
+            detail::WaitForPdlDependency();
             for (int segment_id = first_segment_id; segment_id + 1 < last_segment_id; ++segment_id) {
                 const int iter       = segment_id - first_segment_id;
                 const int stage      = iter & 1;
@@ -252,6 +254,7 @@ struct Sm90CorrectInitialStates {
                                                  segment_id);
                 }
             }
+            detail::TriggerPdlDependents();
             return;
         }
 
@@ -318,6 +321,9 @@ struct Sm90CorrectInitialStates {
                 break;
             }
 
+            if (store_iter == 0) {
+                detail::WaitForPdlDependency();
+            }
             const int  iter     = segment_id - first_segment_id;
             const int  stage    = iter & 1;
             const int  phase    = (iter >> 1) & 1;
@@ -447,20 +453,23 @@ void LaunchSm90CorrectInitialStatesTyped(core::Tensor&              cp_state,
     static_cast<void>(cp);
     SetCorrectInitialStatesSharedMemoryLimit<StateT, block_dv>(smem_bytes);
 
-    Sm90CorrectInitialStatesKernel<StateT, block_dv>
-        <<<grid, block, smem_bytes, stream>>>(reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
-                                              reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
-                                              cp_sequence_starts.data<int32_t>(),
-                                              finished.data<bool>(),
-                                              cp_fallback.data<bool>(),
-                                              segment_state.data<__nv_bfloat16>(),
-                                              segment_m.data<__nv_bfloat16>(),
-                                              cp_state.data<float>(),
-                                              state_layer_offset,
-                                              problem.num_head_groups,
-                                              problem.heads_per_block,
-                                              problem.sequence_num);
-    TM_CUDA_CHECK(cudaGetLastError());
+    detail::LaunchPdlKernel(grid,
+                            block,
+                            smem_bytes,
+                            stream,
+                            Sm90CorrectInitialStatesKernel<StateT, block_dv>,
+                            reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
+                            reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
+                            cp_sequence_starts.data<int32_t>(),
+                            finished.data<bool>(),
+                            cp_fallback.data<bool>(),
+                            segment_state.data<__nv_bfloat16>(),
+                            segment_m.data<__nv_bfloat16>(),
+                            cp_state.data<float>(),
+                            state_layer_offset,
+                            problem.num_head_groups,
+                            problem.heads_per_block,
+                            problem.sequence_num);
 }
 
 }  // namespace
