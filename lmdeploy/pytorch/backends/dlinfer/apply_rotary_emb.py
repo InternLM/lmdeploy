@@ -17,16 +17,7 @@ class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
                 inplace: bool = True,
                 complex_mode: bool = False):
         """forward."""
-        if complex_mode:
-            from ..default.apply_rotary_emb import DefaultApplyRotaryEmbImpl
-            return DefaultApplyRotaryEmbImpl().forward(
-                query,
-                key,
-                cos,
-                sin,
-                inplace=inplace,
-                complex_mode=True,
-            )
+        assert not complex_mode, 'Dlinfer backend does not support complex_mode'
         if inplace:
             q_embed = None
             k_embed = None
