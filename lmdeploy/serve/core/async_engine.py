@@ -53,6 +53,7 @@ class GenOut:
     last_hidden_state: Any = None
     cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
+    multimodal_outputs: dict[str, Any] | None = None
     cached_tokens: int = 0
 
     def to_response(self, index: int = 0) -> Response:
@@ -70,6 +71,7 @@ class GenOut:
                         last_hidden_state=self.last_hidden_state,
                         logits=self.logits,
                         routed_experts=self.routed_experts,
+                        multimodal_outputs=self.multimodal_outputs,
                         cached_tokens=self.cached_tokens,
                         index=index)
 
@@ -680,6 +682,7 @@ class AsyncEngine:
                                  token_ids=res,
                                  routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
+                                 multimodal_outputs=outputs.multimodal_outputs,
                                  cached_tokens=cached_tokens)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
@@ -697,7 +700,13 @@ class AsyncEngine:
                         finish_reason = 'abort'
                         metrics_processor.increase_failed_requests('abort')
                     else:
-                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        if outputs.multimodal_outputs is not None:
+                            # forecast-only responses return multimodal payloads with no text tokens.
+                            finish_reason = 'stop'
+                        elif len(outputs.token_ids) == 0:
+                            finish_reason = 'stop'
+                        else:
+                            finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
                         metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
@@ -733,6 +742,7 @@ class AsyncEngine:
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
+                                 multimodal_outputs=outputs.multimodal_outputs,
                                  cached_tokens=cached_tokens)
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '

@@ -42,6 +42,7 @@ class VisionModel(ABC):
         'ts_values': Modality.TIME_SERIES,
         'ts_sr': Modality.TIME_SERIES,
         'ts_lens': Modality.TIME_SERIES,
+        'ts_channels': Modality.TIME_SERIES,
     }
 
     # processor output attributes that carry the main feature tensor
@@ -191,6 +192,8 @@ class VisionModel(ABC):
                 'time series processor is not defined for time series input'
             assert not raw_images and not raw_videos and not raw_audios, \
                 'time series is not compatible with image/video/audio input'
+            if len(raw_time_series) != 1:
+                raise ValueError('Only one time-series input is supported per request.')
             self.tokenizer = self.processor.tokenizer
             time_series_processor = self.time_series_processor
             kwargs['time_series'] = raw_time_series
@@ -234,8 +237,7 @@ class VisionModel(ABC):
         # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
 
-        result = dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
-        return result
+        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
 
     @staticmethod
     def has_input_ids(messages: list[dict]) -> bool:

@@ -228,6 +228,7 @@ class EngineInstance(EngineInstanceBase):
 
                 cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
                 req_metrics = resp.data.get('req_metrics', None) if resp.data else None
+                multimodal_outputs = resp.data.get('multimodal_outputs', None) if resp.data else None
                 logprobs = resp.data.pop('logprobs', None) if resp.data else None
 
                 if resp.type == ResponseType.SUCCESS:
@@ -238,6 +239,7 @@ class EngineInstance(EngineInstanceBase):
                                        token_ids[output_offset:].tolist(),
                                        cache_block_ids=cache_block_ids,
                                        req_metrics=req_metrics,
+                                       multimodal_outputs=multimodal_outputs,
                                        logprobs=logprobs)
                     output_offset = len(token_ids)
                 elif resp.type in (ResponseType.FINISH, ResponseType.CANCEL):
@@ -265,6 +267,7 @@ class EngineInstance(EngineInstanceBase):
                                        cache_block_ids=cache_block_ids,
                                        req_metrics=req_metrics,
                                        routed_experts=routed_experts,
+                                       multimodal_outputs=multimodal_outputs,
                                        logprobs=logprobs,
                                        ce_loss=ce_loss)
                     break

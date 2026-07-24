@@ -94,6 +94,7 @@ class InputsMakerConfig:
     is_ssm: bool = False
     dp: int = 1
     spec_decoding: bool = False
+    model_paradigm: str = 'ar'
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
@@ -116,6 +117,7 @@ class InputsMakerConfig:
             role=cache_config.role,
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
+            model_paradigm=model_config.model_paradigm,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
             **kwargs,
@@ -805,6 +807,24 @@ class InputsMakerAsync:
         local_adapter_ids = model_inputs.seq_length.new_tensor(local_adapter_ids)
         model_inputs.local_adapter_ids = local_adapter_ids
 
+    def _make_multimodal_output_metas(self, messages: 'SeqList'):
+        """Build per-request multimodal output metadata."""
+        if self.config.spec_decoding or self.config.model_paradigm != 'ar':
+            return None
+
+        output_metas = []
+        for msg in messages:
+            sampling_param = msg.sampling_param
+            output_meta = None
+            if sampling_param.ts_forecast:
+                output_meta = dict(
+                    time_series_forecast=dict(
+                        enabled=True,
+                        forecast_horizon=sampling_param.forecast_horizon,
+                    ))
+            output_metas.append(output_meta)
+        return output_metas if any(meta is not None for meta in output_metas) else None
+
     def _map_to_kernel_block_offsets(self, block_offsets: torch.Tensor):
         """Converts manager block_offsets to kernel block_offsets.
 
@@ -869,6 +889,9 @@ class InputsMakerAsync:
         # model_metas
         model_metas = [msg.model_meta for msg in messages]
 
+        # multimodal output metas
+        multimodal_output_metas = self._make_multimodal_output_metas(messages)
+
         # create model inputs for all required fields
         model_inputs = ModelInputs(
             input_ids=input_ids,
@@ -881,6 +904,7 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
+            multimodal_output_metas=multimodal_output_metas,
         )
 
         # adapters
@@ -947,6 +971,9 @@ class InputsMakerAsync:
         # model_metas
         model_metas = [seq.model_meta]
 
+        # multimodal output metas
+        multimodal_output_metas = self._make_multimodal_output_metas([seq])
+
         kv_seqlens = q_seqlens + history_lens
         max_kv_seqlen = kv_seqlens.item()
         sum_kv_seqlen = max_kv_seqlen
@@ -962,6 +989,7 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
+            multimodal_output_metas=multimodal_output_metas,
             is_chunk=True,
         )
 

@@ -240,6 +240,14 @@ class IterationStats:
 
         new_generation_tokens = len(outputs.token_ids)
         if new_generation_tokens == 0:
+            if outputs.status != ResponseType.SUCCESS:
+                # time series forecast-only responses can finish without emitting text tokens.
+                req_stats.finish_reason = outputs.status
+                req_stats.finish_time = self.iteration_timestamp
+                if req_stats.first_token_time == 0:
+                    req_stats.first_token_time = self.iteration_timestamp
+                    req_stats.lastest_token_time = self.iteration_timestamp
+                    self.prompt_tokens = req_stats.prompt_tokens
             return
 
         self.new_generation_tokens = new_generation_tokens

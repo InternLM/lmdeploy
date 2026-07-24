@@ -110,6 +110,9 @@ class GenerationConfig:
             Must be non-negative; values below 0 are treated as 0.
         repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
             Must be non-negative; values below 0 are treated as 0.
+        forecast_horizon: Optional horizon used by time series forecast outputs.
+            Forecast routing is controlled by ``enable_forecasting``.
+        enable_forecasting: Whether to route supported time-series requests to forecast output.
     """
 
     n: int = 1
@@ -150,6 +153,10 @@ class GenerationConfig:
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
+
+    # time series forecasting
+    forecast_horizon: int | None = None
+    enable_forecasting: bool | None = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -200,6 +207,9 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        assert (self.forecast_horizon is None
+                or (type(self.forecast_horizon) is int and self.forecast_horizon > 0)), \
+            'forecast_horizon must be a positive integer'
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0
@@ -597,6 +607,7 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
+    multimodal_outputs: dict[str, Any] | None = None
     cached_tokens: int = 0
 
     def __str__(self):
@@ -627,6 +638,7 @@ class Response:
         fields.extend(_format_tensor('logits', self.logits))
         fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
         fields.extend(_format_tensor('routed_experts', self.routed_experts))
+        fields.append(f'multimodal_outputs={self.multimodal_outputs}')
         return '\n'.join(fields)
 
     def extend(self, other: 'Response') -> 'Response':
@@ -653,6 +665,8 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.multimodal_outputs = other.multimodal_outputs
+        self.cached_tokens = other.cached_tokens
         return self
 
 
@@ -739,6 +753,7 @@ class EngineOutput:
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
+    multimodal_outputs: dict[str, Any] | None = None
     ce_loss: float = None
 
 

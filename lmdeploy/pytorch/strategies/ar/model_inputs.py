@@ -36,6 +36,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
         local_adapter_ids=inputs.local_adapter_ids,
         model_metas=model_metas,
+        multimodal_output_metas=inputs.multimodal_output_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -77,6 +78,13 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     if inputs.model_metas is not None and other.model_metas is not None:
         model_metas = inputs.model_metas + other.model_metas
 
+    # multimodal output metas
+    multimodal_output_metas = None
+    if inputs.multimodal_output_metas is not None or other.multimodal_output_metas is not None:
+        input_metas = inputs.multimodal_output_metas or [None] * inputs.seq_length.numel()
+        other_metas = other.multimodal_output_metas or [None] * other.seq_length.numel()
+        multimodal_output_metas = input_metas + other_metas
+
     # ssm
     state_offsets = None
     if inputs.state_offsets is not None:
@@ -100,6 +108,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         sum_kv_seqlen=inputs.sum_kv_seqlen + other.sum_kv_seqlen,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
+        multimodal_output_metas=multimodal_output_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )
@@ -164,6 +173,11 @@ def index_select_model_inputs(inputs: ModelInputs,
     if model_metas is not None and indice_cpu is not None:
         model_metas = [model_metas[i] for i in indice_cpu]
 
+    # multimodal output metas
+    multimodal_output_metas = inputs.multimodal_output_metas
+    if multimodal_output_metas is not None and indice_cpu is not None:
+        multimodal_output_metas = [multimodal_output_metas[i] for i in indice_cpu]
+
     # for ssm
     state_offsets = inputs.state_offsets
     if state_offsets is not None:
@@ -195,6 +209,7 @@ def index_select_model_inputs(inputs: ModelInputs,
         sum_kv_seqlen=sum_kv_seqlen,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
+        multimodal_output_metas=multimodal_output_metas,
         state_offsets=state_offsets,
         state_prefix_cache_save_src_offsets=state_prefix_cache_save_src_offsets,
         state_prefix_cache_save_offsets=state_prefix_cache_save_offsets,

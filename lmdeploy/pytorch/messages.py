@@ -147,6 +147,10 @@ class SamplingParam:
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
 
+    # time series forecast
+    forecast_horizon: int | None = None
+    ts_forecast: bool = False
+
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
         """From gen config."""
@@ -241,6 +245,8 @@ class SamplingParam:
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
             repetition_ngram_threshold=repetition_ngram_threshold,
+            forecast_horizon=gen_config.forecast_horizon,
+            ts_forecast=gen_config.enable_forecasting,
         )
 
 

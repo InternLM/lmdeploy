@@ -42,6 +42,7 @@ from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
 from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
+from .ts_forecast import TSForecastPostprocessor
 
 logger = get_logger('lmdeploy')
 
@@ -94,6 +95,7 @@ class BatchedOutputs:
     stop_pos: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     model_metas: list[dict[str, Any]] = None
+    multimodal_outputs: list[dict[str, Any] | None] | None = None
     logprobs: BatchedLogProbs | None = None
     new_token_timestamp: int = 0
     extra_outputs: ExtraOutputs | None = None
@@ -362,12 +364,13 @@ class BaseModelAgent:
         # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
+        # time series forecast postprocessor
+        self.ts_forecast_postprocessor = TSForecastPostprocessor()
+
     def reset_runtime_state(self):
         """Discard request-local decode and chunk state after sleep cancels
         sessions."""
-        self.step_inputs = self.strategy_factory.build_step_inputs()
-        self._prev_chunk_output = None
-        self._prev_chunk_last_logit = None
+        self._init_runtime_state()
         self.spec_agent.reset_runtime_state()
 
     @contextmanager
@@ -679,7 +682,8 @@ class BaseModelAgent:
                                             return_ce_loss: bool = False,
                                             seq_length: torch.Tensor = None,
                                             all_routed_experts: Any = None,
-                                            extra_inputs: ExtraInputs = None):
+                                            extra_inputs: ExtraInputs = None,
+                                            model_outputs: dict | None = None):
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
@@ -715,6 +719,17 @@ class BaseModelAgent:
             inputs=inputs,
             extra_inputs=extra_inputs,
         )
+        model_outputs = self.ts_forecast_postprocessor.update_chunk_state(inputs, model_outputs or {})
+        (
+            output_token_ids,
+            stopped,
+            multimodal_outputs,
+        ) = self.ts_forecast_postprocessor.maybe_update_outputs_after_sampling(
+            model=self.patched_model.get_model(),
+            model_outputs=model_outputs,
+            output_token_ids=output_token_ids,
+            stopped=stopped,
+        )
 
         # send output
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
@@ -726,6 +741,7 @@ class BaseModelAgent:
                            stopped=stopped,
                            stop_pos=stop_pos,
                            model_metas=model_metas,
+                           multimodal_outputs=multimodal_outputs,
                            logprobs=logprobs,
                            all_routed_experts=all_routed_experts,
                            extra_outputs=extra_outputs,
@@ -740,6 +756,7 @@ class BaseModelAgent:
         extra_inputs: ExtraInputs,
         sampling_inputs: SamplingInputs,
         need_broadcast_next: bool,
+        model_outputs: dict | None = None,
     ):
         rank = self.rank
         # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
@@ -880,6 +897,7 @@ class BaseModelAgent:
                     seq_length=seq_length,
                     all_routed_experts=all_routed_experts,
                     extra_inputs=extra_inputs,
+                    model_outputs=output,
                 ))
         else:
             (
@@ -894,6 +912,7 @@ class BaseModelAgent:
                     extra_inputs,
                     sampling_inputs,
                     need_broadcast_next,
+                    model_outputs=output,
                 ))
 
         if inputs.is_dummy:
