@@ -72,8 +72,13 @@ class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
         hidden_size = int(hf_config.hidden_size)
         state_dtype = _get_concept_state_dtype(hf_config)
         concept_encoder_read_sources = max(enc_layers - 1, 0)
+        # Decode accumulates the current chunk for every state needed when a
+        # chunk boundary emits one concept. Row 0 is the final encoder hidden
+        # used as concept-predictor input; following rows are encoder raw states
+        # consumed by concept-read-encoder residual routes.
+        concept_chunk_state_sources = 1 + concept_encoder_read_sources
         model_config.states_shapes = [
-            ((concept_encoder_read_sources, hidden_size), state_dtype),
+            ((concept_chunk_state_sources, hidden_size), state_dtype),
             ((concept_layers, hidden_size), state_dtype),
             ((hidden_size, ), state_dtype),
         ]

@@ -156,6 +156,22 @@ class ConceptChunkStateUpdateResult:
     concept_update_mask: torch.Tensor
     valid_state_mask: torch.Tensor
     state_ids: torch.Tensor
+    safe_state_ids: torch.Tensor
+
+
+@dataclass
+class ConceptDecodeMetadata:
+    """Fixed-layout decode metadata derived once from engine inputs.
+
+    Decode is always represented as the engine's fixed ``[1, batch]`` token
+    layout at the model boundary and flattened to ``[batch]`` / ``[batch, H]``
+    only inside ConceptLM helpers.
+    """
+
+    position_ids: torch.Tensor
+    state_ids: torch.Tensor
+    safe_state_ids: torch.Tensor
+    valid_state_mask: torch.Tensor
 
 
 @dataclass
@@ -368,6 +384,7 @@ def _concept_decode_chunk_state_update(
         concept_update_mask=concept_update_mask,
         valid_state_mask=valid_state_mask,
         state_ids=state_ids,
+        safe_state_ids=safe_state_ids,
     )
 
 
@@ -1646,10 +1663,12 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             hidden_states = inputs_embeds
 
         if concept_metadata.is_decoding:
-            # TODO: wire the decode control flow using ConceptLMRuntimeOps
-            # state-cache updates. Keeping the previous placeholder behavior
-            # avoids mixing decode-state work into the prefill patch.
-            return hidden_states
+            return self._forward_decode(
+                hidden_states,
+                position_ids,
+                concept_metadata,
+                concept_caches,
+            )
 
         hidden_states, prefill_position_ids = self._normalize_prefill_inputs(
             hidden_states,
@@ -1729,6 +1748,7 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             concept_update_mask=update_mask,
             valid_state_mask=state_ids >= 0,
             state_ids=state_ids,
+            safe_state_ids=state_ids.clamp(min=0),
         )
 
     def support_cuda_graph(
@@ -1740,12 +1760,13 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """Disable CUDA graph until ConceptLM decode state update is graph-safe.
+        """Disable CUDA graph until ConceptLM concept-boundary updates are graph-safe.
 
         ``states_shapes`` makes the engine allocate graph-padded state ids. The
-        current top-level ConceptLM helpers still include dense/reference-only
-        chunk operations, so allowing the default decode graph capture would
-        bake in the wrong execution contract.
+        eager decode path updates chunk-source state through a backend op, but
+        still compacts boundary concept rows dynamically before concept
+        predictor attention. Capturing that would bake in a batch-specific
+        concept update shape.
         """
         return False
 
@@ -1788,6 +1809,290 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
         hidden_states = hidden_states[0].contiguous()
         return hidden_states, position_ids[0].to(device=hidden_states.device)
+
+    def _normalize_decode_inputs(self, hidden_states: torch.Tensor, position_ids: torch.Tensor):
+        """Normalize LMDeploy decode inputs to one flat row per active request."""
+        if hidden_states.dim() != 3 or hidden_states.size(0) != 1:
+            raise NotImplementedError(
+                f'ConceptLM decode expects fixed engine layout [1, batch, hidden], '
+                f'got {tuple(hidden_states.shape)}.')
+        batch_size = hidden_states.size(1)
+        position_ids = _flatten_decode_position_ids(position_ids, batch_size).to(device=hidden_states.device)
+        if position_ids.numel() != batch_size:
+            raise ValueError(f'Expected {batch_size} decode position ids, got {position_ids.numel()}.')
+        return hidden_states[0].contiguous(), position_ids
+
+    @staticmethod
+    def _build_decode_metadata(position_ids: torch.Tensor,
+                               state_ids: torch.Tensor | None,
+                               batch_size: int,
+                               device: torch.device) -> ConceptDecodeMetadata:
+        """Build fixed-shape decode metadata from engine state ids."""
+        if state_ids is None:
+            raise RuntimeError('ConceptLM decode requires state_ids.')
+        state_ids = state_ids.to(device=device, dtype=torch.long).reshape(-1)
+        if state_ids.numel() != batch_size:
+            raise ValueError(f'Expected {batch_size} decode state ids, got {state_ids.numel()}.')
+        valid_state_mask = state_ids >= 0
+        return ConceptDecodeMetadata(
+            position_ids=position_ids,
+            state_ids=state_ids,
+            safe_state_ids=state_ids.clamp(min=0),
+            valid_state_mask=valid_state_mask,
+        )
+
+    @staticmethod
+    def _select_decode_state_rows(state_cache: torch.Tensor,
+                                  decode_metadata: ConceptDecodeMetadata) -> torch.Tensor:
+        """Gather state-cache rows and zero out padded decode rows."""
+        rows = state_cache.index_select(0, decode_metadata.safe_state_ids)
+        mask_shape = (decode_metadata.valid_state_mask.size(0), ) + (1, ) * (rows.dim() - 1)
+        valid_mask = decode_metadata.valid_state_mask.view(mask_shape)
+        return torch.where(valid_mask, rows, torch.zeros_like(rows))
+
+    def _decode_concept_read_mask(self, decode_metadata: ConceptDecodeMetadata) -> torch.Tensor:
+        """Return rows whose current decode token should read a cached concept."""
+        repeat_slots = self._repeat_slot_ids(
+            decode_metadata.position_ids,
+            int(self.config.concept_chunk_size),
+            bool(getattr(self.config, 'concept_shift_feature', True)),
+        )
+        return decode_metadata.valid_state_mask & (repeat_slots >= 0)
+
+    def _build_decode_chunk_source_states(self,
+                                          hidden_states: torch.Tensor,
+                                          encoder_raw_states: list[torch.Tensor]) -> torch.Tensor:
+        """Build current per-row states accumulated until the next concept boundary.
+
+        Row 0 is the final encoder hidden, used as concept-predictor input when
+        a boundary is reached. Remaining rows mirror the prefill
+        ``encoder_raw_states[:-1]`` route sources.
+        """
+        source_states = [hidden_states]
+        source_states.extend(encoder_raw_states[:-1])
+        return torch.stack(tuple(source_states), dim=1)
+
+    @staticmethod
+    def _decode_concept_position_ids(position_ids: torch.Tensor, chunk_size: int) -> torch.Tensor:
+        """Return reference RoPE positions for concept rows emitted at decode boundaries."""
+        return (position_ids - int(chunk_size) + 1).clamp(min=0)
+
+    def _build_concept_decode_metadata_eager(self,
+                                             token_attn_metadata: Any,
+                                             decode_metadata: ConceptDecodeMetadata,
+                                             boundary_indices: torch.Tensor):
+        """Build dynamic concept-stream decode metadata for boundary rows.
+
+        This is the eager-only bridge: it compacts rows whose token completed a
+        concept chunk and makes concept KV positions advance on the compressed
+        concept timeline. CUDA graph support should replace this with a
+        fixed-shape backend metadata object/op instead of calling ``nonzero``
+        and constructing variable-batch attention metadata here.
+        """
+        if token_attn_metadata is None or getattr(token_attn_metadata, 'block_offsets', None) is None:
+            raise RuntimeError('ConceptLM decode concept update requires token attention metadata.')
+
+        device = decode_metadata.position_ids.device
+        num_boundary_rows = boundary_indices.numel()
+        q_seqlens = getattr(token_attn_metadata, 'q_seqlens', None)
+        q_start_loc = getattr(token_attn_metadata, 'q_start_loc', None)
+        kv_seqlens = getattr(token_attn_metadata, 'kv_seqlens', None)
+        if q_seqlens is None or q_start_loc is None or kv_seqlens is None:
+            raise RuntimeError('ConceptLM decode concept update requires q/q_start/kv sequence metadata.')
+        q_dtype = q_seqlens.dtype
+        q_start_dtype = q_start_loc.dtype
+        kv_dtype = kv_seqlens.dtype
+
+        concept_q_seqlens = torch.ones((num_boundary_rows, ), dtype=q_dtype, device=device)
+        concept_q_start_loc = torch.arange(num_boundary_rows, dtype=q_start_dtype, device=device)
+        concept_cu_seqlens = F.pad(torch.cumsum(concept_q_seqlens, dim=0, dtype=torch.int32), (1, 0))
+        concept_kv_seqlens = torch.div(
+            decode_metadata.position_ids.index_select(0, boundary_indices) + 1,
+            int(self.config.concept_chunk_size),
+            rounding_mode='floor',
+        ).to(dtype=kv_dtype)
+
+        updates = dict(
+            is_decoding=True,
+            block_offsets=token_attn_metadata.block_offsets.index_select(0, boundary_indices),
+            q_start_loc=concept_q_start_loc,
+            q_seqlens=concept_q_seqlens,
+            kv_seqlens=concept_kv_seqlens,
+            cu_seqlens_q=concept_cu_seqlens,
+            cu_seqlens_k=concept_cu_seqlens,
+        )
+        if hasattr(token_attn_metadata, 'kv_start_loc'):
+            updates['kv_start_loc'] = concept_kv_seqlens - concept_q_seqlens.to(dtype=concept_kv_seqlens.dtype)
+        if hasattr(token_attn_metadata, 'kv_flatten_size'):
+            updates['kv_flatten_size'] = num_boundary_rows
+        if hasattr(token_attn_metadata, 'max_q_seqlen'):
+            updates['max_q_seqlen'] = 1
+        if hasattr(token_attn_metadata, 'max_kv_seqlen'):
+            # Decode kernels use kv_seqlens directly. Keep a conservative bound
+            # without reading the dynamic maximum back to host.
+            updates['max_kv_seqlen'] = getattr(token_attn_metadata, 'max_kv_seqlen')
+        if hasattr(token_attn_metadata, 'scheduler_metadata'):
+            updates['scheduler_metadata'] = None
+        if hasattr(token_attn_metadata, 'tile_scheduler_metadata'):
+            updates['tile_scheduler_metadata'] = None
+        if hasattr(token_attn_metadata, 'num_splits'):
+            updates['num_splits'] = None
+        if hasattr(token_attn_metadata, 'fill_seqlens'):
+            updates['fill_seqlens'] = concept_q_seqlens
+        return replace(token_attn_metadata, **updates)
+
+    @staticmethod
+    def _stack_concept_raw_states(concept_raw_states: list[torch.Tensor]) -> torch.Tensor:
+        """Stack raw concept-layer states to ``[rows, concept_layers, hidden]``."""
+        return torch.stack(tuple(concept_raw_states), dim=1)
+
+    def _write_decode_concept_states_eager_(self,
+                                            concept_caches: ConceptCaches,
+                                            decode_metadata: ConceptDecodeMetadata,
+                                            boundary_indices: torch.Tensor,
+                                            predicted_vectors: torch.Tensor,
+                                            concept_raw_states: list[torch.Tensor]):
+        """Write newly emitted concept states to persistent decode caches."""
+        last_final_state = concept_caches.last_final_state
+        last_raw_states = concept_caches.last_raw_states
+        if last_final_state is None or last_raw_states is None:
+            raise RuntimeError('ConceptLM decode concept update requires last concept state caches.')
+        state_ids = decode_metadata.safe_state_ids.index_select(0, boundary_indices)
+        last_final_state.index_copy_(0, state_ids, predicted_vectors.to(dtype=last_final_state.dtype))
+        raw_rows = self._stack_concept_raw_states(concept_raw_states)
+        last_raw_states.index_copy_(0, state_ids, raw_rows.to(dtype=last_raw_states.dtype))
+
+    def _update_decode_concept_states_eager_(self,
+                                             chunk_update: ConceptChunkStateUpdateResult,
+                                             decode_metadata: ConceptDecodeMetadata,
+                                             concept_metadata: ConceptMetadata,
+                                             concept_caches: ConceptCaches):
+        """Emit and cache concept states for decode rows that complete a chunk.
+
+        TODO: replace this dynamic eager bridge with a graph-safe backend op and
+        fixed-shape concept attention metadata. The model-level flow should stay
+        the same: chunk accumulator -> concept predictor on boundary rows ->
+        cached final/raw concept states -> decoder routes.
+        """
+        boundary_indices = torch.nonzero(chunk_update.concept_update_mask, as_tuple=False).flatten()
+        if boundary_indices.numel() == 0:
+            return
+        if concept_caches.concept_past_key_values is None:
+            raise RuntimeError('ConceptLM decode concept update requires concept KV caches.')
+
+        boundary_concept_inputs = chunk_update.concept_input_states.index_select(0, boundary_indices)
+        concept_hidden = self.concept_vq_input_norm(boundary_concept_inputs[:, 0])
+        encoder_concept_states = self.concept_predictor.normalize_encoder_concept_states(
+            boundary_concept_inputs[:, 1:])
+        concept_position_ids = self._decode_concept_position_ids(
+            decode_metadata.position_ids,
+            concept_metadata.chunk_size,
+        ).index_select(0, boundary_indices)
+        concept_attn_metadata = self._build_concept_decode_metadata_eager(
+            concept_metadata.attn_metadata,
+            decode_metadata,
+            boundary_indices,
+        )
+        concept_logits, concept_raw_states = self.concept_predictor(
+            concept_hidden,
+            encoder_concept_states,
+            concept_position_ids,
+            past_key_values=concept_caches.concept_past_key_values,
+            attn_metadata=concept_attn_metadata,
+        )
+        predicted_vectors = self.concept_quantizer(concept_logits)
+        self._write_decode_concept_states_eager_(
+            concept_caches,
+            decode_metadata,
+            boundary_indices,
+            predicted_vectors,
+            concept_raw_states,
+        )
+
+    def _merge_prefill_tail_chunk_states(self,
+                                         source_states: torch.Tensor,
+                                         prefill_metadata: ConceptPrefillMetadata) -> torch.Tensor:
+        """Build per-request partial chunk accumulator rows after prefill."""
+        assert source_states.dim() == 3, (
+            f'Expected source states [total_tokens, num_sources, hidden], got {tuple(source_states.shape)}.')
+        device = source_states.device
+        chunk_size = int(self.config.concept_chunk_size)
+        q_seqlens = prefill_metadata.token_q_seqlens.to(device=device, dtype=torch.long)
+        q_start_loc = prefill_metadata.token_q_start_loc.to(device=device, dtype=torch.long)
+        batch_size = q_seqlens.size(0)
+        tail_lens = torch.remainder(q_seqlens, chunk_size)
+        tail_lens = torch.where(q_seqlens < chunk_size, q_seqlens, tail_lens)
+        tail_lens = torch.where(q_seqlens > 0, tail_lens, torch.zeros_like(tail_lens))
+        has_tail = tail_lens > 0
+
+        tail_rows = source_states.new_zeros((batch_size, source_states.size(1), source_states.size(2)))
+        if source_states.size(0) == 0:
+            return tail_rows
+        merge_method = getattr(self.config, 'concept_chunk_merge_method', 'meanpooling')
+        if merge_method == 'first':
+            token_ids = q_start_loc + q_seqlens - tail_lens
+            token_ids = token_ids.clamp(min=0, max=max(source_states.size(0) - 1, 0))
+            rows = source_states[token_ids]
+            return torch.where(has_tail.view(batch_size, 1, 1), rows, tail_rows)
+        if merge_method == 'last':
+            token_ids = q_start_loc + q_seqlens - 1
+            token_ids = token_ids.clamp(min=0, max=max(source_states.size(0) - 1, 0))
+            rows = source_states[token_ids]
+            return torch.where(has_tail.view(batch_size, 1, 1), rows, tail_rows)
+
+        token_ids = torch.arange(prefill_metadata.num_tokens_total, dtype=torch.long, device=device)
+        cu_q_seqlens = F.pad(torch.cumsum(q_seqlens, dim=0), (1, 0))
+        token_seq = torch.searchsorted(cu_q_seqlens[1:], token_ids, right=True)
+        token_pos = token_ids - cu_q_seqlens[token_seq]
+        token_tail_start = q_seqlens[token_seq] - tail_lens[token_seq]
+        valid_tail = (tail_lens[token_seq] > 0) & (token_pos >= token_tail_start)
+        weighted_source = source_states * valid_tail.to(dtype=source_states.dtype).view(-1, 1, 1)
+        tail_rows.index_add_(0, token_seq, weighted_source)
+        return tail_rows
+
+    def _write_prefill_state_caches_eager_(self,
+                                           concept_caches: ConceptCaches,
+                                           concept_metadata: ConceptMetadata,
+                                           prefill_metadata: ConceptPrefillMetadata,
+                                           source_states: torch.Tensor,
+                                           predicted_vectors: torch.Tensor,
+                                           concept_raw_states: list[torch.Tensor]):
+        """Seed decode state caches from a completed prefill forward."""
+        if concept_caches.state_caches is None or concept_metadata.state_ids is None:
+            return
+        chunk_source_state = concept_caches.chunk_source_state
+        last_raw_states = concept_caches.last_raw_states
+        last_final_state = concept_caches.last_final_state
+        if chunk_source_state is None or last_raw_states is None or last_final_state is None:
+            raise RuntimeError('ConceptLM prefill state init requires all ConceptLM state caches.')
+
+        state_ids = concept_metadata.state_ids.to(device=source_states.device, dtype=torch.long).reshape(-1)
+        batch_size = prefill_metadata.token_q_seqlens.numel()
+        if state_ids.numel() != batch_size:
+            raise ValueError(f'Expected {batch_size} prefill state ids, got {state_ids.numel()}.')
+        valid_indices = torch.nonzero(state_ids >= 0, as_tuple=False).flatten()
+        if valid_indices.numel() == 0:
+            return
+
+        valid_state_ids = state_ids.index_select(0, valid_indices)
+        tail_rows = self._merge_prefill_tail_chunk_states(source_states, prefill_metadata)
+        chunk_source_state.index_copy_(0, valid_state_ids,
+                                       tail_rows.index_select(0, valid_indices).to(dtype=chunk_source_state.dtype))
+
+        concept_counts = prefill_metadata.concept_q_seqlens.to(device=source_states.device, dtype=torch.long)
+        concept_start = prefill_metadata.concept_q_start_loc.to(device=source_states.device, dtype=torch.long)
+        concept_valid_mask = (state_ids >= 0) & (concept_counts > 0)
+        concept_indices = torch.nonzero(concept_valid_mask, as_tuple=False).flatten()
+        if concept_indices.numel() == 0:
+            return
+
+        concept_state_ids = state_ids.index_select(0, concept_indices)
+        last_concept_ids = concept_start.index_select(0, concept_indices) + concept_counts.index_select(
+            0, concept_indices) - 1
+        last_final_rows = predicted_vectors.index_select(0, last_concept_ids)
+        last_final_state.index_copy_(0, concept_state_ids, last_final_rows.to(dtype=last_final_state.dtype))
+        raw_rows = self._stack_concept_raw_states(concept_raw_states).index_select(0, last_concept_ids)
+        last_raw_states.index_copy_(0, concept_state_ids, raw_rows.to(dtype=last_raw_states.dtype))
 
     @staticmethod
     def _concept_count_from_seq_len(seq_len: int, chunk_size: int) -> int:
@@ -2057,6 +2362,14 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             attn_metadata=concept_attn_metadata,
         )
         predicted_vectors = self.concept_quantizer(concept_logits)
+        self._write_prefill_state_caches_eager_(
+            concept_caches,
+            concept_metadata,
+            prefill_metadata,
+            self._build_decode_chunk_source_states(hidden_states, encoder_raw_states),
+            predicted_vectors,
+            concept_raw_states,
+        )
         repeated_concepts = self._repeat_shift_packed(predicted_vectors, prefill_metadata)
         decoder_input = self.fusion_tok_norm(hidden_states) + self.fusion_norm_alpha.to(
             hidden_states.dtype) * self.fusion_hl_norm(repeated_concepts.to(hidden_states.dtype))
@@ -2069,6 +2382,85 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             past_key_values=concept_caches.decoder_past_key_values,
             attn_metadata=concept_metadata.attn_metadata,
             prefill_metadata=prefill_metadata,
+        )
+        return final_hidden.unsqueeze(0).contiguous()
+
+    def _forward_decode(self,
+                        hidden_states: torch.Tensor,
+                        position_ids: torch.Tensor,
+                        concept_metadata: ConceptMetadata,
+                        concept_caches: ConceptCaches):
+        """Eager ConceptLM decode path.
+
+        This path is semantically structured for serving but intentionally keeps
+        CUDA graph disabled. Boundary concept updates currently use dynamic row
+        compaction in ``_update_decode_concept_states_eager_``; the stable
+        graph route needs a fixed-shape concept metadata/backend op.
+        """
+        if concept_caches.encoder_past_key_values is None or concept_caches.decoder_past_key_values is None:
+            raise RuntimeError('ConceptLM decode requires encoder and decoder KV caches.')
+        if concept_caches.chunk_source_state is None:
+            raise RuntimeError('ConceptLM decode requires chunk source state cache.')
+        if concept_caches.last_raw_states is None or concept_caches.last_final_state is None:
+            raise RuntimeError('ConceptLM decode requires cached last concept states.')
+
+        hidden_states, decode_position_ids = self._normalize_decode_inputs(hidden_states, position_ids)
+        decode_metadata = self._build_decode_metadata(
+            decode_position_ids,
+            concept_metadata.state_ids,
+            hidden_states.size(0),
+            hidden_states.device,
+        )
+        decode_concept_metadata = replace(
+            concept_metadata,
+            position_ids=decode_position_ids,
+            state_ids=decode_metadata.state_ids,
+        )
+
+        hidden_states, encoder_raw_states = self._encode(
+            hidden_states,
+            decode_position_ids,
+            past_key_values=concept_caches.encoder_past_key_values,
+            attn_metadata=concept_metadata.attn_metadata,
+        )
+        previous_final_concept_state = self._select_decode_state_rows(concept_caches.last_final_state, decode_metadata)
+        previous_concept_raw_state_rows = self._select_decode_state_rows(concept_caches.last_raw_states,
+                                                                         decode_metadata)
+        current_source_states = self._build_decode_chunk_source_states(hidden_states, encoder_raw_states)
+        chunk_update = self._decode_chunk_state_update(
+            current_source_states,
+            decode_concept_metadata,
+            concept_caches,
+        )
+        self._update_decode_concept_states_eager_(
+            chunk_update,
+            decode_metadata,
+            decode_concept_metadata,
+            concept_caches,
+        )
+
+        if bool(getattr(self.config, 'concept_shift_feature', True)):
+            final_concept_state = self._select_decode_state_rows(concept_caches.last_final_state, decode_metadata)
+            concept_raw_state_rows = self._select_decode_state_rows(concept_caches.last_raw_states, decode_metadata)
+        else:
+            final_concept_state = previous_final_concept_state
+            concept_raw_state_rows = previous_concept_raw_state_rows
+        concept_read_mask = self._decode_concept_read_mask(decode_metadata)
+        final_concept_state = torch.where(concept_read_mask.view(-1, 1), final_concept_state,
+                                          torch.zeros_like(final_concept_state))
+        concept_raw_state_rows = torch.where(concept_read_mask.view(-1, 1, 1), concept_raw_state_rows,
+                                             torch.zeros_like(concept_raw_state_rows))
+        decoder_input = self.fusion_tok_norm(hidden_states) + self.fusion_norm_alpha.to(
+            hidden_states.dtype) * self.fusion_hl_norm(final_concept_state.to(hidden_states.dtype))
+        final_hidden = self._decode(
+            decoder_input,
+            encoder_raw_states,
+            final_concept_state,
+            concept_raw_states=[],
+            position_ids=decode_position_ids,
+            past_key_values=concept_caches.decoder_past_key_values,
+            attn_metadata=concept_metadata.attn_metadata,
+            decode_concept_states=concept_raw_state_rows,
         )
         return final_hidden.unsqueeze(0).contiguous()
 
@@ -2106,13 +2498,21 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 decoder_input: torch.Tensor,
                 encoder_raw_states: list[torch.Tensor],
                 final_concept_state: torch.Tensor,
-                concept_raw_states: list[torch.Tensor],
+                concept_raw_states: list[torch.Tensor] | None,
                 position_ids: torch.Tensor,
                 past_key_values: list[list[torch.Tensor]] | None = None,
                 attn_metadata: Any = None,
-                prefill_metadata: ConceptPrefillMetadata | None = None):
+                prefill_metadata: ConceptPrefillMetadata | None = None,
+                decode_concept_states: torch.Tensor | None = None):
         """Decoder stack plus decoder DD and residual routes."""
-        if prefill_metadata is None:
+        if decode_concept_states is not None:
+            decoder_encoder_states = torch.stack(tuple(encoder_raw_states), dim=-2)
+            decoder_encoder_states = self.decoder_read_encoder_shared_source_norm(decoder_encoder_states)
+
+            concept_states = self.decoder_read_concept_shared_source_norm(decode_concept_states)
+            decoder_encoder_source_dim = -2
+            repeated_concept_states = concept_states
+        elif prefill_metadata is None:
             decoder_encoder_states = torch.stack(tuple(encoder_raw_states), dim=2)
             decoder_encoder_states = self.decoder_read_encoder_shared_source_norm(decoder_encoder_states)
 
