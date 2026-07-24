@@ -932,7 +932,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             async for res in cleanup_generator:
                 if await raw_request.is_disconnected():
                     # Abort the request if the client disconnects.
-                    await VariableInterface.async_engine.stop_session(request.session_id)
+                    await session.async_abort()
                     return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
                 final_res = res
                 text += res.response
@@ -960,7 +960,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
 
-    await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
+    inner_results = await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
+    for inner_result in inner_results:
+        if inner_result is not None:
+            return inner_result
 
     response = CompletionResponse(
         id=request_id,
