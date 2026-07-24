@@ -42,6 +42,7 @@ class LinearWeightsStaticF8(LinearWeights):
             expert_list=expert_list,
         )
 
+        self.num_experts = num_experts
         weight_scale = torch.empty(
             (num_experts, out_features, 1),
             dtype=torch.float32,
@@ -57,7 +58,7 @@ class LinearWeightsStaticF8(LinearWeights):
         )
 
         input_scale = torch.empty(
-            (1,),
+            (num_experts,),
             dtype=torch.float32,
             device=device,
         )
@@ -77,7 +78,9 @@ class LinearWeightsStaticF8(LinearWeights):
             self.input_scale_loader
         )
 
-        self._input_scale_loaded = False
+        self._input_scale_loaded = [
+            False for _ in range(num_experts)
+        ]
 
     def weight_loader_scale_tp(
         self,
@@ -128,29 +131,44 @@ class LinearWeightsStaticF8(LinearWeights):
         expert_id: int,
         shard_id: str,
     ):
-        """Load the shared static activation scale."""
-        del expert_id, shard_id
+        """Load a per-expert static activation scale.
 
+        Gate and up projections are packed together and therefore must use
+        the same activation scale within each expert.
+        """
         if loaded_weight.numel() != 1:
             raise ValueError(
                 'Static FP8 input scale must contain '
                 f'one value, but got {loaded_weight.shape}.'
             )
 
+        if not 0 <= expert_id < self.num_experts:
+            raise IndexError(
+                f'Expert index {expert_id} is outside '
+                f'[0, {self.num_experts}).'
+            )
+
+        # update_weights() compacts uniform vectors to the scalar fast path.
+        # Expand it again when a later online weight update starts.
+        if param.numel() == 1 and self.num_experts > 1:
+            param.data = param.data.expand(self.num_experts).clone()
+
         scale = loaded_weight.to(
             device=param.device,
             dtype=param.dtype,
-        ).reshape_as(param)
+        ).reshape(1)
+        param_data = param.data[expert_id:expert_id + 1]
 
-        if not self._input_scale_loaded:
-            param.data.copy_(scale)
-            self._input_scale_loaded = True
+        if not self._input_scale_loaded[expert_id]:
+            param_data.copy_(scale)
+            self._input_scale_loaded[expert_id] = True
             return
 
-        if not torch.equal(param.data, scale):
+        if not torch.equal(param_data, scale):
             raise ValueError(
-                'Packed static FP8 projections must share '
-                'the same input scale.'
+                'Packed static FP8 projections for expert '
+                f'{expert_id} must share the same input scale; '
+                f'got a conflicting {shard_id} scale.'
             )
 
     def update_weight(
@@ -177,6 +195,13 @@ class LinearWeightsStaticF8(LinearWeights):
             weight_scale,
         )
 
+        # Preserve the original scalar fast path for checkpoints whose
+        # experts all share one activation scale.
+        if input_scale.numel() > 1:
+            first_scale = input_scale[:1]
+            if torch.equal(input_scale, first_scale.expand_as(input_scale)):
+                input_scale = first_scale.clone()
+
         input_scale_loader = (
             self.input_scale.weight_loader
         )
@@ -191,6 +216,9 @@ class LinearWeightsStaticF8(LinearWeights):
             'input_scale',
             input_scale,
         )
+        self._input_scale_loaded = [
+            False for _ in range(self.num_experts)
+        ]
 
 class FusedMoEStaticF8(FusedMoEBase):
     """Fused MoE with static per-tensor FP8 quantization."""

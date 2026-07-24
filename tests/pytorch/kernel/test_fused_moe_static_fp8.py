@@ -60,13 +60,14 @@ def _quantize_expert_weights(
 
 
 @pytest.mark.skipif(
-    torch.cuda.get_device_capability()[0] < 9,
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
     reason='require device with cc>=9.0',
 )
 @pytest.mark.parametrize('num_tokens', [1, 6])
+@pytest.mark.parametrize('scale_mode', ['scalar', 'gate_up', 'down', 'both'])
 @torch.inference_mode()
-def test_fused_moe_static_fp8(num_tokens):
-    """Compare fused static FP8 MoE with per-route Linear."""
+def test_fused_moe_static_fp8(num_tokens, scale_mode):
+    """Compare scalar and per-expert scale modes with per-route Linear."""
     torch.manual_seed(2026)
     torch.cuda.manual_seed_all(2026)
 
@@ -136,11 +137,28 @@ def test_fused_moe_static_fp8(num_tokens):
         / fp8_max
     ).clamp_min(1e-8).reshape(1)
 
-    down_input_scale = torch.tensor(
-        [1e-3],
-        device=device,
-        dtype=torch.float32,
-    )
+    if scale_mode in ('gate_up', 'both'):
+        gate_up_input_scale = (
+            gate_up_input_scale
+            * torch.tensor(
+                [1.0, 1.25, 1.5],
+                device=device,
+                dtype=torch.float32,
+            )
+        ).contiguous()
+
+    if scale_mode in ('down', 'both'):
+        down_input_scale = torch.tensor(
+            [8e-4, 1.5e-3, 3e-3],
+            device=device,
+            dtype=torch.float32,
+        )
+    else:
+        down_input_scale = torch.tensor(
+            [1e-3],
+            device=device,
+            dtype=torch.float32,
+        )
 
     route_pattern = torch.tensor(
         [
@@ -197,10 +215,14 @@ def test_fused_moe_static_fp8(num_tokens):
                 ].item()
             )
 
+            gate_up_scale = gate_up_input_scale
+            if gate_up_scale.numel() > 1:
+                gate_up_scale = gate_up_scale[expert_id:expert_id + 1]
+
             gate_up = matmul_kernel_static_quant(
                 token_input,
                 gate_up_weight[expert_id],
-                gate_up_input_scale,
+                gate_up_scale,
                 gate_up_weight_scale[
                     expert_id,
                     :,
@@ -219,11 +241,15 @@ def test_fused_moe_static_fp8(num_tokens):
                 * up.float()
             ).to(out_dtype)
 
+            down_scale = down_input_scale
+            if down_scale.numel() > 1:
+                down_scale = down_scale[expert_id:expert_id + 1]
+
             route_output = (
                 matmul_kernel_static_quant(
                     activated,
                     down_weight[expert_id],
-                    down_input_scale,
+                    down_scale,
                     down_weight_scale[
                         expert_id,
                         :,
@@ -265,3 +291,93 @@ def test_fused_moe_static_fp8(num_tokens):
         atol=2e-3,
         rtol=5e-3,
     )
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+    reason='require device with cc>=9.0',
+)
+@torch.inference_mode()
+def test_fused_moe_static_fp8_per_expert_scales_with_expert_offset():
+    """Use local scale vectors with global expert IDs."""
+    torch.manual_seed(2027)
+    device = torch.device('cuda')
+    quant_dtype = torch.float8_e4m3fn
+    out_dtype = torch.bfloat16
+    num_global_experts = 4
+    expert_offset = 1
+    num_local_experts = 2
+    hidden_dim = 128
+    ffn_dim = 64
+    hidden_states = (
+        torch.randn(
+            num_global_experts,
+            hidden_dim,
+            device=device,
+            dtype=out_dtype,
+        )
+        * 0.2
+    )
+    gate_up_weight, gate_up_weight_scale = _quantize_expert_weights(
+        torch.randn(
+            num_local_experts,
+            ffn_dim * 2,
+            hidden_dim,
+            device=device,
+            dtype=out_dtype,
+        )
+        * 0.1,
+        quant_dtype,
+    )
+    down_weight, down_weight_scale = _quantize_expert_weights(
+        torch.randn(
+            num_local_experts,
+            hidden_dim,
+            ffn_dim,
+            device=device,
+            dtype=out_dtype,
+        )
+        * 0.1,
+        quant_dtype,
+    )
+    gate_up_input_scale = torch.tensor([8e-4, 1.2e-3], device=device, dtype=torch.float32)
+    down_input_scale = torch.tensor([1.5e-3, 2.5e-3], device=device, dtype=torch.float32)
+    topk_ids = torch.arange(num_global_experts, device=device, dtype=torch.long).reshape(-1, 1)
+    topk_weights = torch.ones(num_global_experts, 1, device=device, dtype=torch.float32)
+    local_slice = slice(expert_offset, expert_offset + num_local_experts)
+    local_reference = fused_moe_static_fp8(
+        hidden_states[local_slice].contiguous(),
+        gate_up_input_scale,
+        gate_up_weight,
+        gate_up_weight_scale,
+        down_input_scale,
+        down_weight,
+        down_weight_scale,
+        topk_weights[local_slice].contiguous(),
+        torch.arange(
+            num_local_experts,
+            device=device,
+            dtype=torch.long,
+        ).reshape(-1, 1),
+        topk=1,
+        out_dtype=out_dtype,
+        quant_dtype=quant_dtype,
+    )
+    expected = torch.zeros_like(hidden_states)
+    expected[local_slice] = local_reference
+    observed = fused_moe_static_fp8(
+        hidden_states,
+        gate_up_input_scale,
+        gate_up_weight,
+        gate_up_weight_scale,
+        down_input_scale,
+        down_weight,
+        down_weight_scale,
+        topk_weights,
+        topk_ids,
+        topk=1,
+        out_dtype=out_dtype,
+        quant_dtype=quant_dtype,
+        expert_offset=expert_offset,
+        num_experts=num_global_experts,
+    )
+    torch.testing.assert_close(observed, expected, atol=0, rtol=0)

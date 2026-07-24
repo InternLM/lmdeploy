@@ -290,6 +290,48 @@ def fused_moe_w8a8(input: torch.Tensor,
     ret = moe_reduce(intermediate_cache2, topk_weights)
     return ret
 
+
+def _per_expert_route_quant_fp8(
+    input: torch.Tensor,
+    input_scale: torch.Tensor,
+    topk_ids: torch.Tensor,
+    sorted_idx: torch.Tensor,
+    top_k: int,
+    quant_dtype: torch.dtype,
+    expert_offset: int = 0,
+):
+    """Quantize expert-sorted routes with per-expert static scales."""
+    route_experts = topk_ids.reshape(-1).index_select(
+        0,
+        sorted_idx.long(),
+    )
+
+    route_inputs = input.reshape(-1, input.shape[-1]).index_select(
+        0,
+        torch.div(
+            sorted_idx.long(),
+            top_k,
+            rounding_mode='floor',
+        ),
+    )
+    local_route_experts = (route_experts - expert_offset).clamp(
+        min=0,
+        max=input_scale.numel() - 1,
+    )
+    route_scales = input_scale.float().reshape(-1).index_select(
+        0,
+        local_route_experts.long(),
+    ).contiguous()
+
+    dtype_info = torch.finfo(quant_dtype)
+    route_inputs_quant = torch.clamp(
+        route_inputs.float() / route_scales[:, None],
+        min=dtype_info.min,
+        max=dtype_info.max,
+    ).to(quant_dtype)
+    return route_inputs_quant.contiguous(), route_scales
+
+
 def fused_moe_static_fp8(
     input: torch.Tensor,
     gate_up_input_scale: torch.Tensor,
@@ -317,8 +359,14 @@ def fused_moe_static_fp8(
 
     full_exp = num_experts == num_local_experts
 
-    assert gate_up_input_scale.numel() == 1
-    assert down_input_scale.numel() == 1
+    assert gate_up_input_scale.numel() in (
+        1,
+        num_local_experts,
+    )
+    assert down_input_scale.numel() in (
+        1,
+        num_local_experts,
+    )
     assert w1.dtype == quant_dtype
     assert w2.dtype == quant_dtype
 
@@ -332,19 +380,32 @@ def fused_moe_static_fp8(
         num_experts,
     )
 
-    # The first GEMM reads input by original token index.
-    input_quant = per_tensor_quant_fp8(
-        input,
-        gate_up_input_scale,
-        quant_dtype=quant_dtype,
-    )
-
-    gate_up_scale_vector = (
-        gate_up_input_scale.float()
-        .reshape(1)
-        .expand(num_tokens)
-        .contiguous()
-    )
+    per_expert_gate_up = gate_up_input_scale.numel() > 1
+    if per_expert_gate_up:
+        input_quant, gate_up_scale_vector = (
+            _per_expert_route_quant_fp8(
+                input,
+                gate_up_input_scale,
+                topk_ids,
+                sorted_idx,
+                topk,
+                quant_dtype,
+                expert_offset,
+            )
+        )
+    else:
+        # Scalar fast path: quantize once per original token.
+        input_quant = per_tensor_quant_fp8(
+            input,
+            gate_up_input_scale,
+            quant_dtype=quant_dtype,
+        )
+        gate_up_scale_vector = (
+            gate_up_input_scale.float()
+            .reshape(1)
+            .expand(num_tokens)
+            .contiguous()
+        )
 
     intermediate_cache1 = _make_intermediate(
         (num_tokens, topk, gate_up_dim),
@@ -366,10 +427,13 @@ def fused_moe_static_fp8(
         sorted_idx=sorted_idx,
         exp_start=exp_start,
         exp_end=exp_end,
-        top_k=topk,
-        num_tokens=num_tokens,
+        top_k=(1 if per_expert_gate_up else topk),
+        num_tokens=(
+            num_tokens * topk
+            if per_expert_gate_up else num_tokens
+        ),
         expert_offset=expert_offset,
-        reindex_a=True,
+        reindex_a=not per_expert_gate_up,
         reindex_c=False,
     )
 
@@ -391,22 +455,41 @@ def fused_moe_static_fp8(
         unflat_size,
     )
 
-    # Second static quantization, using the checkpoint's
-    # calibrated down-projection input scale.
-    gate_cache_quant = per_tensor_quant_fp8(
-        gate_cache,
-        down_input_scale,
-        quant_dtype=quant_dtype,
-    )
-
     num_routed_tokens = num_tokens * topk
-
-    down_scale_vector = (
-        down_input_scale.float()
-        .reshape(1)
-        .expand(num_routed_tokens)
-        .contiguous()
-    )
+    if down_input_scale.numel() > 1:
+        route_experts = topk_ids.reshape(-1).index_select(
+            0,
+            sorted_idx.long(),
+        )
+        local_route_experts = (route_experts - expert_offset).clamp(
+            min=0,
+            max=down_input_scale.numel() - 1,
+        )
+        down_scale_vector = (
+            down_input_scale.float()
+            .reshape(-1)
+            .index_select(0, local_route_experts.long())
+            .contiguous()
+        )
+        dtype_info = torch.finfo(quant_dtype)
+        gate_cache_quant = torch.clamp(
+            gate_cache.reshape(num_routed_tokens, -1).float()
+            / down_scale_vector[:, None],
+            min=dtype_info.min,
+            max=dtype_info.max,
+        ).to(quant_dtype).contiguous()
+    else:
+        gate_cache_quant = per_tensor_quant_fp8(
+            gate_cache,
+            down_input_scale,
+            quant_dtype=quant_dtype,
+        )
+        down_scale_vector = (
+            down_input_scale.float()
+            .reshape(1)
+            .expand(num_routed_tokens)
+            .contiguous()
+        )
 
     intermediate_cache2 = _make_intermediate(
         (num_tokens, topk, w2.shape[1]),

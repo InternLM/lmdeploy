@@ -429,7 +429,7 @@ def test_hy3_static_fp8_factory_builds_static_modules():
         16,
         1,
     )
-    assert experts.gate_up.input_scale.shape == (1,)
+    assert experts.gate_up.input_scale.shape == (4,)
 
     assert experts.down.weight.shape == (
         4,
@@ -444,7 +444,7 @@ def test_hy3_static_fp8_factory_builds_static_modules():
         16,
         1,
     )
-    assert experts.down.input_scale.shape == (1,)
+    assert experts.down.input_scale.shape == (4,)
 
 def test_hy3_loads_static_fp8_expert_weights():
     config = _make_hy3_config()
@@ -623,14 +623,14 @@ def test_hy3_loads_static_fp8_expert_weights():
     )
 
     torch.testing.assert_close(
-        experts.gate_up.input_scale,
+        experts.gate_up.input_scale[0:1],
         gate_up_input_scale,
         atol=0,
         rtol=0,
     )
 
     torch.testing.assert_close(
-        experts.down.input_scale,
+        experts.down.input_scale[0:1],
         down_input_scale,
         atol=0,
         rtol=0,

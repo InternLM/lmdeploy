@@ -12,11 +12,12 @@ from lmdeploy.pytorch.config import (
     CacheConfig,
     DistConfig,
     ModelConfig,
+    QuantizationConfig,
 )
 from lmdeploy.pytorch.configurations.hy3 import Hy3ModelConfigBuilder
 from lmdeploy.pytorch.distributed import DistContext, DistGroup, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import BuildModelContext, ModelInputs
 from lmdeploy.pytorch.models.hy3_mtp import HYV3MultiTokenPredictor
 from lmdeploy.pytorch.models.patch import build_model_from_hf_config
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -415,3 +416,108 @@ def test_hy3_rejects_unsupported_speculative_method():
     config = SimpleNamespace(model_type='hy_v3', num_nextn_predict_layers=1)
     with pytest.raises(ValueError, match='Unsupported speculative method'):
         Hy3ModelConfigBuilder.build(config, spec_method='unsupported_method')
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_hy3_mtp_preserves_per_expert_input_scales(monkeypatch, reverse):
+    _patch_backend(monkeypatch)
+    config = _make_config()
+    config.quantization_config = {
+        'quant_method': 'fp8',
+        'activation_scheme': 'static',
+        'ignored_layers': ['lm_head', 'model.embed_tokens'],
+    }
+    build_context = BuildModelContext(quant_config=QuantizationConfig.from_config(config))
+    model = build_model_from_hf_config(
+        config, dtype=torch.bfloat16, device=torch.device('cpu'), build_model_ctx=build_context
+    )
+    prefix = 'model.layers.2.mlp.experts'
+    weights = [
+        (f'{prefix}.0.gate_proj.input_scale', torch.tensor([0.25])),
+        (f'{prefix}.0.up_proj.input_scale', torch.tensor([0.25])),
+        (f'{prefix}.1.gate_proj.input_scale', torch.tensor([0.5])),
+        (f'{prefix}.1.up_proj.input_scale', torch.tensor([0.5])),
+        (f'{prefix}.2.gate_proj.input_scale', torch.tensor([0.75])),
+        (f'{prefix}.2.up_proj.input_scale', torch.tensor([0.75])),
+        (f'{prefix}.3.gate_proj.input_scale', torch.tensor([1.0])),
+        (f'{prefix}.3.up_proj.input_scale', torch.tensor([1.0])),
+        (f'{prefix}.0.down_proj.input_scale', torch.tensor([0.4])),
+        (f'{prefix}.1.down_proj.input_scale', torch.tensor([0.9])),
+        (f'{prefix}.2.down_proj.input_scale', torch.tensor([0.6])),
+        (f'{prefix}.3.down_proj.input_scale', torch.tensor([0.7])),
+    ]
+    if reverse:
+        weights.reverse()
+    model.load_weights(weights)
+    experts = model.model.layers['2'].mtp_block.mlp.experts
+    for linear_weights in (experts.gate_up, experts.down):
+        linear_weights.update_weight(linear_weights.weight, linear_weights.weight_scale, linear_weights.input_scale)
+    torch.testing.assert_close(experts.gate_up.input_scale, torch.tensor([0.25, 0.5, 0.75, 1.0]))
+    torch.testing.assert_close(experts.down.input_scale, torch.tensor([0.4, 0.9, 0.6, 0.7]))
+
+
+def test_hy3_mtp_compacts_and_reexpands_expert_input_scales(monkeypatch):
+    _patch_backend(monkeypatch)
+    config = _make_config()
+    config.quantization_config = {
+        'quant_method': 'fp8',
+        'activation_scheme': 'static',
+        'ignored_layers': ['lm_head', 'model.embed_tokens'],
+    }
+    build_context = BuildModelContext(quant_config=QuantizationConfig.from_config(config))
+    model = build_model_from_hf_config(
+        config, dtype=torch.bfloat16, device=torch.device('cpu'), build_model_ctx=build_context
+    )
+    prefix = 'model.layers.2.mlp.experts'
+    model.load_weights(
+        [
+            (f'{prefix}.0.gate_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.0.up_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.1.gate_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.1.up_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.2.gate_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.2.up_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.3.gate_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.3.up_proj.input_scale', torch.tensor([0.25])),
+            (f'{prefix}.0.down_proj.input_scale', torch.tensor([0.4])),
+            (f'{prefix}.1.down_proj.input_scale', torch.tensor([0.4])),
+            (f'{prefix}.2.down_proj.input_scale', torch.tensor([0.4])),
+            (f'{prefix}.3.down_proj.input_scale', torch.tensor([0.4])),
+        ]
+    )
+    experts = model.model.layers['2'].mtp_block.mlp.experts
+    for linear_weights in (experts.gate_up, experts.down):
+        linear_weights.update_weight(linear_weights.weight, linear_weights.weight_scale, linear_weights.input_scale)
+    torch.testing.assert_close(experts.gate_up.input_scale, torch.tensor([0.25]))
+    torch.testing.assert_close(experts.down.input_scale, torch.tensor([0.4]))
+    model.load_weights(
+        [
+            (f'{prefix}.2.gate_proj.input_scale', torch.tensor([0.5])),
+            (f'{prefix}.2.up_proj.input_scale', torch.tensor([0.5])),
+        ]
+    )
+    torch.testing.assert_close(experts.gate_up.input_scale, torch.tensor([0.25, 0.25, 0.5, 0.25]))
+    experts.gate_up.update_weight(experts.gate_up.weight, experts.gate_up.weight_scale, experts.gate_up.input_scale)
+    torch.testing.assert_close(experts.gate_up.input_scale, torch.tensor([0.25, 0.25, 0.5, 0.25]))
+
+
+def test_hy3_mtp_rejects_conflicting_gate_up_input_scales(monkeypatch):
+    _patch_backend(monkeypatch)
+    config = _make_config()
+    config.quantization_config = {
+        'quant_method': 'fp8',
+        'activation_scheme': 'static',
+        'ignored_layers': ['lm_head', 'model.embed_tokens'],
+    }
+    build_context = BuildModelContext(quant_config=QuantizationConfig.from_config(config))
+    model = build_model_from_hf_config(
+        config, dtype=torch.bfloat16, device=torch.device('cpu'), build_model_ctx=build_context
+    )
+    prefix = 'model.layers.2.mlp.experts'
+    with pytest.raises(ValueError, match='must share the same input scale'):
+        model.load_weights(
+            [
+                (f'{prefix}.0.gate_proj.input_scale', torch.tensor([0.25])),
+                (f'{prefix}.0.up_proj.input_scale', torch.tensor([0.75])),
+            ]
+        )
