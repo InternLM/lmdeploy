@@ -35,7 +35,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
                          model_meta: dict[str, Any] = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          routed_experts: np.ndarray = None,
-                         indexer_topk: np.ndarray = None,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""
         # update history image nums
@@ -49,7 +48,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
         num_valid = len(token_ids)
         # record cached expert ids
         self.append_routed_experts(routed_experts)
-        self.append_indexer_topk(indexer_topk)
 
         if mode == UpdateTokenMode.INPUTS:
             self.cached_tokens = 0
@@ -93,8 +91,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
             # chunk long context might not have all routed experts
             if len(self.all_routed_experts) > step:
                 self.all_routed_experts.resize(step)
-        if self.return_indexer_topk and len(self.all_indexer_topk) > step:
-            self.all_indexer_topk.resize(step)
 
     def cleanup(self):
         """Setup history meta after sequence stopped or cancelled."""
@@ -143,21 +139,13 @@ class ARSequenceStrategy(SequenceStrategy):
         if batched_outputs.all_routed_experts is not None:
             all_routed_experts = batched_outputs.all_routed_experts.split(num_tokens, dim=0)
             all_routed_experts = [experts.numpy() for experts in all_routed_experts]
-        all_indexer_topk = [None] * len(num_tokens)
-        if batched_outputs.all_indexer_topk is not None:
-            all_indexer_topk = batched_outputs.all_indexer_topk.split(num_tokens, dim=0)
-            all_indexer_topk = [topk.numpy() for topk in all_indexer_topk]
         update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
-        for token, msg, stop, model_meta, routed_experts, indexer_topk in zip(
-                next_token_ids, running, stopped, model_metas, all_routed_experts, all_indexer_topk):
+        for token, msg, stop, model_meta, routed_experts in zip(next_token_ids, running, stopped, model_metas,
+                                                                all_routed_experts):
             if msg.status != MessageStatus.RUNNING:
                 continue
 
             # fill token
-            msg.update_token_ids(token,
-                                 model_meta=model_meta,
-                                 mode=update_mode,
-                                 routed_experts=routed_experts,
-                                 indexer_topk=indexer_topk)
+            msg.update_token_ids(token, model_meta=model_meta, mode=update_mode, routed_experts=routed_experts)
             if stop:
                 msg.state.finish()

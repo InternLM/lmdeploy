@@ -146,7 +146,6 @@ class GenerationConfig:
 
     # router replay
     return_routed_experts: bool = False
-    return_indexer_topk: bool = False
 
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
@@ -498,7 +497,6 @@ class PytorchEngineConfig:
     logprobs_mode: str = None
     # router replay
     enable_return_routed_experts: bool = False
-    enable_return_indexer_topk: bool = False
     enable_transfer_obj_ref: bool = False
 
     # dllm
@@ -599,7 +597,6 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
-    indexer_topk: Any = None
     cached_tokens: int = 0
 
     def __str__(self):
@@ -630,7 +627,6 @@ class Response:
         fields.extend(_format_tensor('logits', self.logits))
         fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
         fields.extend(_format_tensor('routed_experts', self.routed_experts))
-        fields.extend(_format_tensor('indexer_topk', self.indexer_topk))
         return '\n'.join(fields)
 
     def extend(self, other: 'Response') -> 'Response':
@@ -657,7 +653,6 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
-        self.indexer_topk = other.indexer_topk
         return self
 
 
@@ -744,7 +739,6 @@ class EngineOutput:
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
-    indexer_topk: torch.Tensor = None
     ce_loss: float = None
 
 

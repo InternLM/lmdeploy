@@ -139,7 +139,7 @@ class EngineInstance(EngineInstanceBase):
 
     def _get_extra_outputs(self, resp: Response, num_all_ids: int, gen_config: GenerationConfig = None):
         """Get extra outputs."""
-        outputs = dict(routed_experts=None, indexer_topk=None)
+        outputs = dict(routed_experts=None)
         if resp.type not in [ResponseType.FINISH, ResponseType.CANCEL]:
             return outputs
 
@@ -172,11 +172,6 @@ class EngineInstance(EngineInstanceBase):
         if routed_experts is not None:
             routed_experts = _validate_num_tokens('routed_experts', routed_experts)
             outputs['routed_experts'] = _maybe_transfer(routed_experts)
-
-        indexer_topk = resp.data.get('indexer_topk', None) if resp.data else None
-        if indexer_topk is not None:
-            indexer_topk = _validate_num_tokens('indexer_topk', indexer_topk)
-            outputs['indexer_topk'] = _maybe_transfer(indexer_topk)
         return outputs
 
     async def _async_try_add_session(self, session_id: int):
@@ -280,7 +275,6 @@ class EngineInstance(EngineInstanceBase):
                     num_all_ids = prompt_ids_len + output_offset + num_ids
                     extra_outputs = self._get_extra_outputs(resp, num_all_ids, gen_config=gen_config)
                     routed_experts = extra_outputs.get('routed_experts', None)
-                    indexer_topk = extra_outputs.get('indexer_topk', None)
 
                     logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                     yield EngineOutput(resp.type,
@@ -289,7 +283,6 @@ class EngineInstance(EngineInstanceBase):
                                        cache_block_ids=cache_block_ids,
                                        req_metrics=req_metrics,
                                        routed_experts=routed_experts,
-                                       indexer_topk=indexer_topk,
                                        logprobs=logprobs,
                                        ce_loss=ce_loss)
                     break

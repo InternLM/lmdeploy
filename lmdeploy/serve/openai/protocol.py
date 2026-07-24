@@ -226,10 +226,6 @@ class ChatCompletionRequest(BaseModel):
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
     )
-    return_indexer_topk: bool | None = Field(
-        default=False,
-        description=('Whether to return sparse-attention top-k indices for full indexer layers.'),
-    )
 
 
 class FunctionCall(BaseModel):
@@ -297,7 +293,6 @@ class ChatCompletionResponseChoice(BaseModel):
     finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     output_ids: list[int] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
-    indexer_topk: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -340,7 +335,6 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     output_ids: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     routed_experts: list[list[list[int]]] | str | None = None
-    indexer_topk: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -565,7 +559,6 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
     return_routed_experts: bool | None = False
-    return_indexer_topk: bool | None = False
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     # kwargs for media IO
@@ -586,7 +579,6 @@ class GenerateReqMetaOutput(BaseModel):
     finish_reason: dict[str, Any] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
     routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
-    indexer_topk: list[list[list[int]]] | str | None = None  # (num_token, num_full_indexer_layer, index_topk)
 
 
 # /generate output

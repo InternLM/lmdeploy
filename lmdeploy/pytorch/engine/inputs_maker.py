@@ -574,9 +574,6 @@ class _ForwardInputsTask:
     def _need_routed_experts(self):
         return any(seq.return_routed_experts for seq in self.result.running)
 
-    def _need_indexer_topk(self):
-        return any(getattr(seq, 'return_indexer_topk', False) for seq in self.result.running)
-
     def _need_ce_loss(self):
         return any(seq.return_ce_loss for seq in self.result.running)
 
@@ -600,7 +597,6 @@ class _ForwardInputsTask:
             return_logits=self._need_logits(),
             extra_inputs=result.extra_inputs,
             return_routed_experts=self._need_routed_experts(),
-            return_indexer_topk=self._need_indexer_topk(),
             return_ce_loss=self._need_ce_loss(),
         )
 

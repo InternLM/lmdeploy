@@ -61,9 +61,6 @@ class InferOutput:
     # expert ids
     routed_experts: np.ndarray = None
 
-    # sparse-attention indexer results
-    indexer_topk: np.ndarray = None
-
     # summed, unnormalized cross-entropy (NLL) of the input prompt
     ce_loss: float = None
 

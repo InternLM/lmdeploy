@@ -788,15 +788,6 @@ class ArgumentHelper:
                                    help='Whether to output routed expert ids for replay')
 
     @staticmethod
-    def enable_return_indexer_topk(parser):
-        """Add argument return sparse-attention indexer top-k to parser."""
-
-        return parser.add_argument('--enable-return-indexer-topk',
-                                   action='store_true',
-                                   default=False,
-                                   help='Whether to output sparse-attention indexer top-k ids for replay')
-
-    @staticmethod
     def add_spec_group(parser):
         spec_group = parser.add_argument_group('Speculative decoding arguments')
         spec_group.add_argument('--speculative-algorithm',

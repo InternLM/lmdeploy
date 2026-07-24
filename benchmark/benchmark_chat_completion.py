@@ -56,7 +56,6 @@ class SSEEvent:
     done: bool = False
     raw: dict[str, Any] | None = None
     routed_experts: str | None = None
-    indexer_topk: str | None = None
 
     @property
     def token_text(self) -> str:
@@ -359,7 +358,6 @@ def parse_sse_line(line: bytes | str) -> SSEEvent:
         usage=data.get('usage'),
         raw=data,
         routed_experts=choice.get('routed_experts'),
-        indexer_topk=choice.get('indexer_topk'),
     )
 
 
@@ -380,7 +378,6 @@ def build_payload(
     ignore_eos: bool = False,
     return_token_ids: bool = False,
     return_routed_experts: bool = False,
-    return_indexer_topk: bool = False,
     return_logprob: bool = False,
     logprobs: bool = False,
     top_logprobs: int | None = None,
@@ -411,8 +408,6 @@ def build_payload(
         payload['return_token_ids'] = True
     if return_routed_experts:
         payload['return_routed_experts'] = True
-    if return_indexer_topk:
-        payload['return_indexer_topk'] = True
     if return_logprob:
         payload['return_logprob'] = True
     if logprobs:
@@ -469,7 +464,6 @@ async def request_chat_completion(
     ignore_eos: bool,
     return_token_ids: bool,
     return_routed_experts: bool,
-    return_indexer_topk: bool,
     return_logprob: bool,
     logprobs: bool,
     top_logprobs: int | None,
@@ -488,7 +482,6 @@ async def request_chat_completion(
         ignore_eos=ignore_eos,
         return_token_ids=return_token_ids,
         return_routed_experts=return_routed_experts,
-        return_indexer_topk=return_indexer_topk,
         return_logprob=return_logprob,
         logprobs=logprobs,
         top_logprobs=top_logprobs,
@@ -539,11 +532,6 @@ async def request_chat_completion(
                     if event.routed_experts and shared_store is not None:
                         try:
                             await fetch_routed_experts(shared_store, event.routed_experts)
-                        except Exception as e:  # noqa: BLE001 - record and keep consuming SSE.
-                            trace.error = repr(e)
-                    if event.indexer_topk and shared_store is not None:
-                        try:
-                            await fetch_shared_output(shared_store, event.indexer_topk)
                         except Exception as e:  # noqa: BLE001 - record and keep consuming SSE.
                             trace.error = repr(e)
 
@@ -1032,7 +1020,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
     extra_body = json.loads(args.extra_request_body) if args.extra_request_body else {}
 
     shared_store = None
-    if args.return_routed_experts or args.return_indexer_topk:
+    if args.return_routed_experts:
         shared_store = init_shared_store()
 
     tokenizer = None
@@ -1073,8 +1061,6 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
             print('return_token_ids=True')
         if args.return_routed_experts:
             print('return_routed_experts=True')
-        if args.return_indexer_topk:
-            print('return_indexer_topk=True')
         if args.return_logprob:
             print('return_logprob=True')
         if args.logprobs:
@@ -1096,7 +1082,6 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                 ignore_eos=args.ignore_eos,
                 return_token_ids=args.return_token_ids,
                 return_routed_experts=args.return_routed_experts,
-                return_indexer_topk=args.return_indexer_topk,
                 return_logprob=args.return_logprob,
                 logprobs=args.logprobs,
                 top_logprobs=args.top_logprobs,
@@ -1291,11 +1276,6 @@ def parse_args() -> argparse.Namespace:
         '--return-routed-experts',
         action='store_true',
         help='Set return_routed_experts=true to include MoE routed expert indices (LMDeploy extension).',
-    )
-    parser.add_argument(
-        '--return-indexer-topk',
-        action='store_true',
-        help='Set return_indexer_topk=true and fetch sparse-attention indexer results (LMDeploy extension).',
     )
     parser.add_argument(
         '--return-logprob',

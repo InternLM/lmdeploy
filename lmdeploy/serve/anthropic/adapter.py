@@ -356,7 +356,6 @@ def to_generation_config(
         skip_special_tokens=True,
         spaces_between_special_tokens=True,
         return_routed_experts=request.return_routed_experts or False,
-        return_indexer_topk=request.return_indexer_topk or False,
         logprobs=1 if request.return_logprob else None,
     )
 

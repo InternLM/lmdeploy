@@ -227,7 +227,6 @@ class EngineLoop:
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
-                                indexer_topk=out.indexer_topk,
                                 logprobs=logprobs,
                                 ce_loss=out.ce_loss))
 
@@ -316,18 +315,15 @@ class EngineLoop:
 
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
-        all_indexer_topk = batched_outputs.all_indexer_topk
         ce_loss = batched_outputs.ce_loss
 
         if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
-            seq.append_indexer_topk(all_indexer_topk)
             seq.append_logits(logits)
             seq.append_ce_loss(ce_loss, finish=False)
             self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
-            self.scheduler.block_trie.cache_indexer_topk_for_seq(seq)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -342,7 +338,6 @@ class EngineLoop:
                                          model_inputs=model_inputs,
                                          delta=delta)
         self.scheduler.block_trie.cache_routed_experts(running)
-        self.scheduler.block_trie.cache_indexer_topk(running)
 
         # generate output
         outputs: dict[int, InferOutput] = dict()
@@ -387,8 +382,7 @@ class EngineLoop:
                               cache_block_ids=cache_block_ids,
                               req_metrics=req_metrics,
                               logprobs=cur_logprobs,
-                              routed_experts=msg.routed_experts,
-                              indexer_topk=msg.indexer_topk)
+                              routed_experts=msg.routed_experts)
             outputs[session_id] = out
 
             if msg.return_ce_loss:

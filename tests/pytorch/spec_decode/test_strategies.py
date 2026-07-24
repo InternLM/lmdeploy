@@ -540,55 +540,6 @@ def _experts(n, k=2):
     return np.arange(n * k, dtype=np.uint16).reshape(n, 1, k)
 
 
-def _make_seq_with_indexer(prefill_tokens=None):
-    """Create a speculative sequence that captures sparse-attention indices."""
-    strategy = ARSpecSequenceStrategy()
-    seq_meta = SequenceMeta(block_size=16, strategy=strategy)
-    session = MagicMock()
-    session.seq_meta = seq_meta
-    sampling_param = SamplingParam(return_indexer_topk=True,
-                                   max_new_tokens=512)
-    seq = SchedulerSequenceARSpec(seq_id=0, session=session, sampling_param=sampling_param)
-    if prefill_tokens is not None:
-        seq._update_token_ids_inputs(np.array(prefill_tokens, dtype=np.int64))
-    return seq
-
-
-def _indexer_topk(n):
-    return np.arange(n * 6, dtype=np.int32).reshape(n, 2, 3)
-
-
-class TestIndexerTopKSpecDecode:
-
-    def test_decode_keeps_only_accepted_indexer_rows(self):
-        seq = _make_seq_with_indexer()
-        seq._num_valid_ids = 3
-        seq._num_history_ids = 2
-        seq.history_cache.append(np.array([0, 1, 2, 100, 101], dtype=np.int64))
-        seq._num_token_ids = 3
-
-        seq._update_token_ids_decode(
-            np.array([30, 40, -1]),
-            draft_token_ids=np.array([], dtype=np.int64),
-            indexer_topk=_indexer_topk(3),
-        )
-
-        assert len(seq.all_indexer_topk) == 2
-        assert np.array_equal(seq.all_indexer_topk.get_real(), _indexer_topk(2))
-
-    def test_indexer_history_grows_geometrically_and_truncates_logically(self):
-        seq = _make_seq_with_indexer([1, 2, 3, 4])
-        seq.append_indexer_topk(_indexer_topk(4))
-
-        assert len(seq.all_indexer_topk._data) == 4
-        seq.append_indexer_topk(_indexer_topk(2))
-        assert len(seq.all_indexer_topk) == 6
-        assert len(seq.all_indexer_topk._data) == 8
-        seq.set_step(3)
-        assert len(seq.all_indexer_topk) == 3
-        assert len(seq.all_indexer_topk._data) == 8
-
-
 # ---------------------------------------------------------------------------
 # Tests for routed_experts in _update_token_ids_decode
 # ---------------------------------------------------------------------------

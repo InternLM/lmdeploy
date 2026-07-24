@@ -31,7 +31,7 @@ from .protocol import (
     ThinkingDelta,
 )
 
-_OPTIONAL_EXTENSION_FIELDS = ('output_ids', 'output_token_logprobs', 'routed_experts', 'indexer_topk')
+_OPTIONAL_EXTENSION_FIELDS = ('output_ids', 'output_token_logprobs', 'routed_experts')
 
 
 def _format_sse(data: AnthropicStreamEvent) -> str:
@@ -169,7 +169,6 @@ async def stream_messages_response(result_generator,
                                    response_parser,
                                    return_token_ids: bool = False,
                                    return_routed_experts: bool = False,
-                                   return_indexer_topk: bool = False,
                                    logprobs: bool = False) -> AsyncGenerator[str, None]:
     """Convert LMDeploy generation stream to Anthropic SSE events."""
 
@@ -227,7 +226,7 @@ async def stream_messages_response(result_generator,
 
         should_validate_complete = (
             res.finish_reason in ('stop', 'length')
-            and (return_token_ids or return_routed_experts or return_indexer_topk)
+            and (return_token_ids or return_routed_experts)
         )
         if should_validate_complete and not response_parser.validate_complete():
             res.finish_reason = 'parse_error'
@@ -316,12 +315,10 @@ async def stream_messages_response(result_generator,
     output_tokens = 0 if final_res is None else final_res.generate_token_len
     stop_reason = map_finish_reason(None if final_res is None else final_res.finish_reason)
     routed_experts = final_res.routed_experts if return_routed_experts and final_res is not None else None
-    indexer_topk = final_res.indexer_topk if return_indexer_topk and final_res is not None else None
     yield _format_sse(
         MessageDeltaEvent(
             delta=MessageDelta(stop_reason=stop_reason, stop_sequence=None),
             usage=MessageDeltaUsage(output_tokens=output_tokens),
             routed_experts=routed_experts,
-            indexer_topk=indexer_topk,
         ))
     yield _format_sse(MessageStopEvent())
