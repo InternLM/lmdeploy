@@ -58,9 +58,17 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoEW8A8:
             from .moe import TritonFusedMoEW8A8Builder
             return TritonFusedMoEW8A8Builder
+        elif layer_type == OpType.FusedMoEStaticF8:
+            from .moe import TritonFusedMoEStaticF8Builder
+            return TritonFusedMoEStaticF8Builder
         elif layer_type == OpType.FusedMoEBlockedF8:
             from .moe import TritonFusedMoEBlockedF8Builder
             return TritonFusedMoEBlockedF8Builder
+        elif layer_type == OpType.LinearStaticF8:
+            from .static_fp8_modules import (
+                TritonLinearStaticF8Builder,
+            )
+            return TritonLinearStaticF8Builder
         elif layer_type == OpType.LinearBlockedF8:
             from .blockedf8_modules import TritonLinearBlockedF8Builder
             return TritonLinearBlockedF8Builder

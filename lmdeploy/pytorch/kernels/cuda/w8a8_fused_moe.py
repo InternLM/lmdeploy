@@ -6,7 +6,10 @@ import triton.language as tl
 
 from .activation import silu_and_mul
 from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
-from .w8a8_triton_kernels import per_token_quant_int8
+from .w8a8_triton_kernels import (
+    per_tensor_quant_fp8,
+    per_token_quant_int8,
+)
 
 
 def get_cuda_autotune_config():
@@ -286,3 +289,153 @@ def fused_moe_w8a8(input: torch.Tensor,
 
     ret = moe_reduce(intermediate_cache2, topk_weights)
     return ret
+
+def fused_moe_static_fp8(
+    input: torch.Tensor,
+    gate_up_input_scale: torch.Tensor,
+    w1: torch.Tensor,
+    w1_scale: torch.Tensor,
+    down_input_scale: torch.Tensor,
+    w2: torch.Tensor,
+    w2_scale: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    topk: int,
+    out_dtype: torch.dtype = torch.float16,
+    quant_dtype: torch.dtype = torch.float8_e4m3fn,
+    expert_offset: int = 0,
+    num_experts: int = None,
+    renormalize: bool = False,
+) -> torch.Tensor:
+    """Fused MoE using static per-tensor FP8 quantization."""
+    device = input.device
+    num_tokens = input.size(0)
+    num_local_experts, gate_up_dim, _ = w1.shape
+
+    if num_experts is None:
+        num_experts = num_local_experts
+
+    full_exp = num_experts == num_local_experts
+
+    assert gate_up_input_scale.numel() == 1
+    assert down_input_scale.numel() == 1
+    assert w1.dtype == quant_dtype
+    assert w2.dtype == quant_dtype
+
+    topk_weights = _renormalize(
+        topk_weights,
+        renormalize,
+    )
+
+    sorted_idx, exp_start, exp_end = _get_sorted_idx(
+        topk_ids,
+        num_experts,
+    )
+
+    # The first GEMM reads input by original token index.
+    input_quant = per_tensor_quant_fp8(
+        input,
+        gate_up_input_scale,
+        quant_dtype=quant_dtype,
+    )
+
+    gate_up_scale_vector = (
+        gate_up_input_scale.float()
+        .reshape(1)
+        .expand(num_tokens)
+        .contiguous()
+    )
+
+    intermediate_cache1 = _make_intermediate(
+        (num_tokens, topk, gate_up_dim),
+        dtype=out_dtype,
+        device=device,
+        zeros=not full_exp,
+    )
+
+    # First GEMM: gate/up projection.
+    #
+    # reindex_c=False keeps results in expert-sorted layout,
+    # which is consumed directly by the second GEMM.
+    fused_moe_w8a8_kernel_launcher(
+        input_quant,
+        gate_up_scale_vector,
+        w1,
+        w1_scale,
+        intermediate_cache1,
+        sorted_idx=sorted_idx,
+        exp_start=exp_start,
+        exp_end=exp_end,
+        top_k=topk,
+        num_tokens=num_tokens,
+        expert_offset=expert_offset,
+        reindex_a=True,
+        reindex_c=False,
+    )
+
+    # Activation in the expert-sorted layout.
+    unflat_size = intermediate_cache1.shape[:-1]
+    intermediate_cache1 = intermediate_cache1.flatten(
+        0,
+        -2,
+    )
+
+    gate_cache = silu_and_mul(
+        intermediate_cache1,
+    )
+
+    del intermediate_cache1
+
+    gate_cache = gate_cache.unflatten(
+        0,
+        unflat_size,
+    )
+
+    # Second static quantization, using the checkpoint's
+    # calibrated down-projection input scale.
+    gate_cache_quant = per_tensor_quant_fp8(
+        gate_cache,
+        down_input_scale,
+        quant_dtype=quant_dtype,
+    )
+
+    num_routed_tokens = num_tokens * topk
+
+    down_scale_vector = (
+        down_input_scale.float()
+        .reshape(1)
+        .expand(num_routed_tokens)
+        .contiguous()
+    )
+
+    intermediate_cache2 = _make_intermediate(
+        (num_tokens, topk, w2.shape[1]),
+        dtype=out_dtype,
+        device=device,
+        zeros=not full_exp,
+    )
+
+    # Second GEMM: down projection.
+    #
+    # gate_cache is already expert-sorted, so reindex_a=False.
+    # reindex_c=True restores the original token/top-k layout.
+    fused_moe_w8a8_kernel_launcher(
+        gate_cache_quant,
+        down_scale_vector,
+        w2,
+        w2_scale,
+        intermediate_cache2,
+        sorted_idx=sorted_idx,
+        exp_start=exp_start,
+        exp_end=exp_end,
+        top_k=1,
+        num_tokens=num_tokens,
+        expert_offset=expert_offset,
+        reindex_a=False,
+        reindex_c=True,
+    )
+
+    return moe_reduce(
+        intermediate_cache2,
+        topk_weights,
+    )
