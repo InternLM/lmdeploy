@@ -23,10 +23,11 @@ bool GdrKernelRegistry::Add(std::unique_ptr<GdrKernel> kernel)
     return true;
 }
 
-const GdrKernel* GdrKernelRegistry::Find(const Operation& operation, const PlanningContext& context) const
+const GdrKernel*
+GdrKernelRegistry::Find(const Operation& operation, const PlanningContext& context, std::string_view architecture) const
 {
     for (const auto& kernel : kernels_) {
-        if (kernel->Match(operation, context)) {
+        if (std::string_view{kernel->spec().architecture} == architecture && kernel->Match(operation, context)) {
             return kernel.get();
         }
     }

@@ -4,7 +4,7 @@
 
 namespace turbomind::linear_attn::delta_rule::detail {
 
-bool PlanPreSm90Operation(const GdrKernelSpec&, const PlanningContext&, Plan*);
+bool PlanPreSm90Operation(const GdrKernelSpec&, const Operation&, const PlanningContext&, Plan*);
 
 void RunPreSm90RecurrentF16F16(const Arguments&, const Plan&, cudaStream_t);
 void RunPreSm90RecurrentF16F32(const Arguments&, const Plan&, cudaStream_t);

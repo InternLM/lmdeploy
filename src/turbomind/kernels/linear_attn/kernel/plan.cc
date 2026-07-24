@@ -77,10 +77,11 @@ Problem BuildProblem(const PlanningContext& context, const GdrKernelSpec& spec)
     return problem;
 }
 
-ContextParallelPlan BuildDisabledContextParallelPlan(const Problem& problem)
+ContextParallelPlan BuildDisabledContextParallelPlan(const Problem& problem, ContextParallelLevel cp_level)
 {
     TensorPlan          zero{core::Layout{{0}}, kInt32};
     ContextParallelPlan cp{};
+    cp.cp_level           = cp_level;
     cp.total_segments     = problem.sequence_num;
     cp.segment_tokens     = problem.token_num;
     cp.segment_chunks     = IsRecurrentGdr(problem) ? CeilDiv(problem.token_num, problem.chunk_size) : 0;

@@ -45,6 +45,8 @@ private:
     const int      tp_size_;
     const DataType recurrent_state_dtype_;
 
+    const linear_attn::delta_rule::ContextParallelLevel gdr_cp_level_;
+
     LlamaLinear& linear_;
 
     // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
