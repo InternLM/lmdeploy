@@ -257,3 +257,48 @@ async def _run_max_new_tokens_zero_cleans_up_session():
 
 def test_max_new_tokens_zero_cleans_up_session():
     asyncio.run(_run_max_new_tokens_zero_cleans_up_session())
+
+
+async def _run_generate_disconnect_returns_client_disconnected_response():
+    from types import SimpleNamespace
+
+    from fastapi.responses import JSONResponse
+
+    from lmdeploy.serve.core.async_engine import GenOut
+    from lmdeploy.serve.openai.api_server import VariableInterface, generate
+    from lmdeploy.serve.openai.protocol import GenerateReqInput
+
+    class _FakeAsyncEngine:
+        epoch = 0
+
+        def __init__(self):
+            self.backend_config = SimpleNamespace()
+            self.session_mgr = SessionManager()
+
+        async def generate(self, **kwargs):
+            yield GenOut(response='hi', input_token_len=1, generate_token_len=1, finish_reason=None)
+            await asyncio.Event().wait()
+
+    class _FakeRawRequest:
+
+        async def json(self):
+            return {}
+
+        async def is_disconnected(self):
+            return True
+
+    origin_async_engine = VariableInterface.async_engine
+    VariableInterface.async_engine = _FakeAsyncEngine()
+    try:
+        request = GenerateReqInput(prompt='hello', stream=False)
+        result = await generate(request, _FakeRawRequest())
+    finally:
+        VariableInterface.async_engine = origin_async_engine
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 400
+    assert b'Client disconnected' in result.body
+
+
+def test_generate_disconnect_returns_client_disconnected_response():
+    asyncio.run(_run_generate_disconnect_returns_client_disconnected_response())

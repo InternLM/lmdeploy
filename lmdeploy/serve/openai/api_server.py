@@ -1081,7 +1081,9 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                      completion_tokens=res.generate_token_len)
         response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
-    await _inner_call()
+    inner_result = await _inner_call()
+    if inner_result is not None:
+        return inner_result
     return response
 
 
