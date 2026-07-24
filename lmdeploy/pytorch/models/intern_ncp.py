@@ -16,14 +16,16 @@ Modules are added incrementally. Current state:
   - ``_ConceptPredictor``: concept block container and prediction heads.
   - top-level encoder/decoder containers, fusion norms, route norms, and
     checkpoint loading for the implemented module tree.
+  - packed non-decode prefill path through encoder -> concept
+    predictor/quantizer -> fusion -> decoder, with per-request chunk-stream
+    attention metadata derived explicitly from token-stream metadata.
 
-Results are NOT yet correct end-to-end — the encoder/concept/decoder control
-flow still needs runtime metadata for the compressed concept stream. The
-module structure mirrors the reference for readability.
+Decode still needs the graph-safe compressed concept-stream runtime contract.
+The module structure mirrors the reference for readability.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -154,6 +156,56 @@ class ConceptChunkStateUpdateResult:
     concept_update_mask: torch.Tensor
     valid_state_mask: torch.Tensor
     state_ids: torch.Tensor
+
+
+@dataclass
+class ConceptPrefillMetadata:
+    """Packed prefill metadata derived once from token attention metadata.
+
+    Field groups:
+      - token stream: original engine-provided token request boundaries.
+      - concept stream: compact chunk-token request boundaries and positions
+        used by the concept predictor attention.
+      - chunk merge: token -> concept ids and helper ids used to reduce encoder
+        token states into concept states without a Python batch loop.
+      - repeat/gather: concept -> token ids used to project compact concept
+        states back to the packed token stream.
+      - scalar bounds: eager compact sizes / upper bounds needed by metadata and
+        attention launch parameters.
+    """
+
+    # Token stream metadata, shape [batch]. This is the original packed prefill
+    # layout consumed by normal token attention.
+    token_q_seqlens: torch.Tensor
+    token_q_start_loc: torch.Tensor
+
+    # Concept stream metadata, shape [batch] plus compact concept positions.
+    # These describe the shorter chunk-token stream consumed by concept
+    # predictor attention.
+    concept_q_seqlens: torch.Tensor
+    concept_q_start_loc: torch.Tensor
+    concept_position_ids: torch.Tensor
+
+    # Chunk merge metadata. ``merge_token_to_concept`` maps each packed token to
+    # the compact concept row that owns it, or -1 when the token is dropped from
+    # concept production. Counts/first/last ids implement mean/first/last merge.
+    merge_token_to_concept: torch.Tensor
+    merge_token_counts: torch.Tensor
+    merge_first_token_ids: torch.Tensor
+    merge_last_token_ids: torch.Tensor
+    merge_short_concept_mask: torch.Tensor
+
+    # Repeat/gather metadata. Maps each packed token row to the compact concept
+    # row it should read after shift semantics are applied, or -1 for the
+    # zero-concept row.
+    token_to_concept: torch.Tensor
+
+    # Scalar sizes/bounds. ``num_concepts_total`` is the exact compact size in
+    # eager prefill; ``max_concepts_per_request`` is the per-request attention
+    # launch bound.
+    num_tokens_total: int
+    num_concepts_total: int
+    max_concepts_per_request: int
 
 
 def _get_configured_window(config: PretrainedConfig):
@@ -1588,15 +1640,28 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         """Model forward, return hidden_states (logits computed by runtime)."""
         concept_metadata = self._build_concept_metadata(position_ids, attn_metadata, state_ids)
         concept_caches = self._build_concept_caches(past_key_values, state_caches)
-        _ = concept_metadata, concept_caches
         if inputs_embeds is None:
-            # NOTE: placeholder. The real path is
-            #   embed -> encoder -> concept(vq+predictor) -> fusion -> decoder
-            # added incrementally. Returns raw embeddings as hidden_states.
             hidden_states = self.embedding(input_ids)
         else:
             hidden_states = inputs_embeds
-        return hidden_states
+
+        if concept_metadata.is_decoding:
+            # TODO: wire the decode control flow using ConceptLMRuntimeOps
+            # state-cache updates. Keeping the previous placeholder behavior
+            # avoids mixing decode-state work into the prefill patch.
+            return hidden_states
+
+        hidden_states, prefill_position_ids = self._normalize_prefill_inputs(
+            hidden_states,
+            position_ids,
+            attn_metadata,
+        )
+        return self._forward_prefill_packed(
+            hidden_states,
+            prefill_position_ids,
+            concept_metadata,
+            concept_caches,
+        )
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1684,48 +1749,328 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         """
         return False
 
-    def _merge_chunks(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Reference chunk merge for dense ``[seq, batch, hidden]`` states."""
-        assert hidden_states.dim() == 3, (
-            f'_merge_chunks currently expects dense [seq, batch, hidden], got {tuple(hidden_states.shape)}.')
-        seq_len, batch_size, hidden_size = hidden_states.shape
-        chunk_size = int(self.config.concept_chunk_size)
-        if seq_len < chunk_size:
-            return hidden_states.mean(dim=0, keepdim=True)
-
-        usable = (seq_len // chunk_size) * chunk_size
-        chunks = hidden_states[:usable].reshape(usable // chunk_size, chunk_size, batch_size, hidden_size)
-        merge_method = getattr(self.config, 'concept_chunk_merge_method', 'meanpooling')
-        if merge_method == 'first':
-            return chunks[:, 0]
-        if merge_method == 'last':
-            return chunks[:, -1]
-        return chunks.mean(dim=1)
-
-    def _repeat_shift(self, concept_states: torch.Tensor, seq_len: int) -> torch.Tensor:
-        """Repeat chunk-level concept states back to the token timeline."""
-        chunk_size = int(self.config.concept_chunk_size)
-        shifted = torch.cat((torch.zeros_like(concept_states[:1]), concept_states), dim=0)
-        repeated = shifted.repeat_interleave(chunk_size, dim=0)[:int(seq_len) + 1]
-        if bool(getattr(self.config, 'concept_shift_feature', True)):
-            repeated = repeated[1:]
-        else:
-            repeated = repeated[:seq_len]
-        if repeated.shape[0] < seq_len:
-            pad_len = int(seq_len) - repeated.shape[0]
-            repeated = torch.cat((repeated, repeated.new_zeros(pad_len, *repeated.shape[1:])), dim=0)
-        return repeated[:seq_len]
-
-    def _build_encoder_concept_states(self, encoder_raw_states: list[torch.Tensor]) -> torch.Tensor:
-        """Build chunk-level encoder states used by the concept predictor."""
-        chunks = [self._merge_chunks(state) for state in encoder_raw_states[:-1]]
-        assert len(chunks) > 0, 'ConceptLM concept-read-encoder route requires at least one encoder source state.'
-        states = torch.stack(chunks, dim=2)
-        return self.concept_predictor.normalize_encoder_concept_states(states)
-
     def _route_gate(self, layer_idx: int) -> torch.Tensor:
         """Return decoder route gate ``[decoder_dd_scale, concept_route_scale]``."""
         return self.final_read_concept_gate_logits[int(layer_idx)].float().softmax(dim=-1)
+
+    def _normalize_prefill_inputs(self,
+                                  hidden_states: torch.Tensor,
+                                  position_ids: torch.Tensor,
+                                  attn_metadata: Any = None):
+        """Normalize LMDeploy prefill inputs to packed token layout.
+
+        Engine layout stays fixed as ``[1, total_tokens, hidden]`` with
+        ``position_ids=[1, total_tokens]``. Per-request boundaries come from
+        ``attn_metadata.q_seqlens``/``q_start_loc`` and are used only to build
+        the concept stream.
+        """
+        if attn_metadata is None or getattr(attn_metadata, 'q_seqlens', None) is None:
+            raise RuntimeError('ConceptLM prefill requires q_seqlens attention metadata.')
+        if getattr(attn_metadata, 'is_decoding', False):
+            raise RuntimeError('ConceptLM prefill input normalization received decode metadata.')
+
+        if hidden_states.dim() != 3 or hidden_states.size(0) != 1:
+            raise NotImplementedError(
+                f'ConceptLM prefill expects fixed engine layout [1, total_tokens, hidden], '
+                f'got {tuple(hidden_states.shape)}.')
+
+        total_tokens = hidden_states.size(1)
+        if position_ids.dim() != 2 or position_ids.size(0) != 1:
+            raise NotImplementedError(
+                f'ConceptLM prefill expects fixed position layout [1, total_tokens], '
+                f'got {tuple(position_ids.shape)}.')
+        if position_ids.size(1) != total_tokens:
+            raise ValueError(f'position_ids length {position_ids.size(1)} does not match token length {total_tokens}.')
+
+        q_seqlens = attn_metadata.q_seqlens
+        if q_seqlens.dim() != 1:
+            raise ValueError(f'ConceptLM prefill expects 1-D q_seqlens, got {tuple(q_seqlens.shape)}.')
+
+        hidden_states = hidden_states[0].contiguous()
+        return hidden_states, position_ids[0].to(device=hidden_states.device)
+
+    @staticmethod
+    def _concept_count_from_seq_len(seq_len: int, chunk_size: int) -> int:
+        """Return reference ConceptLM chunk count for one request length."""
+        seq_len = int(seq_len or 0)
+        if seq_len <= 0:
+            return 0
+        if seq_len < chunk_size:
+            return 1
+        return seq_len // chunk_size
+
+    @staticmethod
+    def _concept_counts_from_q_seqlens(q_seqlens: torch.Tensor, chunk_size: int) -> torch.Tensor:
+        """Vectorized version of ``_concept_count_from_seq_len``."""
+        counts = torch.div(q_seqlens, chunk_size, rounding_mode='floor').clamp(min=1)
+        return torch.where(q_seqlens > 0, counts, torch.zeros_like(q_seqlens))
+
+    @staticmethod
+    def _repeat_slot_ids(token_pos: torch.Tensor, chunk_size: int, shift_feature: bool) -> torch.Tensor:
+        """Return local concept slot read by each token after shift semantics."""
+        if shift_feature:
+            return torch.div(token_pos + 1, chunk_size, rounding_mode='floor') - 1
+        return torch.div(token_pos, chunk_size, rounding_mode='floor') - 1
+
+    @staticmethod
+    def _get_max_concepts_per_request(token_attn_metadata: Any,
+                                      concept_q_seqlens: torch.Tensor,
+                                      chunk_size: int) -> int:
+        """Return per-request concept attention bound without hidden context access."""
+        max_q_seqlen = getattr(token_attn_metadata, 'max_q_seqlen', None)
+        if max_q_seqlen is not None:
+            return ConceptLMV22VQForCausalLM._concept_count_from_seq_len(int(max_q_seqlen), chunk_size)
+
+        # Test/direct-call fallback. Serving should use the scheduler-provided
+        # Python max_q_seqlen above, as in DSV4 metadata construction.
+        return int(concept_q_seqlens.max().item()) if concept_q_seqlens.numel() > 0 else 0
+
+    def _build_prefill_metadata(self,
+                                token_attn_metadata: Any,
+                                position_ids: torch.Tensor) -> ConceptPrefillMetadata:
+        """Build packed token-to-concept metadata for batched prefill."""
+        if token_attn_metadata is None:
+            raise RuntimeError('ConceptLM prefill requires attention metadata.')
+        if getattr(token_attn_metadata, 'is_decoding', False):
+            raise RuntimeError('ConceptLM prefill metadata cannot be built from decode metadata.')
+
+        q_seqlens = token_attn_metadata.q_seqlens
+        q_start_loc = getattr(token_attn_metadata, 'q_start_loc', None)
+        if q_start_loc is None:
+            q_start_loc = F.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))[:-1]
+
+        total_tokens = int(position_ids.numel())
+        chunk_size = int(self.config.concept_chunk_size)
+        shift_feature = bool(getattr(self.config, 'concept_shift_feature', True))
+
+        q_seqlens_long = q_seqlens.to(dtype=torch.long, device=position_ids.device)
+        q_start_loc_long = q_start_loc.to(dtype=torch.long, device=position_ids.device)
+        cu_q_seqlens = getattr(token_attn_metadata, 'cu_seqlens_q', None)
+        if cu_q_seqlens is None:
+            cu_q_seqlens = F.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
+        cu_q_seqlens_long = cu_q_seqlens.to(dtype=torch.long, device=position_ids.device)
+
+        token_ids = torch.arange(total_tokens, dtype=torch.long, device=position_ids.device)
+        token_seq = torch.searchsorted(cu_q_seqlens_long[1:], token_ids, right=True)
+        token_pos = token_ids - cu_q_seqlens_long[token_seq]
+
+        concept_q_seqlens_long = self._concept_counts_from_q_seqlens(q_seqlens_long, chunk_size)
+        concept_q_seqlens = concept_q_seqlens_long.to(dtype=q_seqlens.dtype, device=q_seqlens.device)
+        concept_q_start_loc = F.pad(torch.cumsum(concept_q_seqlens, dim=0, dtype=torch.int32), (1, 0))[:-1]
+        concept_q_start_loc_long = concept_q_start_loc.to(dtype=torch.long, device=position_ids.device)
+        concept_cu_seqlens_long = F.pad(torch.cumsum(concept_q_seqlens_long, dim=0), (1, 0))
+
+        # TODO: remove this eager compact-size scalar read by moving ConceptLM
+        # concept-stream allocation/compaction into the engine/backend contract,
+        # like DSV4's precomputed metadata and Qwen3.5's state-cache metadata.
+        num_concepts_total = int(concept_cu_seqlens_long[-1].item())
+        concept_ids = torch.arange(num_concepts_total, dtype=torch.long, device=position_ids.device)
+        concept_seq = torch.searchsorted(concept_cu_seqlens_long[1:], concept_ids, right=True)
+        local_concept_ids = concept_ids - concept_cu_seqlens_long[concept_seq]
+        concept_token_start = q_start_loc_long[concept_seq] + local_concept_ids * chunk_size
+        concept_position_ids = position_ids[concept_token_start]
+
+        seq_concept_start = concept_q_start_loc_long[token_seq]
+        seq_concept_count = concept_q_seqlens_long[token_seq]
+        repeat_slots = self._repeat_slot_ids(token_pos, chunk_size, shift_feature)
+        valid_repeat = (repeat_slots >= 0) & (repeat_slots < seq_concept_count)
+        token_to_concept = torch.where(
+            valid_repeat,
+            seq_concept_start + repeat_slots,
+            torch.full_like(repeat_slots, -1),
+        )
+
+        merge_slots = torch.div(token_pos, chunk_size, rounding_mode='floor')
+        valid_merge = (merge_slots >= 0) & (merge_slots < seq_concept_count)
+        merge_token_to_concept = torch.where(
+            valid_merge,
+            seq_concept_start + merge_slots,
+            torch.full_like(merge_slots, -1),
+        )
+        safe_merge_ids = merge_token_to_concept.clamp(min=0)
+        merge_token_counts = torch.zeros(num_concepts_total, dtype=torch.int32, device=position_ids.device)
+        merge_token_counts.index_add_(0, safe_merge_ids, valid_merge.to(dtype=torch.int32))
+
+        concept_seq_len = q_seqlens_long[concept_seq]
+        merge_first_pos = torch.where(
+            concept_seq_len < chunk_size,
+            torch.zeros_like(local_concept_ids),
+            local_concept_ids * chunk_size,
+        )
+        merge_last_pos = torch.where(
+            concept_seq_len < chunk_size,
+            (concept_seq_len - 1).clamp(min=0),
+            local_concept_ids * chunk_size + chunk_size - 1,
+        )
+        merge_first_token_ids = q_start_loc_long[concept_seq] + merge_first_pos
+        merge_last_token_ids = q_start_loc_long[concept_seq] + merge_last_pos
+        merge_short_concept_mask = concept_seq_len < chunk_size
+        max_concepts_per_request = self._get_max_concepts_per_request(
+            token_attn_metadata,
+            concept_q_seqlens_long,
+            chunk_size,
+        )
+
+        return ConceptPrefillMetadata(
+            token_q_seqlens=q_seqlens,
+            token_q_start_loc=q_start_loc,
+            concept_q_seqlens=concept_q_seqlens,
+            concept_q_start_loc=concept_q_start_loc,
+            concept_position_ids=concept_position_ids,
+            merge_token_to_concept=merge_token_to_concept,
+            merge_token_counts=merge_token_counts,
+            merge_first_token_ids=merge_first_token_ids,
+            merge_last_token_ids=merge_last_token_ids,
+            merge_short_concept_mask=merge_short_concept_mask,
+            token_to_concept=token_to_concept,
+            num_tokens_total=total_tokens,
+            num_concepts_total=num_concepts_total,
+            max_concepts_per_request=max_concepts_per_request,
+        )
+
+    @staticmethod
+    def _merge_chunks_mean_packed(hidden_states: torch.Tensor,
+                                  prefill_metadata: ConceptPrefillMetadata) -> torch.Tensor:
+        """Mean-pool packed token states by precomputed concept ids."""
+        merge_token_to_concept = prefill_metadata.merge_token_to_concept.to(device=hidden_states.device)
+        valid_merge = (merge_token_to_concept >= 0).to(dtype=hidden_states.dtype).unsqueeze(-1)
+        safe_merge_ids = merge_token_to_concept.clamp(min=0)
+        merged = hidden_states.new_zeros((prefill_metadata.num_concepts_total, hidden_states.size(-1)))
+        merged.index_add_(0, safe_merge_ids, hidden_states * valid_merge)
+        counts = prefill_metadata.merge_token_counts.clamp(min=1).to(device=hidden_states.device,
+                                                                      dtype=hidden_states.dtype)
+        return merged / counts.unsqueeze(-1)
+
+    def _merge_chunks_packed(self,
+                             hidden_states: torch.Tensor,
+                             prefill_metadata: ConceptPrefillMetadata) -> torch.Tensor:
+        """Merge packed token states into packed per-request concept states."""
+        assert hidden_states.dim() == 2, (
+            f'_merge_chunks_packed expects [total_tokens, hidden], got {tuple(hidden_states.shape)}.')
+        merge_method = getattr(self.config, 'concept_chunk_merge_method', 'meanpooling')
+        if prefill_metadata.num_concepts_total <= 0:
+            raise RuntimeError('ConceptLM prefill produced no concept chunks.')
+        if merge_method == 'first':
+            merged = hidden_states[prefill_metadata.merge_first_token_ids]
+            short_mean = self._merge_chunks_mean_packed(hidden_states, prefill_metadata)
+            return torch.where(prefill_metadata.merge_short_concept_mask[:, None], short_mean, merged)
+        if merge_method == 'last':
+            merged = hidden_states[prefill_metadata.merge_last_token_ids]
+            short_mean = self._merge_chunks_mean_packed(hidden_states, prefill_metadata)
+            return torch.where(prefill_metadata.merge_short_concept_mask[:, None], short_mean, merged)
+
+        return self._merge_chunks_mean_packed(hidden_states, prefill_metadata)
+
+    @staticmethod
+    def _gather_zero_prefixed_concepts(concept_states_with_zero: torch.Tensor,
+                                       prefill_metadata: ConceptPrefillMetadata) -> torch.Tensor:
+        """Gather zero-prefixed concept rows to packed token rows."""
+        token_to_concept = prefill_metadata.token_to_concept.to(device=concept_states_with_zero.device)
+        gather_ids = torch.clamp(token_to_concept + 1, min=0)
+        return concept_states_with_zero[gather_ids]
+
+    def _repeat_shift_packed(self,
+                             concept_states: torch.Tensor,
+                             prefill_metadata: ConceptPrefillMetadata) -> torch.Tensor:
+        """Gather packed concept states back to packed token states."""
+        concept_states_with_zero = torch.cat((torch.zeros_like(concept_states[:1]), concept_states), dim=0)
+        return self._gather_zero_prefixed_concepts(concept_states_with_zero, prefill_metadata)
+
+    def _repeat_shift_source_states_packed(self,
+                                           concept_states_with_zero: torch.Tensor,
+                                           prefill_metadata: ConceptPrefillMetadata) -> torch.Tensor:
+        """Gather zero-prefixed packed concept source states to token rows."""
+        return self._gather_zero_prefixed_concepts(concept_states_with_zero, prefill_metadata)
+
+    def _build_encoder_concept_states_packed(self,
+                                             encoder_raw_states: list[torch.Tensor],
+                                             prefill_metadata: ConceptPrefillMetadata) -> torch.Tensor:
+        """Build packed chunk-level encoder states used by the concept predictor."""
+        chunks = [self._merge_chunks_packed(state, prefill_metadata) for state in encoder_raw_states[:-1]]
+        assert len(chunks) > 0, 'ConceptLM concept-read-encoder route requires at least one encoder source state.'
+        states = torch.stack(chunks, dim=-2)
+        return self.concept_predictor.normalize_encoder_concept_states(states)
+
+    def _build_concept_prefill_metadata(self,
+                                        token_attn_metadata: Any,
+                                        prefill_metadata: ConceptPrefillMetadata):
+        """Build chunk-stream attention metadata for packed prefill."""
+        if token_attn_metadata is None:
+            raise RuntimeError('ConceptLM prefill requires attention metadata for concept predictor attention.')
+        if getattr(token_attn_metadata, 'is_decoding', False):
+            raise RuntimeError('ConceptLM concept prefill metadata cannot be built from decode metadata.')
+
+        concept_q_seqlens = prefill_metadata.concept_q_seqlens
+        concept_q_start_loc = prefill_metadata.concept_q_start_loc
+        concept_cu_seqlens = torch.nn.functional.pad(
+            torch.cumsum(concept_q_seqlens, dim=0, dtype=torch.int32),
+            (1, 0),
+        )
+        max_concept_seqlen = int(prefill_metadata.max_concepts_per_request)
+
+        updates = dict(
+            is_decoding=False,
+            q_start_loc=concept_q_start_loc,
+            q_seqlens=concept_q_seqlens,
+            kv_seqlens=concept_q_seqlens,
+            cu_seqlens_q=concept_cu_seqlens,
+            cu_seqlens_k=concept_cu_seqlens,
+        )
+        if hasattr(token_attn_metadata, 'kv_start_loc'):
+            updates['kv_start_loc'] = concept_q_start_loc
+        if hasattr(token_attn_metadata, 'kv_flatten_size'):
+            updates['kv_flatten_size'] = int(prefill_metadata.num_concepts_total)
+        if hasattr(token_attn_metadata, 'max_q_seqlen'):
+            updates['max_q_seqlen'] = max_concept_seqlen
+        if hasattr(token_attn_metadata, 'max_kv_seqlen'):
+            updates['max_kv_seqlen'] = max_concept_seqlen
+        return replace(token_attn_metadata, **updates)
+
+    def _forward_prefill_packed(self,
+                                hidden_states: torch.Tensor,
+                                position_ids: torch.Tensor,
+                                concept_metadata: ConceptMetadata,
+                                concept_caches: ConceptCaches):
+        """Packed non-decode ConceptLM forward."""
+        if (concept_caches.encoder_past_key_values is None or concept_caches.concept_past_key_values is None
+                or concept_caches.decoder_past_key_values is None):
+            raise RuntimeError('ConceptLM prefill requires encoder, concept, and decoder KV caches.')
+        prefill_metadata = self._build_prefill_metadata(concept_metadata.attn_metadata, position_ids)
+        hidden_states, encoder_raw_states = self._encode(
+            hidden_states,
+            position_ids,
+            past_key_values=concept_caches.encoder_past_key_values,
+            attn_metadata=concept_metadata.attn_metadata,
+        )
+        concept_hidden = self._merge_chunks_packed(hidden_states, prefill_metadata)
+        concept_hidden = self.concept_vq_input_norm(concept_hidden)
+        encoder_concept_states = self._build_encoder_concept_states_packed(encoder_raw_states, prefill_metadata)
+        concept_attn_metadata = self._build_concept_prefill_metadata(
+            concept_metadata.attn_metadata,
+            prefill_metadata,
+        )
+        concept_logits, concept_raw_states = self.concept_predictor(
+            concept_hidden,
+            encoder_concept_states,
+            prefill_metadata.concept_position_ids,
+            past_key_values=concept_caches.concept_past_key_values,
+            attn_metadata=concept_attn_metadata,
+        )
+        predicted_vectors = self.concept_quantizer(concept_logits)
+        repeated_concepts = self._repeat_shift_packed(predicted_vectors, prefill_metadata)
+        decoder_input = self.fusion_tok_norm(hidden_states) + self.fusion_norm_alpha.to(
+            hidden_states.dtype) * self.fusion_hl_norm(repeated_concepts.to(hidden_states.dtype))
+        final_hidden = self._decode(
+            decoder_input,
+            encoder_raw_states,
+            repeated_concepts,
+            concept_raw_states,
+            position_ids,
+            past_key_values=concept_caches.decoder_past_key_values,
+            attn_metadata=concept_metadata.attn_metadata,
+            prefill_metadata=prefill_metadata,
+        )
+        return final_hidden.unsqueeze(0).contiguous()
 
     def _encode(self,
                 hidden_states: torch.Tensor,
@@ -1764,15 +2109,29 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 concept_raw_states: list[torch.Tensor],
                 position_ids: torch.Tensor,
                 past_key_values: list[list[torch.Tensor]] | None = None,
-                attn_metadata: Any = None):
+                attn_metadata: Any = None,
+                prefill_metadata: ConceptPrefillMetadata | None = None):
         """Decoder stack plus decoder DD and residual routes."""
-        decoder_encoder_states = torch.stack(tuple(encoder_raw_states), dim=2)
-        decoder_encoder_states = self.decoder_read_encoder_shared_source_norm(decoder_encoder_states)
+        if prefill_metadata is None:
+            decoder_encoder_states = torch.stack(tuple(encoder_raw_states), dim=2)
+            decoder_encoder_states = self.decoder_read_encoder_shared_source_norm(decoder_encoder_states)
 
-        concept_states = torch.stack(tuple(concept_raw_states), dim=2)
-        zero_chunk = torch.zeros_like(concept_states[:1])
-        concept_states = torch.cat((zero_chunk, concept_states), dim=0)
-        concept_states = self.decoder_read_concept_shared_source_norm(concept_states)
+            concept_states = torch.stack(tuple(concept_raw_states), dim=2)
+            zero_chunk = torch.zeros_like(concept_states[:1])
+            concept_states = torch.cat((zero_chunk, concept_states), dim=0)
+            concept_states = self.decoder_read_concept_shared_source_norm(concept_states)
+            decoder_encoder_source_dim = 2
+            repeated_concept_states = None
+        else:
+            decoder_encoder_states = torch.stack(tuple(encoder_raw_states), dim=-2)
+            decoder_encoder_states = self.decoder_read_encoder_shared_source_norm(decoder_encoder_states)
+
+            concept_states = torch.stack(tuple(concept_raw_states), dim=-2)
+            zero_chunk = torch.zeros_like(concept_states[:1])
+            concept_states = torch.cat((zero_chunk, concept_states), dim=0)
+            concept_states = self.decoder_read_concept_shared_source_norm(concept_states)
+            decoder_encoder_source_dim = -2
+            repeated_concept_states = self._repeat_shift_source_states_packed(concept_states, prefill_metadata)
 
         chunk_size = int(self.config.concept_chunk_size)
         hidden_states = decoder_input
@@ -1800,16 +2159,24 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             hidden_states = self.decoder_read_encoder_routes[layer_idx](
                 hidden_states,
                 decoder_encoder_states,
-                source_dim=2,
+                source_dim=decoder_encoder_source_dim,
             )
-            hidden_states = self.decoder_read_concept_routes[layer_idx].forward_repeated_chunks(
-                hidden_states,
-                concept_states,
-                chunk_size,
-                bool(getattr(self.config, 'concept_shift_feature', True)),
-                residual_scale=gate[1],
-                source_dim=2,
-            )
+            if repeated_concept_states is None:
+                hidden_states = self.decoder_read_concept_routes[layer_idx].forward_repeated_chunks(
+                    hidden_states,
+                    concept_states,
+                    chunk_size,
+                    bool(getattr(self.config, 'concept_shift_feature', True)),
+                    residual_scale=gate[1],
+                    source_dim=2,
+                )
+            else:
+                hidden_states = self.decoder_read_concept_routes[layer_idx](
+                    hidden_states,
+                    repeated_concept_states,
+                    residual_scale=gate[1],
+                    source_dim=-2,
+                )
 
         if self.decoder.final_layernorm is not None:
             hidden_states = self.decoder.final_layernorm(hidden_states)
