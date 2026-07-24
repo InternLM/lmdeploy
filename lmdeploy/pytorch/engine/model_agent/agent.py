@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import pybase64
+import os
 import torch
 import torch.distributed as dist
 from torch.profiler import record_function
@@ -1226,6 +1227,11 @@ class BaseModelAgent:
             return ipc_tensor.clone() if require_clone else ipc_tensor
 
         def _deserialize_weights(serialized_data):
+            if os.environ.get('LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS', '0') != '1':
+                raise ValueError(
+                    'Pickled serialized_named_tensors is disabled by default. '
+                    'Pass structured tensors, or set LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1 '
+                    'only for trusted local IPC.')
             weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
             if request.load_format == 'flattened_bucket':
                 metadata: list[FlattenedTensorMetadata] = weights['metadata']
