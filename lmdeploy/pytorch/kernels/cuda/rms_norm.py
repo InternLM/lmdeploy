@@ -14,7 +14,7 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
     out = xf * tl.math.rsqrt(var + eps)
-    out = w * out.to(x.dtype)
+    out = w * out.to(xf.dtype)
     return out
 
 

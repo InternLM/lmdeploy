@@ -474,7 +474,7 @@ class AsyncEngine:
             session_id: int | Session,
             gen_config: GenerationConfig | None = None,
             tools: list[object] | None = None,
-            reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+            reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
             stream_response: bool = True,
             do_preprocess: bool = True,
             adapter_name: str | None = None,
