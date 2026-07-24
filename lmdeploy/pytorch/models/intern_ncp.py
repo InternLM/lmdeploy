@@ -14,13 +14,16 @@ Modules are added incrementally. Current state:
   - ``_ResidualRoute``: replicated residual source mixer for decoder routes.
   - ``_TwoRouteAdd``: decoder depth mixing plus final-concept residual route.
   - ``_ConceptPredictor``: concept block container and prediction heads.
+  - top-level encoder/decoder containers, fusion norms, route norms, and
+    checkpoint loading for the implemented module tree.
 
 Results are NOT yet correct end-to-end — the encoder/concept/decoder control
-flow is added in later steps. The module structure mirrors the reference for
-readability.
+flow still needs runtime metadata for the compressed concept stream. The
+module structure mirrors the reference for readability.
 """
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -29,7 +32,8 @@ from torch.nn import functional as F
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ConceptLMRuntimeOps, RMSNorm, SiluAndMul,
+                                 build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear,
                                         build_merged_colwise_linear, build_o_proj, build_qkv_proj)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -41,6 +45,115 @@ from .utils.model import DeployModelMixinV1, build_embedding
 _CONFIG_VALUE = object()
 _HistoryStates = list[torch.Tensor] | tuple[torch.Tensor, ...] | torch.Tensor
 _SourceStates = list[torch.Tensor] | tuple[torch.Tensor, ...] | torch.Tensor | None
+
+
+@dataclass
+class ConceptMetadata:
+    """Layer-invariant ConceptLM runtime metadata.
+
+    This mirrors the DSV4 pattern: ``StepContext`` is read at the top-level
+    model boundary, then submodules receive explicit metadata instead of
+    reaching back into the engine context. The dense/reference helpers below do
+    not consume all fields yet; they are part of the serving decode contract.
+    """
+
+    chunk_size: int
+    merge_method: str
+    shift_feature: bool
+    is_decoding: bool | None = None
+    state_ids: torch.Tensor | None = None
+    position_ids: torch.Tensor | None = None
+    block_offsets: torch.Tensor | None = None
+    q_seqlens: torch.Tensor | None = None
+    kv_seqlens: torch.Tensor | None = None
+    q_start_loc: torch.Tensor | None = None
+    attn_metadata: Any = None
+
+    @classmethod
+    def build(cls,
+              config: PretrainedConfig,
+              position_ids: torch.Tensor | None = None,
+              attn_metadata: Any = None,
+              state_ids: torch.Tensor | None = None):
+        """Build ConceptLM metadata from explicit forward inputs."""
+        return cls(
+            chunk_size=int(config.concept_chunk_size),
+            merge_method=getattr(config, 'concept_chunk_merge_method', 'meanpooling'),
+            shift_feature=bool(getattr(config, 'concept_shift_feature', True)),
+            is_decoding=getattr(attn_metadata, 'is_decoding', None),
+            state_ids=state_ids,
+            position_ids=position_ids,
+            block_offsets=getattr(attn_metadata, 'block_offsets', None),
+            q_seqlens=getattr(attn_metadata, 'q_seqlens', None),
+            kv_seqlens=getattr(attn_metadata, 'kv_seqlens', None),
+            q_start_loc=getattr(attn_metadata, 'q_start_loc', None),
+            attn_metadata=attn_metadata,
+        )
+
+
+@dataclass
+class ConceptCaches:
+    """ConceptLM cache views resolved once at the top-level model boundary."""
+
+    encoder_past_key_values: list[list[torch.Tensor]] | None = None
+    concept_past_key_values: list[list[torch.Tensor]] | None = None
+    decoder_past_key_values: list[list[torch.Tensor]] | None = None
+    state_caches: list[torch.Tensor] | None = None
+    chunk_source_idx: int = 0
+    last_raw_idx: int = 1
+    last_final_idx: int = 2
+
+    @classmethod
+    def build(cls,
+              config: PretrainedConfig,
+              past_key_values: list[list[torch.Tensor]] | None = None,
+              state_caches: list[torch.Tensor] | None = None):
+        """Build ConceptLM cache views from engine-provided caches."""
+        encoder_past_key_values, concept_past_key_values, decoder_past_key_values = (
+            _split_concept_past_key_values(config, past_key_values))
+        return cls(
+            encoder_past_key_values=encoder_past_key_values,
+            concept_past_key_values=concept_past_key_values,
+            decoder_past_key_values=decoder_past_key_values,
+            state_caches=state_caches,
+            chunk_source_idx=int(getattr(config, 'concept_state_chunk_source_idx', 0)),
+            last_raw_idx=int(getattr(config, 'concept_state_last_raw_idx', 1)),
+            last_final_idx=int(getattr(config, 'concept_state_last_final_idx', 2)),
+        )
+
+    def state_cache(self, state_idx: int) -> torch.Tensor | None:
+        """Return one anonymous state-cache tensor by semantic index."""
+        if self.state_caches is None:
+            return None
+        if state_idx < 0 or state_idx >= len(self.state_caches):
+            return None
+        return self.state_caches[state_idx]
+
+    @property
+    def chunk_source_state(self) -> torch.Tensor | None:
+        """Current chunk source accumulator state cache."""
+        return self.state_cache(self.chunk_source_idx)
+
+    @property
+    def last_raw_states(self) -> torch.Tensor | None:
+        """Latest raw concept-layer state cache."""
+        return self.state_cache(self.last_raw_idx)
+
+    @property
+    def last_final_state(self) -> torch.Tensor | None:
+        """Latest final concept vector state cache."""
+        return self.state_cache(self.last_final_idx)
+
+
+@dataclass
+class ConceptChunkStateUpdateResult:
+    """Fixed-shape result of one decode chunk-source state update."""
+
+    concept_input_states: torch.Tensor
+    next_chunk_source_states: torch.Tensor
+    concept_update_mask: torch.Tensor
+    valid_state_mask: torch.Tensor
+    state_ids: torch.Tensor
 
 
 def _get_configured_window(config: PretrainedConfig):
@@ -98,6 +211,128 @@ def _load_stacked_codebook_weight(param: torch.nn.Parameter, loaded_weight: torc
     assert target.size() == loaded_weight.size(), (
         f'Attempted to load codebook weight ({loaded_weight.size()}) into parameter slice ({target.size()})')
     target.copy_(loaded_weight)
+
+
+def _split_concept_past_key_values(config: PretrainedConfig, past_key_values: list[list[torch.Tensor]] | None):
+    """Split the flat LMDeploy KV-cache list into ConceptLM streams."""
+    if past_key_values is None or len(past_key_values) == 0:
+        return None, None, None
+    enc_layers = int(config.concept_encoder_layers)
+    concept_layers = int(config.concept_special_layers)
+    dec_layers = int(config.concept_decoder_layers)
+    total_layers = enc_layers + concept_layers + dec_layers
+    assert len(past_key_values) >= total_layers, (
+        f'ConceptLM requires {total_layers} KV-cache layers '
+        f'({enc_layers} encoder + {concept_layers} concept + {dec_layers} decoder), '
+        f'got {len(past_key_values)}.')
+    enc_end = enc_layers
+    concept_end = enc_end + concept_layers
+    dec_end = concept_end + dec_layers
+    return past_key_values[:enc_end], past_key_values[enc_end:concept_end], past_key_values[concept_end:dec_end]
+
+
+def _flatten_decode_position_ids(position_ids: torch.Tensor, batch_size: int) -> torch.Tensor:
+    """Normalize decode position ids to one absolute position per batch row."""
+    if position_ids.dim() == 0:
+        position_ids = position_ids.view(1)
+    if position_ids.dim() == 1:
+        return position_ids.to(torch.long)
+    position_ids = position_ids.reshape(-1)
+    if position_ids.numel() == batch_size:
+        return position_ids.to(torch.long)
+    assert position_ids.numel() % batch_size == 0, (
+        f'Cannot map position_ids with {position_ids.numel()} elements to batch size {batch_size}.')
+    return position_ids.reshape(-1, batch_size)[-1].to(torch.long)
+
+
+def _concept_decode_chunk_state_update(
+    chunk_source_state_cache: torch.Tensor,
+    current_source_states: torch.Tensor,
+    state_ids: torch.Tensor,
+    position_ids: torch.Tensor,
+    chunk_size: int,
+    merge_method: str,
+) -> ConceptChunkStateUpdateResult:
+    """Compute one decode step's chunk-source state update.
+
+    This helper is intentionally fixed-shape over the decode batch. It returns
+    per-row next states plus a device-side boundary mask; it does not compact
+    concept rows by ``num_concepts_total``. The future Triton/CUDA op should
+    fuse this compute with the state write and skip ``state_id < 0`` rows.
+
+    Args:
+        chunk_source_state_cache: ``[num_state_slots, num_sources, hidden]``.
+        current_source_states: ``[batch, num_sources, hidden]`` for the current
+            decode token after encoder source selection. These should be the
+            unnormalized states that are merged over the current concept chunk.
+        state_ids: ``[batch]`` state-cache slot per row, with ``-1`` for
+            padded CUDA-graph rows.
+        position_ids: absolute token positions for the decode rows.
+        chunk_size: ConceptLM chunk size.
+        merge_method: ``meanpooling``, ``first``, or ``last``.
+    """
+    assert current_source_states.dim() == 3, (
+        f'current_source_states must be [batch, num_sources, hidden], got {tuple(current_source_states.shape)}.')
+    assert chunk_source_state_cache.dim() == 3, (
+        f'chunk_source_state_cache must be [num_state_slots, num_sources, hidden], '
+        f'got {tuple(chunk_source_state_cache.shape)}.')
+    batch_size = current_source_states.size(0)
+    assert current_source_states.shape[1:] == chunk_source_state_cache.shape[1:], (
+        f'Current source state shape {tuple(current_source_states.shape[1:])} does not match state-cache shape '
+        f'{tuple(chunk_source_state_cache.shape[1:])}.')
+
+    state_ids = state_ids.to(device=current_source_states.device, dtype=torch.long)
+    position_ids = _flatten_decode_position_ids(position_ids, batch_size).to(device=current_source_states.device)
+    assert position_ids.numel() == batch_size, (
+        f'Expected {batch_size} decode position ids, got {position_ids.numel()}.')
+
+    valid_state_mask = state_ids >= 0
+    safe_state_ids = state_ids.clamp(min=0)
+    previous_rows = chunk_source_state_cache.index_select(0, safe_state_ids)
+
+    chunk_size = int(chunk_size)
+    chunk_pos = torch.remainder(position_ids, chunk_size)
+    concept_update_mask = valid_state_mask & (torch.remainder(position_ids + 1, chunk_size) == 0)
+    first_token_mask = valid_state_mask & (chunk_pos == 0)
+    merge_method = str(merge_method)
+
+    if merge_method == 'first':
+        update_rows = torch.where(first_token_mask.view(batch_size, 1, 1), current_source_states, previous_rows)
+        concept_input_states = update_rows
+    elif merge_method == 'last':
+        update_rows = current_source_states
+        concept_input_states = current_source_states
+    else:
+        update_rows = previous_rows + current_source_states
+        concept_input_states = update_rows / chunk_size
+
+    zero_rows = torch.zeros_like(update_rows)
+    next_rows = torch.where(concept_update_mask.view(batch_size, 1, 1), zero_rows, update_rows)
+    next_rows = torch.where(valid_state_mask.view(batch_size, 1, 1), next_rows, previous_rows)
+    concept_input_states = torch.where(concept_update_mask.view(batch_size, 1, 1), concept_input_states, zero_rows)
+    return ConceptChunkStateUpdateResult(
+        concept_input_states=concept_input_states,
+        next_chunk_source_states=next_rows,
+        concept_update_mask=concept_update_mask,
+        valid_state_mask=valid_state_mask,
+        state_ids=state_ids,
+    )
+
+
+def _apply_concept_chunk_state_update_reference_(chunk_source_state_cache: torch.Tensor,
+                                                update: ConceptChunkStateUpdateResult):
+    """Reference-only state write for tests.
+
+    This uses a Python loop and may read scalar state ids on host. Do not call
+    it from the serving hot path. The graph-safe implementation should write
+    ``update.next_chunk_source_states`` inside a backend op that skips
+    ``state_id < 0`` rows.
+    """
+    for batch_idx in range(update.state_ids.numel()):
+        state_id = int(update.state_ids[batch_idx])
+        if state_id < 0:
+            continue
+        chunk_source_state_cache[state_id].copy_(update.next_chunk_source_states[batch_idx])
 
 
 def _qk_rmsnorm_variance(query: torch.Tensor, key: torch.Tensor) -> torch.Tensor:
@@ -1266,7 +1501,40 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         self.ctx_mgr = ctx_mgr
         # token embedding — mirrors ``self.embedding`` in the reference.
         self.embedding = ConceptLMV22VQEmbedding(config, dtype=dtype, device=device)
+        self.encoder = ConceptLMV22VQOlmoBlock(config,
+                                               config.concept_encoder_layers,
+                                               post_layer_norm=False,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('encoder', prefix))
+        self.decoder = ConceptLMV22VQOlmoBlock(config,
+                                               config.concept_decoder_layers,
+                                               post_layer_norm=True,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('decoder', prefix))
+        self.concept_vq_input_norm = nn.LayerNorm(config.hidden_size,
+                                                  eps=getattr(config, 'layernorm_epsilon', 1e-6),
+                                                  dtype=dtype,
+                                                  device=device)
         self.concept_quantizer = ConceptLMV22VQQuantizer(config, dtype=dtype, device=device)
+        self.concept_predictor = ConceptLMV22VQConceptPredictor(config,
+                                                                dtype=dtype,
+                                                                device=device,
+                                                                prefix=add_prefix('concept_predictor', prefix))
+        self.concept_predictor.set_attention_window(tuple(getattr(config, 'window_size', (None, None))),
+                                                    getattr(config, 'window_attn_skip_freq', None))
+        self.fusion_tok_norm = nn.LayerNorm(config.hidden_size,
+                                            eps=getattr(config, 'layernorm_epsilon', 1e-6),
+                                            dtype=dtype,
+                                            device=device)
+        self.fusion_hl_norm = nn.LayerNorm(config.hidden_size,
+                                           eps=getattr(config, 'layernorm_epsilon', 1e-6),
+                                           dtype=dtype,
+                                           device=device)
+        self.fusion_norm_alpha = nn.Parameter(
+            torch.tensor(getattr(config, 'concept_fusion_norm_alpha_init', 0.1), dtype=dtype, device=device),
+            requires_grad=False)
         self.dd_encoder_self_dd = ConceptLMV22VQSelfDD(config,
                                                        config.concept_encoder_layers,
                                                        use_softmax=False,
@@ -1280,6 +1548,10 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                                         device=device)
             for _ in range(config.concept_decoder_layers)
         ])
+        self.decoder_read_encoder_shared_source_norm = nn.LayerNorm(config.hidden_size,
+                                                                    eps=getattr(config, 'layernorm_epsilon', 1e-6),
+                                                                    dtype=dtype,
+                                                                    device=device)
         self.decoder_read_concept_routes = nn.ModuleList([
             ConceptLMV22VQResidualRoute(config,
                                         config.concept_special_layers,
@@ -1288,13 +1560,15 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                                         device=device)
             for _ in range(config.concept_decoder_layers)
         ])
+        self.decoder_read_concept_shared_source_norm = nn.LayerNorm(config.hidden_size,
+                                                                    eps=getattr(config, 'layernorm_epsilon', 1e-6),
+                                                                    dtype=dtype,
+                                                                    device=device)
+        self.final_read_concept_gate_logits = nn.Parameter(
+            torch.zeros(config.concept_decoder_layers, 2, dtype=dtype, device=device),
+            requires_grad=False)
         self.dd_two_route_add = ConceptLMV22VQTwoRouteAdd(config, dtype=dtype, device=device)
-        self.concept_predictor = ConceptLMV22VQConceptPredictor(config,
-                                                                dtype=dtype,
-                                                                device=device,
-                                                                prefix=add_prefix('concept_predictor', prefix))
-        self.concept_predictor.set_attention_window(tuple(getattr(config, 'window_size', (None, None))),
-                                                    getattr(config, 'window_attn_skip_freq', None))
+        self.concept_ops = ConceptLMRuntimeOps()
         # output projection — mirrors ``output_layer`` in the reference. Built
         # via build_lm_head and named ``lm_head`` so DeployModelMixinV1.
         # get_logits picks it up directly; load_weights maps the checkpoint's
@@ -1308,8 +1582,13 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 past_key_values: list[list[torch.Tensor]],
                 attn_metadata=None,
                 inputs_embeds: torch.Tensor = None,
+                state_ids: torch.Tensor | None = None,
+                state_caches: list[torch.Tensor] | None = None,
                 **kwargs):
         """Model forward, return hidden_states (logits computed by runtime)."""
+        concept_metadata = self._build_concept_metadata(position_ids, attn_metadata, state_ids)
+        concept_caches = self._build_concept_caches(past_key_values, state_caches)
+        _ = concept_metadata, concept_caches
         if inputs_embeds is None:
             # NOTE: placeholder. The real path is
             #   embed -> encoder -> concept(vq+predictor) -> fusion -> decoder
@@ -1322,6 +1601,219 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.embedding.word_embeddings
+
+    def get_output_embeddings(self):
+        """Get output embeddings."""
+        return self.lm_head
+
+    def _split_past_key_values(self, past_key_values: list[list[torch.Tensor]] | None):
+        """Split the flat LMDeploy KV-cache list into ConceptLM streams."""
+        return _split_concept_past_key_values(self.config, past_key_values)
+
+    def _build_concept_metadata(self,
+                                position_ids: torch.Tensor | None,
+                                attn_metadata: Any = None,
+                                state_ids: torch.Tensor | None = None) -> ConceptMetadata:
+        """Build top-level ConceptLM metadata for future serving paths."""
+        return ConceptMetadata.build(
+            self.config,
+            position_ids=position_ids,
+            attn_metadata=attn_metadata,
+            state_ids=state_ids,
+        )
+
+    def _build_concept_caches(self,
+                              past_key_values: list[list[torch.Tensor]] | None,
+                              state_caches: list[torch.Tensor] | None = None) -> ConceptCaches:
+        """Build top-level ConceptLM cache views for future serving paths."""
+        return ConceptCaches.build(
+            self.config,
+            past_key_values=past_key_values,
+            state_caches=state_caches,
+        )
+
+    def _decode_chunk_state_update(self,
+                                   current_source_states: torch.Tensor,
+                                   concept_metadata: ConceptMetadata,
+                                   concept_caches: ConceptCaches) -> ConceptChunkStateUpdateResult:
+        """Update decode chunk-source state and return fixed-shape rows.
+
+        CUDA uses the Triton writer. CPU uses the reference writer for tests.
+        The returned rows deliberately avoid dynamic concept-row compaction,
+        matching the CUDA graph route in the design doc.
+        """
+        chunk_source_state = concept_caches.chunk_source_state
+        if chunk_source_state is None:
+            raise RuntimeError('ConceptLM decode chunk update requires concept chunk source state cache.')
+        if concept_metadata.state_ids is None:
+            raise RuntimeError('ConceptLM decode chunk update requires state_ids.')
+        if concept_metadata.position_ids is None:
+            raise RuntimeError('ConceptLM decode chunk update requires position_ids.')
+        concept_input_states, next_rows, update_mask = self.concept_ops.decode_chunk_state_update(
+            chunk_source_state,
+            current_source_states,
+            concept_metadata.state_ids,
+            concept_metadata.position_ids,
+            concept_metadata.chunk_size,
+            concept_metadata.merge_method,
+        )
+        state_ids = concept_metadata.state_ids.to(device=current_source_states.device, dtype=torch.long)
+        return ConceptChunkStateUpdateResult(
+            concept_input_states=concept_input_states,
+            next_chunk_source_states=next_rows,
+            concept_update_mask=update_mask,
+            valid_state_mask=state_ids >= 0,
+            state_ids=state_ids,
+        )
+
+    def support_cuda_graph(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """Disable CUDA graph until ConceptLM decode state update is graph-safe.
+
+        ``states_shapes`` makes the engine allocate graph-padded state ids. The
+        current top-level ConceptLM helpers still include dense/reference-only
+        chunk operations, so allowing the default decode graph capture would
+        bake in the wrong execution contract.
+        """
+        return False
+
+    def _merge_chunks(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Reference chunk merge for dense ``[seq, batch, hidden]`` states."""
+        assert hidden_states.dim() == 3, (
+            f'_merge_chunks currently expects dense [seq, batch, hidden], got {tuple(hidden_states.shape)}.')
+        seq_len, batch_size, hidden_size = hidden_states.shape
+        chunk_size = int(self.config.concept_chunk_size)
+        if seq_len < chunk_size:
+            return hidden_states.mean(dim=0, keepdim=True)
+
+        usable = (seq_len // chunk_size) * chunk_size
+        chunks = hidden_states[:usable].reshape(usable // chunk_size, chunk_size, batch_size, hidden_size)
+        merge_method = getattr(self.config, 'concept_chunk_merge_method', 'meanpooling')
+        if merge_method == 'first':
+            return chunks[:, 0]
+        if merge_method == 'last':
+            return chunks[:, -1]
+        return chunks.mean(dim=1)
+
+    def _repeat_shift(self, concept_states: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """Repeat chunk-level concept states back to the token timeline."""
+        chunk_size = int(self.config.concept_chunk_size)
+        shifted = torch.cat((torch.zeros_like(concept_states[:1]), concept_states), dim=0)
+        repeated = shifted.repeat_interleave(chunk_size, dim=0)[:int(seq_len) + 1]
+        if bool(getattr(self.config, 'concept_shift_feature', True)):
+            repeated = repeated[1:]
+        else:
+            repeated = repeated[:seq_len]
+        if repeated.shape[0] < seq_len:
+            pad_len = int(seq_len) - repeated.shape[0]
+            repeated = torch.cat((repeated, repeated.new_zeros(pad_len, *repeated.shape[1:])), dim=0)
+        return repeated[:seq_len]
+
+    def _build_encoder_concept_states(self, encoder_raw_states: list[torch.Tensor]) -> torch.Tensor:
+        """Build chunk-level encoder states used by the concept predictor."""
+        chunks = [self._merge_chunks(state) for state in encoder_raw_states[:-1]]
+        assert len(chunks) > 0, 'ConceptLM concept-read-encoder route requires at least one encoder source state.'
+        states = torch.stack(chunks, dim=2)
+        return self.concept_predictor.normalize_encoder_concept_states(states)
+
+    def _route_gate(self, layer_idx: int) -> torch.Tensor:
+        """Return decoder route gate ``[decoder_dd_scale, concept_route_scale]``."""
+        return self.final_read_concept_gate_logits[int(layer_idx)].float().softmax(dim=-1)
+
+    def _encode(self,
+                hidden_states: torch.Tensor,
+                position_ids: torch.Tensor,
+                past_key_values: list[list[torch.Tensor]] | None = None,
+                attn_metadata: Any = None):
+        """Encoder stack plus encoder self-DD.
+
+        This helper mirrors the reference flow but consumes LMDeploy attention
+        inputs. It is wired for the future full forward path; continuous
+        batching still needs caller-side concept metadata before the full model
+        can use it safely.
+        """
+        raw_states = []
+        history_buffer = self.dd_encoder_self_dd.make_history_buffer(hidden_states)
+        self.dd_encoder_self_dd.write_history(history_buffer, 0, hidden_states)
+        rotary_pos_emb = self.encoder._make_rotary_pos_emb(hidden_states, position_ids)
+
+        for layer_idx, layer in enumerate(self.encoder.layers):
+            pkv = past_key_values[layer_idx] if past_key_values is not None else None
+            raw = layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=pkv,
+                attn_metadata=attn_metadata,
+            )
+            raw_states.append(raw)
+            self.dd_encoder_self_dd.write_history(history_buffer, layer_idx + 1, raw)
+            hidden_states = self.dd_encoder_self_dd.forward_from_buffer(layer_idx, raw, history_buffer)
+        return hidden_states, raw_states
+
+    def _decode(self,
+                decoder_input: torch.Tensor,
+                encoder_raw_states: list[torch.Tensor],
+                final_concept_state: torch.Tensor,
+                concept_raw_states: list[torch.Tensor],
+                position_ids: torch.Tensor,
+                past_key_values: list[list[torch.Tensor]] | None = None,
+                attn_metadata: Any = None):
+        """Decoder stack plus decoder DD and residual routes."""
+        decoder_encoder_states = torch.stack(tuple(encoder_raw_states), dim=2)
+        decoder_encoder_states = self.decoder_read_encoder_shared_source_norm(decoder_encoder_states)
+
+        concept_states = torch.stack(tuple(concept_raw_states), dim=2)
+        zero_chunk = torch.zeros_like(concept_states[:1])
+        concept_states = torch.cat((zero_chunk, concept_states), dim=0)
+        concept_states = self.decoder_read_concept_shared_source_norm(concept_states)
+
+        chunk_size = int(self.config.concept_chunk_size)
+        hidden_states = decoder_input
+        history_buffer = self.dd_two_route_add.make_history_buffer(hidden_states)
+        self.dd_two_route_add.write_history(history_buffer, 0, hidden_states)
+        rotary_pos_emb = self.decoder._make_rotary_pos_emb(hidden_states, position_ids)
+
+        for layer_idx, layer in enumerate(self.decoder.layers):
+            pkv = past_key_values[layer_idx] if past_key_values is not None else None
+            raw = layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=pkv,
+                attn_metadata=attn_metadata,
+            )
+            self.dd_two_route_add.write_history(history_buffer, layer_idx + 1, raw)
+            gate = self._route_gate(layer_idx)
+            hidden_states = self.dd_two_route_add.forward_from_buffer(
+                layer_idx,
+                raw,
+                history_buffer,
+                final_concept_state,
+                gate[0],
+            )
+            hidden_states = self.decoder_read_encoder_routes[layer_idx](
+                hidden_states,
+                decoder_encoder_states,
+                source_dim=2,
+            )
+            hidden_states = self.decoder_read_concept_routes[layer_idx].forward_repeated_chunks(
+                hidden_states,
+                concept_states,
+                chunk_size,
+                bool(getattr(self.config, 'concept_shift_feature', True)),
+                residual_scale=gate[1],
+                source_dim=2,
+            )
+
+        if self.decoder.final_layernorm is not None:
+            hidden_states = self.decoder.final_layernorm(hidden_states)
+        return hidden_states
 
     def prepare_inputs_for_generation(self,
                                       past_key_values: list[list[torch.Tensor]],
@@ -1337,32 +1829,35 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            state_ids=context.state_offsets,
+            state_caches=context.state_caches,
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
-        """Load weights.
-
-        Only modules currently wired into the top-level model are loaded. Other
-        checkpoint tensors are skipped until their corresponding modules are
-        added.
-        """
+        """Load native ConceptLM checkpoint weights into implemented modules."""
         # (checkpoint_name, target_name)
         weight_map = {
             'embedding.word_embeddings.weight': 'embedding.word_embeddings.weight',
             'output_layer.weight': 'lm_head.weight',
         }
         codebook_prefix = 'concept_quantizer.codebook.'
-        concept_hlm_prefix = 'concept_predictor.hlm_block.'
         prediction_head_prefix = 'concept_predictor.prediction_heads.'
+        block_prefixes = (
+            ('encoder.', self.encoder),
+            ('decoder.', self.decoder),
+            ('concept_predictor.hlm_block.', self.concept_predictor.hlm_block),
+        )
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if name.startswith(concept_hlm_prefix):
-                self.concept_predictor.hlm_block.load_weights(
-                    [(name, loaded_weight)],
-                    prefix=concept_hlm_prefix[:-1],
-                )
+            loaded_by_block = False
+            for block_prefix, block in block_prefixes:
+                if name.startswith(block_prefix):
+                    block.load_weights([(name, loaded_weight)], prefix=block_prefix[:-1])
+                    loaded_by_block = True
+                    break
+            if loaded_by_block:
                 continue
             if name.startswith(prediction_head_prefix):
                 suffix = name[len(prediction_head_prefix):]
@@ -1388,7 +1883,7 @@ class ConceptLMV22VQForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             if target is None:
                 target = name
             if target not in params_dict:
-                # skip modules not yet wired into the top-level model
+                # skip checkpoint metadata or tensors owned by future runtime-only paths
                 continue
             param = params_dict[target]
             load_weight(param, loaded_weight)

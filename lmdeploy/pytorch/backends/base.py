@@ -45,6 +45,9 @@ class OpType(Enum):
     CausalConv1d = auto()
     GatedDeltaRule = auto()
 
+    # ConceptLM
+    ConceptLMRuntimeOps = auto()
+
 
 class OpsBackend(ABC):
     """Layer backend abstract."""

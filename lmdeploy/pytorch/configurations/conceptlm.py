@@ -1,10 +1,34 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
+
 from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
 
 logger = get_logger('lmdeploy')
+
+CONCEPT_STATE_CHUNK_SOURCE = 0
+CONCEPT_STATE_LAST_RAW = 1
+CONCEPT_STATE_LAST_FINAL = 2
+CONCEPT_STATE_NAMES = (
+    'concept_chunk_source_state',
+    'concept_last_raw_states',
+    'concept_last_final_state',
+)
+
+
+def _get_concept_state_dtype(hf_config):
+    """Return the dtype used by ConceptLM sequence-state caches."""
+    torch_dtype = getattr(hf_config, 'torch_dtype', None)
+    if isinstance(torch_dtype, torch.dtype):
+        return torch_dtype
+    torch_dtype = str(torch_dtype).lower()
+    if 'bfloat16' in torch_dtype or 'bf16' in torch_dtype:
+        return torch.bfloat16
+    if 'float32' in torch_dtype or 'fp32' in torch_dtype:
+        return torch.float32
+    return torch.float16
 
 
 class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
@@ -44,6 +68,23 @@ class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
         model_config.llm_config.concept_kv_concept_offset = enc_layers
         model_config.llm_config.concept_kv_decoder_offset = enc_layers + concept_layers
         model_config.llm_config.concept_kv_total_layers = model_config.num_layers
+
+        hidden_size = int(hf_config.hidden_size)
+        state_dtype = _get_concept_state_dtype(hf_config)
+        concept_encoder_read_sources = max(enc_layers - 1, 0)
+        model_config.states_shapes = [
+            ((concept_encoder_read_sources, hidden_size), state_dtype),
+            ((concept_layers, hidden_size), state_dtype),
+            ((hidden_size, ), state_dtype),
+        ]
+        # The current branch only supports anonymous states_shapes. Keep stable
+        # indices on the HF config so model code has one semantic source of
+        # truth; if DSV4 StateCacheSpec lands here later, these become the
+        # names of ConceptLM's state-cache specs.
+        model_config.llm_config.concept_state_names = CONCEPT_STATE_NAMES
+        model_config.llm_config.concept_state_chunk_source_idx = CONCEPT_STATE_CHUNK_SOURCE
+        model_config.llm_config.concept_state_last_raw_idx = CONCEPT_STATE_LAST_RAW
+        model_config.llm_config.concept_state_last_final_idx = CONCEPT_STATE_LAST_FINAL
         return model_config
 
     @staticmethod

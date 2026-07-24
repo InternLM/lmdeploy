@@ -3,6 +3,7 @@
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/
 from .activation import GeluAndMul, SiluAndMul  # noqa: F401
 from .attention import Attention, FlashAttention  # noqa: F401
+from .conceptlm import ConceptLMRuntimeOps  # noqa: F401
 from .embedding import ParallelEmbedding  # noqa: F401
 from .hc_prepost import HcPrePost  # noqa: F401
 from .norm import LayerNorm, RMSNorm, rms_scale  # noqa: F401
