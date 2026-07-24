@@ -1,0 +1,106 @@
+#pragma once
+
+#include "src/turbomind/core/core.h"
+
+#include <cuda_runtime.h>
+
+#include <vector>
+
+namespace turbomind {
+
+struct MoeA2AInputPartition {
+    int begin;
+    int size;
+    int max_tokens_per_rank;
+};
+
+MoeA2AInputPartition GetMoeA2AInputPartition(const std::vector<int>& local_token_nums,  //
+                                             int                     ep_size,
+                                             int                     ep_rank,
+                                             int                     mlp_tp_size);
+
+int CeilPowerOfTwo(int x);
+
+// Select experts for DeepEP dispatch.
+//
+// logits:         [tokens, experts], float32
+// topk_weights:   [tokens, experts_per_token], float32
+// topk_indices:   [tokens, experts_per_token], int32 global expert ids
+//
+// The output order within a token is unspecified. Each weight remains paired
+// with the index at the same position.
+void invokeMoeA2AGate(float*       topk_weights,
+                      int*         topk_indices,
+                      const float* logits,
+                      int          tokens,
+                      int          experts,
+                      int          experts_per_token,
+                      bool         softmax,
+                      bool         norm_topk,
+                      float        routed_scale,
+                      cudaStream_t stream);
+
+// noaux_tc routing
+//
+// scores = sigmoid(logits) or softmax(logits)
+// choice_scores = scores + correction_bias
+//
+// Experts are selected using choice_scores while the output weights are
+// gathered from scores, optionally normalized over the selected experts, and
+// finally multiplied by routed_scale.
+//
+// topk_weights:      [tokens, experts_per_token], float32, token-major
+// topk_indices:      [tokens, experts_per_token], int32 global expert ids
+// correction_bias:  [experts], float32, optional
+//
+// This interface performs global top-k selection (n_group == topk_group == 1).
+// The output order within a token is unspecified; weights and indices remain
+// paired at the same position.
+void invokeMoeA2AGate_NoAuxTC(float*       topk_weights,
+                              int*         topk_indices,
+                              const float* logits,
+                              const float* correction_bias,
+                              int          tokens,
+                              int          experts,
+                              int          experts_per_token,
+                              bool         norm_topk,
+                              float        routed_scale,
+                              bool         use_sigmoid,
+                              cudaStream_t stream);
+
+// Build the expert-major mappings consumed by the grouped MoE GEMMs.
+//
+// recv_topk_idx:      [recv_capacity, num_topk], token-major local expert ids; non-local entries are -1
+// actual_recv_tokens: device scalar, number of valid rows in recv_topk_idx
+// offsets:            [num_local_experts + 1], exclusive prefix sum of assignments per local expert
+// expert_counters:    [num_local_experts], assignment counts; consumed to zero as atomic cursors
+//
+// Only [0, offsets[num_local_experts]) is valid in f2n/f2E:
+//   f2n[flat] = recv token row
+//   f2E[flat] = local expert id
+//
+// en2f is fully initialized as [num_topk, recv_capacity]. Its first dimension is
+// the top-k slot (not the expert id), and invalid entries are -1.
+void invokeMoeA2AMapping(int*         f2n,
+                         int*         f2E,
+                         int*         en2f,
+                         const int*   recv_topk_idx,
+                         const int*   actual_recv_tokens,
+                         const int*   offsets,
+                         int*         expert_counters,
+                         int          recv_capacity,
+                         int          num_topk,
+                         int          num_local_experts,
+                         cudaStream_t stream);
+
+// Merge the routed result with the in-place shared FFN result:
+//   output = routed + shared_scale * sigmoid(shared_scales) * output
+//
+// shared_scales is optional. When it is null, shared_scale is applied directly.
+void invokeMoeA2ASharedCombine(Tensor&       output,  //
+                               const Tensor& routed,
+                               const float*  shared_scales,
+                               float         shared_scale,
+                               cudaStream_t  stream);
+
+}  // namespace turbomind
