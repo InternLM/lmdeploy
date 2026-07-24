@@ -49,13 +49,23 @@ def _num_cache_blocks(block_offsets):
     return int(block_offsets.max().item()) + 1
 
 
+def test_fa3_softcap_translation_preserves_enabled_values():
+    impl = FA3Impl.__new__(FA3Impl)
+
+    for configured, expected in ((-1.0, 0.0), (0.0, 0.0), (30.0, 30.0)):
+        impl.logit_softcapping = configured
+        assert impl._get_fa3_softcap() == expected
+
+
 def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     """Regression test for FA3 prefill with recycled paged KV blocks."""
     impl = FA3Impl.__new__(FA3Impl)
     impl.scale = 1.0
     impl.causal = True
     impl.sliding_window = None
-    impl.logit_softcapping = 0.0
+    # TritonAttentionImpl uses -1 as the disabled-softcap sentinel. FA3 needs
+    # exactly 0 when built without softcapping kernels.
+    impl.logit_softcapping = -1.0
 
     q_seqlens = _make_prefill_seqlens()
     block_offsets = _make_recycled_block_offsets(device='cpu')
@@ -77,6 +87,7 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     def fake_flash_attn_varlen_func(**kwargs):
         captured['flash_max_seqlen_k'] = kwargs['max_seqlen_k']
         captured['flash_k_size'] = kwargs['k'].size(0)
+        captured['flash_softcap'] = kwargs['softcap']
         return torch.empty_like(kwargs['q'])
 
     impl.flatten_kv_cache = fake_flatten_kv_cache
@@ -89,3 +100,4 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     assert captured['flatten_out_size'] == _guarded_flatten_size(q_seqlens)
     assert captured['flash_k_size'] == _guarded_flatten_size(q_seqlens)
     assert captured['flash_max_seqlen_k'] == metadata.max_kv_seqlen
+    assert captured['flash_softcap'] == 0.0

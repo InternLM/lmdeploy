@@ -79,6 +79,15 @@ class FA3Impl(TritonAttentionImpl):
             return (sliding_window, sliding_window)
         return sliding_window
 
+    def _get_fa3_softcap(self) -> float:
+        """Translate LMDeploy's disabled-softcap sentinel for FA3.
+
+        Triton attention uses a negative value to represent disabled logit
+        softcapping, while FA3 expects exactly zero when kernels without
+        softcapping support are used.
+        """
+        return 0.0 if self.logit_softcapping <= 0.0 else self.logit_softcapping
+
     def _decoding_speculative(
         self,
         query: torch.Tensor,
@@ -133,7 +142,7 @@ class FA3Impl(TritonAttentionImpl):
             softmax_scale=self.scale,
             causal=self.causal,
             window_size=sliding_window,
-            softcap=self.logit_softcapping,
+            softcap=self._get_fa3_softcap(),
         )
         return attn_output
 
@@ -299,7 +308,7 @@ class FA3Impl(TritonAttentionImpl):
             softmax_scale=self.scale,
             causal=self.causal,
             window_size=sliding_window,
-            softcap=self.logit_softcapping,
+            softcap=self._get_fa3_softcap(),
         )
 
         # Inverse-rotate output back to original domain
