@@ -11,6 +11,9 @@ h:
       max-batch-size: 256
       cache-max-entry-count: 0.7
   backends:
+  - name: turbomind
+    communicators:
+    - nccl
   - name: pytorch
     communicators:
     - nccl
@@ -81,6 +84,33 @@ h:
   quantization:
     pytorch:
     - fp8
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 8
+    cp: 2
+    extra:
+      max-batch-size: 256
+      cache-max-entry-count: 0.7
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20
