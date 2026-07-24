@@ -268,9 +268,12 @@ struct ObjectAllocator::Impl {
         s.page             = space_.pages_.stats();
         s.region_bytes     = static_cast<size_t>(space_.mem_.byte_size());
         s.live_allocations = table_.pool_.size() - table_.free_.size();
+        s.live_bytes       = 0;
         s.slabs.reserve(space_.slabs_.size());
         for (const SlabAllocator& slab : space_.slabs_) {
-            s.slabs.push_back(slab.stats());
+            auto stats = slab.stats();
+            s.live_bytes += stats.used_objects * stats.object_size;
+            s.slabs.push_back(std::move(stats));
         }
         return s;
     }

@@ -31,8 +31,10 @@ std::string FormatMemoryStats(const MemoryStats& s)
     fmt::memory_buffer buf;
 
     fmt::format_to(std::back_inserter(buf),
-                   "[cache] region={} live_alloc={} | pages {}/{} used ({:.2f}%) page_size={}",
+                   "[cache] region={} live={} ({:.2f}%) live_alloc={} | pages {}/{} used ({:.2f}%) page_size={}",
                    human_bytes(s.region_bytes),
+                   human_bytes(s.live_bytes),
+                   pct(s.live_bytes, s.region_bytes),
                    s.live_allocations,
                    s.page.used_pages,
                    s.page.pages,
