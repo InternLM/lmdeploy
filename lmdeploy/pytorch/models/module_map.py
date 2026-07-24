@@ -125,6 +125,8 @@ MODULE_MAP.update({'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.de
 MODULE_MAP.update({
     'HYV3ForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3.HYV3ForCausalLM',
+    'HYV3MTP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3_mtp.HYV3MTP',
 })
 
 # llava

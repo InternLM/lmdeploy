@@ -18,7 +18,7 @@ def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeCo
     if specdecode_config is None:
         return None
 
-    if specdecode_config.method == 'qwen3_5_mtp':
+    if specdecode_config.method in ('qwen3_5_mtp', 'hy3_mtp'):
         return dist_ctx
 
     draft_dist_config = specdecode_config.dist_config
