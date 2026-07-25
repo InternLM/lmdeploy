@@ -73,7 +73,7 @@ void invokeMoeA2AGate_NoAuxTC(float*       topk_weights,
 // recv_topk_idx:      [recv_capacity, num_topk], token-major local expert ids; non-local entries are -1
 // actual_recv_tokens: device scalar, number of valid rows in recv_topk_idx
 // offsets:            [num_local_experts + 1], exclusive prefix sum of assignments per local expert
-// expert_counters:    [num_local_experts], assignment counts; consumed to zero as atomic cursors
+// expert_counters:    [num_local_experts], assignment counts; consumed to zero by CTA-level atomic reservations
 //
 // Only [0, offsets[num_local_experts]) is valid in f2n/f2E:
 //   f2n[flat] = recv token row

@@ -5,12 +5,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <numeric>
 #include <type_traits>
 #include <utility>
 
 #include <cub/warp/warp_scan.cuh>
+
+#define DEVICE_ASSERT(cond)                                                                                            \
+    do {                                                                                                               \
+        if (not(cond)) {                                                                                               \
+            printf("Assertion failed: %s:%d, condition: %s\n", __FILE__, __LINE__, #cond);                             \
+            asm("trap;");                                                                                              \
+        }                                                                                                              \
+    } while (0)
 
 namespace turbomind {
 
@@ -502,13 +511,23 @@ __global__ void MoeA2AMappingKernel(int*       f2n,
                                     int        num_topk,
                                     int        num_local_experts)
 {
-    const int token_idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (token_idx >= recv_capacity) {
-        return;
-    }
+    extern __shared__ int block_counts[];
 
+    for (int expert_idx = threadIdx.x; expert_idx < num_local_experts; expert_idx += blockDim.x) {
+        block_counts[expert_idx] = 0;
+    }
+    __syncthreads();
+
+    const int token_idx       = threadIdx.x + blockIdx.x * blockDim.x;
     const int num_recv_tokens = __ldg(actual_recv_tokens);
+
+    // Use en2f as temporary storage for each assignment's rank within this CTA
+    // and expert. This avoids K-sized per-thread arrays and their register cost.
     for (int topk_idx = 0; topk_idx < num_topk; ++topk_idx) {
+        if (token_idx >= recv_capacity) {
+            continue;
+        }
+
         const int reverse_idx = topk_idx * recv_capacity + token_idx;
         en2f[reverse_idx]     = -1;
 
@@ -520,16 +539,41 @@ __global__ void MoeA2AMappingKernel(int*       f2n,
         if ((unsigned)expert_idx >= (unsigned)num_local_experts) {
             continue;
         }
+        en2f[reverse_idx] = atomicAdd(block_counts + expert_idx, 1);
+    }
 
-        const int old_count = atomicSub(expert_counters + expert_idx, 1);
-        if (old_count <= 0) {
+    __syncthreads();
+
+    // Reserve one contiguous output range per non-empty CTA/expert pair, then
+    // reuse block_counts to store the corresponding expert-major base.
+    for (int expert_idx = threadIdx.x; expert_idx < num_local_experts; expert_idx += blockDim.x) {
+        const int count = block_counts[expert_idx];
+        if (count > 0) {
+            const int old_count = atomicSub(expert_counters + expert_idx, count);
+            DEVICE_ASSERT(old_count >= count);
+            block_counts[expert_idx] = __ldg(offsets + expert_idx + 1) - old_count;
+        }
+    }
+
+    __syncthreads();
+
+    if (token_idx >= num_recv_tokens || token_idx >= recv_capacity) {
+        return;
+    }
+
+    // Convert the CTA-local ranks into expert-major flat indices.
+    for (int topk_idx = 0; topk_idx < num_topk; ++topk_idx) {
+        const int reverse_idx = topk_idx * recv_capacity + token_idx;
+        const int local_rank  = en2f[reverse_idx];
+        if (local_rank < 0) {
             continue;
         }
 
-        const int flat_idx = __ldg(offsets + expert_idx + 1) - old_count;
-        f2n[flat_idx]      = token_idx;
-        f2E[flat_idx]      = expert_idx;
-        en2f[reverse_idx]  = flat_idx;
+        const int expert_idx = __ldg(recv_topk_idx + token_idx * num_topk + topk_idx);
+        const int flat_idx   = block_counts[expert_idx] + local_rank;
+        f2n[flat_idx]        = token_idx;
+        f2E[flat_idx]        = expert_idx;
+        en2f[reverse_idx]    = flat_idx;
     }
 }
 
@@ -549,18 +593,19 @@ void invokeMoeA2AMapping(int*         f2n,
         return;
     }
 
-    constexpr int threads = 256;
-    const int     blocks  = (recv_capacity - 1) / threads + 1;
-    MoeA2AMappingKernel<<<blocks, threads, 0, stream>>>(f2n,
-                                                        f2E,
-                                                        en2f,
-                                                        recv_topk_idx,
-                                                        actual_recv_tokens,
-                                                        offsets,
-                                                        expert_counters,
-                                                        recv_capacity,
-                                                        num_topk,
-                                                        num_local_experts);
+    constexpr int threads      = 256;
+    const int     blocks       = (recv_capacity - 1) / threads + 1;
+    const int     shared_bytes = num_local_experts * sizeof(int);
+    MoeA2AMappingKernel<<<blocks, threads, shared_bytes, stream>>>(f2n,
+                                                                   f2E,
+                                                                   en2f,
+                                                                   recv_topk_idx,
+                                                                   actual_recv_tokens,
+                                                                   offsets,
+                                                                   expert_counters,
+                                                                   recv_capacity,
+                                                                   num_topk,
+                                                                   num_local_experts);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
