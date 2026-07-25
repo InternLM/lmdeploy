@@ -84,16 +84,6 @@ target_link_libraries(token_dispatcher PRIVATE
     Threads::Threads)
 set_property(TARGET token_dispatcher PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-add_executable(test_dispatcher test_dispatcher.cc)
-target_compile_features(test_dispatcher PRIVATE cxx_std_20)
-target_link_libraries(test_dispatcher PRIVATE
-    token_dispatcher
-    core
-    host_comm
-    CUDA::cudart
-    ${NCCL_LIBRARIES}
-    Threads::Threads)
-
 install(
     DIRECTORY "${deepep_SOURCE_DIR}/deep_ep/include/deep_ep"
     DESTINATION include)
