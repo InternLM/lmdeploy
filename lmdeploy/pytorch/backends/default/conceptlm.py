@@ -673,7 +673,7 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         concept_raw_states: list[Tensor],
     ) -> None:
         """Seed decode state caches from a completed prefill forward."""
-        return self.write_prefill_state_caches_eager(
+        return self._write_prefill_state_caches_impl(
             chunk_source_state,
             last_raw_states,
             last_final_state,
@@ -684,7 +684,7 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
             concept_raw_states,
         )
 
-    def write_prefill_state_caches_eager(
+    def _write_prefill_state_caches_impl(
         self,
         chunk_source_state: Tensor | None,
         last_raw_states: Tensor | None,

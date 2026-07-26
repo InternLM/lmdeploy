@@ -47,7 +47,7 @@ class TritonConceptLMRuntimeOpsImpl(DefaultConceptLMRuntimeOpsImpl):
             self.merge_method,
         )
 
-    def write_prefill_state_caches_eager(
+    def _write_prefill_state_caches_impl(
         self,
         chunk_source_state: Tensor | None,
         last_raw_states: Tensor | None,
@@ -65,7 +65,7 @@ class TritonConceptLMRuntimeOpsImpl(DefaultConceptLMRuntimeOpsImpl):
             return
         if not (source_states.is_cuda and chunk_source_state.is_cuda and last_raw_states.is_cuda
                 and last_final_state.is_cuda):
-            return super().write_prefill_state_caches_eager(
+            return super()._write_prefill_state_caches_impl(
                 chunk_source_state,
                 last_raw_states,
                 last_final_state,
