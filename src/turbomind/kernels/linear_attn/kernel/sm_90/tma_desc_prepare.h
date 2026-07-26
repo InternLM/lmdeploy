@@ -317,8 +317,8 @@ CUtensorMap MakeContextParallelStateTmaDesc(StateT* ptr, int total_segments, int
 template<class T>
 CUtensorMap MakeCorrectInitialStatesSegmentMatrixTmaDesc(T* ptr, int total_segments, int hv)
 {
-    constexpr int kRowsPerTma = 64;
-    static_assert(kHeadDim % kRowsPerTma == 0);
+    constexpr int kColumnsPerTma = 64;
+    static_assert(kHeadDim % kColumnsPerTma == 0);
 
     const uint64_t global_dim[4] = {
         static_cast<uint64_t>(kHeadDim),
@@ -332,7 +332,7 @@ CUtensorMap MakeCorrectInitialStatesSegmentMatrixTmaDesc(T* ptr, int total_segme
         static_cast<uint64_t>(hv) * kHeadDim * kHeadDim * sizeof(T),
     };
     const uint32_t box_dim[4] = {
-        static_cast<uint32_t>(kRowsPerTma),
+        static_cast<uint32_t>(kColumnsPerTma),
         static_cast<uint32_t>(kHeadDim),
         1u,
         1u,

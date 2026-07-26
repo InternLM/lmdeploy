@@ -18,7 +18,7 @@ struct Sm90CorrectInitialStates {
         kCorrectInitialStatesSegmentMDesc,
     };
 
-    static constexpr int kCorrectInitialStatesMRowsPerTma = 64;
+    static constexpr int kCorrectInitialStatesMColumnsPerTma = 64;
 
     static constexpr int kCorrectInitialStatesKTile                = 128;
     static constexpr int kCorrectInitialStatesStoreStages          = 2;
@@ -203,7 +203,7 @@ struct Sm90CorrectInitialStates {
 
         constexpr int kPrefixHBytes = kHeadDim * BlockDv * static_cast<int>(sizeof(__nv_bfloat16));
         constexpr int kPrefixMBytes = kHeadDim * kCorrectInitialStatesKTile * static_cast<int>(sizeof(__nv_bfloat16));
-        static_assert(kCorrectInitialStatesMRowsPerTma == 64);
+        static_assert(kCorrectInitialStatesMColumnsPerTma == 64);
 
         if (tid >= kCorrectInitialStatesProducerTid0) {
             // Register deallocation is WG1-collective, while the h_free/m_free
@@ -238,12 +238,12 @@ struct Sm90CorrectInitialStates {
                 // Acquire: thread 128 receives this M stage after all 128 consumers
                 // release it; first use also uses complementary free parity.
                 cute::wait_barrier(m_free_bar[stage], free_phase);
-                // Release: arm a kPrefixMBytes transaction. Completion of both 64-row TMA
+                // Release: arm a kPrefixMBytes transaction. Completion of both 64-column TMA
                 // boxes releases the full BF16 M tile through m_ready_mbar.
                 cutlass::arch::ClusterTransactionBarrier::arrive_and_expect_tx(&m_ready_mbar[stage], kPrefixMBytes);
                 auto* m_stage = &smem.m_stage[stage][0][0];
 #pragma unroll
-                for (int col = 0; col < kHeadDim; col += kCorrectInitialStatesMRowsPerTma) {
+                for (int col = 0; col < kHeadDim; col += kCorrectInitialStatesMColumnsPerTma) {
                     cute::SM90_TMA_LOAD_4D::copy(segment_m_tma_desc,
                                                  &m_ready_mbar[stage],
                                                  kTmaNoCacheHint,
@@ -266,7 +266,7 @@ struct Sm90CorrectInitialStates {
                                                                            Element,
                                                                            float,
                                                                            FallbackTileShape,
-                                                                           cute::SM90::GMMA::Major::MN,
+                                                                           cute::SM90::GMMA::Major::K,
                                                                            cute::SM90::GMMA::Major::MN>());
         auto  fallback_mma      = cute::make_tiled_mma(FallbackGmmaAtom{});
         auto  fallback_thr_mma  = fallback_mma.get_thread_slice(tid);
@@ -358,7 +358,7 @@ struct Sm90CorrectInitialStates {
             if (fallback) {
                 auto s_m =
                     cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.m_stage[stage][0][0])),
-                                      FusedGdrGmmaStateTLayout<Element, kWideGdrBlockDv>());
+                                      FusedGdrGmmaSegmentMatrixLayout<Element>());
                 auto s_h_prev = cute::make_tensor(cute::make_smem_ptr(reinterpret_cast<Element*>(&smem.h_prev[0][0])),
                                                   FusedGdrGmmaStateTLayout<Element, BlockDv>());
                 FusedGdrGmmaSs(fallback_mma, tid, s_m, s_h_prev, tCrH, cute::SM90::GMMA::ScaleOut::One);
