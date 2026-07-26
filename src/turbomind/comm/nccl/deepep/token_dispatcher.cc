@@ -267,12 +267,11 @@ void TokenDispatcherImpl::Dispatch(Tensor&       x,
     token_metadata_at_forward_ = {};
     channel_linked_list_       = {};
     if (nccl_context_->num_scaleout_ranks_ > 1) {
-        auto AssignTensor = [](Ref<Tensor> tensor_, Ref<Buffer> buffer_, const Layout& layout) {
-            auto& tensor = tensor_.get();
-            auto& buffer = buffer_.get();
+        auto AssignTensor = [](auto& tensor, auto& buffer, const Layout& layout) {
             TM_CHECK_EQ(buffer.dtype(), tensor.dtype());
             if (buffer.size() < layout.size()) {
-                buffer = {layout.size(), buffer.dtype(), kDEVICE};
+                using BufferType = std::remove_cvref_t<decltype(buffer)>;
+                buffer           = BufferType{layout.size(), kDEVICE};
             }
             tensor = {buffer, layout};
         };

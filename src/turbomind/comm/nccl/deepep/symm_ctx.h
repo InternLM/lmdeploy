@@ -23,8 +23,9 @@ using namespace deep_ep::elastic;
 
 namespace turbomind::comm {
 
-TM_ENV_VAR(COMM, SL_IDX, 3);
+TM_ENV_VAR(COMM, SL_IDX, 0);
 TM_ENV_VAR(COMM, EP_NIC_NAME, std::string("mlx5_0"));
+TM_ENV_VAR(COMM, EP_NUM_QPS, 0);
 
 struct NCCLSymmetricMemoryContext {
 private:
@@ -37,7 +38,10 @@ public:
         rank_idx_{rank_idx}, num_ranks_{num_ranks}, comm_{comm}
     {
 
-        num_allocated_qps_ = IsFastRdmaAtomicSupport(GetEnv<COMM_EP_NIC_NAME>()) ? 65 : 129;
+        num_allocated_qps_ = GetEnv<COMM_EP_NUM_QPS>();
+        if (num_allocated_qps_ <= 0) {
+            num_allocated_qps_ = IsFastRdmaAtomicSupport(GetEnv<COMM_EP_NIC_NAME>()) ? 65 : 129;
+        }
 
         int nccl_runtime_version;
         NCCL_CHECK(ncclGetVersion(&nccl_runtime_version));
