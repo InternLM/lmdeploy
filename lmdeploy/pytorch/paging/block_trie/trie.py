@@ -36,8 +36,8 @@ SSM checkpoint detail:
   slots stored on trie ``Node.state_idx``.  A trie node may own KV only, KV plus
   an unready checkpoint reservation, or KV plus a ready checkpoint.
 * Saving a checkpoint starts from an already-attached block-aligned trie node.
-  ``reserve_state_checkpoint_for_seq()`` records ``save_state``, ``save_step``,
-  ``save_node``, and ``save_is_decode`` on ``seq.prefix_cache``.  Prefill and
+  ``reserve_state_checkpoint_for_seq()`` records a ``pending_save`` reservation
+  on ``seq.prefix_cache``.  Prefill and
   long-context chunks save at the produced chunk end; decode saves are optional
   and bounded by ``prefix_cache_decode_state_interval``.
 * ``InputsMaker`` converts those pending saves into compact host integer
@@ -53,8 +53,8 @@ SSM checkpoint detail:
   ``_match_state_checkpoint()`` searches ready checkpoint steps, filters by
   ``(adapter, step, last_block_hash)``, then proves the complete prefix against
   immutable exact-match metadata built when the checkpoint is published.  A
-  hit appends trie-owned KV blocks, advances ``seq.num_history_ids``, records
-  ``restore_state``/``restore_node``, and may replay routed experts.
+  hit appends trie-owned KV blocks, advances ``seq.num_history_ids``, records a
+  selected ``restore``, and may replay routed experts.
 * Restore is two-phase.  The scheduler/input maker pins the ready checkpoint by
   incrementing ``state_ref_count``.  ``ModelAgent`` copies
   ``checkpoint -> runtime_state`` before the suffix forward.  ``EngineLoop``
@@ -507,22 +507,6 @@ class BlockTrie:
         node.state_topology_epoch = node._topology_epoch
         return node.state_idx
 
-    def _clear_pending_state_checkpoint(self, seq: SchedulerSequence):
-        """Clear pending checkpoint save metadata from a sequence."""
-        prefix_cache = seq.prefix_cache
-        prefix_cache.save_state = -1
-        prefix_cache.save_step = 0
-        prefix_cache.save_is_decode = False
-        prefix_cache.save_node = None
-
-    @staticmethod
-    def _clear_save_checkpoint_ref(seq: SchedulerSequence):
-        """Clear an in-flight producer checkpoint ref from a sequence."""
-        prefix_cache = seq.prefix_cache
-        prefix_cache.save_state_acquired = False
-        prefix_cache.save_acquired_state = -1
-        prefix_cache.save_acquired_node = None
-
     def discard_state_checkpoint_for_seq(self, seq: SchedulerSequence):
         """Discard an unpublished state checkpoint reservation for a sequence.
 
@@ -530,15 +514,17 @@ class BlockTrie:
         before the copy is committed, the unready state slot must be released rather than becoming matchable.
         """
         prefix_cache = seq.prefix_cache
-        state_idx = prefix_cache.save_state
-        node = prefix_cache.save_node
-        is_decode = prefix_cache.save_is_decode
-        self._clear_pending_state_checkpoint(seq)
-        if state_idx < 0:
+        pending_save = prefix_cache.pending_save
+        if not pending_save.is_pending:
+            pending_save.clear()
             return False
+        state_idx = pending_save.slot
+        node = pending_save.node
+        is_decode = pending_save.is_decode
+        pending_save.clear()
         if self._is_unpublished_state_checkpoint_reservation(node, state_idx):
-            if is_decode and prefix_cache.decode_state_node is node:
-                prefix_cache.decode_state_node = None
+            if is_decode and prefix_cache.decode_checkpoint_node is node:
+                prefix_cache.decode_checkpoint_node = None
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f'Discard SSM prefix-cache checkpoint reservation: session_id={seq.session_id} '
                              f'seq_id={seq.seq_id} step={node.num_matched} state_idx={state_idx} '
@@ -585,11 +571,7 @@ class BlockTrie:
         if state_idx < 0:
             return -1
 
-        prefix_cache = seq.prefix_cache
-        prefix_cache.save_state = state_idx
-        prefix_cache.save_step = step
-        prefix_cache.save_is_decode = is_decode
-        prefix_cache.save_node = node
+        seq.prefix_cache.pending_save.reserve(state_idx, step, node, is_decode)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Reserve SSM prefix-cache checkpoint: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} step={step} state_idx={state_idx} is_decode={is_decode}')
@@ -625,9 +607,9 @@ class BlockTrie:
             return -1
 
         prefix_cache = seq.prefix_cache
-        old_node = prefix_cache.decode_state_node
+        old_node = prefix_cache.decode_checkpoint_node
         if old_node is not None and old_node.state_idx < 0:
-            prefix_cache.decode_state_node = None
+            prefix_cache.decode_checkpoint_node = None
             old_node = None
         if old_node is not None:
             if self._is_same_ready_decode_state_checkpoint(old_node, step):
@@ -640,7 +622,7 @@ class BlockTrie:
                              f'old_step={old_node.num_matched} old_state_idx={old_node.state_idx} '
                              f'new_step={step}')
             self.release_state_checkpoint(old_node)
-            prefix_cache.decode_state_node = None
+            prefix_cache.decode_checkpoint_node = None
 
         return self.reserve_state_checkpoint_for_seq(seq, step=step, is_decode=True)
 
@@ -736,23 +718,21 @@ class BlockTrie:
         """Release an invalid pending save only if it still owns the slot."""
         if not self._is_unpublished_state_checkpoint_reservation(node, state_idx):
             return
-        if is_decode and seq.prefix_cache.decode_state_node is node:
-            seq.prefix_cache.decode_state_node = None
+        if is_decode and seq.prefix_cache.decode_checkpoint_node is node:
+            seq.prefix_cache.decode_checkpoint_node = None
         self.release_state_checkpoint(node)
 
     def _acquire_state_checkpoint_save_for_seq(self, seq: SchedulerSequence, node: Node, state_idx: int):
         """Pin a just-published checkpoint until its producer forward
         completes."""
-        prefix_cache = seq.prefix_cache
-        if prefix_cache.save_state_acquired:
+        producer_pin = seq.prefix_cache.producer_save_pin
+        if producer_pin.is_acquired:
             raise RuntimeError('SSM prefix-cache save checkpoint already has an in-flight producer ref.')
         if not self._is_ready_state_checkpoint(node, state_idx):
             return False
         node.state_ref_count += 1
         node.state_access_time = time.perf_counter()
-        prefix_cache.save_state_acquired = True
-        prefix_cache.save_acquired_state = state_idx
-        prefix_cache.save_acquired_node = node
+        producer_pin.acquire(state_idx, node)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Acquire SSM prefix-cache save checkpoint: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} step={node.num_matched} state_idx={state_idx} '
@@ -770,17 +750,18 @@ class BlockTrie:
         advanced by one sampled token before the output boundary publishes the checkpoint.
         """
         prefix_cache = seq.prefix_cache
-        state_idx = prefix_cache.save_state
-        save_step = prefix_cache.save_step
-        is_decode = prefix_cache.save_is_decode
-        node = prefix_cache.save_node
-        if state_idx < 0:
-            self._clear_pending_state_checkpoint(seq)
+        pending_save = prefix_cache.pending_save
+        if not pending_save.is_pending:
+            pending_save.clear()
             return False
+        state_idx = pending_save.slot
+        save_step = pending_save.step
+        is_decode = pending_save.is_decode
+        node = pending_save.node
 
         invalid_reason = self._state_checkpoint_commit_invalid_reason(node, state_idx, save_step)
         if invalid_reason is not None:
-            self._clear_pending_state_checkpoint(seq)
+            pending_save.clear()
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f'Drop invalid SSM prefix-cache checkpoint commit: session_id={seq.session_id} '
                              f'seq_id={seq.seq_id} step={save_step} state_idx={state_idx} '
@@ -791,12 +772,12 @@ class BlockTrie:
         try:
             self.mark_state_checkpoint_ready(node, seq)
         except Exception:
-            self._clear_pending_state_checkpoint(seq)
+            pending_save.clear()
             self._release_invalid_state_checkpoint_reservation(seq, node, state_idx, is_decode)
             raise
-        self._clear_pending_state_checkpoint(seq)
+        pending_save.clear()
         if is_decode:
-            prefix_cache.decode_state_node = node
+            prefix_cache.decode_checkpoint_node = node
         if acquire_save_ref:
             self._acquire_state_checkpoint_save_for_seq(seq, node, state_idx)
         if logger.isEnabledFor(logging.DEBUG):
@@ -814,15 +795,15 @@ class BlockTrie:
     def acquire_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
         """Pin a matched state checkpoint until its restore copy has
         completed."""
-        prefix_cache = seq.prefix_cache
-        if prefix_cache.restore_state < 0 or prefix_cache.restore_state_acquired:
+        restore = seq.prefix_cache.restore
+        if not restore.is_selected or restore.pinned:
             return False
-        node = prefix_cache.restore_node
-        if not self._is_ready_state_checkpoint(node, prefix_cache.restore_state):
+        node = restore.node
+        if not self._is_ready_state_checkpoint(node, restore.slot):
             return False
         node.state_ref_count += 1
         node.state_access_time = time.perf_counter()
-        prefix_cache.restore_state_acquired = True
+        restore.pinned = True
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Acquire SSM prefix-cache restore checkpoint: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} step={node.num_matched} state_idx={node.state_idx} '
@@ -845,21 +826,19 @@ class BlockTrie:
 
     def release_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
         """Release a state checkpoint pinned for restore."""
-        prefix_cache = seq.prefix_cache
-        if not prefix_cache.restore_state_acquired:
+        restore = seq.prefix_cache.restore
+        if not restore.pinned:
             return False
         node = self._release_state_checkpoint_ref(
-            prefix_cache.restore_node,
-            prefix_cache.restore_state,
+            restore.node,
+            restore.slot,
             'Acquired SSM prefix-cache restore checkpoint lost its node reference.',
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Release SSM prefix-cache restore checkpoint: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} step={node.num_matched} state_idx={node.state_idx} '
                          f'ref_count={node.state_ref_count}')
-        prefix_cache.restore_state = -1
-        prefix_cache.restore_node = None
-        prefix_cache.restore_state_acquired = False
+        restore.clear()
         return True
 
     def release_state_checkpoint_restores(self, seqs: list[SchedulerSequence]):
@@ -871,17 +850,17 @@ class BlockTrie:
 
     def release_state_checkpoint_save_for_seq(self, seq: SchedulerSequence):
         """Release a checkpoint pinned for its producer save copy."""
-        prefix_cache = seq.prefix_cache
-        if not prefix_cache.save_state_acquired:
+        producer_pin = seq.prefix_cache.producer_save_pin
+        if not producer_pin.is_acquired:
             return False
         node = self._release_state_checkpoint_ref(
-            prefix_cache.save_acquired_node, prefix_cache.save_acquired_state,
+            producer_pin.node, producer_pin.slot,
             'Acquired SSM prefix-cache save checkpoint lost its node reference.')
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Release SSM prefix-cache save checkpoint: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} step={node.num_matched} state_idx={node.state_idx} '
                          f'ref_count={node.state_ref_count}')
-        self._clear_save_checkpoint_ref(seq)
+        producer_pin.clear()
         return True
 
     def release_state_checkpoint_saves(self, seqs: list[SchedulerSequence]):
@@ -1074,8 +1053,7 @@ class BlockTrie:
         self._append_state_checkpoint_routed_experts(seq, node, initial_step)
 
         prefix_cache = seq.prefix_cache
-        prefix_cache.restore_state = node.state_idx
-        prefix_cache.restore_node = node
+        prefix_cache.restore.select(node.state_idx, node)
         prefix_cache.last_shared_node = node
         if raw_match_step >= 0:
             self._set_private_recompute_range(seq, step, raw_match_step)
@@ -1093,10 +1071,6 @@ class BlockTrie:
         KV-only reuse is unsafe for SSM models, so this path reports a hit only if a ready recurrent-state checkpoint
         exists at the exact matched step.
         """
-        self._clear_private_recompute_range(seq)
-        seq.prefix_cache.restore_state = -1
-        seq.prefix_cache.restore_node = None
-
         init_curr = seq.prefix_cache.last_shared_node
         if init_curr is None:
             init_curr = self.get_root(seq.adapter_name)
@@ -1153,8 +1127,7 @@ class BlockTrie:
             return
         self._clear_private_recompute_range(seq)
         seq.prefix_cache.match_start_step = seq.num_history_ids
-        seq.prefix_cache.restore_state = -1
-        seq.prefix_cache.restore_node = None
+        seq.prefix_cache.restore.clear()
         if self.requires_state_checkpoint:
             self._match_state_checkpoint(seq)
             return
@@ -1228,7 +1201,7 @@ class BlockTrie:
             seq.set_step(num_matched)
             self._append_matched_routed_experts(seq, matched_nodes, init_num_matched)
             if self.requires_state_checkpoint:
-                seq.prefix_cache.restore_state = curr.state_idx
+                seq.prefix_cache.restore.select(curr.state_idx, curr)
 
         # record prefix hit
         self._record_match_stats(seq,

@@ -60,9 +60,9 @@ def _compact_state_prefix_cache_restore_offsets(messages: list['SchedulerSequenc
     src_offsets = []
     dst_offsets = []
     for msg in messages:
-        state_idx = msg.prefix_cache.restore_state
-        if state_idx >= 0:
-            src_offsets.append(state_idx)
+        restore = msg.prefix_cache.restore
+        if restore.is_selected:
+            src_offsets.append(restore.slot)
             dst_offsets.append(msg.logical_state)
     if len(src_offsets) == 0:
         return None, None
@@ -895,12 +895,12 @@ class InputsMakerAsync:
             state_offsets = torch.tensor([msg.logical_state for msg in messages])
             model_inputs.state_offsets = state_offsets
             if (self.cache_config.enable_prefix_caching
-                    and any(msg.prefix_cache.restore_state >= 0 for msg in messages)):
+                    and any(msg.prefix_cache.restore.is_selected for msg in messages)):
                 # Pin restore checkpoints while the forward copies them into
                 # runtime state slots; otherwise checkpoint eviction could race
                 # with input prefetching for the next batch.
                 self.scheduler.block_trie.acquire_state_checkpoint_restores(messages)
-                if any(msg.prefix_cache.restore_state >= 0 and not msg.prefix_cache.restore_state_acquired
+                if any(msg.prefix_cache.restore.is_selected and not msg.prefix_cache.restore.pinned
                        for msg in messages):
                     raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
                 restore_src_offsets, restore_dst_offsets = _compact_state_prefix_cache_restore_offsets(messages)
@@ -979,13 +979,13 @@ class InputsMakerAsync:
         # ssm
         if self.config.is_ssm:
             model_inputs.state_offsets = torch.tensor([seq.logical_state])
-            if self.cache_config.enable_prefix_caching and seq.prefix_cache.restore_state >= 0:
+            if self.cache_config.enable_prefix_caching and seq.prefix_cache.restore.is_selected:
                 # Long-context chunks use the same restore pinning contract as
                 # normal prefill batches.
                 self.scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
-                if not seq.prefix_cache.restore_state_acquired:
+                if not seq.prefix_cache.restore.pinned:
                     raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
-                model_inputs.state_prefix_cache_offsets = (seq.prefix_cache.restore_state, )
+                model_inputs.state_prefix_cache_offsets = (seq.prefix_cache.restore.slot, )
                 model_inputs.state_prefix_cache_dst_offsets = (seq.logical_state, )
             if self.cache_config.enable_prefix_caching:
                 # Save at the exact state step produced by this chunk forward.

@@ -21,7 +21,7 @@ Successful prefill scheduling keeps this order:
 SSM scheduling detail:
 
 * ``block_trie.match(seq)`` may find a ready checkpoint and record
-  ``seq.prefix_cache.restore_state`` before the request owns a runtime state.
+  ``seq.prefix_cache.restore`` before the request owns a runtime state.
   The scheduler must treat that as tentative until KV blocks and one runtime
   state slot are guaranteed.
 * A matched restore checkpoint can be pinned before eviction so checkpoint LRU
@@ -379,7 +379,7 @@ class _PrefillAdmissionAttempt:
         if gate_check.prefix_match is None:
             scheduler.block_trie.match(seq)
 
-        had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore_state >= 0
+        had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore.is_selected
         if not scheduler._acquire_ssm_restore_if_needed(seq):
             result = self._rollback_gate(stats_snapshot, gate_check,
                                          'failed to acquire SSM restore checkpoint')
@@ -441,7 +441,7 @@ class _PrefillAdmissionAttempt:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                         f'restore_state={seq.prefix_cache.restore_state}')
+                         f'restore_state={seq.prefix_cache.restore.slot}')
         self.scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
     def _finish_admission(self):
@@ -516,7 +516,7 @@ class Scheduler:
 
     def _acquire_ssm_restore_if_needed(self, seq: SchedulerSequence):
         """Pin a matched SSM checkpoint before scheduler-side eviction."""
-        if not self.is_ssm or seq.prefix_cache.restore_state < 0:
+        if not self.is_ssm or not seq.prefix_cache.restore.is_selected:
             return True
         return self.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
 
@@ -538,9 +538,7 @@ class Scheduler:
         seq.kv_token_limit = None
         prefix_cache = seq.prefix_cache
         prefix_cache.last_shared_node = None
-        prefix_cache.restore_state = -1
-        prefix_cache.restore_node = None
-        prefix_cache.restore_state_acquired = False
+        prefix_cache.restore.clear()
         prefix_cache.match_start_step = -1
         prefix_cache.private_recompute_start_step = -1
         prefix_cache.private_recompute_end_step = -1
@@ -552,7 +550,7 @@ class Scheduler:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Rollback tentative prefix-cache gate match: session_id={seq.session_id} '
                          f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                         f'restore_state={seq.prefix_cache.restore_state}')
+                         f'restore_state={seq.prefix_cache.restore.slot}')
         self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
     def _try_prefix_match_for_prefill_gate(

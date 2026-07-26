@@ -65,14 +65,94 @@ PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
 
 
 @dataclass
+class StateCheckpointRestore:
+    """A checkpoint selected to restore into this sequence's runtime state."""
+
+    slot: int = -1
+    node: Any = field(default=None, repr=False)
+    pinned: bool = False
+
+    @property
+    def is_selected(self) -> bool:
+        """Whether prefix matching selected a checkpoint."""
+        return self.slot >= 0
+
+    def select(self, slot: int, node: Any) -> None:
+        """Remember the checkpoint selected by prefix matching."""
+        self.slot = slot
+        self.node = node
+        self.pinned = False
+
+    def clear(self) -> None:
+        """Forget the selected checkpoint after release or rollback."""
+        self.slot = -1
+        self.node = None
+        self.pinned = False
+
+
+@dataclass
+class StateCheckpointSaveReservation:
+    """An unpublished checkpoint destination reserved before model forward."""
+
+    slot: int = -1
+    step: int = 0
+    node: Any = field(default=None, repr=False)
+    is_decode: bool = False
+
+    @property
+    def is_pending(self) -> bool:
+        """Whether a save destination is currently reserved."""
+        return self.slot >= 0
+
+    def reserve(self, slot: int, step: int, node: Any, is_decode: bool) -> None:
+        """Record the slot and trie identity that a forward will save."""
+        self.slot = slot
+        self.step = step
+        self.node = node
+        self.is_decode = is_decode
+
+    def clear(self) -> None:
+        """Forget a published or discarded save reservation."""
+        self.slot = -1
+        self.step = 0
+        self.node = None
+        self.is_decode = False
+
+
+@dataclass
+class StateCheckpointProducerPin:
+    """A published checkpoint pinned until its producer forward completes."""
+
+    slot: int = -1
+    node: Any = field(default=None, repr=False)
+
+    @property
+    def is_acquired(self) -> bool:
+        """Whether the producer currently holds a checkpoint pin."""
+        return self.slot >= 0
+
+    def acquire(self, slot: int, node: Any) -> None:
+        """Remember a pin acquired after checkpoint publication."""
+        self.slot = slot
+        self.node = node
+
+    def clear(self) -> None:
+        """Forget a producer pin after releasing its node reference."""
+        self.slot = -1
+        self.node = None
+
+
+@dataclass
 class PrefixCacheState:
     """Per-sequence prefix-cache bookkeeping.
 
     ``metas`` and ``block_extra_hashes`` are persistent request metadata used
-    when constructing multimodal-aware trie keys.  The restore/save fields are
-    transient scheduler state for SSM checkpoints: a matched frozen state is
-    pinned before forward, and pending save slots are published only after the
-    model has copied runtime state into them.  ``last_shared_node`` is the
+    when constructing multimodal-aware trie keys.  ``restore``,
+    ``pending_save``, and ``producer_save_pin`` expose the three transient SSM
+    checkpoint phases explicitly: a matched frozen state is pinned before
+    forward, a save reservation is published after the model copies runtime
+    state into it, and that published destination remains pinned until its
+    producer forward completes.  ``last_shared_node`` is the
     deepest trie node already shared by this sequence; ``BlockTrie.match()``
     writes it and ``BlockTrie.allocate()`` continues inserting new full blocks
     from it.  ``match_start_step`` remembers the sequence step before a
@@ -99,22 +179,13 @@ class PrefixCacheState:
     # Trie cursor for the deepest prefix block already shared by this sequence.
     last_shared_node: Any = field(default=None, repr=False)
 
-    # SSM checkpoint restore state pinned by a prefix hit before forward.
-    restore_state: int = -1
-    restore_state_acquired: bool = False
-    restore_node: Any = field(default=None, repr=False)
-
-    # SSM checkpoint save state staged until model forward publishes it.
-    save_state: int = -1
-    save_step: int = 0
-    save_is_decode: bool = False
-    save_node: Any = field(default=None, repr=False)
-    save_state_acquired: bool = False
-    save_acquired_state: int = -1
-    save_acquired_node: Any = field(default=None, repr=False)
+    # SSM checkpoint state grouped by its distinct lifecycle phase.
+    restore: StateCheckpointRestore = field(default_factory=StateCheckpointRestore)
+    pending_save: StateCheckpointSaveReservation = field(default_factory=StateCheckpointSaveReservation)
+    producer_save_pin: StateCheckpointProducerPin = field(default_factory=StateCheckpointProducerPin)
 
     # Latest decode checkpoint node owned by this sequence.
-    decode_state_node: Any = field(default=None, repr=False)
+    decode_checkpoint_node: Any = field(default=None, repr=False)
 
     # Tentative match state used for chunking, MTP overlap, and metrics.
     match_start_step: int = -1

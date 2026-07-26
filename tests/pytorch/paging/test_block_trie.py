@@ -10,7 +10,7 @@ from lmdeploy.pytorch.paging import Scheduler
 from lmdeploy.vl.constants import Modality
 
 
-class TestBlockTire:
+class TestBlockTrie:
 
     @pytest.fixture
     def block_size(self):
@@ -374,7 +374,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert seq.num_history_ids == block_size * 2
-        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore.slot == state_idx
         assert seq.prefix_cache.private_recompute_start_step == block_size * 2
         assert seq.prefix_cache.private_recompute_end_step == block_size * 4
 
@@ -411,8 +411,8 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert seq.num_history_ids == shallow_step
-        assert seq.prefix_cache.restore_state == shallow_state
-        assert seq.prefix_cache.restore_state != deep_state
+        assert seq.prefix_cache.restore.slot == shallow_state
+        assert seq.prefix_cache.restore.slot != deep_state
         assert seq.prefix_cache.private_recompute_start_step == shallow_step
         assert seq.prefix_cache.private_recompute_end_step == block_size * 4
 
@@ -439,8 +439,8 @@ class TestBlockTire:
 
         assert seq.num_history_ids == 0
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
-        assert seq.prefix_cache.restore_node is None
+        assert seq.prefix_cache.restore.slot == -1
+        assert seq.prefix_cache.restore.node is None
         assert seq.prefix_cache.private_recompute_start_step == -1
         assert seq.prefix_cache.private_recompute_end_step == -1
         assert np.array_equal(block_trie.allocator.get_ref_count(cached_blocks), ref_counts)
@@ -477,7 +477,7 @@ class TestBlockTire:
 
         save_step = block_size * (4 + num_new_blocks)
         assert block_trie.reserve_state_checkpoint_for_seq(producer, step=save_step) >= 0
-        save_node = producer.prefix_cache.save_node
+        save_node = producer.prefix_cache.pending_save.node
         assert block_trie.commit_state_checkpoint_for_seq(producer)
         match_data = save_node.state_match_data
         trie_blocks = np.array([node.block for node in block_trie._get_node_blocks(save_node)])
@@ -906,7 +906,7 @@ class TestBlockTire:
         block_trie.match(seq)
         assert len(seq.logical_blocks) == 0
         assert seq.num_history_ids == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
 
         state_idx = block_trie.reserve_state_checkpoint(node)
         block_trie.mark_state_checkpoint_ready(node)
@@ -915,7 +915,7 @@ class TestBlockTire:
         block_trie.match(seq)
         assert len(seq.logical_blocks) == 2
         assert seq.num_history_ids == block_size * 2
-        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore.slot == state_idx
 
     def test_match_ssm_clamps_to_deepest_ready_state_checkpoint(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -937,7 +937,7 @@ class TestBlockTire:
 
         assert len(seq.logical_blocks) == 2
         assert seq.num_history_ids == block_size * 2
-        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore.slot == state_idx
 
     def test_match_ssm_replays_cached_routed_experts(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -960,7 +960,7 @@ class TestBlockTire:
         matched = sess.add_sequence(token_ids + [3], sampling_param=sampling_param)
         block_trie.match(matched)
 
-        assert matched.prefix_cache.restore_state == state_idx
+        assert matched.prefix_cache.restore.slot == state_idx
         assert matched.num_history_ids == block_size * 2
         assert np.array_equal(matched.all_routed_experts.get_real(), experts)
 
@@ -997,7 +997,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
         assert calls == 1
 
     def test_match_ssm_sparse_index_verifies_hash_collision_exactly(self, ssm_scheduler):
@@ -1023,7 +1023,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
 
     def test_match_ssm_sparse_bucket_continues_after_candidate_mismatch(self, ssm_scheduler):
         block_size = ssm_scheduler.seq_meta.block_size
@@ -1041,8 +1041,8 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert seq.num_history_ids == block_size * 2
-        assert seq.prefix_cache.restore_state == good_state
-        assert seq.prefix_cache.restore_node is good_node
+        assert seq.prefix_cache.restore.slot == good_state
+        assert seq.prefix_cache.restore.node is good_node
 
     def test_match_ssm_from_checkpoint_cursor_appends_only_suffix(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -1062,7 +1062,7 @@ class TestBlockTire:
         block_trie.match(seq)
         shallow_blocks = seq.logical_blocks.get_real_blocks().copy()
         assert len(shallow_blocks) == 1
-        assert seq.prefix_cache.restore_state == shallow_state
+        assert seq.prefix_cache.restore.slot == shallow_state
 
         deep_state = block_trie.reserve_state_checkpoint_for_seq(cached, step=block_size * 3)
         assert deep_state >= 0
@@ -1070,7 +1070,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert seq.num_history_ids == block_size * 3
-        assert seq.prefix_cache.restore_state == deep_state
+        assert seq.prefix_cache.restore.slot == deep_state
         assert np.array_equal(seq.logical_blocks.get_real_blocks()[:1], shallow_blocks)
         assert len(seq.logical_blocks) == 3
 
@@ -1099,7 +1099,7 @@ class TestBlockTire:
         )
         block_trie.match(matched)
         assert matched.num_history_ids == block_size * 3
-        assert matched.prefix_cache.restore_state == state_idx
+        assert matched.prefix_cache.restore.slot == state_idx
 
         mismatched = sess.add_sequence(
             token_ids + [3],
@@ -1107,7 +1107,7 @@ class TestBlockTire:
         )
         block_trie.match(mismatched)
         assert mismatched.num_history_ids == 0
-        assert mismatched.prefix_cache.restore_state == -1
+        assert mismatched.prefix_cache.restore.slot == -1
 
     def test_match_ssm_keeps_request_mismatch_checkpoint_candidate(self, ssm_scheduler):
         block_size = ssm_scheduler.seq_meta.block_size
@@ -1124,7 +1124,7 @@ class TestBlockTire:
         ssm_scheduler.block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
         assert node.state_idx == state_idx
         assert node.state_ready
         assert node in ssm_scheduler.block_trie._state_checkpoints._buckets[key]
@@ -1148,7 +1148,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
         assert stale_key not in block_trie._state_checkpoints._buckets
         assert node in block_trie._state_checkpoints._buckets[canonical_key]
         assert block_trie._state_checkpoints._steps_by_adapter[node.adapter_name] == {node.num_matched}
@@ -1169,7 +1169,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
         assert key not in block_trie._state_checkpoints._buckets
         assert node.adapter_name not in block_trie._state_checkpoints._steps_by_adapter
         assert node.state_idx == -1
@@ -1193,7 +1193,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
         assert key not in block_trie._state_checkpoints._buckets
         assert node.state_idx == -1
         assert not node.state_ready
@@ -1232,7 +1232,7 @@ class TestBlockTire:
         matched = sess.add_sequence(token_ids + [3])
         block_trie.match(matched)
         assert matched.num_history_ids == block_size * 2
-        assert matched.prefix_cache.restore_node is replacement
+        assert matched.prefix_cache.restore.node is replacement
 
     def test_match_ssm_keeps_pinned_stale_checkpoint_candidate(self, ssm_scheduler):
         block_size = ssm_scheduler.seq_meta.block_size
@@ -1248,7 +1248,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
         assert node.state_idx == state_idx
         assert node.state_ready
         assert node.state_ref_count == 1
@@ -1278,7 +1278,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.restore.slot == -1
         assert key not in block_trie._state_checkpoints._buckets
         assert node.adapter_name not in block_trie._state_checkpoints._steps_by_adapter
         assert node.state_idx == -1
@@ -1315,13 +1315,13 @@ class TestBlockTire:
         node = seq.prefix_cache.last_shared_node
 
         assert state_idx >= 0
-        assert seq.prefix_cache.save_state == state_idx
+        assert seq.prefix_cache.pending_save.slot == state_idx
         assert not node.state_ready
         assert node.state_match_data is None
 
         assert block_trie.commit_state_checkpoint_for_seq(seq)
         assert node.state_ready
-        assert seq.prefix_cache.save_state == -1
+        assert seq.prefix_cache.pending_save.slot == -1
         match_data = node.state_match_data
         assert match_data is not None
         assert np.array_equal(match_data.token_ids, token_ids)
@@ -1336,7 +1336,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert seq.num_history_ids == block_size * 2
-        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore.slot == state_idx
 
     def test_ssm_restore_acquire_survives_tail_allocation(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -1350,19 +1350,19 @@ class TestBlockTire:
         seq = ssm_scheduler.add_session(100).add_sequence(checkpoint_tokens + suffix_tokens)
         block_trie.match(seq)
         assert seq.num_history_ids == block_size * 2
-        assert seq.prefix_cache.restore_state == state_idx
-        assert seq.prefix_cache.restore_node is checkpoint_node
+        assert seq.prefix_cache.restore.slot == state_idx
+        assert seq.prefix_cache.restore.node is checkpoint_node
 
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         assert seq.prefix_cache.last_shared_node is not checkpoint_node
-        assert seq.prefix_cache.restore_node is checkpoint_node
+        assert seq.prefix_cache.restore.node is checkpoint_node
 
         assert block_trie.acquire_state_checkpoint_restore_for_seq(seq)
         assert checkpoint_node.state_ref_count == 1
         assert block_trie.release_state_checkpoint_restore_for_seq(seq)
         assert checkpoint_node.state_ref_count == 0
-        assert seq.prefix_cache.restore_node is None
+        assert seq.prefix_cache.restore.node is None
 
     def test_ssm_checkpoint_release_rejects_pinned_state(self, ssm_scheduler):
         block_trie = ssm_scheduler.block_trie
@@ -1373,7 +1373,7 @@ class TestBlockTire:
 
         seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [2])
         block_trie.match(seq)
-        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore.slot == state_idx
         assert block_trie.acquire_state_checkpoint_restore_for_seq(seq)
 
         with pytest.raises(RuntimeError, match='Cannot release a pinned'):
@@ -1391,7 +1391,7 @@ class TestBlockTire:
 
         seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [2])
         block_trie.match(seq)
-        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore.slot == state_idx
         assert block_trie.acquire_state_checkpoint_restore_for_seq(seq)
         checkpoint_node.state_ref_count = 0
 
@@ -1467,9 +1467,9 @@ class TestBlockTire:
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states - 1
 
         assert block_trie.discard_state_checkpoint_for_seq(seq)
-        assert seq.prefix_cache.save_state == -1
-        assert seq.prefix_cache.save_step == 0
-        assert seq.prefix_cache.save_node is None
+        assert seq.prefix_cache.pending_save.slot == -1
+        assert seq.prefix_cache.pending_save.step == 0
+        assert seq.prefix_cache.pending_save.node is None
         assert node.state_idx == -1
         assert not node.state_ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
@@ -1487,13 +1487,13 @@ class TestBlockTire:
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         state_idx = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
-        node = seq.prefix_cache.save_node
+        node = seq.prefix_cache.pending_save.node
 
         assert state_idx >= 0
         seq.update_token_ids([2], mode=UpdateTokenMode.DECODE)
 
         assert block_trie.commit_state_checkpoint_for_seq(seq)
-        assert seq.prefix_cache.decode_state_node is node
+        assert seq.prefix_cache.decode_checkpoint_node is node
         assert node.state_ready
 
     def test_ssm_checkpoint_commit_failure_discards_detached_pending_slot(self, ssm_scheduler):
@@ -1514,9 +1514,9 @@ class TestBlockTire:
         node.parent = None
 
         assert not block_trie.commit_state_checkpoint_for_seq(seq)
-        assert seq.prefix_cache.save_state == -1
-        assert seq.prefix_cache.save_step == 0
-        assert seq.prefix_cache.save_node is None
+        assert seq.prefix_cache.pending_save.slot == -1
+        assert seq.prefix_cache.pending_save.step == 0
+        assert seq.prefix_cache.pending_save.node is None
         assert node.state_idx == -1
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
@@ -1539,9 +1539,9 @@ class TestBlockTire:
 
         assert not block_trie.commit_state_checkpoint_for_seq(seq)
 
-        assert seq.prefix_cache.save_state == -1
-        assert seq.prefix_cache.save_step == 0
-        assert seq.prefix_cache.save_node is None
+        assert seq.prefix_cache.pending_save.slot == -1
+        assert seq.prefix_cache.pending_save.step == 0
+        assert seq.prefix_cache.pending_save.node is None
         assert node.state_idx == -1
         assert not node.state_ready
         assert node.state_match_data is None
@@ -1569,7 +1569,7 @@ class TestBlockTire:
         with pytest.raises(RuntimeError, match='mismatched sequence cursor'):
             block_trie.commit_state_checkpoint_for_seq(seq)
 
-        assert seq.prefix_cache.save_state == -1
+        assert seq.prefix_cache.pending_save.slot == -1
         assert node.state_idx == -1
         assert not node.state_ready
         assert node.state_match_data is None
@@ -1600,9 +1600,9 @@ class TestBlockTire:
             block_trie.commit_state_checkpoint_for_seq(seq)
 
         assert state_idx >= 0
-        assert seq.prefix_cache.save_state == -1
-        assert seq.prefix_cache.save_step == 0
-        assert seq.prefix_cache.save_node is None
+        assert seq.prefix_cache.pending_save.slot == -1
+        assert seq.prefix_cache.pending_save.step == 0
+        assert seq.prefix_cache.pending_save.node is None
         assert node.state_idx == -1
         assert not node.state_ready
         assert node.state_match_data is None
@@ -1622,26 +1622,26 @@ class TestBlockTire:
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         state_idx_a = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
-        node_a = seq.prefix_cache.save_node
+        node_a = seq.prefix_cache.pending_save.node
 
         assert state_idx_a >= 0
-        assert seq.prefix_cache.save_is_decode
+        assert seq.prefix_cache.pending_save.is_decode
         assert block_trie.commit_state_checkpoint_for_seq(seq)
-        assert seq.prefix_cache.decode_state_node is node_a
+        assert seq.prefix_cache.decode_checkpoint_node is node_a
         assert node_a.state_ready
 
         seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         state_idx_b = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
-        node_b = seq.prefix_cache.save_node
+        node_b = seq.prefix_cache.pending_save.node
 
         assert state_idx_b >= 0
         assert node_a.state_idx == -1
         assert not node_a.state_ready
-        assert seq.prefix_cache.decode_state_node is None
+        assert seq.prefix_cache.decode_checkpoint_node is None
         assert block_trie.commit_state_checkpoint_for_seq(seq)
-        assert seq.prefix_cache.decode_state_node is node_b
+        assert seq.prefix_cache.decode_checkpoint_node is node_b
         assert node_b.state_ready
 
     def test_ssm_decode_checkpoint_skip_replacement_when_previous_is_pinned(self, ssm_scheduler):
@@ -1656,7 +1656,7 @@ class TestBlockTire:
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         state_idx = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
-        node = seq.prefix_cache.save_node
+        node = seq.prefix_cache.pending_save.node
         assert state_idx >= 0
         assert block_trie.commit_state_checkpoint_for_seq(seq)
         node.state_ref_count = 1
@@ -1666,10 +1666,10 @@ class TestBlockTire:
         block_trie.allocate(seq)
 
         assert block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size) == -1
-        assert seq.prefix_cache.decode_state_node is node
+        assert seq.prefix_cache.decode_checkpoint_node is node
         assert node.state_idx == state_idx
         assert node.state_ready
-        assert seq.prefix_cache.save_state == -1
+        assert seq.prefix_cache.pending_save.slot == -1
 
     def test_ssm_decode_checkpoint_keeps_old_state_when_new_node_is_pending(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -1685,11 +1685,11 @@ class TestBlockTire:
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         old_state_idx = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
-        old_node = seq.prefix_cache.save_node
+        old_node = seq.prefix_cache.pending_save.node
 
         assert old_state_idx >= 0
         assert block_trie.commit_state_checkpoint_for_seq(seq)
-        assert seq.prefix_cache.decode_state_node is old_node
+        assert seq.prefix_cache.decode_checkpoint_node is old_node
         assert old_node.state_ready
 
         seq.update_token_ids(new_tokens, mode=UpdateTokenMode.DECODE)
@@ -1707,10 +1707,10 @@ class TestBlockTire:
         assert not new_node.state_ready
 
         assert block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size) == -1
-        assert seq.prefix_cache.decode_state_node is old_node
+        assert seq.prefix_cache.decode_checkpoint_node is old_node
         assert old_node.state_idx == old_state_idx
         assert old_node.state_ready
-        assert seq.prefix_cache.save_state == -1
+        assert seq.prefix_cache.pending_save.slot == -1
 
     def test_ssm_decode_checkpoint_keeps_old_state_when_new_step_is_not_allocated(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -1724,7 +1724,7 @@ class TestBlockTire:
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         state_idx = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
-        node = seq.prefix_cache.save_node
+        node = seq.prefix_cache.pending_save.node
         assert state_idx >= 0
         assert block_trie.commit_state_checkpoint_for_seq(seq)
 
@@ -1732,7 +1732,7 @@ class TestBlockTire:
         block_mgr.allocate(seq)
 
         assert block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size) == -1
-        assert seq.prefix_cache.decode_state_node is node
+        assert seq.prefix_cache.decode_checkpoint_node is node
         assert node.state_idx == state_idx
         assert node.state_ready
 
@@ -1750,8 +1750,8 @@ class TestBlockTire:
         state_idx = block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)
 
         assert state_idx >= 0
-        assert seq.prefix_cache.save_state == state_idx
-        assert seq.prefix_cache.save_step == checkpoint_step
+        assert seq.prefix_cache.pending_save.slot == state_idx
+        assert seq.prefix_cache.pending_save.step == checkpoint_step
 
         # Long-context chunking advances the sequence step before the executor
         # output is committed. The checkpoint should still attach to the
@@ -1763,7 +1763,7 @@ class TestBlockTire:
         block_trie.match(seq)
 
         assert seq.num_history_ids == checkpoint_step
-        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore.slot == state_idx
 
     def test_ssm_checkpoint_save_skips_partial_tail(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -1777,7 +1777,7 @@ class TestBlockTire:
         block_trie.allocate(seq)
 
         assert block_trie.reserve_state_checkpoint_for_seq(seq) == -1
-        assert seq.prefix_cache.save_state == -1
+        assert seq.prefix_cache.pending_save.slot == -1
 
     def test_ssm_checkpoint_save_skips_when_no_state_slot(self, ssm_cache_config, scheduler_config, seq_meta):
         cache_config = ssm_cache_config
@@ -1794,7 +1794,7 @@ class TestBlockTire:
         block_trie.allocate(seq)
 
         assert block_trie.reserve_state_checkpoint_for_seq(seq) == -1
-        assert seq.prefix_cache.save_state == -1
+        assert seq.prefix_cache.pending_save.slot == -1
 
     def test_ssm_checkpoint_save_skips_duplicate_unready_node(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -1820,15 +1820,15 @@ class TestBlockTire:
         assert state_idx_b == -1
         assert node.state_idx == state_idx_a
         assert not node.state_ready
-        assert seq_a.prefix_cache.save_state == state_idx_a
-        assert seq_a.prefix_cache.save_node is node
-        assert seq_b.prefix_cache.save_state == -1
-        assert seq_b.prefix_cache.save_node is None
+        assert seq_a.prefix_cache.pending_save.slot == state_idx_a
+        assert seq_a.prefix_cache.pending_save.node is node
+        assert seq_b.prefix_cache.pending_save.slot == -1
+        assert seq_b.prefix_cache.pending_save.node is None
 
         assert block_trie.commit_state_checkpoint_for_seq(seq_a)
         matched = ssm_scheduler.add_session(2).add_sequence(token_ids + [2])
         block_trie.match(matched)
-        assert matched.prefix_cache.restore_state == state_idx_a
+        assert matched.prefix_cache.restore.slot == state_idx_a
         assert matched.num_history_ids == block_size * 2
 
     def test_ssm_checkpoint_save_evicts_unpinned_state_only(self, ssm_cache_config, scheduler_config, seq_meta):
@@ -1857,11 +1857,11 @@ class TestBlockTire:
 
         seq_a = scheduler.add_session(100).add_sequence(token_ids_a + [3])
         scheduler.block_trie.match(seq_a)
-        assert seq_a.prefix_cache.restore_state == -1
+        assert seq_a.prefix_cache.restore.slot == -1
 
         seq_b = scheduler.add_session(101).add_sequence(token_ids_b + [3])
         scheduler.block_trie.match(seq_b)
-        assert seq_b.prefix_cache.restore_state == state_idx_b
+        assert seq_b.prefix_cache.restore.slot == state_idx_b
 
     def test_ssm_checkpoint_save_producer_pin_blocks_eviction_until_release(self, ssm_cache_config, scheduler_config,
                                                                             seq_meta):
@@ -1877,7 +1877,7 @@ class TestBlockTire:
         scheduler.block_manager.allocate(seq_a)
         scheduler.block_trie.allocate(seq_a)
         state_idx_a = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq_a)
-        node_a = seq_a.prefix_cache.save_node
+        node_a = seq_a.prefix_cache.pending_save.node
 
         assert state_idx_a >= 0
         assert scheduler.block_trie.commit_state_checkpoint_for_seq(seq_a, acquire_save_ref=True)
@@ -1886,7 +1886,7 @@ class TestBlockTire:
 
         matched = scheduler.add_session(1).add_sequence(token_ids_a + [3])
         scheduler.block_trie.match(matched)
-        assert matched.prefix_cache.restore_state == state_idx_a
+        assert matched.prefix_cache.restore.slot == state_idx_a
 
         seq_b = scheduler.add_session(2).add_sequence(token_ids_b)
         scheduler.block_manager.allocate(seq_b)
@@ -1920,7 +1920,7 @@ class TestBlockTire:
 
         seq_a = scheduler.add_session(100).add_sequence(token_ids_a + [4])
         scheduler.block_trie.match(seq_a)
-        assert seq_a.prefix_cache.restore_state == state_idx_a
+        assert seq_a.prefix_cache.restore.slot == state_idx_a
         assert scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq_a)
         assert node_a.state_ref_count == 1
 
@@ -1938,7 +1938,7 @@ class TestBlockTire:
 
         assert scheduler.block_trie.release_state_checkpoint_restore_for_seq(seq_a)
         assert node_a.state_ref_count == 0
-        assert seq_a.prefix_cache.restore_state == -1
+        assert seq_a.prefix_cache.restore.slot == -1
 
     def test_evict_ssm_releases_state_checkpoint(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager

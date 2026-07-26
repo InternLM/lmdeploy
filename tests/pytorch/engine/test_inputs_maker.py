@@ -15,7 +15,7 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     _compact_state_prefix_cache_restore_offsets,
     _compact_state_prefix_cache_save_offsets,
 )
-from lmdeploy.pytorch.messages import MessageStatus
+from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore
 
 
 @dataclass
@@ -61,7 +61,7 @@ class _DummySeq:
 
 def _state_seq(logical_state: int, restore_state: int = -1):
     return SimpleNamespace(logical_state=logical_state,
-                           prefix_cache=SimpleNamespace(restore_state=restore_state))
+                           prefix_cache=SimpleNamespace(restore=StateCheckpointRestore(slot=restore_state)))
 
 
 class _FakeScheduler:
