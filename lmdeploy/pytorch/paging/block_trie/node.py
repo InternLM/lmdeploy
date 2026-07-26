@@ -98,6 +98,21 @@ class Node:
             node.state_match_data = None
             pending.extend(node.children.values())
 
+    def is_attached(self):
+        """Check whether this node is still linked from its parent."""
+        parent = self.parent
+        return parent is not None and parent.children.get(self.hash_key) is self
+
+    def path_from_root(self):
+        """Return non-root nodes from the adapter root to this node."""
+        nodes = []
+        node = self
+        while node is not None and node.parent is not None:
+            nodes.append(node)
+            node = node.parent
+        nodes.reverse()
+        return nodes
+
     def __lt__(self, other):
         return True
 

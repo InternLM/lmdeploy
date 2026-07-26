@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Prefix-cache trie topology, matching, and KV ownership.
 
-``BlockTrie`` owns reusable prefix identity, trie-owned KV block references,
-and optional routed-expert replay data.  It delegates SSM checkpoint slot
-ownership to ``StateCheckpointLifecycle`` while keeping the scheduler-facing
-facade.  Read this module together with ``Scheduler._schedule_prefill``,
+``BlockTrie`` owns reusable prefix identity and optional routed-expert replay
+data. It delegates trie KV references and leaf eviction to
+``KVBlockLifecycle``, and SSM checkpoint slots to
+``StateCheckpointLifecycle``, while keeping the scheduler-facing facade. Read
+this module together with ``Scheduler._schedule_prefill``,
 ``InputsMaker.create_model_inputs*``, ``model_forward``, and
 ``EngineLoop._publish_forward_prefix_cache``.
 
@@ -67,7 +68,6 @@ SSM checkpoint detail:
   an exact ready SSM checkpoint is intentionally a miss.
 """
 
-import heapq
 import logging
 from dataclasses import dataclass
 
@@ -86,6 +86,7 @@ from .checkpoint import (
     make_request_multimodal_identity,
 )
 from .checkpoint_lifecycle import StateCheckpointLifecycle
+from .kv_lifecycle import KVBlockLifecycle
 from .node import Node
 
 logger = get_logger('lmdeploy')
@@ -117,10 +118,10 @@ class BlockTrie:
     newly computed full blocks.  ``evict()`` frees trie-owned KV leaves under
     allocator pressure.
 
-    Internally this facade owns several related indexes:
+    Internally this facade coordinates several related owners:
 
-    * adapter-partitioned trie roots and leaf candidates for KV eviction;
-    * multimodal-aware block keys;
+    * adapter-partitioned trie roots and multimodal-aware block identity;
+    * KV reference transactions and leaf eviction in ``KVBlockLifecycle``;
     * optional SSM checkpoint reserve/commit/restore/save lifecycle;
     * sparse ready-checkpoint lookup for SSM prefix hits;
     * best-effort routed-expert replay data;
@@ -138,7 +139,6 @@ class BlockTrie:
 
         # caches with different adapter should not be shared.
         self._roots: dict[str, Node] = dict()
-        self.leaves: set[Node] = set()
         # SSM checkpoints are sparse.  The trie still owns KV blocks, but ready
         # recurrent-state snapshots are indexed only at selected exact steps.
         self._state_checkpoints = StateCheckpointIndex(self.block_size, self._make_key)
@@ -153,7 +153,13 @@ class BlockTrie:
             make_node_match_data=self._make_state_checkpoint_match_data_from_node,
             make_sequence_match_data=self._make_state_checkpoint_match_data_from_seq,
         )
+        self._kv_lifecycle = KVBlockLifecycle(self.allocator, self._checkpoint_lifecycle)
         self.stats = PrefixCacheStats()
+
+    @property
+    def leaves(self):
+        """Expose KV leaf candidates for compatibility and diagnostics."""
+        return self._kv_lifecycle.leaves
 
     # Prefix-cache stats and tentative-match rollback helpers.
 
@@ -479,8 +485,7 @@ class BlockTrie:
     @staticmethod
     def _is_attached_node(node: Node):
         """Check whether a node is still attached to the trie."""
-        parent = node.parent
-        return parent is not None and parent.children.get(node.hash_key) is node
+        return node.is_attached()
 
     def _has_current_state_checkpoint_path(self, node: Node):
         """Check a cached checkpoint path through its invalidation contract."""
@@ -488,17 +493,6 @@ class BlockTrie:
         if match_data is None or len(match_data.blocks) == 0:
             return False
         return (len(match_data.blocks) * self.block_size == node.num_matched and self._is_attached_node(node))
-
-    @staticmethod
-    def _is_attached_leaf(node: Node):
-        """Check whether a node is a current attached trie leaf."""
-        return BlockTrie._is_attached_node(node) and len(node.children) == 0
-
-    @staticmethod
-    def _is_evict_candidate_leaf(node: Node):
-        """Check whether a leaf-set entry can be considered by KV eviction."""
-        return (node.block >= 0 and len(node.children) == 0
-                and (node.parent is None or BlockTrie._is_attached_node(node)))
 
     def _is_attached_cursor(self, node: Node):
         """Check whether a sequence cursor still reaches the adapter root."""
@@ -513,12 +507,7 @@ class BlockTrie:
 
     def _get_node_blocks(self, node: Node):
         """Get trie nodes from root to a target node."""
-        nodes = []
-        while node is not None and node.parent is not None:
-            nodes.append(node)
-            node = node.parent
-        nodes.reverse()
-        return nodes
+        return node.path_from_root()
 
     def _drop_stale_state_checkpoint_index_entry(self, node: Node, key, reason: str):
         """Remove a bad sparse-index entry without releasing a valid node."""
@@ -739,7 +728,9 @@ class BlockTrie:
         cursor still reaches the current trie.  Existing identical children are
         deduplicated back to the trie-owned block, except for the private
         recompute-overlap window where the sequence must keep fresh writable KV.
-        New nodes take one trie-owned allocator ref.
+        New nodes take one trie-owned allocator ref. The facade decides the
+        identity path; ``KVBlockLifecycle`` commits the resulting batched
+        reference changes and leaf bookkeeping.
         """
         if not self.enable:
             return
@@ -767,8 +758,7 @@ class BlockTrie:
             self._clear_private_recompute_range(seq)
             return
 
-        if len(node.children) == 0 and node.parent is not None:
-            self.leaves.discard(node)
+        self._kv_lifecycle.begin_path_extension(node)
 
         block_id = num_matched // block_size
         private_trie_blocks = seq.prefix_cache.private_recompute_trie_blocks
@@ -823,100 +813,18 @@ class BlockTrie:
             block_id += 1
 
         seq.prefix_cache.last_shared_node = node
-        if node.parent is not None and len(node.children) == 0:
-            # ignore root
-            self.leaves.add(node)
-        if len(blocks) > 0:
-            self.allocator.add_ref_count(np.array(blocks), 1)
-        if len(free_blocks) > 0:
-            self.allocator.free(np.array(free_blocks))
+        self._kv_lifecycle.commit_path_extension(node,
+                                                 additional_ref_blocks=blocks,
+                                                 duplicate_blocks=free_blocks)
         self._clear_private_recompute_range(seq)
 
     def evict(self, max_num_blocks: int):
         """Evict trie-owned KV leaf blocks.
 
-        ``self.leaves`` is an auxiliary candidate index, not the source of
-        truth.  Each candidate is rechecked against the parent/children chain,
-        allocator refcount, and checkpoint pin state before removing it.  When
-        a leaf is removed, its parent can become the next leaf candidate.
+        ``KVBlockLifecycle`` owns the auxiliary leaf index and rechecks every
+        candidate against topology, allocator refs, and checkpoint pins.
         """
         if not self.enable:
             return 0
 
-        def __remove_leaf(leaves, evicted_blocks):
-            while len(leaves) > 0:
-                _, leaf = heapq.heappop(leaves)
-                if leaf not in self.leaves:
-                    continue
-                if not self._is_evict_candidate_leaf(leaf):
-                    self.leaves.discard(leaf)
-                    continue
-                if self._is_pinned_state_checkpoint(leaf):
-                    continue
-                if int(self.allocator.get_ref_count(leaf.block)) != 1:
-                    continue
-                break
-            else:
-                return False, None
-
-            evicted_blocks.append(leaf.block)
-            self.release_state_checkpoint(leaf)
-            parent = leaf.parent
-            if parent is not None:
-                leaf.parent = None
-            self.leaves.discard(leaf)
-            return True, parent
-
-        def __add_leaf(leaves, parent):
-            if not self._is_attached_leaf(parent):
-                return
-            if parent in self.leaves:
-                return
-            self.leaves.add(parent)
-            if self.allocator.get_ref_count(parent.block) == 1:
-                access_time = self.allocator.get_access_time(parent.block)
-                heapq.heappush(leaves, (access_time, parent))
-
-        if len(self.leaves) == 0:
-            return 0
-
-        evicted_blocks = []
-        old_leaf_count = len(self.leaves)
-        leaves = list(leaf for leaf in self.leaves if self._is_evict_candidate_leaf(leaf))
-        if len(leaves) != len(self.leaves):
-            self.leaves.intersection_update(leaves)
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f'Dropped stale prefix-cache leaf candidates before eviction: '
-                             f'old_count={old_leaf_count} new_count={len(leaves)}')
-        if len(leaves) == 0:
-            return 0
-
-        # filter ref-cnt == 1 (trie own one block ref)
-        leaf_blocks = np.array(list(leaf.block for leaf in leaves))
-        ref_cnt = self.allocator.get_ref_count(leaf_blocks)
-        indices = (ref_cnt == 1).nonzero()[0]
-        if len(indices) == 0:
-            return 0
-
-        # make heap
-        leaves = list(leaves[i] for i in indices)
-        access_times = self.allocator.get_access_time(leaf_blocks)
-        access_times = list(access_times[i] for i in indices)
-        leaves = list(zip(access_times, leaves))
-        heapq.heapify(leaves)
-
-        while len(leaves) > 0 and len(evicted_blocks) < max_num_blocks:
-            removed, parent = __remove_leaf(leaves, evicted_blocks)
-            if not removed:
-                break
-            if parent is None or parent.parent is None:
-                # ignore root
-                continue
-            if len(parent.children) == 0:
-                __add_leaf(leaves, parent)
-
-        if len(evicted_blocks) == 0:
-            return 0
-        self.allocator.free(np.array(evicted_blocks))
-
-        return len(evicted_blocks)
+        return self._kv_lifecycle.evict(max_num_blocks)

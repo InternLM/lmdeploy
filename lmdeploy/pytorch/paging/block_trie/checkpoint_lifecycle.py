@@ -2,9 +2,11 @@
 """Ownership lifecycle for node-backed SSM state checkpoints.
 
 The lifecycle owns state-slot reservation, publication, async-copy pins, and
-checkpoint-only eviction.  It deliberately does not own trie topology or KV
-blocks.  Instead, :class:`BlockTrie` supplies narrow callbacks for the few
-topology and exact-identity decisions needed while publishing a checkpoint.
+checkpoint-only eviction. It deliberately does not own trie topology or KV
+blocks. :class:`BlockTrie` supplies narrow callbacks for the few topology and
+exact-identity decisions needed while publishing a checkpoint, while
+``KVBlockLifecycle`` consults this owner before evicting a checkpoint-bearing
+KV leaf.
 """
 
 from __future__ import annotations

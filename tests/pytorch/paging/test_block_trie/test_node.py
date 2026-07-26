@@ -16,11 +16,14 @@ def test_parent_assignment_maintains_both_sides():
     child.parent = root
 
     assert child.parent is root
+    assert child.is_attached()
     assert root.children == {child.hash_key: child}
+    assert child.path_from_root() == [child]
 
     child.parent = None
 
     assert child.parent is None
+    assert not child.is_attached()
     assert root.children == {}
 
 
