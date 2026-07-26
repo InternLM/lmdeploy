@@ -7,6 +7,164 @@ import triton.language as tl
 
 
 @triton.jit
+def _prefill_chunk_state_update_kernel(
+    source_states,
+    concept_states,
+    token_start_ids,
+    token_counts,
+    source_stride_t,
+    source_stride_s,
+    source_stride_h,
+    out_stride_c,
+    out_stride_s,
+    out_stride_h,
+    HIDDEN: tl.constexpr,
+    TOTAL_ELEMS: tl.constexpr,
+    CHUNK_SIZE: tl.constexpr,
+    MERGE_METHOD: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    """Merge contiguous token chunks into compact concept-source rows."""
+    tile_id = tl.program_id(0)
+    concept_id = tl.program_id(1)
+    offs = tile_id * BLOCK + tl.arange(0, BLOCK)
+    valid_elem = offs < TOTAL_ELEMS
+
+    source_id = offs // HIDDEN
+    hidden_id = offs - source_id * HIDDEN
+
+    token_start = tl.load(token_start_ids + concept_id)
+    token_count = tl.load(token_counts + concept_id)
+    has_token = token_count > 0
+
+    acc = tl.zeros((BLOCK, ), dtype=tl.float32)
+    for token_offset in range(CHUNK_SIZE):
+        load_mask = valid_elem & (token_offset < token_count)
+        ptrs = (source_states + (token_start + token_offset) * source_stride_t + source_id * source_stride_s +
+                hidden_id * source_stride_h)
+        values = tl.load(ptrs, mask=load_mask, other=0.0).to(tl.float32)
+        acc += values
+
+    denom = tl.maximum(token_count, 1).to(tl.float32)
+    mean_values = acc / denom
+    if MERGE_METHOD == 1:  # first; short prompts keep reference mean-pooling
+        first_ptrs = (source_states + token_start * source_stride_t + source_id * source_stride_s +
+                      hidden_id * source_stride_h)
+        first_values = tl.load(first_ptrs, mask=valid_elem & has_token, other=0.0).to(tl.float32)
+        out_values = tl.where(token_count < CHUNK_SIZE, mean_values, first_values)
+    elif MERGE_METHOD == 2:  # last; short prompts keep reference mean-pooling
+        last_token = token_start + tl.maximum(token_count, 1) - 1
+        last_ptrs = (source_states + last_token * source_stride_t + source_id * source_stride_s +
+                     hidden_id * source_stride_h)
+        last_values = tl.load(last_ptrs, mask=valid_elem & has_token, other=0.0).to(tl.float32)
+        out_values = tl.where(token_count < CHUNK_SIZE, mean_values, last_values)
+    else:
+        out_values = mean_values
+
+    out_ptrs = concept_states + concept_id * out_stride_c + source_id * out_stride_s + hidden_id * out_stride_h
+    tl.store(out_ptrs, out_values, mask=valid_elem)
+
+
+@triton.jit
+def _prefill_state_cache_update_kernel(
+    chunk_state_cache,
+    last_raw_state_cache,
+    last_final_state_cache,
+    source_states,
+    predicted_vectors,
+    raw_states,
+    state_ids,
+    token_q_start_loc,
+    token_q_seqlens,
+    concept_q_start_loc,
+    concept_q_seqlens,
+    chunk_state_stride_n,
+    chunk_state_stride_s,
+    chunk_state_stride_h,
+    raw_cache_stride_n,
+    raw_cache_stride_l,
+    raw_cache_stride_h,
+    final_cache_stride_n,
+    final_cache_stride_h,
+    source_stride_t,
+    source_stride_s,
+    source_stride_h,
+    pred_stride_c,
+    pred_stride_h,
+    raw_stride_c,
+    raw_stride_l,
+    raw_stride_h,
+    HIDDEN: tl.constexpr,
+    SOURCE_ELEMS: tl.constexpr,
+    RAW_ELEMS: tl.constexpr,
+    CHUNK_SIZE: tl.constexpr,
+    MERGE_METHOD: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    """Seed decode state caches directly from prefill rows."""
+    tile_id = tl.program_id(0)
+    batch_id = tl.program_id(1)
+    state_id = tl.load(state_ids + batch_id)
+    if state_id < 0:
+        return
+
+    offs = tile_id * BLOCK + tl.arange(0, BLOCK)
+    q_start = tl.load(token_q_start_loc + batch_id).to(tl.int64)
+    q_len = tl.load(token_q_seqlens + batch_id).to(tl.int64)
+    tail_len = q_len % CHUNK_SIZE
+    tail_len = tl.where(q_len < CHUNK_SIZE, q_len, tail_len)
+    tail_len = tl.where(q_len > 0, tail_len, 0)
+    has_tail = tail_len > 0
+
+    source_mask = offs < SOURCE_ELEMS
+    source_id = offs // HIDDEN
+    source_hidden_id = offs - source_id * HIDDEN
+    tail_start = q_start + q_len - tail_len
+
+    if MERGE_METHOD == 1:  # first
+        first_ptrs = (source_states + tail_start * source_stride_t + source_id * source_stride_s +
+                      source_hidden_id * source_stride_h)
+        source_values = tl.load(first_ptrs, mask=source_mask & has_tail, other=0.0).to(tl.float32)
+    elif MERGE_METHOD == 2:  # last
+        last_ptrs = (source_states + (q_start + q_len - 1) * source_stride_t + source_id * source_stride_s +
+                     source_hidden_id * source_stride_h)
+        source_values = tl.load(last_ptrs, mask=source_mask & has_tail, other=0.0).to(tl.float32)
+    else:
+        source_values = tl.zeros((BLOCK, ), dtype=tl.float32)
+        for token_offset in range(CHUNK_SIZE):
+            load_mask = source_mask & (token_offset < tail_len)
+            ptrs = (source_states + (tail_start + token_offset) * source_stride_t + source_id * source_stride_s +
+                    source_hidden_id * source_stride_h)
+            values = tl.load(ptrs, mask=load_mask, other=0.0).to(tl.float32)
+            source_values += values
+
+    chunk_ptrs = (chunk_state_cache + state_id * chunk_state_stride_n + source_id * chunk_state_stride_s +
+                  source_hidden_id * chunk_state_stride_h)
+    tl.store(chunk_ptrs, source_values, mask=source_mask)
+
+    concept_count = tl.load(concept_q_seqlens + batch_id).to(tl.int64)
+    has_concept = concept_count > 0
+    concept_start = tl.load(concept_q_start_loc + batch_id).to(tl.int64)
+    last_concept_id = concept_start + concept_count - 1
+
+    final_hidden_id = offs
+    final_mask = (offs < HIDDEN) & has_concept
+    pred_ptrs = predicted_vectors + last_concept_id * pred_stride_c + final_hidden_id * pred_stride_h
+    final_ptrs = last_final_state_cache + state_id * final_cache_stride_n + final_hidden_id * final_cache_stride_h
+    final_values = tl.load(pred_ptrs, mask=final_mask, other=0.0)
+    tl.store(final_ptrs, final_values, mask=final_mask)
+
+    raw_mask = (offs < RAW_ELEMS) & has_concept
+    raw_layer_id = offs // HIDDEN
+    raw_hidden_id = offs - raw_layer_id * HIDDEN
+    raw_ptrs = raw_states + last_concept_id * raw_stride_c + raw_layer_id * raw_stride_l + raw_hidden_id * raw_stride_h
+    raw_cache_ptrs = (last_raw_state_cache + state_id * raw_cache_stride_n + raw_layer_id * raw_cache_stride_l +
+                      raw_hidden_id * raw_cache_stride_h)
+    raw_values = tl.load(raw_ptrs, mask=raw_mask, other=0.0)
+    tl.store(raw_cache_ptrs, raw_values, mask=raw_mask)
+
+
+@triton.jit
 def _decode_chunk_state_update_kernel(
     state_cache,
     current_states,
@@ -257,6 +415,122 @@ def _merge_method_id(merge_method: str) -> int:
     if merge_method == 'last':
         return 2
     return 0
+
+
+def prefill_chunk_state_update(
+    source_states: torch.Tensor,
+    token_start_ids: torch.Tensor,
+    token_counts: torch.Tensor,
+    num_concepts_total: int,
+    chunk_size: int,
+    merge_method: str,
+    block: int = 1024,
+):
+    """Merge prefill source states into compact concept-source rows.
+
+    Args:
+        source_states: ``[num_tokens, num_sources, hidden]``.
+        token_start_ids: first token row for each compact concept row.
+        token_counts: number of tokens merged into each concept row.
+        num_concepts_total: compact concept row count.
+        chunk_size: ConceptLM chunk size.
+        merge_method: ``meanpooling``, ``first``, or ``last``.
+        block: Triton vector width over ``num_sources * hidden``.
+    """
+    assert source_states.is_cuda, 'ConceptLM prefill merge requires CUDA source states.'
+    assert source_states.dim() == 3
+    num_sources = source_states.size(1)
+    hidden = source_states.size(2)
+    concept_states = source_states.new_empty((num_concepts_total, num_sources, hidden))
+    if num_concepts_total == 0:
+        return concept_states
+
+    total_elems = num_sources * hidden
+    token_start_ids = token_start_ids.to(device=source_states.device, dtype=torch.long)
+    token_counts = token_counts.to(device=source_states.device, dtype=torch.int32)
+    grid = (triton.cdiv(total_elems, block), num_concepts_total)
+    _prefill_chunk_state_update_kernel[grid](
+        source_states,
+        concept_states,
+        token_start_ids,
+        token_counts,
+        *source_states.stride(),
+        *concept_states.stride(),
+        HIDDEN=hidden,
+        TOTAL_ELEMS=total_elems,
+        CHUNK_SIZE=int(chunk_size),
+        MERGE_METHOD=_merge_method_id(merge_method),
+        BLOCK=block,
+        num_warps=8,
+    )
+    return concept_states
+
+
+def prefill_state_cache_update(
+    chunk_state_cache: torch.Tensor,
+    last_raw_state_cache: torch.Tensor,
+    last_final_state_cache: torch.Tensor,
+    source_states: torch.Tensor,
+    predicted_vectors: torch.Tensor,
+    raw_states: torch.Tensor,
+    state_ids: torch.Tensor,
+    token_q_start_loc: torch.Tensor,
+    token_q_seqlens: torch.Tensor,
+    concept_q_start_loc: torch.Tensor,
+    concept_q_seqlens: torch.Tensor,
+    chunk_size: int,
+    merge_method: str,
+    block: int = 1024,
+) -> None:
+    """Seed ConceptLM decode state caches from prefill in one CUDA op."""
+    assert chunk_state_cache.is_cuda, 'ConceptLM prefill state-cache update requires CUDA caches.'
+    assert last_raw_state_cache.is_cuda and last_final_state_cache.is_cuda
+    assert source_states.is_cuda and predicted_vectors.is_cuda and raw_states.is_cuda
+    assert source_states.dim() == 3 and predicted_vectors.dim() == 2 and raw_states.dim() == 3
+    assert chunk_state_cache.shape[1:] == source_states.shape[1:]
+    assert last_final_state_cache.size(1) == predicted_vectors.size(1)
+    assert last_raw_state_cache.shape[1:] == raw_states.shape[1:]
+
+    batch_size = token_q_seqlens.numel()
+    if batch_size == 0:
+        return
+
+    hidden = source_states.size(2)
+    source_elems = source_states.size(1) * hidden
+    raw_elems = raw_states.size(1) * raw_states.size(2)
+    max_elems = max(source_elems, hidden, raw_elems)
+    state_ids = state_ids.to(device=source_states.device, dtype=torch.long).reshape(-1)
+    token_q_start_loc = token_q_start_loc.to(device=source_states.device)
+    token_q_seqlens = token_q_seqlens.to(device=source_states.device)
+    concept_q_start_loc = concept_q_start_loc.to(device=source_states.device)
+    concept_q_seqlens = concept_q_seqlens.to(device=source_states.device)
+    grid = (triton.cdiv(max_elems, block), batch_size)
+    _prefill_state_cache_update_kernel[grid](
+        chunk_state_cache,
+        last_raw_state_cache,
+        last_final_state_cache,
+        source_states,
+        predicted_vectors,
+        raw_states,
+        state_ids,
+        token_q_start_loc,
+        token_q_seqlens,
+        concept_q_start_loc,
+        concept_q_seqlens,
+        *chunk_state_cache.stride(),
+        *last_raw_state_cache.stride(),
+        *last_final_state_cache.stride(),
+        *source_states.stride(),
+        *predicted_vectors.stride(),
+        *raw_states.stride(),
+        HIDDEN=hidden,
+        SOURCE_ELEMS=source_elems,
+        RAW_ELEMS=raw_elems,
+        CHUNK_SIZE=int(chunk_size),
+        MERGE_METHOD=_merge_method_id(merge_method),
+        BLOCK=block,
+        num_warps=8,
+    )
 
 
 def decode_chunk_state_update(

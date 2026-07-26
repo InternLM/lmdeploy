@@ -6,13 +6,92 @@ from lmdeploy.pytorch.kernels.cuda.conceptlm import (
     decode_concept_state_update,
     decode_kv_cache_restore,
     decode_kv_cache_snapshot,
+    prefill_chunk_state_update,
+    prefill_state_cache_update,
 )
 
 from ..conceptlm import ConceptLMRuntimeOpsBuilder, ConceptLMRuntimeOpsImpl
+from ..default.conceptlm import DefaultConceptLMRuntimeOpsImpl
 
 
-class TritonConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
+class TritonConceptLMRuntimeOpsImpl(DefaultConceptLMRuntimeOpsImpl):
     """Triton implementation of ConceptLM runtime operations."""
+
+    def merge_chunks_packed(self, hidden_states: Tensor, prefill_metadata) -> Tensor:
+        """Merge packed token states into packed concept rows."""
+        if not hidden_states.is_cuda:
+            return super().merge_chunks_packed(hidden_states, prefill_metadata)
+        source_states = hidden_states.unsqueeze(1)
+        return self.prefill_chunk_state_update(source_states, prefill_metadata)[:, 0]
+
+    def prefill_chunk_state_update(self, source_states: Tensor, prefill_metadata) -> Tensor:
+        """Merge prefill source states to compact concept rows."""
+        if not source_states.is_cuda:
+            return super().prefill_chunk_state_update(source_states, prefill_metadata)
+        if source_states.dim() == 2:
+            source_states = source_states.unsqueeze(1)
+            return prefill_chunk_state_update(
+                source_states,
+                prefill_metadata.merge_token_start_ids,
+                prefill_metadata.merge_token_counts,
+                prefill_metadata.num_concepts_total,
+                self.chunk_size,
+                self.merge_method,
+            )[:, 0]
+        return prefill_chunk_state_update(
+            source_states,
+            prefill_metadata.merge_token_start_ids,
+            prefill_metadata.merge_token_counts,
+            prefill_metadata.num_concepts_total,
+            self.chunk_size,
+            self.merge_method,
+        )
+
+    def write_prefill_state_caches_eager(
+        self,
+        chunk_source_state: Tensor | None,
+        last_raw_states: Tensor | None,
+        last_final_state: Tensor | None,
+        state_ids: Tensor | None,
+        prefill_metadata,
+        source_states: Tensor,
+        predicted_vectors: Tensor,
+        concept_raw_states: list[Tensor],
+    ) -> None:
+        """Seed decode state caches from a completed CUDA prefill forward."""
+        if state_ids is None:
+            return
+        if chunk_source_state is None or last_raw_states is None or last_final_state is None:
+            return
+        if not (source_states.is_cuda and chunk_source_state.is_cuda and last_raw_states.is_cuda
+                and last_final_state.is_cuda):
+            return super().write_prefill_state_caches_eager(
+                chunk_source_state,
+                last_raw_states,
+                last_final_state,
+                state_ids,
+                prefill_metadata,
+                source_states,
+                predicted_vectors,
+                concept_raw_states,
+            )
+
+        raw_rows = self.stack_concept_raw_states(concept_raw_states)
+        return prefill_state_cache_update(
+            chunk_source_state,
+            last_raw_states,
+            last_final_state,
+            source_states,
+            predicted_vectors,
+            raw_rows,
+            state_ids,
+            prefill_metadata.token_q_start_loc,
+            prefill_metadata.token_q_seqlens,
+            prefill_metadata.concept_q_start_loc,
+            prefill_metadata.concept_q_seqlens,
+            self.chunk_size,
+            self.merge_method,
+        )
 
     def decode_chunk_state_update(
         self,
