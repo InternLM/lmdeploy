@@ -80,6 +80,6 @@ class TritonConceptLMRuntimeOpsBuilder(ConceptLMRuntimeOpsBuilder):
     """Triton ConceptLM runtime operation builder."""
 
     @staticmethod
-    def build() -> ConceptLMRuntimeOpsImpl:
+    def build(config) -> ConceptLMRuntimeOpsImpl:
         """Build layer implementation."""
-        return TritonConceptLMRuntimeOpsImpl()
+        return TritonConceptLMRuntimeOpsImpl(config)

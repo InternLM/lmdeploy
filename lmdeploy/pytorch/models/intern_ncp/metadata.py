@@ -173,79 +173,6 @@ class ConceptCaches:
         return self.semantic_state_cache(self.last_final_name, self.last_final_idx)
 
 
-@dataclass
-class ConceptChunkStateUpdateResult:
-    """Fixed-shape result of one decode chunk-source state update."""
-
-    concept_input_states: torch.Tensor
-    concept_update_mask: torch.Tensor
-
-
-@dataclass
-class ConceptDecodeMetadata:
-    """Fixed-layout decode metadata derived once from engine inputs.
-
-    Decode is always represented as the engine's fixed ``[1, batch]`` token
-    layout at the model boundary and flattened to ``[batch]`` / ``[batch, H]``
-    only inside ConceptLM helpers.
-    """
-
-    position_ids: torch.Tensor
-    state_ids: torch.Tensor
-    safe_state_ids: torch.Tensor
-    valid_state_mask: torch.Tensor
-
-
-@dataclass
-class ConceptPrefillMetadata:
-    """Packed prefill metadata derived once from token attention metadata.
-
-    Field groups:
-      - token stream: original engine-provided token request boundaries.
-      - concept stream: compact chunk-token request boundaries and positions
-        used by the concept predictor attention.
-      - chunk merge: token -> concept ids and helper ids used to reduce encoder
-        token states into concept states without a Python batch loop.
-      - repeat/gather: concept -> token ids used to project compact concept
-        states back to the packed token stream.
-      - scalar bounds: eager compact sizes / upper bounds needed by metadata and
-        attention launch parameters.
-    """
-
-    # Token stream metadata, shape [batch]. This is the original packed prefill
-    # layout consumed by normal token attention.
-    token_q_seqlens: torch.Tensor
-    token_q_start_loc: torch.Tensor
-
-    # Concept stream metadata, shape [batch] plus compact concept positions.
-    # These describe the shorter chunk-token stream consumed by concept
-    # predictor attention.
-    concept_q_seqlens: torch.Tensor
-    concept_q_start_loc: torch.Tensor
-    concept_position_ids: torch.Tensor
-
-    # Chunk merge metadata. ``merge_token_to_concept`` maps each packed token to
-    # the compact concept row that owns it, or -1 when the token is dropped from
-    # concept production. Counts/first/last ids implement mean/first/last merge.
-    merge_token_to_concept: torch.Tensor
-    merge_token_counts: torch.Tensor
-    merge_first_token_ids: torch.Tensor
-    merge_last_token_ids: torch.Tensor
-    merge_short_concept_mask: torch.Tensor
-
-    # Repeat/gather metadata. Maps each packed token row to the compact concept
-    # row it should read after shift semantics are applied, or -1 for the
-    # zero-concept row.
-    token_to_concept: torch.Tensor
-
-    # Scalar sizes/bounds. ``num_concepts_total`` is the exact compact size in
-    # eager prefill; ``max_concepts_per_request`` is the per-request attention
-    # launch bound.
-    num_tokens_total: int
-    num_concepts_total: int
-    max_concepts_per_request: int
-
-
 def _split_concept_past_key_values(config: PretrainedConfig, past_key_values: list[list[torch.Tensor]] | None):
     """Split the flat LMDeploy KV-cache list into ConceptLM streams."""
     if past_key_values is None or len(past_key_values) == 0:
@@ -262,17 +189,3 @@ def _split_concept_past_key_values(config: PretrainedConfig, past_key_values: li
     concept_end = enc_end + concept_layers
     dec_end = concept_end + dec_layers
     return past_key_values[:enc_end], past_key_values[enc_end:concept_end], past_key_values[concept_end:dec_end]
-
-
-def _flatten_decode_position_ids(position_ids: torch.Tensor, batch_size: int) -> torch.Tensor:
-    """Normalize decode position ids to one absolute position per batch row."""
-    if position_ids.dim() == 0:
-        position_ids = position_ids.view(1)
-    if position_ids.dim() == 1:
-        return position_ids.to(torch.long)
-    position_ids = position_ids.reshape(-1)
-    if position_ids.numel() == batch_size:
-        return position_ids.to(torch.long)
-    assert position_ids.numel() % batch_size == 0, (
-        f'Cannot map position_ids with {position_ids.numel()} elements to batch size {batch_size}.')
-    return position_ids.reshape(-1, batch_size)[-1].to(torch.long)

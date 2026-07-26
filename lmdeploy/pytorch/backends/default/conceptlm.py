@@ -5,20 +5,6 @@ from torch import Tensor
 from ..conceptlm import ConceptLMRuntimeOpsBuilder, ConceptLMRuntimeOpsImpl
 
 
-def _flatten_decode_position_ids(position_ids: Tensor, batch_size: int, device: torch.device) -> Tensor:
-    """Normalize decode position ids to one absolute position per batch row."""
-    if position_ids.dim() == 0:
-        position_ids = position_ids.view(1)
-    if position_ids.dim() == 1:
-        return position_ids.to(device=device, dtype=torch.long)
-    position_ids = position_ids.reshape(-1)
-    if position_ids.numel() == batch_size:
-        return position_ids.to(device=device, dtype=torch.long)
-    assert position_ids.numel() % batch_size == 0, (
-        f'Cannot map position_ids with {position_ids.numel()} elements to batch size {batch_size}.')
-    return position_ids.reshape(-1, batch_size)[-1].to(device=device, dtype=torch.long)
-
-
 class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
     """Torch fallback implementation of ConceptLM runtime operations."""
 
@@ -56,7 +42,7 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
             f'{tuple(chunk_source_state_cache.shape[1:])}.')
 
         state_ids = state_ids.to(device=current_source_states.device, dtype=torch.long)
-        position_ids = _flatten_decode_position_ids(position_ids, batch_size, current_source_states.device)
+        position_ids = self.flatten_decode_position_ids(position_ids, batch_size, current_source_states.device)
         assert position_ids.numel() == batch_size, (
             f'Expected {batch_size} decode position ids, got {position_ids.numel()}.')
 
@@ -144,6 +130,6 @@ class DefaultConceptLMRuntimeOpsBuilder(ConceptLMRuntimeOpsBuilder):
     """Torch fallback ConceptLM runtime operation builder."""
 
     @staticmethod
-    def build() -> ConceptLMRuntimeOpsImpl:
+    def build(config) -> ConceptLMRuntimeOpsImpl:
         """Build layer implementation."""
-        return DefaultConceptLMRuntimeOpsImpl()
+        return DefaultConceptLMRuntimeOpsImpl(config)
