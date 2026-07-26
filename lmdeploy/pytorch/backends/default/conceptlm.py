@@ -43,8 +43,8 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         position_ids: Tensor,
         chunk_size: int,
         merge_method: str,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Update state cache and return fixed-shape decode rows."""
+    ) -> tuple[Tensor, Tensor]:
+        """Update state cache and return fixed-shape concept inputs."""
         assert current_source_states.dim() == 3, (
             f'current_source_states must be [batch, num_sources, hidden], got {tuple(current_source_states.shape)}.')
         assert chunk_source_state_cache.dim() == 3, (
@@ -89,7 +89,7 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
             state_id = int(state_ids[batch_idx])
             if state_id >= 0:
                 chunk_source_state_cache[state_id].copy_(next_rows[batch_idx])
-        return concept_input_states, next_rows, update_mask
+        return concept_input_states, update_mask
 
     def decode_kv_cache_snapshot(
         self,

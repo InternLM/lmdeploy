@@ -25,9 +25,8 @@ class ConceptLMRuntimeOps(nn.Module):
         position_ids: Tensor,
         chunk_size: int,
         merge_method: str,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Update state cache and return concept inputs, next rows, and
-        mask."""
+    ) -> tuple[Tensor, Tensor]:
+        """Update state cache and return concept inputs plus update mask."""
         return self.impl.decode_chunk_state_update(
             chunk_source_state_cache,
             current_source_states,
@@ -90,23 +89,4 @@ class ConceptLMRuntimeOps(nn.Module):
             raw_states,
             state_ids,
             update_mask,
-        )
-
-    def forward(
-        self,
-        chunk_source_state_cache: Tensor,
-        current_source_states: Tensor,
-        state_ids: Tensor,
-        position_ids: Tensor,
-        chunk_size: int,
-        merge_method: str,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Alias the current runtime op for module-call compatibility."""
-        return self.decode_chunk_state_update(
-            chunk_source_state_cache,
-            current_source_states,
-            state_ids,
-            position_ids,
-            chunk_size,
-            merge_method,
         )

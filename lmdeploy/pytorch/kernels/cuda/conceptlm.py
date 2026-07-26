@@ -13,7 +13,6 @@ def _decode_chunk_state_update_kernel(
     state_ids,
     position_ids,
     concept_inputs,
-    next_rows,
     update_mask,
     state_stride_n,
     state_stride_s,
@@ -24,9 +23,6 @@ def _decode_chunk_state_update_kernel(
     out_stride_b,
     out_stride_s,
     out_stride_h,
-    next_stride_b,
-    next_stride_s,
-    next_stride_h,
     HIDDEN: tl.constexpr,
     TOTAL_ELEMS: tl.constexpr,
     CHUNK_SIZE: tl.constexpr,
@@ -69,12 +65,9 @@ def _decode_chunk_state_update_kernel(
     zero = tl.zeros((BLOCK, ), dtype=tl.float32)
     next_value = tl.where(is_boundary, zero, merged)
     concept_value = tl.where(valid_state & is_boundary, concept, zero)
-    next_debug_value = tl.where(valid_state, next_value, previous)
 
     concept_ptrs = concept_inputs + batch_id * out_stride_b + source_id * out_stride_s + hidden_id * out_stride_h
-    next_ptrs = next_rows + batch_id * next_stride_b + source_id * next_stride_s + hidden_id * next_stride_h
     tl.store(concept_ptrs, concept_value, mask=valid_elem)
-    tl.store(next_ptrs, next_debug_value, mask=valid_elem)
     tl.store(state_ptrs, next_value, mask=valid_elem & valid_state)
 
     if tile_id == 0:
@@ -287,10 +280,9 @@ def decode_chunk_state_update(
         block: Triton vector width.
 
     Returns:
-        Tuple ``(concept_inputs, next_rows, update_mask)``. ``concept_inputs``
-        is zero for non-boundary rows. ``next_rows`` is a debug/reference copy
-        of the per-batch rows written to state cache. ``update_mask`` is
-        ``True`` only for valid boundary rows.
+        Tuple ``(concept_inputs, update_mask)``. ``concept_inputs`` is zero for
+        non-boundary rows. ``update_mask`` is ``True`` only for valid boundary
+        rows.
     """
     assert chunk_source_state_cache.is_cuda, 'ConceptLM chunk-state kernel requires CUDA state cache.'
     assert current_source_states.is_cuda, 'ConceptLM chunk-state kernel requires CUDA current states.'
@@ -303,7 +295,6 @@ def decode_chunk_state_update(
     state_ids = state_ids.to(device=current_source_states.device, dtype=torch.long)
     position_ids = _flatten_decode_position_ids(position_ids, batch_size, current_source_states.device)
     concept_inputs = torch.empty_like(current_source_states)
-    next_rows = torch.empty_like(current_source_states)
     update_mask = torch.empty((batch_size, ), dtype=torch.bool, device=current_source_states.device)
     grid = (triton.cdiv(total_elems, block), batch_size)
     _decode_chunk_state_update_kernel[grid](
@@ -312,12 +303,10 @@ def decode_chunk_state_update(
         state_ids,
         position_ids,
         concept_inputs,
-        next_rows,
         update_mask,
         *chunk_source_state_cache.stride(),
         *current_source_states.stride(),
         *concept_inputs.stride(),
-        *next_rows.stride(),
         HIDDEN=hidden,
         TOTAL_ELEMS=total_elems,
         CHUNK_SIZE=int(chunk_size),
@@ -325,7 +314,7 @@ def decode_chunk_state_update(
         BLOCK=block,
         num_warps=8,
     )
-    return concept_inputs, next_rows, update_mask
+    return concept_inputs, update_mask
 
 
 def decode_kv_cache_snapshot(

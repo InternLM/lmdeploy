@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
@@ -9,12 +10,10 @@ from .default import DefaultModelConfigBuilder
 logger = get_logger('lmdeploy')
 
 CONCEPT_STATE_CHUNK_SOURCE = 0
-CONCEPT_STATE_LAST_RAW = 1
-CONCEPT_STATE_LAST_FINAL = 2
+CONCEPT_STATE_LAST = 1
 CONCEPT_STATE_NAMES = (
     'concept_chunk_source_state',
-    'concept_last_raw_states',
-    'concept_last_final_state',
+    'concept_last_state',
 )
 
 
@@ -34,9 +33,8 @@ def _get_concept_state_dtype(hf_config):
 class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
     """Config builder for ConceptLM V2.2-VQ.
 
-    The upstream checkpoint config does not declare bos/eos/pad token ids,
-    so derive them from the tokenizer when missing before handing the config
-    to the default builder (which asserts they exist).
+    The upstream checkpoint config does not declare bos/eos/pad token ids, so derive them from the tokenizer when
+    missing before handing the config to the default builder (which asserts they exist).
     """
 
     @classmethod
@@ -77,19 +75,24 @@ class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
         # used as concept-predictor input; following rows are encoder raw states
         # consumed by concept-read-encoder residual routes.
         concept_chunk_state_sources = 1 + concept_encoder_read_sources
-        model_config.states_shapes = [
-            ((concept_chunk_state_sources, hidden_size), state_dtype),
-            ((concept_layers, hidden_size), state_dtype),
-            ((hidden_size, ), state_dtype),
+        # Last emitted concept snapshot. Row 0 is the final concept vector,
+        # rows 1: are raw concept-layer states. Keep this packed so decode can
+        # gather the visible last-concept state once per batch row.
+        concept_last_state_sources = 1 + concept_layers
+        state_specs = [
+            StateCacheSpec(CONCEPT_STATE_NAMES[CONCEPT_STATE_CHUNK_SOURCE],
+                           (concept_chunk_state_sources, hidden_size), state_dtype),
+            StateCacheSpec(CONCEPT_STATE_NAMES[CONCEPT_STATE_LAST], (concept_last_state_sources, hidden_size),
+                           state_dtype),
         ]
-        # The current branch only supports anonymous states_shapes. Keep stable
-        # indices on the HF config so model code has one semantic source of
-        # truth; if DSV4 StateCacheSpec lands here later, these become the
-        # names of ConceptLM's state-cache specs.
+        model_config.state_cache_specs = state_specs
+        # Backward-compat bridge used by scheduler/state-cache sizing. The
+        # actual runtime access should use state_cache_specs/named_state_caches
+        # like DSV4, not anonymous order-dependent indices.
+        model_config.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in state_specs]
         model_config.llm_config.concept_state_names = CONCEPT_STATE_NAMES
         model_config.llm_config.concept_state_chunk_source_idx = CONCEPT_STATE_CHUNK_SOURCE
-        model_config.llm_config.concept_state_last_raw_idx = CONCEPT_STATE_LAST_RAW
-        model_config.llm_config.concept_state_last_final_idx = CONCEPT_STATE_LAST_FINAL
+        model_config.llm_config.concept_state_last_idx = CONCEPT_STATE_LAST
         return model_config
 
     @staticmethod

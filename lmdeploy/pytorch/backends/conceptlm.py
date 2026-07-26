@@ -20,9 +20,8 @@ class ConceptLMRuntimeOpsImpl(ABC):
         position_ids: Tensor,
         chunk_size: int,
         merge_method: str,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Update state cache and return concept inputs, next rows, and
-        mask."""
+    ) -> tuple[Tensor, Tensor]:
+        """Update state cache and return concept inputs plus update mask."""
         raise NotImplementedError('Not implemented.')
 
     @abstractmethod

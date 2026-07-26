@@ -22,8 +22,8 @@ class TritonConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         position_ids: Tensor,
         chunk_size: int,
         merge_method: str,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Update state cache and return fixed-shape decode rows."""
+    ) -> tuple[Tensor, Tensor]:
+        """Update state cache and return fixed-shape concept inputs."""
         return decode_chunk_state_update(
             chunk_source_state_cache,
             current_source_states,
