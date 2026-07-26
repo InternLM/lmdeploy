@@ -371,7 +371,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert block_trie.state_checkpoints.reserve_for_seq(producer, step=save_step) >= 0
         save_node = producer.prefix_cache.pending_save.node
         assert block_trie.state_checkpoints.commit_for_seq(producer)
-        match_data = save_node.state_match_data
+        match_data = save_node.state_checkpoint.match_data
         trie_blocks = np.array([node.block for node in save_node.path_from_root()])
         assert np.array_equal(match_data.blocks, trie_blocks)
 

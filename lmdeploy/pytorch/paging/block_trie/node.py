@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -13,6 +14,26 @@ if TYPE_CHECKING:
     from .checkpoint import StateCheckpointMatchData
 
 
+@dataclass(slots=True)
+class NodeStateCheckpoint:
+    """State-checkpoint metadata allocated only for checkpoint owners.
+
+    ``slot`` identifies the state-pool allocation. ``ready`` publishes that
+    allocation to exact matching, while ``ref_count`` pins it across async
+    save/restore copies. ``access_time`` drives state-only LRU eviction.
+    ``topology_epoch`` detects a path change between reservation and
+    publication, and ``match_data`` caches the immutable exact prefix identity
+    and logical KV path used after sparse lookup.
+    """
+
+    slot: int
+    ready: bool = False
+    ref_count: int = 0
+    access_time: float = 0.0
+    topology_epoch: int = -1
+    match_data: StateCheckpointMatchData | None = None
+
+
 class Node:
     """One full-token-block edge in the prefix-cache trie.
 
@@ -20,24 +41,18 @@ class Node:
     and ``extra_hashes`` define the block identity; ``extra_hashes`` carries
     VLM content identity for blocks that overlap multimodal spans.
 
-    The same node may also own an optional SSM checkpoint. ``state_idx`` is the
-    checkpoint slot, and ``state_ref_count`` pins the slot while an async
-    restore may still read it or a producer save may still write it.
-    ``state_ready`` together with non-``None`` ``state_match_data`` means the
-    slot has been published and is matchable. A topology change invalidates
-    ``state_match_data`` immediately; lookup later removes that temporarily
-    stale ready/index entry.
-    ``state_match_data`` caches the immutable host identity and logical KV path
-    used to prove and apply an exact checkpoint hit without repeated Python
-    block scans.
+    ``state_checkpoint`` is allocated lazily when this node reserves an SSM
+    state slot. It groups state ownership, publication, pinning, and cached
+    exact-match data so ordinary KV-only nodes do not carry those lifecycle
+    fields individually.
 
     ``parent`` is intentionally stateful: assigning it updates the old and new
     parent ``children`` maps and invalidates cached checkpoint paths in the
     moved subtree. Detached nodes can therefore still exist as stale
     auxiliary-index entries, but they are no longer trie truth.
-    ``_topology_epoch`` changes during that invalidation;
-    ``state_topology_epoch`` records the version captured by a checkpoint
-    reservation so a path change before publication is also detectable.
+    ``_topology_epoch`` changes during that invalidation. A checkpoint records
+    the version captured by its reservation so a path change before
+    publication is also detectable.
     """
 
     def __init__(self,
@@ -46,10 +61,6 @@ class Node:
                  tokens: np.ndarray,
                  num_matched: int = 0,
                  extra_hashes: PrefixCacheExtraHashes = (),
-                 state_idx: int = -1,
-                 state_ready: bool = False,
-                 state_ref_count: int = 0,
-                 state_access_time: float = 0.0,
                  routed_experts: np.ndarray = None,
                  adapter_name: str = None):
         self.hash_key = hash_key
@@ -57,13 +68,8 @@ class Node:
         self.tokens = tokens
         self.num_matched = num_matched
         self.extra_hashes = extra_hashes
-        self.state_idx = state_idx
-        self.state_ready = state_ready
-        self.state_ref_count = state_ref_count
-        self.state_access_time = state_access_time
-        self.state_match_data: StateCheckpointMatchData | None = None
+        self.state_checkpoint: NodeStateCheckpoint | None = None
         self._topology_epoch = 0
-        self.state_topology_epoch = -1
         self.routed_experts = routed_experts
         self.adapter_name = adapter_name
         self.children: dict[int, Node] = {}
@@ -95,7 +101,9 @@ class Node:
         while pending:
             node = pending.pop()
             node._topology_epoch += 1
-            node.state_match_data = None
+            checkpoint = node.state_checkpoint
+            if checkpoint is not None:
+                checkpoint.match_data = None
             pending.extend(node.children.values())
 
     def is_attached(self):
@@ -112,9 +120,3 @@ class Node:
             node = node.parent
         nodes.reverse()
         return nodes
-
-    def __lt__(self, other):
-        return True
-
-    def __le__(self, other):
-        return True

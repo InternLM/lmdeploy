@@ -36,8 +36,9 @@ SSM checkpoint detail:
   ``allocate()`` continues inserting newly computed full blocks from it.
 * ``StateManager`` owns one state-cache pool split by role: active requests use
   runtime slots stored on ``seq.logical_state``; prefix-cache checkpoints use
-  slots stored on trie ``Node.state_idx``.  A trie node may own KV only, KV plus
-  an unready checkpoint reservation, or KV plus a ready checkpoint.
+  slots stored in a trie's optional ``Node.state_checkpoint`` record. A trie
+  node may own KV only, KV plus an unready checkpoint reservation, or KV plus a
+  ready checkpoint.
 * Saving a checkpoint starts from an already-attached block-aligned trie node.
   ``state_checkpoints.reserve_for_seq()`` records a ``pending_save`` reservation
   on ``seq.prefix_cache``.  Prefill and
@@ -47,8 +48,8 @@ SSM checkpoint detail:
   src/dst pairs.  ``ModelAgent`` then copies ``runtime_state -> checkpoint`` on
   the model forward stream after the model has produced the new SSM state.
   ``EngineLoop`` calls ``state_checkpoints.commit_for_seq()`` after the forward
-  is queued; only then does ``state_ready`` become true and the sparse
-  checkpoint index become matchable.  The producing forward holds a producer ref
+  is queued; only then does the checkpoint become ready and enter the sparse
+  match index. The producing forward holds a producer ref
   until the output/event boundary, so this early visibility cannot make the
   destination slot evictable before the save copy reaches the forward stream.
   Abandoned reservations are discarded.
@@ -59,7 +60,7 @@ SSM checkpoint detail:
   hit appends trie-owned KV blocks, advances ``seq.num_history_ids``, records a
   selected ``restore``, and may replay routed experts.
 * Restore is two-phase.  The scheduler/input maker pins the ready checkpoint by
-  incrementing ``state_ref_count``.  ``ModelAgent`` copies
+  incrementing its reference count. ``ModelAgent`` copies
   ``checkpoint -> runtime_state`` before the suffix forward.  ``EngineLoop``
   releases the pin once the copy has been queued, so LRU eviction cannot reuse
   the checkpoint source slot too early.
@@ -381,7 +382,10 @@ class BlockTrie:
 
     def _has_current_state_checkpoint_path(self, node: Node):
         """Check a cached checkpoint path through its invalidation contract."""
-        match_data = node.state_match_data
+        checkpoint = node.state_checkpoint
+        if checkpoint is None:
+            return False
+        match_data = checkpoint.match_data
         if match_data is None or len(match_data.blocks) == 0:
             return False
         return len(match_data.blocks) * self.block_size == node.num_matched and node.is_attached()
@@ -390,7 +394,8 @@ class BlockTrie:
         """Check whether a sequence cursor still reaches the adapter root."""
         if node.parent is None:
             return node.block < 0 and self._roots.get(node.adapter_name) is node
-        if node.state_match_data is not None:
+        checkpoint = node.state_checkpoint
+        if checkpoint is not None and checkpoint.match_data is not None:
             return self._has_current_state_checkpoint_path(node)
         nodes = node.path_from_root()
         if len(nodes) * self.block_size != node.num_matched:
@@ -404,9 +409,11 @@ class BlockTrie:
         elif match_result.status == StateCheckpointVerifyStatus.STALE_CHECKPOINT:
             self.state_checkpoints._release_stale_candidate(node, match_result.reason)
         if logger.isEnabledFor(logging.DEBUG):
+            checkpoint = node.state_checkpoint
+            state_idx = -1 if checkpoint is None else checkpoint.slot
             logger.debug(f'Reject SSM prefix-cache checkpoint candidate: '
                          f'session_id={seq.session_id} seq_id={seq.seq_id} step={node.num_matched} '
-                         f'state_idx={node.state_idx} status={match_result.status.name} '
+                         f'state_idx={state_idx} status={match_result.status.name} '
                          f'reason={match_result.reason}')
 
     def _has_required_recompute_suffix(self, seq: SchedulerSequence, node: Node, recompute_blocks: int):
@@ -439,7 +446,8 @@ class BlockTrie:
         self._append_state_checkpoint_routed_experts(seq, node, initial_step)
 
         prefix_cache = seq.prefix_cache
-        prefix_cache.restore.select(node.state_idx, node)
+        checkpoint = node.state_checkpoint
+        prefix_cache.restore.select(checkpoint.slot, node)
         prefix_cache.last_shared_node = node
         if raw_match_step >= 0:
             self._set_private_recompute_range(seq, step, raw_match_step)
@@ -449,7 +457,7 @@ class BlockTrie:
                                  hit_tokens=step - initial_step)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'SSM prefix-cache hit: session_id={seq.session_id} seq_id={seq.seq_id} '
-                         f'init_step={initial_step} matched_step={step} state_idx={node.state_idx}')
+                         f'init_step={initial_step} matched_step={step} state_idx={checkpoint.slot}')
 
     def _match_state_checkpoint(self, seq: SchedulerSequence):
         """Match SSM prefixes through sparse ready-checkpoint lookup.
@@ -586,8 +594,6 @@ class BlockTrie:
             seq.logical_blocks.append(matched_blocks)
             seq.set_step(num_matched)
             self._append_matched_routed_experts(seq, matched_nodes, init_num_matched)
-            if self.requires_state_checkpoint:
-                seq.prefix_cache.restore.select(curr.state_idx, curr)
 
         # record prefix hit
         self._record_match_stats(seq,

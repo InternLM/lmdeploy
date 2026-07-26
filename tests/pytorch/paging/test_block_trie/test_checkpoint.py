@@ -264,8 +264,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
 
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
-        assert node.state_idx == state_idx
-        assert node.state_ready
+        assert node.state_checkpoint.slot == state_idx
+        assert node.state_checkpoint.ready
         assert node in ssm_scheduler.block_trie._checkpoint_index._buckets[key]
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
@@ -291,8 +291,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert stale_key not in block_trie._checkpoint_index._buckets
         assert node in block_trie._checkpoint_index._buckets[canonical_key]
         assert block_trie._checkpoint_index._steps_by_adapter[node.adapter_name] == {node.num_matched}
-        assert node.state_idx == state_idx
-        assert node.state_ready
+        assert node.state_checkpoint.slot == state_idx
+        assert node.state_checkpoint.ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
     def test_match_ssm_releases_detached_stale_checkpoint_candidate(self, ssm_scheduler):
@@ -311,8 +311,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert seq.prefix_cache.restore.slot == -1
         assert key not in block_trie._checkpoint_index._buckets
         assert node.adapter_name not in block_trie._checkpoint_index._steps_by_adapter
-        assert node.state_idx == -1
-        assert not node.state_ready
+        assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
 
     def test_match_ssm_releases_checkpoint_with_detached_ancestor(self, ssm_scheduler):
@@ -326,7 +325,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         ancestor = node.parent
         ancestor.parent = None
         assert node.parent is ancestor
-        assert node.state_match_data is None
+        assert node.state_checkpoint.match_data is None
 
         seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [4])
         block_trie.match(seq)
@@ -334,8 +333,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
         assert key not in block_trie._checkpoint_index._buckets
-        assert node.state_idx == -1
-        assert not node.state_ready
+        assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
 
     def test_replacing_child_detaches_displaced_node(self, ssm_scheduler):
@@ -362,11 +360,11 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert parent.children[replacement.hash_key] is replacement
         assert block_trie.state_checkpoints.reserve(replacement) >= 0
         block_trie.state_checkpoints.mark_ready(replacement)
-        match_data = replacement.state_match_data
+        match_data = replacement.state_checkpoint.match_data
 
         displaced.parent = None
         assert parent.children[replacement.hash_key] is replacement
-        assert replacement.state_match_data is match_data
+        assert replacement.state_checkpoint.match_data is match_data
 
         matched = sess.add_sequence(token_ids + [3])
         block_trie.match(matched)
@@ -381,16 +379,16 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         key = block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
-        node.state_ref_count = 1
+        node.state_checkpoint.ref_count = 1
         node.parent = None
         seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [3])
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
-        assert node.state_idx == state_idx
-        assert node.state_ready
-        assert node.state_ref_count == 1
+        assert node.state_checkpoint.slot == state_idx
+        assert node.state_checkpoint.ready
+        assert node.state_checkpoint.ref_count == 1
         assert node in block_trie._checkpoint_index._buckets[key]
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
@@ -407,7 +405,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         node = seq.prefix_cache.last_shared_node
         state_idx = block_trie.state_checkpoints.reserve(node)
         assert state_idx >= 0
-        assert not node.state_ready
+        assert not node.state_checkpoint.ready
         key = block_trie._checkpoint_index.make_node_key(node)
         block_trie._checkpoint_index._buckets.setdefault(key, []).append(node)
         block_trie._checkpoint_index._steps_by_adapter.setdefault(node.adapter_name, set()).add(node.num_matched)
@@ -420,6 +418,5 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert seq.prefix_cache.restore.slot == -1
         assert key not in block_trie._checkpoint_index._buckets
         assert node.adapter_name not in block_trie._checkpoint_index._steps_by_adapter
-        assert node.state_idx == -1
-        assert not node.state_ready
+        assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1

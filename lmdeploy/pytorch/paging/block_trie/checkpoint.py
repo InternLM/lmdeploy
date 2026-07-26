@@ -180,7 +180,8 @@ class StateCheckpointIndex:
                index_key: StateCheckpointKey,
                path_is_current: bool):
         """Prove that a sparse candidate is an exact, current prefix hit."""
-        if node.state_idx < 0 or not node.state_ready:
+        checkpoint = node.state_checkpoint
+        if checkpoint is None or checkpoint.slot < 0 or not checkpoint.ready:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint is not ready')
 
@@ -189,7 +190,7 @@ class StateCheckpointIndex:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason=f'invalid checkpoint step: {step}')
 
-        match_data = node.state_match_data
+        match_data = checkpoint.match_data
         if match_data is None:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint exact-match metadata is missing')

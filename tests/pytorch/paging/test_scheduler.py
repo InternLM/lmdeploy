@@ -275,8 +275,7 @@ def test_ssm_runtime_state_reclaims_borrowed_checkpoint_slot():
 
     assert output.running == [seq]
     assert seq.logical_state == state_idx
-    assert node.state_idx == -1
-    assert not node.state_ready
+    assert node.state_checkpoint is None
     assert scheduler.state_manager.get_num_runtime_states() == 1
     assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
 
@@ -322,7 +321,7 @@ def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     block_size = scheduler.seq_meta.block_size
     node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
-    node.state_ref_count = 1
+    node.state_checkpoint.ref_count = 1
     seq = scheduler.add_session(100).add_sequence([2] * block_size * 2)
 
     output = scheduler.schedule(is_prefill=True)
@@ -330,8 +329,8 @@ def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     assert output.running == []
     assert seq.status == MessageStatus.WAITING
     assert seq.logical_state == -1
-    assert node.state_idx == state_idx
-    assert node.state_ready
+    assert node.state_checkpoint.slot == state_idx
+    assert node.state_checkpoint.ready
 
 
 def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
@@ -380,8 +379,7 @@ def test_ssm_end_session_discards_pending_checkpoint_reservation():
     scheduler.end_session(100)
 
     assert 100 not in scheduler.sessions
-    assert node.state_idx == -1
-    assert not node.state_ready
+    assert node.state_checkpoint is None
     assert scheduler.state_manager.get_num_runtime_states() == 0
     assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
 
@@ -395,21 +393,21 @@ def test_ssm_end_session_releases_acquired_restore_checkpoint():
     scheduler.block_trie.match(seq)
     assert seq.prefix_cache.restore.slot == state_idx
     assert scheduler.block_trie.state_checkpoints.acquire_restore_for_seq(seq)
-    assert node.state_ref_count == 1
+    assert node.state_checkpoint.ref_count == 1
 
     scheduler.end_session(100)
 
     assert 100 not in scheduler.sessions
-    assert node.state_idx == state_idx
-    assert node.state_ready
-    assert node.state_ref_count == 0
+    assert node.state_checkpoint.slot == state_idx
+    assert node.state_checkpoint.ready
+    assert node.state_checkpoint.ref_count == 0
 
 
 def test_ssm_failed_restore_schedule_rolls_back_match():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     block_size = scheduler.seq_meta.block_size
     node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
-    node.state_ref_count = 1
+    node.state_checkpoint.ref_count = 1
     seq = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [2])
 
     output = scheduler.schedule(is_prefill=True)
@@ -422,12 +420,12 @@ def test_ssm_failed_restore_schedule_rolls_back_match():
     assert seq.prefix_cache.last_shared_node is None
     assert seq.prefix_cache.restore.slot == -1
     assert seq.prefix_cache.restore.node is None
-    assert node.state_idx == state_idx
-    assert node.state_ready
+    assert node.state_checkpoint.slot == state_idx
+    assert node.state_checkpoint.ready
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
-    node.state_ref_count = 0
+    node.state_checkpoint.ref_count = 0
     output = scheduler.schedule(is_prefill=True)
 
     assert output.running == [seq]
@@ -435,8 +433,7 @@ def test_ssm_failed_restore_schedule_rolls_back_match():
     assert seq.num_history_ids == 0
     assert seq.prefix_cache.restore.slot == -1
     assert seq.logical_state == state_idx
-    assert node.state_idx == -1
-    assert not node.state_ready
+    assert node.state_checkpoint is None
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
@@ -457,11 +454,10 @@ def test_ssm_scheduler_preserves_matched_checkpoint_when_evicting_for_runtime_st
     assert seq.prefix_cache.restore.node is node_a
     assert seq.prefix_cache.restore.pinned
     assert seq.logical_state == state_idx_b
-    assert node_a.state_idx == state_idx_a
-    assert node_a.state_ready
-    assert node_a.state_ref_count == 1
-    assert node_b.state_idx == -1
-    assert not node_b.state_ready
+    assert node_a.state_checkpoint.slot == state_idx_a
+    assert node_a.state_checkpoint.ready
+    assert node_a.state_checkpoint.ref_count == 1
+    assert node_b.state_checkpoint is None
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
 
     assert scheduler.block_trie.state_checkpoints.release_restore_for_seq(seq)
@@ -787,8 +783,8 @@ def test_ssm_scheduler_rolls_back_prefix_match_for_prefill_gate_without_pinning_
     assert still_long.prefix_cache.restore.slot == -1
     assert still_long.prefix_cache.restore.node is None
     assert not still_long.prefix_cache.restore.pinned
-    assert node.state_idx == state_idx
-    assert node.state_ref_count == 0
+    assert node.state_checkpoint.slot == state_idx
+    assert node.state_checkpoint.ref_count == 0
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
@@ -816,9 +812,9 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_pinned_restor
     assert cache_hit_tail.prefix_cache.restore.slot == -1
     assert cache_hit_tail.prefix_cache.restore.node is None
     assert not cache_hit_tail.prefix_cache.restore.pinned
-    assert node.state_idx == state_idx
-    assert node.state_ready
-    assert node.state_ref_count == 0
+    assert node.state_checkpoint.slot == state_idx
+    assert node.state_checkpoint.ready
+    assert node.state_checkpoint.ref_count == 0
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
@@ -852,9 +848,9 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_runtime_state
     assert cache_hit_tail.prefix_cache.restore.slot == -1
     assert cache_hit_tail.prefix_cache.restore.node is None
     assert not cache_hit_tail.prefix_cache.restore.pinned
-    assert node.state_idx == state_idx
-    assert node.state_ready
-    assert node.state_ref_count == 0
+    assert node.state_checkpoint.slot == state_idx
+    assert node.state_checkpoint.ready
+    assert node.state_checkpoint.ref_count == 0
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 

@@ -69,10 +69,10 @@ class KVBlockLifecycle:
                 and (node.parent is None or node.is_attached()))
 
     def _remove_leaf(self,
-                     leaves: list[tuple[float, Node]],
+                     leaves: list[tuple[float, int, Node]],
                      evicted_blocks: list[int]) -> tuple[bool, Node | None]:
         while len(leaves) > 0:
-            _, leaf = heapq.heappop(leaves)
+            _, _, leaf = heapq.heappop(leaves)
             if leaf not in self.leaves:
                 continue
             if not self._is_evict_candidate_leaf(leaf):
@@ -94,13 +94,13 @@ class KVBlockLifecycle:
         self.leaves.discard(leaf)
         return True, parent
 
-    def _add_leaf(self, leaves: list[tuple[float, Node]], parent: Node):
+    def _add_leaf(self, leaves: list[tuple[float, int, Node]], parent: Node):
         if not self._is_attached_leaf(parent) or parent in self.leaves:
             return
         self.leaves.add(parent)
         if self.allocator.get_ref_count(parent.block) == 1:
             access_time = self.allocator.get_access_time(parent.block)
-            heapq.heappush(leaves, (access_time, parent))
+            heapq.heappush(leaves, (access_time, id(parent), parent))
 
     def evict(self, max_num_blocks: int):
         """Evict least-recently-used trie-owned KV leaf blocks."""
@@ -125,7 +125,7 @@ class KVBlockLifecycle:
             return 0
 
         access_times = self.allocator.get_access_time(candidate_blocks)
-        leaves = [(access_times[index], candidates[index]) for index in evictable_indices]
+        leaves = [(access_times[index], id(candidates[index]), candidates[index]) for index in evictable_indices]
         heapq.heapify(leaves)
 
         evicted_blocks: list[int] = []
