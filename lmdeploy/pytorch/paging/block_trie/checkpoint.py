@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Host-side lookup primitives for SSM prefix-cache checkpoints.
 
-``BlockTrie`` remains the owner of trie topology, KV references, checkpoint
-state slots, and sequence mutation.  This module owns the auxiliary sparse
-index used to find checkpoint candidates and the immutable metadata used to
-verify a candidate exactly.
+``BlockTrie`` owns trie topology, KV references, and prefix-match sequence
+mutation.  ``StateCheckpointLifecycle`` owns recurrent-state slots and their
+publication/pinning lifecycle.  This module owns the auxiliary sparse index
+used to find checkpoint candidates and the immutable metadata used to verify a
+candidate exactly.
 
 The sparse key ``(adapter, step, last_block_hash)`` is only a coarse lookup.
 ``verify()`` compares the complete token and multimodal identities before a

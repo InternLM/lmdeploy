@@ -1589,13 +1589,14 @@ class TestBlockTrie:
         state_idx = block_trie.reserve_state_checkpoint_for_seq(seq)
         node = seq.prefix_cache.last_shared_node
         key = block_trie._make_state_checkpoint_node_key(node)
-        index_checkpoint = block_trie._index_state_checkpoint
+        checkpoint_lifecycle = block_trie._checkpoint_lifecycle
+        index_checkpoint = checkpoint_lifecycle.index_checkpoint
 
         def fail_after_index(checkpoint_node):
             index_checkpoint(checkpoint_node)
             raise RuntimeError('injected index failure')
 
-        monkeypatch.setattr(block_trie, '_index_state_checkpoint', fail_after_index)
+        monkeypatch.setattr(checkpoint_lifecycle, 'index_checkpoint', fail_after_index)
         with pytest.raises(RuntimeError, match='injected index failure'):
             block_trie.commit_state_checkpoint_for_seq(seq)
 
