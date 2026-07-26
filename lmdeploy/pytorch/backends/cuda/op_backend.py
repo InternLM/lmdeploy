@@ -252,6 +252,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
             max_kv_seqlen=step_context.max_kv_seqlen,
+            max_q_seqlen=step_context.max_q_seqlen,
         )
         if step_context.is_decoding:
             if use_flash_mla:
