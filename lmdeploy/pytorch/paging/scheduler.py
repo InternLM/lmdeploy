@@ -372,7 +372,7 @@ class _PrefillAdmissionAttempt:
         scheduler = self.scheduler
         seq = self.seq
         if gate_check.prefix_match is None:
-            stats_snapshot = scheduler.block_trie.snapshot_stats()
+            stats_snapshot = scheduler.block_trie.stats.snapshot()
         else:
             stats_snapshot = gate_check.prefix_match.stats_snapshot
 
@@ -511,14 +511,14 @@ class Scheduler:
             return True
         if self.state_manager.get_num_free_runtime() > 0:
             return True
-        self.block_trie.evict_state_checkpoints(1)
+        self.block_trie.state_checkpoints.evict(1)
         return self.state_manager.get_num_free_runtime() > 0
 
     def _acquire_ssm_restore_if_needed(self, seq: SchedulerSequence):
         """Pin a matched SSM checkpoint before scheduler-side eviction."""
         if not self.is_ssm or not seq.prefix_cache.restore.is_selected:
             return True
-        return self.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+        return self.block_trie.state_checkpoints.acquire_restore_for_seq(seq)
 
     def _rollback_unscheduled_prefix_match(self, seq: SchedulerSequence, stats_snapshot=None):
         """Drop a tentative prefix match that will not be used now.
@@ -528,9 +528,9 @@ class Scheduler:
         If later eviction or state allocation fails, undo those side effects so
         the waiting sequence can be scheduled cleanly in a later round.
         """
-        self.block_trie.restore_stats(stats_snapshot)
+        self.block_trie.stats.restore(stats_snapshot)
         if self.is_ssm:
-            self.block_trie.release_state_checkpoint_restore_for_seq(seq)
+            self.block_trie.state_checkpoints.release_restore_for_seq(seq)
         if seq.num_blocks > 0 or seq.logical_state >= 0:
             seq.state.free()
         elif seq.num_history_ids > 0:
@@ -568,7 +568,7 @@ class Scheduler:
         if not self.block_trie.enable:
             return None
 
-        stats_snapshot = self.block_trie.snapshot_stats()
+        stats_snapshot = self.block_trie.stats.snapshot()
         self.block_trie.match(seq)
 
         prefix_match = _PrefixMatchForPrefillGate(
@@ -1065,6 +1065,6 @@ class Scheduler:
             active_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready(),
             cache_usage=cache_usage,
-            prefix_cache_hit_rate=self.block_trie.hit_rate(),
+            prefix_cache_hit_rate=self.block_trie.stats.hit_rate(),
             scheduler_tick=self.scheduler_tick,
         )

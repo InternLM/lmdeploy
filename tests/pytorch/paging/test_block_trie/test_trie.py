@@ -250,9 +250,9 @@ class TestBlockTrie(BlockTrieTestMixin):
         checkpoint_seq = sess.add_sequence(checkpoint_tokens)
         block_mgr.allocate(checkpoint_seq)
         block_trie.allocate(checkpoint_seq)
-        state_idx = block_trie.reserve_state_checkpoint_for_seq(checkpoint_seq)
+        state_idx = block_trie.state_checkpoints.reserve_for_seq(checkpoint_seq)
         assert state_idx >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(checkpoint_seq)
+        assert block_trie.state_checkpoints.commit_for_seq(checkpoint_seq)
 
         token_ids = checkpoint_tokens + [3] * block_size + [4] * block_size + [5]
         cached = sess.add_sequence(token_ids)
@@ -291,12 +291,12 @@ class TestBlockTrie(BlockTrieTestMixin):
         block_mgr.allocate(cached)
         block_trie.allocate(cached)
         shallow_step = block_size * 3
-        shallow_state = block_trie.reserve_state_checkpoint_for_seq(cached, step=shallow_step)
+        shallow_state = block_trie.state_checkpoints.reserve_for_seq(cached, step=shallow_step)
         assert shallow_state >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(cached)
-        deep_state = block_trie.reserve_state_checkpoint_for_seq(cached, step=block_size * 4)
+        assert block_trie.state_checkpoints.commit_for_seq(cached)
+        deep_state = block_trie.state_checkpoints.reserve_for_seq(cached, step=block_size * 4)
         assert deep_state >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(cached)
+        assert block_trie.state_checkpoints.commit_for_seq(cached)
 
         seq = sess.add_sequence(token_ids + [5])
         seq.prefix_cache.match_recompute_blocks = 1
@@ -319,9 +319,9 @@ class TestBlockTrie(BlockTrieTestMixin):
         cached = sess.add_sequence(cached_tokens)
         block_mgr.allocate(cached)
         block_trie.allocate(cached)
-        state_idx = block_trie.reserve_state_checkpoint_for_seq(cached, step=block_size * 2)
+        state_idx = block_trie.state_checkpoints.reserve_for_seq(cached, step=block_size * 2)
         assert state_idx >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(cached)
+        assert block_trie.state_checkpoints.commit_for_seq(cached)
         cached_blocks = cached.logical_blocks.get_real_blocks().copy()
         ref_counts = block_trie.allocator.get_ref_count(cached_blocks).copy()
 
@@ -349,8 +349,8 @@ class TestBlockTrie(BlockTrieTestMixin):
         block_mgr.allocate(cached)
         block_trie.allocate(cached)
         checkpoint_step = block_size * 2
-        assert block_trie.reserve_state_checkpoint_for_seq(cached, step=checkpoint_step) >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(cached)
+        assert block_trie.state_checkpoints.reserve_for_seq(cached, step=checkpoint_step) >= 0
+        assert block_trie.state_checkpoints.commit_for_seq(cached)
         ssm_scheduler.end_session(cached_session.session_id)
 
         new_tokens = [5] * block_size * num_new_blocks
@@ -368,11 +368,11 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert np.all(producer_blocks[2:4] != [private_trie_blocks[2], private_trie_blocks[3]])
 
         save_step = block_size * (4 + num_new_blocks)
-        assert block_trie.reserve_state_checkpoint_for_seq(producer, step=save_step) >= 0
+        assert block_trie.state_checkpoints.reserve_for_seq(producer, step=save_step) >= 0
         save_node = producer.prefix_cache.pending_save.node
-        assert block_trie.commit_state_checkpoint_for_seq(producer)
+        assert block_trie.state_checkpoints.commit_for_seq(producer)
         match_data = save_node.state_match_data
-        trie_blocks = np.array([node.block for node in block_trie._get_node_blocks(save_node)])
+        trie_blocks = np.array([node.block for node in save_node.path_from_root()])
         assert np.array_equal(match_data.blocks, trie_blocks)
 
         private_blocks = producer_blocks[2:4]

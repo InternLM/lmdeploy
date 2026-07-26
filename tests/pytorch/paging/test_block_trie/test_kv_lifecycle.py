@@ -1,5 +1,5 @@
 def test_evict(block_trie, scheduler, num_gpu_blocks):
-    block_mgr = block_trie.block_manager
+    block_mgr = scheduler.block_manager
     sess = scheduler.add_session(0)
     block_size = sess.seq_meta.block_size
     token_ids = ([1] * block_size * (num_gpu_blocks - 1))
@@ -22,7 +22,7 @@ def test_evict(block_trie, scheduler, num_gpu_blocks):
 
 
 def test_evict_prunes_stale_non_leaf_entry(block_trie, scheduler, num_gpu_blocks):
-    block_mgr = block_trie.block_manager
+    block_mgr = scheduler.block_manager
     allocator = block_trie.allocator
     sess = scheduler.add_session(0)
     block_size = sess.seq_meta.block_size

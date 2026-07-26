@@ -423,15 +423,16 @@ class EngineLoop:
         """Publish per-forward prefix-cache ownership before prefetching."""
         if not self.scheduler.block_trie.enable:
             return
+        state_checkpoints = self.scheduler.block_trie.state_checkpoints
         if has_state_checkpoint_save:
-            self.scheduler.block_trie.commit_state_checkpoints(running, acquire_save_ref=True)
-        self.scheduler.block_trie.release_state_checkpoint_restores(running)
+            state_checkpoints.commit(running, acquire_save_ref=True)
+        state_checkpoints.release_restores(running)
 
     def _release_forward_prefix_cache_saves(self, running: 'SeqList'):
         """Release producer refs after the forward output/event boundary."""
         if not self.scheduler.block_trie.enable:
             return
-        self.scheduler.block_trie.release_state_checkpoint_saves(running)
+        self.scheduler.block_trie.state_checkpoints.release_saves(running)
 
     def _finish_forward_output(self,
                                out: 'BatchedOutputs | None',

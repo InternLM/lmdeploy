@@ -25,8 +25,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert seq.num_history_ids == 0
         assert seq.prefix_cache.restore.slot == -1
 
-        state_idx = block_trie.reserve_state_checkpoint(node)
-        block_trie.mark_state_checkpoint_ready(node)
+        state_idx = block_trie.state_checkpoints.reserve(node)
+        block_trie.state_checkpoints.mark_ready(node)
 
         seq = sess.add_sequence(token_ids)
         block_trie.match(seq)
@@ -46,8 +46,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_trie.allocate(seq)
         leaf = seq.prefix_cache.last_shared_node
         checkpoint_node = leaf.parent
-        state_idx = block_trie.reserve_state_checkpoint(checkpoint_node)
-        block_trie.mark_state_checkpoint_ready(checkpoint_node)
+        state_idx = block_trie.state_checkpoints.reserve(checkpoint_node)
+        block_trie.state_checkpoints.mark_ready(checkpoint_node)
 
         seq = sess.add_sequence(token_ids)
         block_trie.match(seq)
@@ -70,9 +70,9 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_trie.allocate(seq)
         seq.append_routed_experts(experts)
         block_trie.cache_routed_experts_for_seq(seq)
-        state_idx = block_trie.reserve_state_checkpoint_for_seq(seq)
+        state_idx = block_trie.state_checkpoints.reserve_for_seq(seq)
         assert state_idx >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(seq)
+        assert block_trie.state_checkpoints.commit_for_seq(seq)
 
         matched = sess.add_sequence(token_ids + [3], sampling_param=sampling_param)
         block_trie.match(matched)
@@ -118,8 +118,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.last_shared_node
-        block_trie.reserve_state_checkpoint(node)
-        block_trie.mark_state_checkpoint_ready(node)
+        block_trie.state_checkpoints.reserve(node)
+        block_trie.state_checkpoints.mark_ready(node)
 
         miss_token_ids = token_ids.copy()
         miss_token_ids[(num_blocks - 1) * block_size:num_blocks * block_size] = [777] * block_size
@@ -150,14 +150,14 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.last_shared_node
-        block_trie.reserve_state_checkpoint(node)
-        block_trie.mark_state_checkpoint_ready(node)
+        block_trie.state_checkpoints.reserve(node)
+        block_trie.state_checkpoints.mark_ready(node)
 
         miss_token_ids = [1] * block_size + [4] * block_size + [3]
         seq = sess.add_sequence(miss_token_ids)
-        collision_key = block_trie._make_state_checkpoint_lookup_key(seq, block_size * 2)
-        block_trie._state_checkpoints._buckets.setdefault(collision_key, []).append(node)
-        block_trie._state_checkpoints._steps_by_adapter.setdefault(seq.adapter_name, set()).add(block_size * 2)
+        collision_key = block_trie._checkpoint_index.make_request_key(seq, block_size * 2)
+        block_trie._checkpoint_index._buckets.setdefault(collision_key, []).append(node)
+        block_trie._checkpoint_index._steps_by_adapter.setdefault(seq.adapter_name, set()).add(block_size * 2)
 
         block_trie.match(seq)
 
@@ -171,10 +171,10 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         _, bad_node, _ = self._add_ready_ssm_checkpoint(ssm_scheduler, bad_tokens)
         _, good_node, good_state = self._add_ready_ssm_checkpoint(ssm_scheduler, good_tokens)
         block_trie = ssm_scheduler.block_trie
-        key = block_trie._make_state_checkpoint_node_key(good_node)
+        key = block_trie._checkpoint_index.make_node_key(good_node)
 
-        assert block_trie._make_state_checkpoint_node_key(bad_node) == key
-        assert block_trie._state_checkpoints._buckets[key] == [bad_node, good_node]
+        assert block_trie._checkpoint_index.make_node_key(bad_node) == key
+        assert block_trie._checkpoint_index._buckets[key] == [bad_node, good_node]
 
         seq = ssm_scheduler.add_session(100).add_sequence(good_tokens + [3])
         block_trie.match(seq)
@@ -193,9 +193,9 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         cached = sess.add_sequence(token_ids)
         block_mgr.allocate(cached)
         block_trie.allocate(cached)
-        shallow_state = block_trie.reserve_state_checkpoint_for_seq(cached, step=block_size)
+        shallow_state = block_trie.state_checkpoints.reserve_for_seq(cached, step=block_size)
         assert shallow_state >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(cached)
+        assert block_trie.state_checkpoints.commit_for_seq(cached)
 
         seq = sess.add_sequence(token_ids + [4])
         block_trie.match(seq)
@@ -203,9 +203,9 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert len(shallow_blocks) == 1
         assert seq.prefix_cache.restore.slot == shallow_state
 
-        deep_state = block_trie.reserve_state_checkpoint_for_seq(cached, step=block_size * 3)
+        deep_state = block_trie.state_checkpoints.reserve_for_seq(cached, step=block_size * 3)
         assert deep_state >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(cached)
+        assert block_trie.state_checkpoints.commit_for_seq(cached)
         block_trie.match(seq)
 
         assert seq.num_history_ids == block_size * 3
@@ -228,9 +228,9 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         )
         block_mgr.allocate(checkpoint_seq)
         block_trie.allocate(checkpoint_seq)
-        state_idx = block_trie.reserve_state_checkpoint_for_seq(checkpoint_seq)
+        state_idx = block_trie.state_checkpoints.reserve_for_seq(checkpoint_seq)
         assert state_idx >= 0
-        assert block_trie.commit_state_checkpoint_for_seq(checkpoint_seq)
+        assert block_trie.state_checkpoints.commit_for_seq(checkpoint_seq)
 
         matched = sess.add_sequence(
             token_ids + [3],
@@ -252,7 +252,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_size = ssm_scheduler.seq_meta.block_size
         token_ids = [1] * block_size + [2] * block_size
         _, node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
-        key = ssm_scheduler.block_trie._make_state_checkpoint_node_key(node)
+        key = ssm_scheduler.block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         # Same indexed step and last block, but a different earlier block. This
@@ -266,7 +266,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert seq.prefix_cache.restore.slot == -1
         assert node.state_idx == state_idx
         assert node.state_ready
-        assert node in ssm_scheduler.block_trie._state_checkpoints._buckets[key]
+        assert node in ssm_scheduler.block_trie._checkpoint_index._buckets[key]
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
     def test_match_ssm_drops_stale_sparse_index_entry_only(self, ssm_scheduler):
@@ -274,23 +274,23 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         token_ids = [1] * block_size + [2] * block_size
         _, node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
         block_trie = ssm_scheduler.block_trie
-        canonical_key = block_trie._make_state_checkpoint_node_key(node)
+        canonical_key = block_trie._checkpoint_index.make_node_key(node)
 
         miss_token_ids = [1] * block_size + [4] * block_size + [3]
         seq = ssm_scheduler.add_session(100).add_sequence(miss_token_ids)
-        stale_key = block_trie._make_state_checkpoint_lookup_key(seq, block_size * 2)
+        stale_key = block_trie._checkpoint_index.make_request_key(seq, block_size * 2)
         assert stale_key != canonical_key
-        block_trie._state_checkpoints._buckets.setdefault(stale_key, []).append(node)
-        block_trie._state_checkpoints._steps_by_adapter.setdefault(seq.adapter_name, set()).add(block_size * 2)
+        block_trie._checkpoint_index._buckets.setdefault(stale_key, []).append(node)
+        block_trie._checkpoint_index._steps_by_adapter.setdefault(seq.adapter_name, set()).add(block_size * 2)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
-        assert stale_key not in block_trie._state_checkpoints._buckets
-        assert node in block_trie._state_checkpoints._buckets[canonical_key]
-        assert block_trie._state_checkpoints._steps_by_adapter[node.adapter_name] == {node.num_matched}
+        assert stale_key not in block_trie._checkpoint_index._buckets
+        assert node in block_trie._checkpoint_index._buckets[canonical_key]
+        assert block_trie._checkpoint_index._steps_by_adapter[node.adapter_name] == {node.num_matched}
         assert node.state_idx == state_idx
         assert node.state_ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
@@ -300,7 +300,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         token_ids = [1] * block_size + [2] * block_size
         _, node, _ = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
         block_trie = ssm_scheduler.block_trie
-        key = block_trie._make_state_checkpoint_node_key(node)
+        key = block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         node.parent = None
@@ -309,8 +309,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
 
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
-        assert key not in block_trie._state_checkpoints._buckets
-        assert node.adapter_name not in block_trie._state_checkpoints._steps_by_adapter
+        assert key not in block_trie._checkpoint_index._buckets
+        assert node.adapter_name not in block_trie._checkpoint_index._steps_by_adapter
         assert node.state_idx == -1
         assert not node.state_ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
@@ -320,7 +320,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         token_ids = [1] * block_size + [2] * block_size + [3] * block_size
         _, node, _ = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
         block_trie = ssm_scheduler.block_trie
-        key = block_trie._make_state_checkpoint_node_key(node)
+        key = block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         ancestor = node.parent
@@ -333,7 +333,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
 
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
-        assert key not in block_trie._state_checkpoints._buckets
+        assert key not in block_trie._checkpoint_index._buckets
         assert node.state_idx == -1
         assert not node.state_ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
@@ -360,8 +360,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
 
         assert displaced.parent is None
         assert parent.children[replacement.hash_key] is replacement
-        assert block_trie.reserve_state_checkpoint(replacement) >= 0
-        block_trie.mark_state_checkpoint_ready(replacement)
+        assert block_trie.state_checkpoints.reserve(replacement) >= 0
+        block_trie.state_checkpoints.mark_ready(replacement)
         match_data = replacement.state_match_data
 
         displaced.parent = None
@@ -378,7 +378,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         token_ids = [1] * block_size + [2] * block_size
         _, node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
         block_trie = ssm_scheduler.block_trie
-        key = block_trie._make_state_checkpoint_node_key(node)
+        key = block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         node.state_ref_count = 1
@@ -391,7 +391,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert node.state_idx == state_idx
         assert node.state_ready
         assert node.state_ref_count == 1
-        assert node in block_trie._state_checkpoints._buckets[key]
+        assert node in block_trie._checkpoint_index._buckets[key]
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
     def test_match_ssm_releases_unready_indexed_checkpoint_candidate(self, ssm_scheduler):
@@ -405,12 +405,12 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.last_shared_node
-        state_idx = block_trie.reserve_state_checkpoint(node)
+        state_idx = block_trie.state_checkpoints.reserve(node)
         assert state_idx >= 0
         assert not node.state_ready
-        key = block_trie._make_state_checkpoint_node_key(node)
-        block_trie._state_checkpoints._buckets.setdefault(key, []).append(node)
-        block_trie._state_checkpoints._steps_by_adapter.setdefault(node.adapter_name, set()).add(node.num_matched)
+        key = block_trie._checkpoint_index.make_node_key(node)
+        block_trie._checkpoint_index._buckets.setdefault(key, []).append(node)
+        block_trie._checkpoint_index._steps_by_adapter.setdefault(node.adapter_name, set()).add(node.num_matched)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         seq = sess.add_sequence(token_ids + [3])
@@ -418,8 +418,8 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
 
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
-        assert key not in block_trie._state_checkpoints._buckets
-        assert node.adapter_name not in block_trie._state_checkpoints._steps_by_adapter
+        assert key not in block_trie._checkpoint_index._buckets
+        assert node.adapter_name not in block_trie._checkpoint_index._steps_by_adapter
         assert node.state_idx == -1
         assert not node.state_ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1

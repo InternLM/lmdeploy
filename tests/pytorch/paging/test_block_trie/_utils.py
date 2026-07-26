@@ -45,7 +45,7 @@ class BlockTrieTestMixin:
         seq = scheduler.add_session(len(scheduler.sessions)).add_sequence(token_ids)
         scheduler.block_manager.allocate(seq)
         scheduler.block_trie.allocate(seq)
-        state_idx = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq)
+        state_idx = scheduler.block_trie.state_checkpoints.reserve_for_seq(seq)
         assert state_idx >= 0
-        assert scheduler.block_trie.commit_state_checkpoint_for_seq(seq)
+        assert scheduler.block_trie.state_checkpoints.commit_for_seq(seq)
         return seq, seq.prefix_cache.last_shared_node, state_idx

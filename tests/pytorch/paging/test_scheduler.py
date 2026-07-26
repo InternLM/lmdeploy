@@ -257,9 +257,9 @@ def _add_ready_ssm_checkpoint(scheduler: Scheduler, token_ids: list[int]):
     seq = session.add_sequence(token_ids)
     scheduler.block_manager.allocate(seq)
     scheduler.block_trie.allocate(seq)
-    state_idx = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq)
+    state_idx = scheduler.block_trie.state_checkpoints.reserve_for_seq(seq)
     assert state_idx >= 0
-    assert scheduler.block_trie.commit_state_checkpoint_for_seq(seq)
+    assert scheduler.block_trie.state_checkpoints.commit_for_seq(seq)
     node = seq.prefix_cache.last_shared_node
     session.remove_sequence(seq)
     return node, state_idx
@@ -294,7 +294,7 @@ def test_ssm_long_chunked_request_schedules_with_only_runtime_state_slot():
     assert seq.logical_state >= 0
     assert scheduler.state_manager.get_num_runtime_states() == 1
     assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
-    assert scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=block_size * 2) == -1
+    assert scheduler.block_trie.state_checkpoints.reserve_for_seq(seq, step=block_size * 2) == -1
 
 
 def test_ssm_running_request_reuses_own_runtime_state_without_spare_slot():
@@ -350,7 +350,7 @@ def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
     assert seq_a.prefix_cache.last_shared_node is seq_b.prefix_cache.last_shared_node
 
     save_state_offsets = [
-        scheduler.block_trie.reserve_state_checkpoint_for_seq(seq) for seq in output.running
+        scheduler.block_trie.state_checkpoints.reserve_for_seq(seq) for seq in output.running
     ]
     save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(output.running,
                                                                                   save_state_offsets)
@@ -371,7 +371,7 @@ def test_ssm_end_session_discards_pending_checkpoint_reservation():
     scheduler.block_trie.allocate(seq)
     scheduler.state_manager.allocate(seq)
 
-    state_idx = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq)
+    state_idx = scheduler.block_trie.state_checkpoints.reserve_for_seq(seq)
     node = seq.prefix_cache.pending_save.node
     assert state_idx >= 0
     assert node is not None
@@ -394,7 +394,7 @@ def test_ssm_end_session_releases_acquired_restore_checkpoint():
 
     scheduler.block_trie.match(seq)
     assert seq.prefix_cache.restore.slot == state_idx
-    assert scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+    assert scheduler.block_trie.state_checkpoints.acquire_restore_for_seq(seq)
     assert node.state_ref_count == 1
 
     scheduler.end_session(100)
@@ -464,7 +464,7 @@ def test_ssm_scheduler_preserves_matched_checkpoint_when_evicting_for_runtime_st
     assert not node_b.state_ready
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
 
-    assert scheduler.block_trie.release_state_checkpoint_restore_for_seq(seq)
+    assert scheduler.block_trie.state_checkpoints.release_restore_for_seq(seq)
 
 
 def test_ssm_scheduler_evicts_stopped_runtime_state_with_free_checkpoint_slot():
@@ -606,7 +606,7 @@ def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window():
     scheduler.block_trie.allocate(cached)
 
     seq = scheduler.add_session(1).add_sequence(token_ids)
-    stats_snapshot = scheduler.block_trie.snapshot_stats()
+    stats_snapshot = scheduler.block_trie.stats.snapshot()
     scheduler.block_trie.match(seq)
 
     assert seq.num_history_ids == block_size * 2

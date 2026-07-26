@@ -30,9 +30,9 @@ class KVBlockLifecycle:
     detached, while an unpinned checkpoint must be released first.
     """
 
-    def __init__(self, allocator: LogicalAllocator, checkpoint_lifecycle: StateCheckpointLifecycle):
+    def __init__(self, allocator: LogicalAllocator, state_checkpoints: StateCheckpointLifecycle):
         self.allocator = allocator
-        self.checkpoint_lifecycle = checkpoint_lifecycle
+        self.state_checkpoints = state_checkpoints
         self.leaves: set[Node] = set()
 
     def begin_path_extension(self, node: Node):
@@ -78,7 +78,7 @@ class KVBlockLifecycle:
             if not self._is_evict_candidate_leaf(leaf):
                 self.leaves.discard(leaf)
                 continue
-            if self.checkpoint_lifecycle.is_pinned_checkpoint(leaf):
+            if self.state_checkpoints.is_pinned(leaf):
                 continue
             if int(self.allocator.get_ref_count(leaf.block)) != 1:
                 continue
@@ -87,7 +87,7 @@ class KVBlockLifecycle:
             return False, None
 
         evicted_blocks.append(leaf.block)
-        self.checkpoint_lifecycle.release_state_checkpoint(leaf)
+        self.state_checkpoints.release(leaf)
         parent = leaf.parent
         if parent is not None:
             leaf.parent = None
