@@ -252,14 +252,14 @@ def _make_ssm_scheduler(max_batch_size: int = 1, prefix_cache_state_budget: int 
     return Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
 
 
-def _add_ready_ssm_checkpoint(scheduler: Scheduler, token_ids: list[int]):
+def _add_published_ssm_checkpoint(scheduler: Scheduler, token_ids: list[int]):
     session = scheduler.add_session(len(scheduler.sessions))
     seq = session.add_sequence(token_ids)
     scheduler.block_manager.allocate(seq)
     scheduler.block_trie.allocate(seq)
-    state_idx = scheduler.block_trie.state_checkpoints.reserve_for_seq(seq)
+    state_idx = scheduler.block_trie.state_checkpoints.reserve_save(seq)
     assert state_idx >= 0
-    assert scheduler.block_trie.state_checkpoints.commit_for_seq(seq)
+    assert scheduler.block_trie.state_checkpoints.publish_save(seq)
     node = seq.prefix_cache.last_shared_node
     session.remove_sequence(seq)
     return node, state_idx
@@ -268,7 +268,7 @@ def _add_ready_ssm_checkpoint(scheduler: Scheduler, token_ids: list[int]):
 def test_ssm_runtime_state_reclaims_borrowed_checkpoint_slot():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     block_size = scheduler.seq_meta.block_size
-    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
     seq = scheduler.add_session(100).add_sequence([2] * block_size * 2)
 
     output = scheduler.schedule(is_prefill=True)
@@ -293,7 +293,7 @@ def test_ssm_long_chunked_request_schedules_with_only_runtime_state_slot():
     assert seq.logical_state >= 0
     assert scheduler.state_manager.get_num_runtime_states() == 1
     assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
-    assert scheduler.block_trie.state_checkpoints.reserve_for_seq(seq, step=block_size * 2) == -1
+    assert scheduler.block_trie.state_checkpoints.reserve_save(seq, step=block_size * 2) == -1
 
 
 def test_ssm_running_request_reuses_own_runtime_state_without_spare_slot():
@@ -320,8 +320,8 @@ def test_ssm_running_request_reuses_own_runtime_state_without_spare_slot():
 def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     block_size = scheduler.seq_meta.block_size
-    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
-    node.state_checkpoint.ref_count = 1
+    node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node.state_checkpoint.pin_count = 1
     seq = scheduler.add_session(100).add_sequence([2] * block_size * 2)
 
     output = scheduler.schedule(is_prefill=True)
@@ -330,7 +330,7 @@ def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     assert seq.status == MessageStatus.WAITING
     assert seq.logical_state == -1
     assert node.state_checkpoint.slot == state_idx
-    assert node.state_checkpoint.ready
+    assert node.state_checkpoint.published
 
 
 def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
@@ -349,7 +349,7 @@ def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
     assert seq_a.prefix_cache.last_shared_node is seq_b.prefix_cache.last_shared_node
 
     save_state_offsets = [
-        scheduler.block_trie.state_checkpoints.reserve_for_seq(seq) for seq in output.running
+        scheduler.block_trie.state_checkpoints.reserve_save(seq) for seq in output.running
     ]
     save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(output.running,
                                                                                   save_state_offsets)
@@ -370,7 +370,7 @@ def test_ssm_end_session_discards_pending_checkpoint_reservation():
     scheduler.block_trie.allocate(seq)
     scheduler.state_manager.allocate(seq)
 
-    state_idx = scheduler.block_trie.state_checkpoints.reserve_for_seq(seq)
+    state_idx = scheduler.block_trie.state_checkpoints.reserve_save(seq)
     node = seq.prefix_cache.pending_save.node
     assert state_idx >= 0
     assert node is not None
@@ -384,30 +384,30 @@ def test_ssm_end_session_discards_pending_checkpoint_reservation():
     assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
 
 
-def test_ssm_end_session_releases_acquired_restore_checkpoint():
+def test_ssm_end_session_unpins_restore_checkpoint():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
     block_size = scheduler.seq_meta.block_size
-    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
     seq = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [2])
 
     scheduler.block_trie.match(seq)
     assert seq.prefix_cache.restore.slot == state_idx
-    assert scheduler.block_trie.state_checkpoints.acquire_restore_for_seq(seq)
-    assert node.state_checkpoint.ref_count == 1
+    assert scheduler.block_trie.state_checkpoints.pin_restore(seq)
+    assert node.state_checkpoint.pin_count == 1
 
     scheduler.end_session(100)
 
     assert 100 not in scheduler.sessions
     assert node.state_checkpoint.slot == state_idx
-    assert node.state_checkpoint.ready
-    assert node.state_checkpoint.ref_count == 0
+    assert node.state_checkpoint.published
+    assert node.state_checkpoint.pin_count == 0
 
 
 def test_ssm_failed_restore_schedule_rolls_back_match():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     block_size = scheduler.seq_meta.block_size
-    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
-    node.state_checkpoint.ref_count = 1
+    node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node.state_checkpoint.pin_count = 1
     seq = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [2])
 
     output = scheduler.schedule(is_prefill=True)
@@ -421,11 +421,11 @@ def test_ssm_failed_restore_schedule_rolls_back_match():
     assert seq.prefix_cache.restore.slot == -1
     assert seq.prefix_cache.restore.node is None
     assert node.state_checkpoint.slot == state_idx
-    assert node.state_checkpoint.ready
+    assert node.state_checkpoint.published
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
-    node.state_checkpoint.ref_count = 0
+    node.state_checkpoint.pin_count = 0
     output = scheduler.schedule(is_prefill=True)
 
     assert output.running == [seq]
@@ -441,8 +441,8 @@ def test_ssm_failed_restore_schedule_rolls_back_match():
 def test_ssm_scheduler_preserves_matched_checkpoint_when_evicting_for_runtime_state():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
     block_size = scheduler.seq_meta.block_size
-    node_a, state_idx_a = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
-    node_b, state_idx_b = _add_ready_ssm_checkpoint(scheduler, [2] * block_size * 2)
+    node_a, state_idx_a = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node_b, state_idx_b = _add_published_ssm_checkpoint(scheduler, [2] * block_size * 2)
     seq = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3])
 
     output = scheduler.schedule(is_prefill=True)
@@ -455,12 +455,12 @@ def test_ssm_scheduler_preserves_matched_checkpoint_when_evicting_for_runtime_st
     assert seq.prefix_cache.restore.pinned
     assert seq.logical_state == state_idx_b
     assert node_a.state_checkpoint.slot == state_idx_a
-    assert node_a.state_checkpoint.ready
-    assert node_a.state_checkpoint.ref_count == 1
+    assert node_a.state_checkpoint.published
+    assert node_a.state_checkpoint.pin_count == 1
     assert node_b.state_checkpoint is None
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
 
-    assert scheduler.block_trie.state_checkpoints.release_restore_for_seq(seq)
+    assert scheduler.block_trie.state_checkpoints.unpin_restore(seq)
 
 
 def test_ssm_scheduler_evicts_stopped_runtime_state_with_free_checkpoint_slot():
@@ -572,11 +572,11 @@ def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
     output = scheduler.schedule(is_prefill=True)
 
     assert output.running == [seq]
-    assert seq.prefix_cache.match_recompute_blocks == 1
+    assert seq.prefix_cache.recompute_overlap.required_blocks == 1
     assert seq.num_history_ids == block_size * 2
     assert seq.cached_tokens == block_size * 2
     assert seq.logical_blocks[2] != cached_blocks[2]
-    assert seq.prefix_cache.private_recompute_start_step == -1
+    assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
     assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
 
@@ -606,15 +606,15 @@ def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window():
     scheduler.block_trie.match(seq)
 
     assert seq.num_history_ids == block_size * 2
-    assert seq.prefix_cache.private_recompute_start_step == block_size * 2
+    assert seq.prefix_cache.recompute_overlap.pending_start_step == block_size * 2
 
     scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
     assert seq.num_history_ids == 0
     assert seq.num_token_ids == len(token_ids)
     assert seq.cached_tokens == 0
-    assert seq.prefix_cache.private_recompute_start_step == -1
-    assert seq.prefix_cache.private_recompute_end_step == -1
+    assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
+    assert seq.prefix_cache.recompute_overlap.pending_end_step == -1
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
@@ -768,7 +768,7 @@ def test_ssm_scheduler_rolls_back_prefix_match_for_prefill_gate_without_pinning_
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
     scheduler.cache_config.max_prefill_token_num = scheduler.seq_meta.block_size
     block_size = scheduler.seq_meta.block_size
-    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
     scheduler.block_trie.stats.reset()
 
     still_long = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3] * (block_size + 1))
@@ -784,7 +784,7 @@ def test_ssm_scheduler_rolls_back_prefix_match_for_prefill_gate_without_pinning_
     assert still_long.prefix_cache.restore.node is None
     assert not still_long.prefix_cache.restore.pinned
     assert node.state_checkpoint.slot == state_idx
-    assert node.state_checkpoint.ref_count == 0
+    assert node.state_checkpoint.pin_count == 0
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
@@ -793,7 +793,7 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_pinned_restor
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1, num_gpu_blocks=2)
     scheduler.cache_config.max_prefill_token_num = scheduler.seq_meta.block_size
     block_size = scheduler.seq_meta.block_size
-    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
     scheduler.block_trie.stats.reset()
 
     cache_hit_tail = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3])
@@ -813,8 +813,8 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_pinned_restor
     assert cache_hit_tail.prefix_cache.restore.node is None
     assert not cache_hit_tail.prefix_cache.restore.pinned
     assert node.state_checkpoint.slot == state_idx
-    assert node.state_checkpoint.ready
-    assert node.state_checkpoint.ref_count == 0
+    assert node.state_checkpoint.published
+    assert node.state_checkpoint.pin_count == 0
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
@@ -823,7 +823,7 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_runtime_state
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1, num_gpu_blocks=4)
     scheduler.cache_config.max_prefill_token_num = scheduler.seq_meta.block_size
     block_size = scheduler.seq_meta.block_size
-    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
     ensure_results = iter([False, True])
 
     def _ensure_runtime_state_available_once_then_succeed():
@@ -849,8 +849,8 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_runtime_state
     assert cache_hit_tail.prefix_cache.restore.node is None
     assert not cache_hit_tail.prefix_cache.restore.pinned
     assert node.state_checkpoint.slot == state_idx
-    assert node.state_checkpoint.ready
-    assert node.state_checkpoint.ref_count == 0
+    assert node.state_checkpoint.published
+    assert node.state_checkpoint.pin_count == 0
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 

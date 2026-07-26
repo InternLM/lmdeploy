@@ -18,20 +18,19 @@ if TYPE_CHECKING:
 class NodeStateCheckpoint:
     """State-checkpoint metadata allocated only for checkpoint owners.
 
-    ``slot`` identifies the state-pool allocation. ``ready`` publishes that
-    allocation to exact matching, while ``ref_count`` pins it across async
-    save/restore copies. ``access_time`` drives state-only LRU eviction.
-    ``topology_epoch`` detects a path change between reservation and
-    publication, and ``match_data`` caches the immutable exact prefix identity
-    and logical KV path used after sparse lookup.
+    ``slot`` and ``reserved_topology_epoch`` describe the reservation.
+    ``published`` exposes it to exact matching, while ``exact_match_data``
+    caches the immutable prefix identity and logical KV path used after sparse
+    lookup. ``pin_count`` protects async save/restore copies, and
+    ``last_access_time`` drives state-only LRU eviction.
     """
 
     slot: int
-    ready: bool = False
-    ref_count: int = 0
-    access_time: float = 0.0
-    topology_epoch: int = -1
-    match_data: StateCheckpointMatchData | None = None
+    reserved_topology_epoch: int = -1
+    published: bool = False
+    exact_match_data: StateCheckpointMatchData | None = None
+    pin_count: int = 0
+    last_access_time: float = 0.0
 
 
 class Node:
@@ -90,21 +89,10 @@ class Node:
             displaced = val.children.get(self.hash_key)
             if displaced is not None and displaced is not self:
                 displaced._parent = None
-                displaced._invalidate_state_match_data()
+                displaced._invalidate_checkpoint_paths()
             val.children[self.hash_key] = self
         self._parent = val
-        self._invalidate_state_match_data()
-
-    def _invalidate_state_match_data(self):
-        """Invalidate checkpoint paths affected by moving this subtree."""
-        pending = [self]
-        while pending:
-            node = pending.pop()
-            node._topology_epoch += 1
-            checkpoint = node.state_checkpoint
-            if checkpoint is not None:
-                checkpoint.match_data = None
-            pending.extend(node.children.values())
+        self._invalidate_checkpoint_paths()
 
     def is_attached(self):
         """Check whether this node is still linked from its parent."""
@@ -120,3 +108,14 @@ class Node:
             node = node.parent
         nodes.reverse()
         return nodes
+
+    def _invalidate_checkpoint_paths(self):
+        """Invalidate checkpoint paths affected by moving this subtree."""
+        pending = [self]
+        while pending:
+            node = pending.pop()
+            node._topology_epoch += 1
+            checkpoint = node.state_checkpoint
+            if checkpoint is not None:
+                checkpoint.exact_match_data = None
+            pending.extend(node.children.values())

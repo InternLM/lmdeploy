@@ -8,8 +8,8 @@ used to find checkpoint candidates and the immutable metadata used to verify a
 candidate exactly.
 
 The sparse key ``(adapter, step, last_block_hash)`` is only a coarse lookup.
-``verify()`` compares the complete token and multimodal identities before a
-checkpoint may be restored.  Keeping that distinction inside one small class
+``verify_candidate()`` compares the complete token and multimodal identities
+before a checkpoint may be restored. Keeping that distinction inside one small class
 makes the matching contract visible without mixing it with cache allocation
 and checkpoint lifecycle code.
 """
@@ -88,7 +88,7 @@ class StateCheckpointIndex:
 
     The index is auxiliary state: trie nodes remain the source of truth for KV
     and recurrent-state ownership.  Consequently callers must remove or
-    release stale candidates reported by :meth:`verify`.
+    release stale candidates reported by :meth:`verify_candidate`.
     """
 
     def __init__(self, block_size: int, make_block_key: BlockKeyMaker):
@@ -110,7 +110,7 @@ class StateCheckpointIndex:
         return (node.adapter_name, node.num_matched, node.hash_key)
 
     def add(self, node: 'Node'):
-        """Add a prevalidated ready checkpoint node."""
+        """Add a prevalidated published checkpoint node."""
         key = self.make_node_key(node)
         nodes = self._buckets.setdefault(key, [])
         if not any(indexed_node is node for indexed_node in nodes):
@@ -129,7 +129,7 @@ class StateCheckpointIndex:
             return False
         if len(nodes) == 0:
             self._buckets.pop(key)
-        self._refresh_step(key[0], key[1])
+        self._remove_step_if_empty(key[0], key[1])
         return True
 
     def remove(self, node: 'Node'):
@@ -138,17 +138,6 @@ class StateCheckpointIndex:
         for key in list(self._buckets):
             removed = self.remove_entry(node, key) or removed
         return removed
-
-    def _refresh_step(self, adapter_name: str, step: int):
-        """Drop an adapter step when no indexed checkpoint still owns it."""
-        steps = self._steps_by_adapter.get(adapter_name)
-        if steps is None or step not in steps:
-            return
-        has_step = any(key[0] == adapter_name and key[1] == step for key in self._buckets)
-        if not has_step:
-            steps.remove(step)
-        if len(steps) == 0:
-            self._steps_by_adapter.pop(adapter_name)
 
     def candidate_steps(self, adapter_name: str, after_step: int, max_step: int):
         """Return possible checkpoint steps from deepest to shallowest."""
@@ -174,23 +163,23 @@ class StateCheckpointIndex:
                 seen_nodes.add(node_id)
                 yield node
 
-    def verify(self,
-               seq: SchedulerSequence,
-               node: 'Node',
-               index_key: StateCheckpointKey,
-               path_is_current: bool):
+    def verify_candidate(self,
+                         seq: SchedulerSequence,
+                         node: 'Node',
+                         index_key: StateCheckpointKey,
+                         path_is_current: bool):
         """Prove that a sparse candidate is an exact, current prefix hit."""
         checkpoint = node.state_checkpoint
-        if checkpoint is None or checkpoint.slot < 0 or not checkpoint.ready:
+        if checkpoint is None or checkpoint.slot < 0 or not checkpoint.published:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
-                                               reason='checkpoint is not ready')
+                                               reason='checkpoint is not published')
 
         step = node.num_matched
         if step <= 0:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason=f'invalid checkpoint step: {step}')
 
-        match_data = checkpoint.match_data
+        match_data = checkpoint.exact_match_data
         if match_data is None:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint exact-match metadata is missing')
@@ -235,3 +224,14 @@ class StateCheckpointIndex:
                 block_node = block_node.parent
 
         return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.HIT, matched_blocks=match_data.blocks)
+
+    def _remove_step_if_empty(self, adapter_name: str, step: int):
+        """Drop an adapter step when no indexed checkpoint still owns it."""
+        steps = self._steps_by_adapter.get(adapter_name)
+        if steps is None or step not in steps:
+            return
+        has_step = any(key[0] == adapter_name and key[1] == step for key in self._buckets)
+        if not has_step:
+            steps.remove(step)
+        if len(steps) == 0:
+            self._steps_by_adapter.pop(adapter_name)

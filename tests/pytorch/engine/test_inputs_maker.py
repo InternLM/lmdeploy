@@ -129,11 +129,11 @@ def _fake_model_inputs(is_chunk: bool = False):
 def test_engine_loop_skips_prefix_cache_publish_when_disabled():
 
     class _DisabledStateCheckpoints:
-        def commit(self, seqs):
-            raise AssertionError('disabled prefix cache must not commit state checkpoints')
+        def publish_saves(self, seqs):
+            raise AssertionError('disabled prefix cache must not publish state checkpoints')
 
-        def release_restores(self, seqs):
-            raise AssertionError('disabled prefix cache must not release state checkpoint restores')
+        def unpin_restores(self, seqs):
+            raise AssertionError('disabled prefix cache must not unpin state checkpoint restores')
 
     loop = EngineLoop.__new__(EngineLoop)
     block_trie = SimpleNamespace(enable=False, state_checkpoints=_DisabledStateCheckpoints())
@@ -148,16 +148,16 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     class _StateCheckpoints:
         pinned = False
 
-        def commit(self, seqs, acquire_save_ref=False):
-            events.append(('commit', acquire_save_ref))
-            assert acquire_save_ref
+        def publish_saves(self, seqs, pin_saves=False):
+            events.append(('publish_saves', pin_saves))
+            assert pin_saves
             self.pinned = True
 
-        def release_restores(self, seqs):
-            events.append(('release_restore', self.pinned))
+        def unpin_restores(self, seqs):
+            events.append(('unpin_restores', self.pinned))
 
-        def release_saves(self, seqs):
-            events.append(('release_save', self.pinned))
+        def unpin_saves(self, seqs):
+            events.append(('unpin_saves', self.pinned))
             self.pinned = False
 
     class _InputsMaker:
@@ -197,30 +197,30 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     assert next_running is None
     assert events == [
         'update_running',
-        ('commit', True),
-        ('release_restore', True),
+        ('publish_saves', True),
+        ('unpin_restores', True),
         ('prefetch', True),
         ('get_output', True),
-        ('release_save', True),
+        ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
 
 
-def test_engine_loop_skips_prefetch_when_sleep_requested_but_releases_state_save():
+def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save():
     events = []
 
     class _StateCheckpoints:
         pinned = False
 
-        def commit(self, seqs, acquire_save_ref=False):
-            events.append(('commit', acquire_save_ref))
+        def publish_saves(self, seqs, pin_saves=False):
+            events.append(('publish_saves', pin_saves))
             self.pinned = True
 
-        def release_restores(self, seqs):
-            events.append(('release_restore', self.pinned))
+        def unpin_restores(self, seqs):
+            events.append(('unpin_restores', self.pinned))
 
-        def release_saves(self, seqs):
-            events.append(('release_save', self.pinned))
+        def unpin_saves(self, seqs):
+            events.append(('unpin_saves', self.pinned))
             self.pinned = False
 
     class _InputsMaker:
@@ -253,10 +253,10 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_releases_state_save
     assert next_running is None
     assert events == [
         'update_running',
-        ('commit', True),
-        ('release_restore', True),
+        ('publish_saves', True),
+        ('unpin_restores', True),
         'get_output',
-        ('release_save', True),
+        ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
 

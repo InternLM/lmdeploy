@@ -20,7 +20,7 @@ Successful prefill scheduling keeps this order:
 
 SSM scheduling detail:
 
-* ``block_trie.match(seq)`` may find a ready checkpoint and record
+* ``block_trie.match(seq)`` may find a published checkpoint and record
   ``seq.prefix_cache.restore`` before the request owns a runtime state.
   The scheduler must treat that as tentative until KV blocks and one runtime
   state slot are guaranteed.
@@ -38,7 +38,6 @@ SSM scheduling detail:
   checkpoint readiness.
 """
 
-import logging
 import time
 from collections import Counter, OrderedDict
 from collections.abc import Callable
@@ -380,9 +379,9 @@ class _PrefillAdmissionAttempt:
             scheduler.block_trie.match(seq)
 
         had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore.is_selected
-        if not scheduler._acquire_ssm_restore_if_needed(seq):
+        if not scheduler._pin_ssm_restore_if_needed(seq):
             result = self._rollback_gate(stats_snapshot, gate_check,
-                                         'failed to acquire SSM restore checkpoint')
+                                         'failed to pin SSM restore checkpoint')
             if result is not None:
                 return result
 
@@ -438,10 +437,9 @@ class _PrefillAdmissionAttempt:
 
     def _rollback_prefix_match(self, stats_snapshot, reason: str):
         seq = self.seq
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
-                         f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                         f'restore_state={seq.prefix_cache.restore.slot}')
+        logger.debug('Rollback tentative prefix-cache match: session_id=%s seq_id=%s reason=%s '
+                     'num_history_ids=%s restore_state=%s', seq.session_id, seq.seq_id, reason, seq.num_history_ids,
+                     seq.prefix_cache.restore.slot)
         self.scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
     def _finish_admission(self):
@@ -514,11 +512,11 @@ class Scheduler:
         self.block_trie.state_checkpoints.evict(1)
         return self.state_manager.get_num_free_runtime() > 0
 
-    def _acquire_ssm_restore_if_needed(self, seq: SchedulerSequence):
+    def _pin_ssm_restore_if_needed(self, seq: SchedulerSequence):
         """Pin a matched SSM checkpoint before scheduler-side eviction."""
         if not self.is_ssm or not seq.prefix_cache.restore.is_selected:
             return True
-        return self.block_trie.state_checkpoints.acquire_restore_for_seq(seq)
+        return self.block_trie.state_checkpoints.pin_restore(seq)
 
     def _rollback_unscheduled_prefix_match(self, seq: SchedulerSequence, stats_snapshot=None):
         """Drop a tentative prefix match that will not be used now.
@@ -530,7 +528,7 @@ class Scheduler:
         """
         self.block_trie.stats.restore(stats_snapshot)
         if self.is_ssm:
-            self.block_trie.state_checkpoints.release_restore_for_seq(seq)
+            self.block_trie.state_checkpoints.unpin_restore(seq)
         if seq.num_blocks > 0 or seq.logical_state >= 0:
             seq.state.free()
         elif seq.num_history_ids > 0:
@@ -540,17 +538,14 @@ class Scheduler:
         prefix_cache.last_shared_node = None
         prefix_cache.restore.clear()
         prefix_cache.match_start_step = -1
-        prefix_cache.private_recompute_start_step = -1
-        prefix_cache.private_recompute_end_step = -1
-        prefix_cache.private_recompute_trie_blocks.clear()
+        prefix_cache.recompute_overlap.reset_runtime_state()
         seq.cached_tokens = 0
 
     def _rollback_prefix_match_for_prefill_gate(self, seq: SchedulerSequence, stats_snapshot, reason: str):
         """Rollback a prefix match tried only to re-check prefill gates."""
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f'Rollback tentative prefix-cache gate match: session_id={seq.session_id} '
-                         f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                         f'restore_state={seq.prefix_cache.restore.slot}')
+        logger.debug('Rollback tentative prefix-cache gate match: session_id=%s seq_id=%s reason=%s '
+                     'num_history_ids=%s restore_state=%s', seq.session_id, seq.seq_id, reason, seq.num_history_ids,
+                     seq.prefix_cache.restore.slot)
         self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
     def _try_prefix_match_for_prefill_gate(
@@ -561,9 +556,9 @@ class Scheduler:
     ):
         """Tentatively match prefix cache before rejecting a prefill candidate.
 
-        This helper is intentionally limited to pre-admission gates.  It does not evict, allocate, acquire SSM restore
-        state, or publish cache state. The caller either continues into the normal admission path with the returned
-        match, or the helper rolls every match side effect back.
+        This helper is intentionally limited to pre-admission gates. It does not evict, allocate, pin SSM restore state,
+        or publish cache state. The caller either continues into the normal admission path with the returned match, or
+        the helper rolls every match side effect back.
         """
         if not self.block_trie.enable:
             return None

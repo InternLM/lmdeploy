@@ -41,11 +41,11 @@ class BlockTrieTestMixin:
         values = np.arange(offset, offset + num_tokens * 2, dtype=np.uint16)
         return values.reshape(num_tokens, 2, 1)
 
-    def _add_ready_ssm_checkpoint(self, scheduler, token_ids):
+    def _add_published_ssm_checkpoint(self, scheduler, token_ids):
         seq = scheduler.add_session(len(scheduler.sessions)).add_sequence(token_ids)
         scheduler.block_manager.allocate(seq)
         scheduler.block_trie.allocate(seq)
-        state_idx = scheduler.block_trie.state_checkpoints.reserve_for_seq(seq)
+        state_idx = scheduler.block_trie.state_checkpoints.reserve_save(seq)
         assert state_idx >= 0
-        assert scheduler.block_trie.state_checkpoints.commit_for_seq(seq)
+        assert scheduler.block_trie.state_checkpoints.publish_save(seq)
         return seq, seq.prefix_cache.last_shared_node, state_idx

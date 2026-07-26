@@ -142,6 +142,65 @@ class StateCheckpointProducerPin:
         self.node = None
 
 
+@dataclass(slots=True)
+class PrefixRecomputeOverlap:
+    """Per-sequence state for deliberately recomputing a cached KV suffix.
+
+    Some strategies need target hidden states from the end of an otherwise
+    reusable prefix. ``required_blocks`` is that persistent strategy policy.
+    A match records the cached-but-dropped suffix as a one-shot pending window;
+    allocation must keep fresh sequence-owned KV for this window instead of
+    deduplicating it back to shared trie blocks.
+
+    ``canonical_trie_blocks`` preserves the shared trie identity corresponding
+    to those fresh blocks. It outlives the pending window so a later SSM state
+    checkpoint can snapshot the canonical KV path.
+    """
+
+    required_blocks: int = 0
+    pending_start_step: int = -1
+    pending_end_step: int = -1
+    canonical_trie_blocks: dict[int, int] = field(default_factory=dict, repr=False)
+
+    def set_pending_window(self, start_step: int, end_step: int, block_size: int) -> None:
+        """Set the block-aligned window that needs fresh KV allocation."""
+        start_step = (start_step // block_size) * block_size
+        end_step = (end_step // block_size) * block_size
+        if end_step <= start_step:
+            self.clear_pending_window()
+            return
+        self.pending_start_step = start_step
+        self.pending_end_step = end_step
+
+    def clear_pending_window(self) -> None:
+        """Finish the one-shot match-to-allocation window."""
+        self.pending_start_step = -1
+        self.pending_end_step = -1
+
+    def requires_fresh_block(self, step: int) -> bool:
+        """Whether this step must keep its sequence-owned writable KV."""
+        return self.pending_start_step >= 0 and self.pending_start_step <= step < self.pending_end_step
+
+    def remember_canonical_block(self, block_id: int, trie_block: int) -> None:
+        """Associate fresh sequence KV with its canonical shared trie block."""
+        self.canonical_trie_blocks[block_id] = trie_block
+
+    def forget_canonical_block(self, block_id: int) -> None:
+        """Forget a substitution once the sequence uses shared/canonical KV."""
+        self.canonical_trie_blocks.pop(block_id, None)
+
+    def rewrite_to_canonical_path(self, blocks: np.ndarray) -> None:
+        """Rewrite sequence block ids to their canonical trie identities."""
+        for block_id, trie_block in self.canonical_trie_blocks.items():
+            if block_id < len(blocks):
+                blocks[block_id] = trie_block
+
+    def reset_runtime_state(self) -> None:
+        """Clear transient overlap state while preserving strategy policy."""
+        self.clear_pending_window()
+        self.canonical_trie_blocks.clear()
+
+
 @dataclass
 class PrefixCacheState:
     """Per-sequence prefix-cache bookkeeping.
@@ -158,14 +217,9 @@ class PrefixCacheState:
     from it.  ``match_start_step`` remembers the sequence step before a
     tentative prefix-cache match so long-context chunking can distinguish
     current-turn cached multimodal spans from older session history.
-    ``match_recompute_blocks`` keeps a small full-block overlap out of prefix
-    reuse for strategies that need target hidden-state bridge data.
-    ``private_recompute_*_step`` marks trie-known blocks that were deliberately
-    dropped from a match and therefore must stay writable/private during the
-    next allocation instead of being deduplicated back to shared trie blocks.
-    ``private_recompute_trie_blocks`` maps those logical block indices to the
-    corresponding trie-owned block ids so a later state checkpoint snapshots
-    the canonical cache path rather than request-private blocks.
+    ``recompute_overlap`` groups the strategy requirement, one-shot allocation
+    window, and canonical trie identities used when a cached suffix must be
+    recomputed into fresh sequence-owned KV.
     ``suppress_match_stats`` is set while replaying work after recompute
     eviction; cache reuse may still happen, but it should not affect the public
     prefix-cache hit-rate metric.
@@ -187,12 +241,9 @@ class PrefixCacheState:
     # Latest decode checkpoint node owned by this sequence.
     decode_checkpoint_node: Any = field(default=None, repr=False)
 
-    # Tentative match state used for chunking, MTP overlap, and metrics.
+    # Tentative match state used for chunking, recompute overlap, and metrics.
     match_start_step: int = -1
-    match_recompute_blocks: int = 0
-    private_recompute_start_step: int = -1
-    private_recompute_end_step: int = -1
-    private_recompute_trie_blocks: dict[int, int] = field(default_factory=dict, repr=False)
+    recompute_overlap: PrefixRecomputeOverlap = field(default_factory=PrefixRecomputeOverlap)
     suppress_match_stats: bool = False
 
 
@@ -1070,7 +1121,7 @@ class SchedulerSequence:
         """Get the deepest prefix step allowed for a cache hit."""
         block_size = self.block_size
         max_step = ((self.num_valid_ids - 1) // block_size) * block_size
-        recompute_blocks = max(0, self.prefix_cache.match_recompute_blocks)
+        recompute_blocks = max(0, self.prefix_cache.recompute_overlap.required_blocks)
         if recompute_blocks > 0:
             max_step = max(0, max_step - recompute_blocks * block_size)
         return self.clamp_prefix_cache_match_step(max_step)

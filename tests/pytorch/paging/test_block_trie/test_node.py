@@ -18,7 +18,7 @@ def test_state_checkpoint_is_allocated_lazily():
     node.state_checkpoint = NodeStateCheckpoint(slot=3)
 
     assert node.state_checkpoint.slot == 3
-    assert not node.state_checkpoint.ready
+    assert not node.state_checkpoint.published
 
 
 def test_parent_assignment_maintains_both_sides():
@@ -46,8 +46,8 @@ def test_reparent_invalidates_checkpoint_paths_in_subtree():
     grandchild = _make_node(2)
     child.parent = old_root
     grandchild.parent = child
-    child.state_checkpoint = NodeStateCheckpoint(slot=0, match_data=object())
-    grandchild.state_checkpoint = NodeStateCheckpoint(slot=1, match_data=object())
+    child.state_checkpoint = NodeStateCheckpoint(slot=0, exact_match_data=object())
+    grandchild.state_checkpoint = NodeStateCheckpoint(slot=1, exact_match_data=object())
     child_epoch = child._topology_epoch
     grandchild_epoch = grandchild._topology_epoch
 
@@ -55,8 +55,8 @@ def test_reparent_invalidates_checkpoint_paths_in_subtree():
 
     assert child.hash_key not in old_root.children
     assert new_root.children[child.hash_key] is child
-    assert child.state_checkpoint.match_data is None
-    assert grandchild.state_checkpoint.match_data is None
+    assert child.state_checkpoint.exact_match_data is None
+    assert grandchild.state_checkpoint.exact_match_data is None
     assert child._topology_epoch == child_epoch + 1
     assert grandchild._topology_epoch == grandchild_epoch + 1
 
@@ -67,8 +67,8 @@ def test_replacing_child_detaches_and_invalidates_displaced_subtree():
     descendant = _make_node(2)
     displaced.parent = root
     descendant.parent = displaced
-    displaced.state_checkpoint = NodeStateCheckpoint(slot=0, match_data=object())
-    descendant.state_checkpoint = NodeStateCheckpoint(slot=1, match_data=object())
+    displaced.state_checkpoint = NodeStateCheckpoint(slot=0, exact_match_data=object())
+    descendant.state_checkpoint = NodeStateCheckpoint(slot=1, exact_match_data=object())
     displaced_epoch = displaced._topology_epoch
     descendant_epoch = descendant._topology_epoch
     replacement = _make_node(displaced.hash_key)
@@ -77,7 +77,7 @@ def test_replacing_child_detaches_and_invalidates_displaced_subtree():
 
     assert displaced.parent is None
     assert root.children[replacement.hash_key] is replacement
-    assert displaced.state_checkpoint.match_data is None
-    assert descendant.state_checkpoint.match_data is None
+    assert displaced.state_checkpoint.exact_match_data is None
+    assert descendant.state_checkpoint.exact_match_data is None
     assert displaced._topology_epoch == displaced_epoch + 1
     assert descendant._topology_epoch == descendant_epoch + 1

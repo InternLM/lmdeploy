@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import heapq
-import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -23,8 +22,8 @@ logger = get_logger('lmdeploy')
 class KVBlockLifecycle:
     """Own trie KV references and the auxiliary leaf-candidate index.
 
-    ``BlockTrie`` decides token identity, collision deduplication, and private
-    recompute policy. This component applies the resulting reference-count
+    ``BlockTrie`` decides token identity, collision deduplication, and recompute
+    overlap policy. This component applies the resulting reference-count
     transaction and owns eviction. KV eviction depends on the checkpoint
     lifecycle because a pinned state checkpoint prevents its node from being
     detached, while an unpinned checkpoint must be released first.
@@ -63,19 +62,19 @@ class KVBlockLifecycle:
         return node.is_attached() and len(node.children) == 0
 
     @classmethod
-    def _is_evict_candidate_leaf(cls, node: Node):
+    def _is_leaf_eviction_candidate(cls, node: Node):
         """Allow stale detached leaves to be pruned from the candidate set."""
         return (node.block >= 0 and len(node.children) == 0
                 and (node.parent is None or node.is_attached()))
 
-    def _remove_leaf(self,
-                     leaves: list[tuple[float, int, Node]],
-                     evicted_blocks: list[int]) -> tuple[bool, Node | None]:
-        while len(leaves) > 0:
-            _, _, leaf = heapq.heappop(leaves)
+    def _try_evict_leaf(self,
+                        candidate_heap: list[tuple[float, int, Node]],
+                        evicted_blocks: list[int]) -> tuple[bool, Node | None]:
+        while len(candidate_heap) > 0:
+            _, _, leaf = heapq.heappop(candidate_heap)
             if leaf not in self.leaves:
                 continue
-            if not self._is_evict_candidate_leaf(leaf):
+            if not self._is_leaf_eviction_candidate(leaf):
                 self.leaves.discard(leaf)
                 continue
             if self.state_checkpoints.is_pinned(leaf):
@@ -87,20 +86,20 @@ class KVBlockLifecycle:
             return False, None
 
         evicted_blocks.append(leaf.block)
-        self.state_checkpoints.release(leaf)
+        self.state_checkpoints.release_checkpoint(leaf)
         parent = leaf.parent
         if parent is not None:
             leaf.parent = None
         self.leaves.discard(leaf)
         return True, parent
 
-    def _add_leaf(self, leaves: list[tuple[float, int, Node]], parent: Node):
+    def _add_parent_leaf_candidate(self, candidate_heap: list[tuple[float, int, Node]], parent: Node):
         if not self._is_attached_leaf(parent) or parent in self.leaves:
             return
         self.leaves.add(parent)
         if self.allocator.get_ref_count(parent.block) == 1:
             access_time = self.allocator.get_access_time(parent.block)
-            heapq.heappush(leaves, (access_time, id(parent), parent))
+            heapq.heappush(candidate_heap, (access_time, id(parent), parent))
 
     def evict(self, max_num_blocks: int):
         """Evict least-recently-used trie-owned KV leaf blocks."""
@@ -108,12 +107,11 @@ class KVBlockLifecycle:
             return 0
 
         old_leaf_count = len(self.leaves)
-        candidates = [leaf for leaf in self.leaves if self._is_evict_candidate_leaf(leaf)]
+        candidates = [leaf for leaf in self.leaves if self._is_leaf_eviction_candidate(leaf)]
         if len(candidates) != old_leaf_count:
             self.leaves.intersection_update(candidates)
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f'Dropped stale prefix-cache leaf candidates before eviction: '
-                             f'old_count={old_leaf_count} new_count={len(candidates)}')
+            logger.debug('Dropped stale prefix-cache leaf candidates before eviction: old_count=%s new_count=%s',
+                         old_leaf_count, len(candidates))
         if len(candidates) == 0:
             return 0
 
@@ -125,19 +123,20 @@ class KVBlockLifecycle:
             return 0
 
         access_times = self.allocator.get_access_time(candidate_blocks)
-        leaves = [(access_times[index], id(candidates[index]), candidates[index]) for index in evictable_indices]
-        heapq.heapify(leaves)
+        candidate_heap = [(access_times[index], id(candidates[index]), candidates[index])
+                          for index in evictable_indices]
+        heapq.heapify(candidate_heap)
 
         evicted_blocks: list[int] = []
-        while len(leaves) > 0 and len(evicted_blocks) < max_num_blocks:
-            removed, parent = self._remove_leaf(leaves, evicted_blocks)
+        while len(candidate_heap) > 0 and len(evicted_blocks) < max_num_blocks:
+            removed, parent = self._try_evict_leaf(candidate_heap, evicted_blocks)
             if not removed:
                 break
             if parent is None or parent.parent is None:
                 # Ignore the adapter root.
                 continue
             if len(parent.children) == 0:
-                self._add_leaf(leaves, parent)
+                self._add_parent_leaf_candidate(candidate_heap, parent)
 
         if len(evicted_blocks) == 0:
             return 0

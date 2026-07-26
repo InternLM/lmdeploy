@@ -10,13 +10,11 @@ if TYPE_CHECKING:
 def _free_seq(seq: SchedulerSequence, scheduler: 'Scheduler'):
     """Free the sequence."""
     if scheduler.block_trie.enable:
-        scheduler.block_trie.state_checkpoints.discard_for_seq(seq)
-        scheduler.block_trie.state_checkpoints.release_restore_for_seq(seq)
+        scheduler.block_trie.state_checkpoints.discard_save(seq)
+        scheduler.block_trie.state_checkpoints.unpin_restore(seq)
         seq.prefix_cache.last_shared_node = None
         seq.prefix_cache.match_start_step = -1
-        seq.prefix_cache.private_recompute_start_step = -1
-        seq.prefix_cache.private_recompute_end_step = -1
-        seq.prefix_cache.private_recompute_trie_blocks.clear()
+        seq.prefix_cache.recompute_overlap.reset_runtime_state()
     seq.cached_tokens = 0
     seq.kv_token_limit = None
     if seq.num_blocks > 0:

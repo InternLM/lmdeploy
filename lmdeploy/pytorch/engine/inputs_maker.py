@@ -900,17 +900,17 @@ class InputsMakerAsync:
                 # Pin restore checkpoints while the forward copies them into
                 # runtime state slots; otherwise checkpoint eviction could race
                 # with input prefetching for the next batch.
-                state_checkpoints.acquire_restores(messages)
+                state_checkpoints.pin_restores(messages)
                 if any(msg.prefix_cache.restore.is_selected and not msg.prefix_cache.restore.pinned
                        for msg in messages):
-                    raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+                    raise RuntimeError('Failed to pin SSM prefix-cache restore checkpoint.')
                 restore_src_offsets, restore_dst_offsets = _compact_state_prefix_cache_restore_offsets(messages)
                 model_inputs.state_prefix_cache_offsets = restore_src_offsets
                 model_inputs.state_prefix_cache_dst_offsets = restore_dst_offsets
             if self.cache_config.enable_prefix_caching and not is_decoding:
                 # Prefill saves publish only after model_forward has copied the
                 # runtime state to these reserved checkpoint offsets.
-                save_state_offsets = [state_checkpoints.reserve_for_seq(msg) for msg in messages]
+                save_state_offsets = [state_checkpoints.reserve_save(msg) for msg in messages]
                 save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(messages,
                                                                                               save_state_offsets)
                 model_inputs.state_prefix_cache_save_src_offsets = save_src_offsets
@@ -982,15 +982,15 @@ class InputsMakerAsync:
             if self.cache_config.enable_prefix_caching and seq.prefix_cache.restore.is_selected:
                 # Long-context chunks use the same restore pinning contract as
                 # normal prefill batches.
-                state_checkpoints.acquire_restore_for_seq(seq)
+                state_checkpoints.pin_restore(seq)
                 if not seq.prefix_cache.restore.pinned:
-                    raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+                    raise RuntimeError('Failed to pin SSM prefix-cache restore checkpoint.')
                 model_inputs.state_prefix_cache_offsets = (seq.prefix_cache.restore.slot, )
                 model_inputs.state_prefix_cache_dst_offsets = (seq.logical_state, )
             if self.cache_config.enable_prefix_caching:
                 # Save at the exact state step produced by this chunk forward.
                 checkpoint_step = seq.num_history_ids + chunk_size
-                save_state = state_checkpoints.reserve_for_seq(seq, step=checkpoint_step)
+                save_state = state_checkpoints.reserve_save(seq, step=checkpoint_step)
                 if save_state >= 0:
                     model_inputs.state_prefix_cache_save_src_offsets = (seq.logical_state, )
                     model_inputs.state_prefix_cache_save_offsets = (save_state, )
@@ -1058,7 +1058,7 @@ class InputsMakerAsync:
         if (self.cache_config.enable_prefix_caching and self.config.is_ssm and decode_state_interval > 0
                 and not self.spec_decoding and num_decode_tokens == 1):
             state_checkpoints = self.scheduler.block_trie.state_checkpoints
-            save_state_offsets = [state_checkpoints.reserve_decode_for_seq(seq, decode_state_interval)
+            save_state_offsets = [state_checkpoints.reserve_decode_save(seq, decode_state_interval)
                                   for seq in valid_seqs]
             if any(state_idx >= 0 for state_idx in save_state_offsets):
                 save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(valid_seqs,
