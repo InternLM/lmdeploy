@@ -23,7 +23,7 @@ from .checkpoint import StateCheckpointIndex
 if TYPE_CHECKING:
     from ..state_manager import StateManager
     from .checkpoint import StateCheckpointKey, StateCheckpointMatchData
-    from .trie import Node
+    from .node import Node
 
 logger = get_logger('lmdeploy')
 
