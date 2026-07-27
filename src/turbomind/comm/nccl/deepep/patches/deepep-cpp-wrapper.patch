@@ -208,6 +208,21 @@ index c01c75a..fec556f 100644
          }
          Derived::launch_impl(kernel, config, args);
      }
+diff --git a/csrc/kernels/backend/symmetric.hpp b/csrc/kernels/backend/symmetric.hpp
+index c82f851..de940ee 100644
+--- a/csrc/kernels/backend/symmetric.hpp
++++ b/csrc/kernels/backend/symmetric.hpp
+@@ -226,9 +226,5 @@ public:
+             auto [pid, fd] = cpu_comm[num_scaleup_ranks * scaleout_rank_idx + i];
+             int local_fd = fd;
+             if (pid != local_pid) {
+-                int pidfd = syscall(SYS_pidfd_open, pid, 0);
+-                EP_HOST_ASSERT(pidfd >= 0 and "`pidfd_open` failed");
+-                local_fd = syscall(SYS_pidfd_getfd, pidfd, fd, 0);
+-                EP_HOST_ASSERT(local_fd >= 0 and "`pidfd_getfd` failed");
+-                close(pidfd);
++                EP_HOST_UNREACHABLE("Cross-process CPU symmetric memory is not supported by TurboMind");
+             }
 diff --git a/csrc/kernels/elastic/barrier.hpp b/csrc/kernels/elastic/barrier.hpp
 index 7312644..e6aad12 100644
 --- a/csrc/kernels/elastic/barrier.hpp
