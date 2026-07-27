@@ -464,6 +464,7 @@ class InternVLModel:
                 root_handles=root_handles,
                 attn_tp=attn_tp,
                 mlp_tp=mlp_tp,
+                ep=ep,
                 model_tp=model_tp,
             )
 

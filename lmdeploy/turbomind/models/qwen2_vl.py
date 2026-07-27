@@ -434,7 +434,8 @@ class Qwen2VLModel:
                 raise ValueError(f'Unsupported Qwen2-VL architecture: {self._arch!r}')
             self.vision_model = vision_cls(vision_cfg, resolver=vision_resolver or resolver)
 
-    def bind_runtime(self, *, ctx, root_handles, attn_tp, mlp_tp, model_tp):
+    def bind_runtime(self, *, ctx, root_handles,
+                     attn_tp, mlp_tp, ep, model_tp):
         for m in (self.text_model, self.vision_model):
             if m is not None:
                 m.bind_runtime(
@@ -442,6 +443,7 @@ class Qwen2VLModel:
                     root_handles=root_handles,
                     attn_tp=attn_tp,
                     mlp_tp=mlp_tp,
+                    ep=ep,
                     model_tp=model_tp,
                 )
 
