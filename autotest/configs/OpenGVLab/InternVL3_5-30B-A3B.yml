@@ -17,6 +17,19 @@ a100:
   test_coverage:
   - func
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
   gen_config:
     repetition-penalty: 1.0
     top-p: 0.8

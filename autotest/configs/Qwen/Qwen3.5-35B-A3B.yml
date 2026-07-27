@@ -16,6 +16,29 @@ a100:
     - nccl
   test_coverage:
   - func
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - experts
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: null
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
   quantization:
     turbomind:
     - kvint8

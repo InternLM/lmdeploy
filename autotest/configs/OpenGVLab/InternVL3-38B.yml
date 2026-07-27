@@ -1,13 +1,16 @@
-# HF model id: Qwen/Qwen3.5-2B-Base
+# HF model id: OpenGVLab/InternVL3-38B
 
 a100:
-- model_type: base
+- model_type:
+  - chat
+  - vl
   engine_config:
-    tp: 1
+    tp: 2
   backends:
   - name: turbomind
     communicators:
     - nccl
+    - cuda-ipc
   - name: pytorch
     communicators:
     - nccl
@@ -17,11 +20,12 @@ a100:
     pytorch:
       suites:
       - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
     turbomind:
       suites:
       - base
-  quantization:
-    turbomind:
-    - kvint8
-    pytorch:
-    - kvint8
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs

@@ -44,6 +44,7 @@ Create separate rows only if one or more of these differ:
 - `engine_config` layout (`tp`, `dp`+`ep`, `cp`+`tp`)
 - `backends` or communicators
 - `test_coverage`
+- `interface`
 - `quantization`
 - `engine_config.extra`
 - `gen_config`
@@ -65,6 +66,7 @@ Each top-level environment key contains a list of matrix rows.
 | `engine_config`       | Yes      | Parallel layout (`tp` / `dp` / `ep` / `cp`)       |
 | `backends`            | Yes      | Backend list (explicit communicators recommended) |
 | `test_coverage`       | Yes      | Enabled test groups                               |
+| `interface`           | No       | Per-backend REST interface suites                 |
 | `quantization`        | No       | Backend-specific quant flags                      |
 | `engine_config.extra` | No       | Launch/runtime flags                              |
 | `gen_config`          | No       | Request/eval sampling params                      |
@@ -101,6 +103,65 @@ Rules:
 - Keep MTP (speculative decoding) on its own row with `speculative-algorithm` in `engine_config.extra`; use `func` and/or `evaluate` in `test_coverage`.
 - Use `prefix_cache` in `test_coverage`; do not add `enable-prefix-caching` manually to `engine_config.extra`.
 - Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`, `w8a8`).
+
+## `interface` (REST interface coverage)
+
+Sibling of `test_coverage`. Drives `daily_ete_test` job `test_restful` via
+`autotest/tools/gen_interface_matrix.py`.
+
+Launch params use the **same dict shape as `engine_config.extra`** (kebab-case
+keys; `null` => boolean CLI flag). Formatting goes through `get_cli_str`, shared
+with tools/pipeline.
+
+Recommended form (suites + explicit launch `extra`):
+
+```yaml
+interface:
+  pytorch:
+    suites: [base, logprob, experts, toolcall, reasoning]
+    extra:
+      logprobs-mode: raw_logprobs
+      enable-return-routed-experts: null
+      tool-call-parser: qwen3coder
+      reasoning-parser: default
+  turbomind:
+    suites: [base, logprob, toolcall, reasoning]
+    extra:
+      logprobs-mode: raw_logprobs
+      tool-call-parser: qwen3coder
+      reasoning-parser: default
+```
+
+Shorthand (suites only; missing launch keys filled from suite defaults):
+
+```yaml
+interface:
+  pytorch: [base, logprob, experts]
+  turbomind: [base, logprob]
+```
+
+Merge order for the interface `api_server` command (later wins):
+
+1. suite defaults (logprob/experts/toolcall/reasoning recommended flags)
+2. row `engine_config.extra` (shared with tools on the same row)
+3. `interface.<backend>.extra` (interface-specific overrides)
+
+Suites:
+
+- `base` — chat/completions basic cases; generate without logprob/experts
+- `logprob` — generate logprob cases
+- `experts` — generate routed-experts cases
+- `toolcall` — `interface/restful/tool_parser/`
+- `reasoning` — `interface/restful/reasoning_parser/`
+
+Notes:
+
+- Prefer putting launch flags in `interface.<backend>.extra` so interface does not
+  pollute tools when sharing a row with `test_coverage: func`.
+- Chat/vl rows run `chat_completions_v1` + `generate` when any of base/logprob/experts is set.
+- Base-only rows run `completions_v1`.
+- Generate logprob/experts stay in one file and use pytest marks (`-m`).
+- Put `interface` on the main functional row only; do not put it on MTP-only rows.
 
 ## `quantization`
 

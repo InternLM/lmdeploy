@@ -347,119 +347,45 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
+  prepare_restful_matrix:
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    needs: download_pkgs
+    runs-on: [self-hosted, linux-a100]
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    container:
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    env:
+      TEST_ENV: a100
+      # Avoid mkdir under shared paths while only generating matrix JSON.
+      CONFIG_COMPARE_SKIP_MKDIRS: '1'
+    steps:
+      - name: Generate restful matrix from configs
+        id: gen
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
+          BACKENDS='${{ toJSON(fromJSON(inputs.backend || '["turbomind", "pytorch"]')) }}'
+          MATRIX=$(PYTHONPATH=autotest python3 autotest/tools/gen_interface_matrix.py --env a100 --backends "$BACKENDS")
+          echo "Generated interface matrix:"
+          echo "$MATRIX" | python3 -m json.tool
+          {
+            echo "matrix<<EOF"
+            echo "$MATRIX"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, linux-a100]
-    needs: test_quantization
+    needs: [test_quantization, prepare_restful_matrix]
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B-Base', 'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
-        include:
-          - tp: 2
-            model: Qwen3.5-35B-A3B
-            model_path: Qwen/Qwen3.5-35B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: all
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: Qwen3.5-35B-A3B
-            model_path: Qwen/Qwen3.5-35B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: Qwen3.5-27B
-            model_path: Qwen/Qwen3.5-27B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-          - tp: 2
-            model: Qwen3.5-35B-A3B-Base
-            model_path: Qwen/Qwen3.5-35B-A3B-Base
-            case_info: ['completions_v1']
-            generate_type: base
-          - tp: 1
-            model: Qwen3.5-2B-Base
-            model_path: Qwen/Qwen3.5-2B-Base
-            case_info: ['completions_v1']
-            generate_type: base
-          - tp: 2
-            model: Qwen3-8B-Base
-            model_path: Qwen/Qwen3-8B-Base
-            case_info: ['completions_v1']
-            generate_type: base
-          - tp: 2
-            model: Qwen3-30B-A3B
-            model_path: Qwen/Qwen3-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: all
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: Qwen3-30B-A3B
-            model_path: Qwen/Qwen3-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: InternVL3_5-30B-A3B
-            model_path: OpenGVLab/InternVL3_5-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: InternVL3_5-30B-A3B
-            model_path: OpenGVLab/InternVL3_5-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: Qwen3-VL-30B-A3B-Instruct
-            model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: Qwen3-VL-30B-A3B-Instruct
-            model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: Qwen3-32B
-            model_path: Qwen/Qwen3-32B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-          - tp: 1
-            model: Qwen3-VL-8B-Instruct
-            model_path: Qwen/Qwen3-VL-8B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 1
-            model: Qwen3-VL-8B-Instruct
-            model_path: Qwen/Qwen3-VL-8B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: InternVL3-38B
-            model_path: OpenGVLab/InternVL3-38B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
+        include: ${{ fromJSON(needs.prepare_restful_matrix.outputs.matrix) }}
     timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
@@ -503,7 +429,8 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} --allow-terminate-by-client --trust-remote-code > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${{matrix.generate_type}}_start_restful.log 2>&1 &
+          SUITES=$(echo '${{ toJSON(matrix.suites) }}' | tr -d '[]"' | tr ',' '_')
+          lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} --allow-terminate-by-client --trust-remote-code > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${SUITES}_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 240)
           do
@@ -519,52 +446,34 @@ jobs:
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Test lmdeploy - chat_completions_v1
-        if:  matrix.model != 'internlm2_5-20b-chat' && matrix.model != 'Intern-S1' && contains(matrix.case_info, 'chat_completions_v1')
+        if: contains(matrix.case_info, 'chat_completions_v1')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5 and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - chat_completions_v1
-        if: matrix.model == 'Intern-S1' && contains(matrix.case_info, 'chat_completions_v1')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - chat_completions_v1 - internlm2_5-20b-chat
-        if:  matrix.model == 'internlm2_5-20b-chat' && contains(matrix.case_info, 'chat_completions_v1')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - completions_v1 - internlm2_5-20b
-        if: matrix.model == 'internlm2_5-20b' && contains(matrix.case_info, 'completions_v1')
+      - name: Test lmdeploy - completions_v1
+        if: contains(matrix.case_info, 'completions_v1')
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - completions_v1 - other
-        if: matrix.model != 'internlm2_5-20b' && contains(matrix.case_info, 'completions_v1')
+      - name: Test generate
+        if: contains(matrix.case_info, 'generate')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m '${{matrix.generate_marker}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test generate - base
-        if:  matrix.generate_type == 'base' && contains(matrix.case_info, 'generate')
+      - name: Test toolcall
+        if: contains(matrix.case_info, 'toolcall')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not logprob and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/tool_parser/ -n 8 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'tool_call and not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test generate - logprob
-        if:  matrix.generate_type == 'logprob' && contains(matrix.case_info, 'generate')
+      - name: Test reasoning
+        if: contains(matrix.case_info, 'reasoning')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test generate - all
-        if:  matrix.generate_type == 'all' && contains(matrix.case_info, 'generate')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/reasoning_parser/ -n 8 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'reasoning and not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()
