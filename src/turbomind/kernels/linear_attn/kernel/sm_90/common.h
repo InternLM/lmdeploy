@@ -77,13 +77,10 @@ CUTE_HOST_DEVICE constexpr auto FusedGdrGmmaSegmentMatrixLayout()
                                cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<kHeadDim>{}));
 }
 
-static_assert(cute::cosize_v<decltype(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>())>
-              == kHeadDim * kHeadDim);
-static_assert(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>()(
-                  cute::Int<0>{}, cute::Int<kHeadDim / 2>{})
+static_assert(cute::cosize_v<decltype(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>())> == kHeadDim * kHeadDim);
+static_assert(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>()(cute::Int<0>{}, cute::Int<kHeadDim / 2>{})
               == (kHeadDim / 2) * kHeadDim);
-static_assert(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>()(
-                  cute::Int<kHeadDim - 1>{}, cute::Int<kHeadDim - 1>{})
+static_assert(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>()(cute::Int<kHeadDim - 1>{}, cute::Int<kHeadDim - 1>{})
               == (kHeadDim / 2) * kHeadDim
                      + cute::Swizzle<3, 4, 3>{}((kHeadDim - 1) * (kHeadDim / 2) + (kHeadDim / 2 - 1)));
 

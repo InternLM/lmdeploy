@@ -949,7 +949,7 @@ struct Sm90FusedGdrFwd {
                 auto* cp_state_base = reinterpret_cast<float*>(static_cast<uintptr_t>(cp_state_ptrs[segment_id]));
                 auto* state_base    = cp_state_base + static_cast<int64_t>(value_head) * kHeadDim * kHeadDim + dv0;
                 detail::WaitForPdlDependency();
-                auto  g_state       = cute::make_tensor(cute::make_gmem_ptr(state_base), state_tile_layout);
+                auto g_state = cute::make_tensor(cute::make_gmem_ptr(state_base), state_tile_layout);
                 FusedGdrLoadStateFragmentGlobal<float>(tCrState, g_state, thr_mma, role_tid);
             }
             else {

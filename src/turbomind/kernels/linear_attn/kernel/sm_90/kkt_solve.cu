@@ -521,10 +521,10 @@ struct Sm90KktSolve {
         uint64_t* k_ready0 = &smem.k_ready0;
         uint64_t* k_ready1 = &smem.k_ready1;
 
-        using MmaElement       = Element;
-        MmaElement* k_tile0    = smem.k_tile;
-        MmaElement* k_tile1    = smem.k_tile + kKTilePlaneElems;
-        float*      beta_stage = smem.beta_stage;
+        using MmaElement            = Element;
+        MmaElement* k_tile0         = smem.k_tile;
+        MmaElement* k_tile1         = smem.k_tile + kKTilePlaneElems;
+        float*      beta_stage      = smem.beta_stage;
         const int   first_beta_quad = value_head_base / 4;
         IssueBetaQuadAsync(beta_stage,
                            beta,
@@ -535,7 +535,7 @@ struct Sm90KktSolve {
                            local_beta_token0,
                            beta_stride,
                            beta_batch_stride);
-        const auto* gmem_desc  = tma_desc_workspace + sequence_id * kKktTmaDescCount;
+        const auto* gmem_desc = tma_desc_workspace + sequence_id * kKktTmaDescCount;
         AcquireAndPrefetchTmaDescriptors(gmem_desc, tx);
         const CUtensorMap* k_desc         = &gmem_desc[kKktKDesc];
         const CUtensorMap* resolvent_desc = &gmem_desc[kKktResolventDesc];

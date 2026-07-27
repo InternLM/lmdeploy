@@ -22,15 +22,15 @@ __device__ __forceinline__ void TriggerPdlDependents()
 }
 
 template<class... KernelArgs, class... CallArgs>
-void LaunchPdlKernel(dim3                         grid,
-                     dim3                         block,
-                     size_t                       dynamic_smem_bytes,
-                     cudaStream_t                 stream,
+void LaunchPdlKernel(dim3         grid,
+                     dim3         block,
+                     size_t       dynamic_smem_bytes,
+                     cudaStream_t stream,
                      void (*kernel)(KernelArgs...),
                      CallArgs&&... args)
 {
     cudaLaunchAttribute attribute{};
-    attribute.id                                           = cudaLaunchAttributeProgrammaticStreamSerialization;
+    attribute.id                                         = cudaLaunchAttributeProgrammaticStreamSerialization;
     attribute.val.programmaticStreamSerializationAllowed = 1;
 
     cudaLaunchConfig_t config{};
