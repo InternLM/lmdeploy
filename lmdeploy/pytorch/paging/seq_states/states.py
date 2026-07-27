@@ -12,6 +12,7 @@ def _free_seq(seq: SchedulerSequence, scheduler: 'Scheduler'):
     if scheduler.block_trie.enabled:
         scheduler.block_trie.state_checkpoints.discard_save(seq)
         scheduler.block_trie.state_checkpoints.unpin_restore(seq)
+        seq.prefix_cache.restore.clear()
         seq.prefix_cache.trie_cursor = None
         seq.prefix_cache.match_start_step = -1
         seq.prefix_cache.recompute_overlap.clear_tracking()

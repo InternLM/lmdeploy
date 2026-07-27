@@ -348,7 +348,7 @@ state that may contain stale entries.
 | State reservation, publication, pins, or state eviction | `checkpoint_lifecycle.py`                                  |
 | KV references, leaf bookkeeping, or KV eviction         | `kv_lifecycle.py`                                          |
 | Admission order or tentative-match rollback             | `../scheduler.py`                                          |
-| Per-sequence prefix-cache protocol state                | `../../messages.py`                                        |
+| Per-sequence prefix-cache protocol state                | `../../prefix_cache_state.py`                              |
 | Host restore/save copy plans                            | `../../engine/inputs_maker.py` and `../../model_inputs.py` |
 | Stream ordering around model execution                  | `../../engine/model_agent/agent.py`                        |
 | Publication and unpin timing                            | `../../engine/engine_loop.py`                              |

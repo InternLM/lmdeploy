@@ -72,6 +72,25 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert checkpoint_node.state_checkpoint.pin_count == 0
         assert seq.prefix_cache.restore.node is None
 
+    def test_free_clears_unpinned_ssm_restore(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        checkpoint_tokens = [1] * block_size * 2
+
+        _, checkpoint_node, state_idx = self._add_published_ssm_checkpoint(ssm_scheduler, checkpoint_tokens)
+
+        seq = ssm_scheduler.add_session(100).add_sequence(checkpoint_tokens + [2])
+        block_trie.match(seq)
+        assert seq.prefix_cache.restore.slot == state_idx
+        assert seq.prefix_cache.restore.node is checkpoint_node
+        assert not seq.prefix_cache.restore.pinned
+
+        seq.state.free()
+
+        assert not seq.prefix_cache.restore.is_selected
+        assert seq.prefix_cache.restore.node is None
+        assert checkpoint_node.state_checkpoint.pin_count == 0
+
     def test_ssm_checkpoint_release_rejects_pinned_state(self, ssm_scheduler):
         block_trie = ssm_scheduler.block_trie
         block_size = ssm_scheduler.seq_meta.block_size
