@@ -31,15 +31,15 @@ def test_evict_prunes_stale_non_leaf_entry(block_trie, scheduler, num_gpu_blocks
 
     block_mgr.allocate(seq)
     block_trie.allocate(seq)
-    leaf = seq.prefix_cache.last_shared_node
+    leaf = seq.prefix_cache.trie_cursor
     parent = leaf.parent
     assert parent.parent is not None
     assert leaf in block_trie.leaves
     assert parent not in block_trie.leaves
 
     block_trie.leaves.add(parent)
-    allocator._log_mem.access_time[leaf.block] = 0
-    allocator._log_mem.access_time[parent.block] = 1
+    allocator._log_mem.access_time[leaf.block_id] = 0
+    allocator._log_mem.access_time[parent.block_id] = 1
     block_mgr.free(seq)
     seq.set_step(0)
 

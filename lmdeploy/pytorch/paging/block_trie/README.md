@@ -75,17 +75,17 @@ accelerate lookup and eviction; they are not sources of truth.
 sequence-side protocol. `SchedulerSequence` in [`messages.py`](../../messages.py)
 owns one instance:
 
-| Field group                   | Purpose                                                                     |
-| ----------------------------- | --------------------------------------------------------------------------- |
-| `metas`, `block_extra_hashes` | Persistent multimodal identity used by trie keys                            |
-| `last_shared_node`            | Cursor at the deepest trie node already shared by this sequence             |
-| `restore`                     | Published SSM checkpoint selected by matching; pinning happens later        |
-| `pending_save`                | Unpublished checkpoint slot reserved for a forward result                   |
-| `producer_save_pin`           | Published save destination protected until its producer forward is safe     |
-| `decode_checkpoint_node`      | Latest replaceable decode checkpoint owned by the sequence                  |
-| `match_start_step`            | Step before a tentative match, used by chunking and cached-token accounting |
-| `recompute_overlap`           | Cached suffix deliberately recomputed into fresh sequence-owned KV          |
-| `suppress_match_stats`        | Excludes replay work from user-visible hit-rate statistics                  |
+| Field group                                | Purpose                                                                     |
+| ------------------------------------------ | --------------------------------------------------------------------------- |
+| `multimodal_spans`, `block_extra_identity` | Persistent multimodal identity used by trie keys                            |
+| `trie_cursor`                              | Cursor at the deepest trie node reached by this sequence                    |
+| `restore`                                  | Published SSM checkpoint selected by matching; pinning happens later        |
+| `pending_save`                             | Unpublished checkpoint slot reserved for a forward result                   |
+| `producer_save_pin`                        | Published save destination protected until its producer forward is safe     |
+| `decode_checkpoint_node`                   | Latest replaceable decode checkpoint owned by the sequence                  |
+| `match_start_step`                         | Step before a tentative match, used by chunking and cached-token accounting |
+| `recompute_overlap`                        | Cached suffix deliberately recomputed into fresh sequence-owned KV          |
+| `suppress_match_stats`                     | Excludes replay work from user-visible hit-rate statistics                  |
 
 ## Tentative Match Transaction
 
@@ -122,11 +122,11 @@ path.
 
 ## AR and VLM Matching
 
-For non-SSM models, `BlockTrie.match()` walks from `last_shared_node` or the
+For non-SSM models, `BlockTrie.match()` walks from `trie_cursor` or the
 adapter root:
 
 1. Build the key from one full block of token ids plus overlapping multimodal
-   hashes.
+   identity.
 2. Find a child by hash and verify its exact identity.
 3. Stop before the request's final forward work. A block is reusable only when
    its end is strictly before `num_valid_ids`.
@@ -135,7 +135,7 @@ adapter root:
 6. Acquire sequence references only for the final accepted blocks, advance the
    sequence step, and replay cached routed experts.
 
-`BlockTrie.allocate()` continues from `last_shared_node` and attaches eligible
+`BlockTrie.allocate()` continues from `trie_cursor` and attaches eligible
 full blocks. On an exact collision it normally substitutes the existing
 trie-owned block and releases the sequence's duplicate. Blocks in the pending
 recompute overlap keep their fresh writable allocation even while traversal
@@ -172,17 +172,17 @@ instead of deduplicating it back to `C shared`.
 
 `PrefixRecomputeOverlap` makes the three lifetimes explicit:
 
-| State                   | Lifetime                                                    | Purpose                                                           |
-| ----------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
-| `required_blocks`       | Sequence strategy                                           | Minimum number of cached suffix blocks the forward must recompute |
-| `fresh_block_range`     | One match-to-allocation transaction                         | Blocks that must keep fresh writable KV during allocation         |
-| `canonical_trie_blocks` | While the corresponding fresh blocks remain on the sequence | Maps each fresh logical block to its shared trie identity         |
+| State               | Lifetime                                                    | Purpose                                                           |
+| ------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| `recompute_blocks`  | Sequence strategy                                           | Minimum number of cached suffix blocks the forward must recompute |
+| `fresh_block_range` | One match-to-allocation transaction                         | Blocks that must keep fresh writable KV during allocation         |
+| `trie_block_map`    | While the corresponding fresh blocks remain on the sequence | Maps each fresh block position to its shared trie block id        |
 
 The fresh block range is cleared after allocation. The canonical mapping remains
 longer because an SSM checkpoint published by this sequence must record the
 shared trie path, not sequence-private physical KV blocks. Rollback or sequence
 release clears both the fresh range and the canonical mapping while keeping
-the strategy's `required_blocks` policy.
+the strategy's `recompute_blocks` policy.
 
 For SSM matching, the same concept begins at the selected state-checkpoint
 step. The checkpoint supplies the recurrent state and canonical KV before that

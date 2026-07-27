@@ -22,14 +22,14 @@ from typing import TYPE_CHECKING, TypeAlias
 import numpy as np
 
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraHashes
+from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraIdentity
 
 if TYPE_CHECKING:
     from .node import Node
 
 
 StateCheckpointKey: TypeAlias = tuple[str, int, int]
-BlockKeyMaker: TypeAlias = Callable[[np.ndarray, PrefixCacheExtraHashes], int]
+BlockHasher: TypeAlias = Callable[[np.ndarray, PrefixCacheExtraIdentity], int]
 
 
 class StateCheckpointVerifyStatus(enum.Enum):
@@ -46,8 +46,8 @@ class StateCheckpointMatchData:
     """Immutable host metadata for proving and applying a checkpoint hit."""
 
     token_ids: np.ndarray
-    multimodal_hashes: PrefixCacheExtraHashes
-    blocks: np.ndarray
+    extra_identity: PrefixCacheExtraIdentity
+    block_ids: np.ndarray
 
 
 @dataclass
@@ -56,23 +56,23 @@ class StateCheckpointVerifyResult:
 
     status: StateCheckpointVerifyStatus
     reason: str = ''
-    matched_blocks: np.ndarray | None = None
+    matched_block_ids: np.ndarray | None = None
 
 
 def freeze_state_checkpoint_match_data(token_ids: np.ndarray,
-                                       multimodal_hashes: PrefixCacheExtraHashes,
-                                       blocks: np.ndarray):
+                                       extra_identity: PrefixCacheExtraIdentity,
+                                       block_ids: np.ndarray):
     """Make already-owned checkpoint identity arrays read-only."""
     token_ids.flags.writeable = False
-    blocks.flags.writeable = False
+    block_ids.flags.writeable = False
     return StateCheckpointMatchData(token_ids=token_ids,
-                                    multimodal_hashes=multimodal_hashes,
-                                    blocks=blocks)
+                                    extra_identity=extra_identity,
+                                    block_ids=block_ids)
 
 
 def make_request_multimodal_identity(seq: SchedulerSequence, step: int):
     """Get the exact multimodal identity for a request prefix."""
-    return tuple(sorted(meta for meta in seq.prefix_cache.metas if meta.start < step and meta.end > 0))
+    return tuple(sorted(span for span in seq.prefix_cache.multimodal_spans if span.start < step and span.end > 0))
 
 
 class StateCheckpointIndex:
@@ -83,23 +83,23 @@ class StateCheckpointIndex:
     release stale candidates reported by :meth:`verify_candidate`.
     """
 
-    def __init__(self, block_size: int, make_block_key: BlockKeyMaker):
+    def __init__(self, block_size: int, hash_block: BlockHasher):
         self.block_size = block_size
-        self._make_block_key = make_block_key
+        self._hash_block = hash_block
         self._buckets: dict[StateCheckpointKey, list[Node]] = {}
         self._steps_by_adapter: dict[str, set[int]] = {}
 
     def make_request_key(self, seq: SchedulerSequence, step: int) -> StateCheckpointKey:
         """Make the sparse lookup key for one request checkpoint step."""
         start = step - self.block_size
-        tokens = seq.history_cache[start:step]
-        extra_hashes = seq.get_prefix_cache_extra_hashes(start, step)
-        return (seq.adapter_name, step, self._make_block_key(tokens, extra_hashes))
+        token_ids = seq.history_cache[start:step]
+        extra_identity = seq.get_prefix_cache_extra_identity(start, step)
+        return (seq.adapter_name, step, self._hash_block(token_ids, extra_identity))
 
     @staticmethod
     def make_node_key(node: 'Node') -> StateCheckpointKey:
-        """Make the canonical sparse-index key for a checkpoint node."""
-        return (node.adapter_name, node.num_matched, node.hash_key)
+        """Make the sparse-index key stored for a checkpoint node."""
+        return (node.adapter_name, node.prefix_len, node.block_hash)
 
     def add(self, node: 'Node'):
         """Add a prevalidated published checkpoint node."""
@@ -107,7 +107,7 @@ class StateCheckpointIndex:
         nodes = self._buckets.setdefault(key, [])
         if not any(indexed_node is node for indexed_node in nodes):
             nodes.append(node)
-        self._steps_by_adapter.setdefault(node.adapter_name, set()).add(node.num_matched)
+        self._steps_by_adapter.setdefault(node.adapter_name, set()).add(node.prefix_len)
 
     def remove_entry(self, node: 'Node', key: StateCheckpointKey):
         """Remove a node from one sparse-index bucket."""
@@ -158,15 +158,14 @@ class StateCheckpointIndex:
     def verify_candidate(self,
                          seq: SchedulerSequence,
                          node: 'Node',
-                         index_key: StateCheckpointKey,
-                         path_is_current: bool):
-        """Prove that a sparse candidate is an exact, current prefix hit."""
+                         index_key: StateCheckpointKey):
+        """Prove that a sparse candidate is an exact attached prefix hit."""
         checkpoint = node.state_checkpoint
         if checkpoint is None or checkpoint.slot < 0 or not checkpoint.published:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint is not published')
 
-        step = node.num_matched
+        step = node.prefix_len
         if step <= 0:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason=f'invalid checkpoint step: {step}')
@@ -175,10 +174,10 @@ class StateCheckpointIndex:
         if match_data is None:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint exact-match metadata is missing')
-        if len(match_data.blocks) * self.block_size != step:
+        if len(match_data.block_ids) * self.block_size != step:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint exact-match path has the wrong length')
-        if not path_is_current:
+        if not node.is_attached():
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint owner is detached from its cached path')
 
@@ -202,7 +201,7 @@ class StateCheckpointIndex:
         if not np.array_equal(seq.history_cache[:step], match_data.token_ids):
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
                                                reason='checkpoint token identity differs from this request')
-        if make_request_multimodal_identity(seq, step) != match_data.multimodal_hashes:
+        if make_request_multimodal_identity(seq, step) != match_data.extra_identity:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
                                                reason='checkpoint multimodal identity differs from this request')
         if seq.return_routed_experts:
@@ -211,11 +210,11 @@ class StateCheckpointIndex:
                 if block_node.routed_experts is None:
                     return StateCheckpointVerifyResult(
                         StateCheckpointVerifyStatus.REQUEST_MISMATCH,
-                        reason=f'routed experts missing at step {block_node.num_matched}',
+                        reason=f'routed experts missing at step {block_node.prefix_len}',
                     )
                 block_node = block_node.parent
 
-        return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.HIT, matched_blocks=match_data.blocks)
+        return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.HIT, matched_block_ids=match_data.block_ids)
 
     def _remove_step_if_empty(self, adapter_name: str, step: int):
         """Drop an adapter step when no indexed checkpoint still owns it."""

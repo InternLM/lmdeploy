@@ -41,21 +41,21 @@ class KVBlockLifecycle:
 
     def commit_path_extension(self,
                               node: Node,
-                              additional_ref_blocks: list[int],
-                              duplicate_blocks: list[int]):
+                              ref_blocks: list[int],
+                              free_blocks: list[int]):
         """Commit leaf bookkeeping and batched allocator ref changes.
 
-        Each block in ``additional_ref_blocks`` needs one new owner: either the
+        Each block in ``ref_blocks`` needs one new owner: either the
         trie ref for a fresh node or the sequence ref after collision
-        deduplication selected an existing trie block. ``duplicate_blocks`` are
+        deduplication selected an existing trie block. ``free_blocks`` are
         the fresh sequence blocks replaced by that deduplication.
         """
         if node.parent is not None and len(node.children) == 0:
             self.leaves.add(node)
-        if len(additional_ref_blocks) > 0:
-            self.allocator.add_ref_count(np.array(additional_ref_blocks), 1)
-        if len(duplicate_blocks) > 0:
-            self.allocator.free(np.array(duplicate_blocks))
+        if len(ref_blocks) > 0:
+            self.allocator.add_ref_count(np.array(ref_blocks), 1)
+        if len(free_blocks) > 0:
+            self.allocator.free(np.array(free_blocks))
 
     @classmethod
     def _is_attached_leaf(cls, node: Node):
@@ -64,7 +64,7 @@ class KVBlockLifecycle:
     @classmethod
     def _is_leaf_eviction_candidate(cls, node: Node):
         """Allow stale detached leaves to be pruned from the candidate set."""
-        return (node.block >= 0 and len(node.children) == 0
+        return (node.block_id >= 0 and len(node.children) == 0
                 and (node.parent is None or node.is_attached()))
 
     def _try_evict_leaf(self,
@@ -79,13 +79,13 @@ class KVBlockLifecycle:
                 continue
             if self.state_checkpoints.is_pinned(leaf):
                 continue
-            if int(self.allocator.get_ref_count(leaf.block)) != 1:
+            if int(self.allocator.get_ref_count(leaf.block_id)) != 1:
                 continue
             break
         else:
             return False, None
 
-        evicted_blocks.append(leaf.block)
+        evicted_blocks.append(leaf.block_id)
         self.state_checkpoints.release_checkpoint(leaf)
         parent = leaf.parent
         if parent is not None:
@@ -97,8 +97,8 @@ class KVBlockLifecycle:
         if not self._is_attached_leaf(parent) or parent in self.leaves:
             return
         self.leaves.add(parent)
-        if self.allocator.get_ref_count(parent.block) == 1:
-            access_time = self.allocator.get_access_time(parent.block)
+        if self.allocator.get_ref_count(parent.block_id) == 1:
+            access_time = self.allocator.get_access_time(parent.block_id)
             heapq.heappush(candidate_heap, (access_time, id(parent), parent))
 
     def evict(self, max_num_blocks: int):
@@ -116,7 +116,7 @@ class KVBlockLifecycle:
             return 0
 
         # A ref count of one means only the trie owns the block.
-        candidate_blocks = np.array([leaf.block for leaf in candidates])
+        candidate_blocks = np.array([leaf.block_id for leaf in candidates])
         ref_counts = self.allocator.get_ref_count(candidate_blocks)
         evictable_indices = (ref_counts == 1).nonzero()[0]
         if len(evictable_indices) == 0:

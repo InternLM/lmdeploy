@@ -34,7 +34,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             if evict_seq.num_blocks == 0:
                 continue
 
-            if block_trie.enable:
+            if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
             evict_seq.state.free()
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
@@ -70,7 +70,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         # avoid requiring free state when already allocated.
         has_runtime_state = state_manager.is_allocated(seq)
         has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
-        if block_trie.enable and not has_free_state:
+        if not has_free_state:
             block_trie.state_checkpoints.evict(1)
             has_free_state = state_manager.get_num_free_runtime() > 0
 
@@ -86,11 +86,11 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 continue
 
             # free sequence
-            if block_trie.enable:
+            if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
             evict_seq.state.free()
             has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
-            if block_trie.enable and not has_free_state:
+            if not has_free_state:
                 block_trie.state_checkpoints.evict(1)
                 has_free_state = state_manager.get_num_free_runtime() > 0
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())

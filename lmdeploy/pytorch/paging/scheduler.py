@@ -300,7 +300,7 @@ class _PrefillAdmissionAttempt:
                        seq.session_id, seq.seq_id, message)
 
     def _admit_resources(self):
-        if self.scheduler.block_trie.enable:
+        if self.scheduler.block_trie.enabled:
             return self._admit_prefix_cache_resources()
         if not self._prepare_and_evict():
             return _PrefillAdmissionResult.stop()
@@ -363,7 +363,7 @@ class _PrefillAdmissionAttempt:
     def _match_prefix_for_prefill_gate(self):
         """Tentatively match once so a request can be rechecked by a gate."""
         scheduler = self.scheduler
-        if not scheduler.block_trie.enable:
+        if not scheduler.block_trie.enabled:
             return None
         stats_snapshot = scheduler.block_trie.stats.snapshot()
         scheduler.block_trie.match(self.seq)
@@ -449,11 +449,11 @@ class _PrefillAdmissionAttempt:
         # estimate used to decide whether this sequence is worth trying.
         prefill_token_count = scheduler._prefill_admission_token_count(seq)
         scheduler.block_manager.allocate(seq, self._alloc_size)
-        if scheduler.block_trie.enable:
+        if scheduler.block_trie.enabled:
             scheduler.block_trie.allocate(seq)
         if scheduler.is_ssm:
             scheduler.state_manager.allocate(seq)
-        if scheduler.block_trie.enable:
+        if scheduler.block_trie.enabled:
             scheduler._finish_prefix_cache_schedule(seq)
         return _PrefillAdmissionResult.admit(prefill_token_count)
 
@@ -537,10 +537,10 @@ class Scheduler:
             seq.set_step(0)
         seq.kv_token_limit = None
         prefix_cache = seq.prefix_cache
-        prefix_cache.last_shared_node = None
+        prefix_cache.trie_cursor = None
         prefix_cache.restore.clear()
         prefix_cache.match_start_step = -1
-        prefix_cache.recompute_overlap.reset_runtime_state()
+        prefix_cache.recompute_overlap.clear_tracking()
         seq.cached_tokens = 0
 
     @staticmethod

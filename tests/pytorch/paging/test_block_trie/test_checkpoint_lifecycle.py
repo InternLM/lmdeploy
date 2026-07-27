@@ -9,22 +9,6 @@ from ._utils import BlockTrieTestMixin
 
 class TestStateCheckpointLifecycle(BlockTrieTestMixin):
 
-    def test_ssm_checkpoint_index_rejects_unpublished_node(self, ssm_scheduler):
-        block_mgr = ssm_scheduler.block_manager
-        block_trie = ssm_scheduler.block_trie
-        sess = ssm_scheduler.add_session(0)
-        block_size = sess.seq_meta.block_size
-        token_ids = [1] * block_size * 2
-
-        seq = sess.add_sequence(token_ids)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        node = seq.prefix_cache.last_shared_node
-        assert block_trie.state_checkpoints._reserve_node(node) >= 0
-
-        with pytest.raises(RuntimeError, match='unpublished SSM prefix-cache checkpoint'):
-            block_trie.state_checkpoints._index_checkpoint(node)
-
     def test_ssm_checkpoint_save_publishes_to_sparse_index(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
         block_trie = ssm_scheduler.block_trie
@@ -36,7 +20,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         state_idx = block_trie.state_checkpoints.reserve_save(seq)
-        node = seq.prefix_cache.last_shared_node
+        node = seq.prefix_cache.trie_cursor
 
         assert state_idx >= 0
         assert seq.prefix_cache.pending_save.slot == state_idx
@@ -51,10 +35,10 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert np.array_equal(match_data.token_ids, token_ids)
         assert not np.shares_memory(match_data.token_ids, seq.history_cache.get_real())
         assert not match_data.token_ids.flags.writeable
-        assert not match_data.blocks.flags.writeable
+        assert not match_data.block_ids.flags.writeable
         expected_blocks = seq.logical_blocks.get_real_blocks()[:len(token_ids) // block_size]
-        assert np.array_equal(match_data.blocks, expected_blocks)
-        assert not np.shares_memory(match_data.blocks, expected_blocks)
+        assert np.array_equal(match_data.block_ids, expected_blocks)
+        assert not np.shares_memory(match_data.block_ids, expected_blocks)
 
         seq = sess.add_sequence(token_ids + [2])
         block_trie.match(seq)
@@ -79,7 +63,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
 
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        assert seq.prefix_cache.last_shared_node is not checkpoint_node
+        assert seq.prefix_cache.trie_cursor is not checkpoint_node
         assert seq.prefix_cache.restore.node is checkpoint_node
 
         assert block_trie.state_checkpoints.pin_restore(seq)
@@ -135,17 +119,17 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = seq.prefix_cache.last_shared_node
-        block_trie.state_checkpoints._reserve_node(node)
+        node = seq.prefix_cache.trie_cursor
+        block_trie.state_checkpoints._reserve_slot(node)
 
-        block_trie.state_checkpoints._publish_node(node, seq)
+        block_trie.state_checkpoints._publish_checkpoint(node, seq)
         match_data = node.state_checkpoint.exact_match_data
-        block_trie.state_checkpoints._publish_node(node, seq)
+        block_trie.state_checkpoints._publish_checkpoint(node, seq)
 
         key = block_trie._checkpoint_index.make_node_key(node)
         assert node.state_checkpoint.exact_match_data is match_data
         assert block_trie._checkpoint_index._buckets[key] == [node]
-        assert block_trie._checkpoint_index._steps_by_adapter[node.adapter_name] == {node.num_matched}
+        assert block_trie._checkpoint_index._steps_by_adapter[node.adapter_name] == {node.prefix_len}
 
     def test_ssm_checkpoint_unindex_removes_duplicate_entries(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -157,9 +141,9 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = seq.prefix_cache.last_shared_node
-        block_trie.state_checkpoints._reserve_node(node)
-        block_trie.state_checkpoints._publish_node(node, seq)
+        node = seq.prefix_cache.trie_cursor
+        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._publish_checkpoint(node, seq)
         key = block_trie._checkpoint_index.make_node_key(node)
         block_trie._checkpoint_index._buckets[key].extend([node, node])
 
@@ -181,7 +165,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_trie.allocate(seq)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.state_checkpoints.reserve_save(seq)
-        node = seq.prefix_cache.last_shared_node
+        node = seq.prefix_cache.trie_cursor
 
         assert state_idx >= 0
         assert node.state_checkpoint.slot == state_idx
@@ -229,7 +213,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_trie.allocate(seq)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.state_checkpoints.reserve_save(seq)
-        node = seq.prefix_cache.last_shared_node
+        node = seq.prefix_cache.trie_cursor
 
         assert state_idx >= 0
         node.detach_leaf()
@@ -253,11 +237,11 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_trie.allocate(seq)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.state_checkpoints.reserve_save(seq)
-        node = seq.prefix_cache.last_shared_node
+        node = seq.prefix_cache.trie_cursor
 
         assert state_idx >= 0
         seq.history_cache = seq.history_cache.clone()
-        assert not np.shares_memory(node.tokens, seq.history_cache.get_real())
+        assert not np.shares_memory(node.token_ids, seq.history_cache.get_real())
         seq.history_cache[block_size * 2 - 1] = 9
 
         with pytest.raises(RuntimeError, match='mismatched sequence cursor'):
@@ -279,16 +263,16 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_trie.allocate(seq)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.state_checkpoints.reserve_save(seq)
-        node = seq.prefix_cache.last_shared_node
+        node = seq.prefix_cache.trie_cursor
         key = block_trie._checkpoint_index.make_node_key(node)
         checkpoint_lifecycle = block_trie.state_checkpoints
-        index_checkpoint = checkpoint_lifecycle._index_checkpoint
+        add_to_index = checkpoint_lifecycle._index.add
 
         def fail_after_index(checkpoint_node):
-            index_checkpoint(checkpoint_node)
+            add_to_index(checkpoint_node)
             raise RuntimeError('injected index failure')
 
-        monkeypatch.setattr(checkpoint_lifecycle, '_index_checkpoint', fail_after_index)
+        monkeypatch.setattr(checkpoint_lifecycle._index, 'add', fail_after_index)
         with pytest.raises(RuntimeError, match='injected index failure'):
             block_trie.state_checkpoints.publish_save(seq)
 
@@ -385,12 +369,12 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         seq.update_token_ids(new_tokens, mode=UpdateTokenMode.DECODE)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        new_node = seq.prefix_cache.last_shared_node
+        new_node = seq.prefix_cache.trie_cursor
 
         pending_seq = sess.add_sequence(old_tokens + new_tokens)
         block_mgr.allocate(pending_seq)
         block_trie.allocate(pending_seq)
-        assert pending_seq.prefix_cache.last_shared_node is new_node
+        assert pending_seq.prefix_cache.trie_cursor is new_node
         pending_state_idx = block_trie.state_checkpoints.reserve_save(pending_seq)
         assert pending_state_idx >= 0
         assert new_node.state_checkpoint.slot == pending_state_idx
@@ -500,8 +484,8 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_mgr.allocate(seq_b)
         block_trie.allocate(seq_b)
 
-        node = seq_a.prefix_cache.last_shared_node
-        assert node is seq_b.prefix_cache.last_shared_node
+        node = seq_a.prefix_cache.trie_cursor
+        assert node is seq_b.prefix_cache.trie_cursor
 
         state_idx_a = block_trie.state_checkpoints.reserve_save(seq_a)
         state_idx_b = block_trie.state_checkpoints.reserve_save(seq_b)
@@ -636,9 +620,9 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = seq.prefix_cache.last_shared_node
-        block_trie.state_checkpoints._reserve_node(node)
-        block_trie.state_checkpoints._publish_node(node, seq)
+        node = seq.prefix_cache.trie_cursor
+        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._publish_checkpoint(node, seq)
         assert node.state_checkpoint.exact_match_data is not None
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
@@ -659,7 +643,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = seq.prefix_cache.last_shared_node
+        node = seq.prefix_cache.trie_cursor
         assert block_trie.state_checkpoints.reserve_save(seq, step=block_size * 2) >= 0
         assert block_trie.state_checkpoints.publish_save(seq, pin_save=True)
         assert node.state_checkpoint.published

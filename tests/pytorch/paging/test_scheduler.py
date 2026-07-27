@@ -260,7 +260,7 @@ def _add_published_ssm_checkpoint(scheduler: Scheduler, token_ids: list[int]):
     state_idx = scheduler.block_trie.state_checkpoints.reserve_save(seq)
     assert state_idx >= 0
     assert scheduler.block_trie.state_checkpoints.publish_save(seq)
-    node = seq.prefix_cache.last_shared_node
+    node = seq.prefix_cache.trie_cursor
     session.remove_sequence(seq)
     return node, state_idx
 
@@ -346,7 +346,7 @@ def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
     assert seq_a.logical_state >= 0
     assert seq_b.logical_state >= 0
     assert seq_a.logical_state != seq_b.logical_state
-    assert seq_a.prefix_cache.last_shared_node is seq_b.prefix_cache.last_shared_node
+    assert seq_a.prefix_cache.trie_cursor is seq_b.prefix_cache.trie_cursor
 
     save_state_offsets = [
         scheduler.block_trie.state_checkpoints.reserve_save(seq) for seq in output.running
@@ -417,7 +417,7 @@ def test_ssm_failed_restore_schedule_rolls_back_match():
     assert seq.num_history_ids == 0
     assert len(seq.logical_blocks) == 0
     assert seq.cached_tokens == 0
-    assert seq.prefix_cache.last_shared_node is None
+    assert seq.prefix_cache.trie_cursor is None
     assert seq.prefix_cache.restore.slot == -1
     assert seq.prefix_cache.restore.node is None
     assert node.state_checkpoint.slot == state_idx
@@ -572,7 +572,7 @@ def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
     output = scheduler.schedule(is_prefill=True)
 
     assert output.running == [seq]
-    assert seq.prefix_cache.recompute_overlap.required_blocks == 1
+    assert seq.prefix_cache.recompute_overlap.recompute_blocks == 1
     assert seq.num_history_ids == block_size * 2
     assert seq.cached_tokens == block_size * 2
     assert seq.logical_blocks[2] != cached_blocks[2]
@@ -737,7 +737,7 @@ def test_scheduler_rolls_back_prefix_match_for_prefill_gate_when_tail_still_exce
     assert cache_hit_tail.status == MessageStatus.WAITING
     assert cache_hit_tail.num_history_ids == 0
     assert cache_hit_tail.cached_tokens == 0
-    assert cache_hit_tail.prefix_cache.last_shared_node is None
+    assert cache_hit_tail.prefix_cache.trie_cursor is None
     assert cache_hit_tail.prefix_cache.match_start_step == -1
 
 
@@ -757,7 +757,7 @@ def test_scheduler_rolls_back_prefix_match_for_prefill_gate_that_still_needs_lon
     assert still_long.status == MessageStatus.WAITING
     assert still_long.num_history_ids == 0
     assert still_long.cached_tokens == 0
-    assert still_long.prefix_cache.last_shared_node is None
+    assert still_long.prefix_cache.trie_cursor is None
     assert still_long.prefix_cache.match_start_step == -1
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
@@ -778,7 +778,7 @@ def test_ssm_scheduler_rolls_back_prefix_match_for_prefill_gate_without_pinning_
     assert still_long.status == MessageStatus.WAITING
     assert still_long.num_history_ids == 0
     assert still_long.cached_tokens == 0
-    assert still_long.prefix_cache.last_shared_node is None
+    assert still_long.prefix_cache.trie_cursor is None
     assert still_long.prefix_cache.restore.slot == -1
     assert still_long.prefix_cache.restore.node is None
     assert not still_long.prefix_cache.restore.pinned
@@ -807,7 +807,7 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_pinned_restor
     assert cache_hit_tail.kv_token_limit is None
     assert cache_hit_tail.logical_state == -1
     assert cache_hit_tail.cached_tokens == 0
-    assert cache_hit_tail.prefix_cache.last_shared_node is None
+    assert cache_hit_tail.prefix_cache.trie_cursor is None
     assert cache_hit_tail.prefix_cache.restore.slot == -1
     assert cache_hit_tail.prefix_cache.restore.node is None
     assert not cache_hit_tail.prefix_cache.restore.pinned
@@ -843,7 +843,7 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_runtime_state
     assert cache_hit_tail.kv_token_limit is None
     assert cache_hit_tail.logical_state == -1
     assert cache_hit_tail.cached_tokens == 0
-    assert cache_hit_tail.prefix_cache.last_shared_node is None
+    assert cache_hit_tail.prefix_cache.trie_cursor is None
     assert cache_hit_tail.prefix_cache.restore.slot == -1
     assert cache_hit_tail.prefix_cache.restore.node is None
     assert not cache_hit_tail.prefix_cache.restore.pinned

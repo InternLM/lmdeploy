@@ -48,4 +48,4 @@ class BlockTrieTestMixin:
         state_idx = scheduler.block_trie.state_checkpoints.reserve_save(seq)
         assert state_idx >= 0
         assert scheduler.block_trie.state_checkpoints.publish_save(seq)
-        return seq, seq.prefix_cache.last_shared_node, state_idx
+        return seq, seq.prefix_cache.trie_cursor, state_idx

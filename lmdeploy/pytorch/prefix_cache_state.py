@@ -12,7 +12,7 @@ from typing import Any, NamedTuple, TypeAlias
 import numpy as np
 
 
-class PrefixCacheMeta(NamedTuple):
+class MultimodalSpan(NamedTuple):
     """Multimodal span identity used by prefix-cache block keys.
 
     Placeholder token ids alone are not enough for VLM prefix caching: two
@@ -27,11 +27,11 @@ class PrefixCacheMeta(NamedTuple):
     content_hash: str
 
 
-# The block index stores the same immutable span objects as ``metas``. Keep the
-# established aliases for callers that describe their role in trie keys.
-PrefixCacheExtraHash: TypeAlias = PrefixCacheMeta
-PrefixCacheExtraHashes: TypeAlias = tuple[PrefixCacheMeta, ...]
-PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
+# The block index stores the same immutable span objects as
+# ``multimodal_spans``. The generic identity name leaves room for other
+# non-token cache identity if another producer needs it later.
+PrefixCacheExtraIdentity: TypeAlias = tuple[MultimodalSpan, ...]
+PrefixCacheBlockExtraIdentity: TypeAlias = dict[int, PrefixCacheExtraIdentity]
 
 
 @dataclass
@@ -117,67 +117,55 @@ class PrefixRecomputeOverlap:
     """Per-sequence state for deliberately recomputing a cached KV suffix.
 
     Some strategies need target hidden states from the end of an otherwise
-    reusable prefix. ``required_blocks`` is that persistent strategy policy.
+    reusable prefix. ``recompute_blocks`` is that persistent strategy policy.
     A match records the cached-but-dropped suffix as a one-shot fresh block
     range; allocation must keep sequence-owned KV for these blocks instead of
     deduplicating it back to shared trie blocks.
 
-    ``canonical_trie_blocks`` preserves the shared trie identity corresponding
+    ``trie_block_map`` preserves the shared trie identity corresponding
     to those fresh blocks. It outlives the fresh range so a later SSM state
-    checkpoint can snapshot the canonical KV path.
+    checkpoint can snapshot the shared trie path.
     """
 
-    required_blocks: int = 0
+    recompute_blocks: int = 0
     fresh_block_range: range | None = None
-    canonical_trie_blocks: dict[int, int] = field(default_factory=dict, repr=False)
+    trie_block_map: dict[int, int] = field(default_factory=dict, repr=False)
 
-    def set_fresh_block_range(self, start_block: int, end_block: int) -> None:
+    def set_fresh_block_range(self, start_block_idx: int, end_block_idx: int) -> None:
         """Set the half-open block range that needs fresh KV allocation."""
-        if end_block <= start_block:
+        if end_block_idx <= start_block_idx:
             self.clear_fresh_block_range()
             return
-        self.fresh_block_range = range(start_block, end_block)
+        self.fresh_block_range = range(start_block_idx, end_block_idx)
 
     def clear_fresh_block_range(self) -> None:
         """Finish the one-shot match-to-allocation window."""
         self.fresh_block_range = None
 
-    def requires_fresh_block(self, block_id: int) -> bool:
-        """Whether this block must keep its sequence-owned writable KV."""
-        return self.fresh_block_range is not None and block_id in self.fresh_block_range
+    def apply_trie_blocks(self, block_ids: np.ndarray) -> None:
+        """Replace fresh block ids with their shared trie block ids."""
+        for block_idx, trie_block_id in self.trie_block_map.items():
+            if block_idx < len(block_ids):
+                block_ids[block_idx] = trie_block_id
 
-    def remember_canonical_block(self, block_id: int, trie_block: int) -> None:
-        """Associate fresh sequence KV with its canonical shared trie block."""
-        self.canonical_trie_blocks[block_id] = trie_block
-
-    def forget_canonical_block(self, block_id: int) -> None:
-        """Forget a substitution once the sequence uses shared/canonical KV."""
-        self.canonical_trie_blocks.pop(block_id, None)
-
-    def rewrite_to_canonical_path(self, blocks: np.ndarray) -> None:
-        """Rewrite sequence block ids to their canonical trie identities."""
-        for block_id, trie_block in self.canonical_trie_blocks.items():
-            if block_id < len(blocks):
-                blocks[block_id] = trie_block
-
-    def reset_runtime_state(self) -> None:
+    def clear_tracking(self) -> None:
         """Clear transient overlap state while preserving strategy policy."""
         self.clear_fresh_block_range()
-        self.canonical_trie_blocks.clear()
+        self.trie_block_map.clear()
 
 
 @dataclass
 class PrefixCacheState:
     """Per-sequence prefix-cache bookkeeping.
 
-    ``metas`` and ``block_extra_hashes`` are persistent request metadata used
+    ``multimodal_spans`` and ``block_extra_identity`` are persistent request metadata used
     when constructing multimodal-aware trie keys. ``restore``,
     ``pending_save``, and ``producer_save_pin`` expose the three transient SSM
     checkpoint phases explicitly: a matched frozen state is pinned before
     forward, a save reservation is published after the model copies runtime
     state into it, and that published destination remains pinned until its
-    producer forward completes. ``last_shared_node`` is the deepest trie node
-    already shared by this sequence; ``BlockTrie.match()`` writes it and
+    producer forward completes. ``trie_cursor`` is the deepest trie node
+    already reached by this sequence; ``BlockTrie.match()`` writes it and
     ``BlockTrie.allocate()`` continues inserting new full blocks from it.
     ``match_start_step`` remembers the sequence step before a tentative
     prefix-cache match so long-context chunking can distinguish current-turn
@@ -190,12 +178,12 @@ class PrefixCacheState:
     """
 
     # Persistent request metadata used to build multimodal-aware trie keys.
-    metas: list[PrefixCacheMeta] = field(default_factory=list)
-    block_extra_hashes: PrefixCacheBlockExtraHashes = field(default_factory=dict, repr=False)
-    num_indexed_metas: int = 0
+    multimodal_spans: list[MultimodalSpan] = field(default_factory=list)
+    block_extra_identity: PrefixCacheBlockExtraIdentity = field(default_factory=dict, repr=False)
+    num_indexed_spans: int = 0
 
-    # Trie cursor for the deepest prefix block already shared by this sequence.
-    last_shared_node: Any = field(default=None, repr=False)
+    # Trie cursor for the deepest prefix node reached by this sequence.
+    trie_cursor: Any = field(default=None, repr=False)
 
     # SSM checkpoint state grouped by its distinct lifecycle phase.
     restore: StateCheckpointRestore = field(default_factory=StateCheckpointRestore)

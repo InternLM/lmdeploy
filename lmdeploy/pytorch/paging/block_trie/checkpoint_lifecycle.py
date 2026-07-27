@@ -73,22 +73,22 @@ class StateCheckpointLifecycle:
             return -1
 
         node = self._find_checkpoint_node(seq, step)
-        if node is None or self._owns_checkpoint_slot(node):
+        if node is None or self._node_has_slot(node):
             return -1
 
         try:
-            state_idx = self._reserve_node(node)
+            slot = self._reserve_slot(node)
         except RuntimeError as e:
             if 'No free states' not in str(e):
                 raise
             return -1
-        if state_idx < 0:
+        if slot < 0:
             return -1
 
-        seq.prefix_cache.pending_save.reserve(state_idx, step, node, is_decode)
+        seq.prefix_cache.pending_save.reserve(slot, step, node, is_decode)
         logger.debug('Reserve SSM prefix-cache checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'is_decode=%s', seq.session_id, seq.seq_id, step, state_idx, is_decode)
-        return state_idx
+                     'is_decode=%s', seq.session_id, seq.seq_id, step, slot, is_decode)
+        return slot
 
     def reserve_decode_save(self, seq: SchedulerSequence, interval: int, step: int = None):
         """Reserve a bounded, replaceable decode checkpoint."""
@@ -105,7 +105,7 @@ class StateCheckpointLifecycle:
         if seq.clamp_prefix_cache_match_step(step) != step:
             return -1
         node = self._find_checkpoint_node(seq, step)
-        if node is None or self._owns_checkpoint_slot(node):
+        if node is None or self._node_has_slot(node):
             return -1
 
         if not self._release_replaceable_decode_checkpoint(seq, step):
@@ -120,15 +120,15 @@ class StateCheckpointLifecycle:
         if not pending_save.is_pending:
             pending_save.clear()
             return False
-        state_idx = pending_save.slot
+        slot = pending_save.slot
         node = pending_save.node
         is_decode = pending_save.is_decode
         pending_save.clear()
-        if self._is_unpublished_reservation(node, state_idx):
+        if self._is_unpublished_reservation(node, slot):
             if is_decode and prefix_cache.decode_checkpoint_node is node:
                 prefix_cache.decode_checkpoint_node = None
             logger.debug('Discard SSM prefix-cache checkpoint reservation: session_id=%s seq_id=%s step=%s '
-                         'state_idx=%s is_decode=%s', seq.session_id, seq.seq_id, node.num_matched, state_idx,
+                         'state_idx=%s is_decode=%s', seq.session_id, seq.seq_id, node.prefix_len, slot,
                          is_decode)
             self.release_checkpoint(node)
             return True
@@ -141,33 +141,33 @@ class StateCheckpointLifecycle:
         if not pending_save.is_pending:
             pending_save.clear()
             return False
-        state_idx = pending_save.slot
+        slot = pending_save.slot
         save_step = pending_save.step
         is_decode = pending_save.is_decode
         node = pending_save.node
 
-        invalid_reason = self._publication_invalid_reason(node, state_idx, save_step)
+        invalid_reason = self._publication_invalid_reason(node, slot, save_step)
         if invalid_reason is not None:
             pending_save.clear()
             logger.debug('Drop invalid SSM prefix-cache checkpoint publication: session_id=%s seq_id=%s step=%s '
-                         'state_idx=%s is_decode=%s reason=%s', seq.session_id, seq.seq_id, save_step, state_idx,
+                         'state_idx=%s is_decode=%s reason=%s', seq.session_id, seq.seq_id, save_step, slot,
                          is_decode, invalid_reason)
-            self._release_invalid_reservation(seq, node, state_idx, is_decode)
+            self._release_invalid_reservation(seq, node, slot, is_decode)
             return False
 
         try:
-            self._publish_node(node, seq)
+            self._publish_checkpoint(node, seq)
         except Exception:
             pending_save.clear()
-            self._release_invalid_reservation(seq, node, state_idx, is_decode)
+            self._release_invalid_reservation(seq, node, slot, is_decode)
             raise
         pending_save.clear()
         if is_decode:
             prefix_cache.decode_checkpoint_node = node
         if pin_save:
-            self._pin_save(seq, node, state_idx)
+            self._pin_save(seq, node, slot)
         logger.debug('Publish SSM prefix-cache checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'is_decode=%s', seq.session_id, seq.seq_id, save_step, state_idx, is_decode)
+                     'is_decode=%s', seq.session_id, seq.seq_id, save_step, slot, is_decode)
         return True
 
     def publish_saves(self, seqs: list[SchedulerSequence], pin_saves: bool = False):
@@ -190,7 +190,7 @@ class StateCheckpointLifecycle:
         checkpoint.last_access_time = time.perf_counter()
         restore.pinned = True
         logger.debug('Pin SSM prefix-cache restore checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.num_matched, checkpoint.slot,
+                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, checkpoint.slot,
                      checkpoint.pin_count)
         return True
 
@@ -211,7 +211,7 @@ class StateCheckpointLifecycle:
         )
         checkpoint = node.state_checkpoint
         logger.debug('Unpin SSM prefix-cache restore checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.num_matched, checkpoint.slot,
+                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, checkpoint.slot,
                      checkpoint.pin_count)
         restore.clear()
         return True
@@ -235,7 +235,7 @@ class StateCheckpointLifecycle:
         )
         checkpoint = node.state_checkpoint
         logger.debug('Unpin SSM prefix-cache save checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.num_matched, checkpoint.slot,
+                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, checkpoint.slot,
                      checkpoint.pin_count)
         producer_pin.clear()
         return True
@@ -264,7 +264,7 @@ class StateCheckpointLifecycle:
             if checkpoint.published:
                 self._warn_unexpected_state(
                     f'published SSM checkpoint has no state slot: adapter={node.adapter_name} '
-                    f'step={node.num_matched}')
+                    f'step={node.prefix_len}')
                 self._unindex_checkpoint(node)
             node.state_checkpoint = None
             return
@@ -289,7 +289,7 @@ class StateCheckpointLifecycle:
                 continue
             checkpoint = node.state_checkpoint
             logger.debug('Evict SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s', node.adapter_name,
-                         node.num_matched, checkpoint.slot)
+                         node.prefix_len, checkpoint.slot)
             self.release_checkpoint(node)
             evicted += 1
         return evicted
@@ -299,10 +299,10 @@ class StateCheckpointLifecycle:
         removed = self._index.remove_entry(node, key)
         if removed:
             checkpoint = node.state_checkpoint
-            state_idx = -1 if checkpoint is None else checkpoint.slot
+            slot = -1 if checkpoint is None else checkpoint.slot
             logger.debug('Drop stale SSM prefix-cache checkpoint index entry: adapter=%s step=%s node_adapter=%s '
-                         'node_step=%s state_idx=%s reason=%s', key[0], key[1], node.adapter_name, node.num_matched,
-                         state_idx, reason)
+                         'node_step=%s state_idx=%s reason=%s', key[0], key[1], node.adapter_name, node.prefix_len,
+                         slot, reason)
         return removed
 
     def release_stale_checkpoint(self, node: Node, reason: str):
@@ -311,7 +311,7 @@ class StateCheckpointLifecycle:
         if self.is_pinned(node):
             checkpoint = node.state_checkpoint
             logger.debug('Skip pinned stale SSM prefix-cache checkpoint candidate: adapter=%s step=%s '
-                         'state_idx=%s pin_count=%s reason=%s', node.adapter_name, node.num_matched, checkpoint.slot,
+                         'state_idx=%s pin_count=%s reason=%s', node.adapter_name, node.prefix_len, checkpoint.slot,
                          checkpoint.pin_count, reason)
             return False
 
@@ -319,24 +319,24 @@ class StateCheckpointLifecycle:
         if checkpoint is None:
             self._unindex_checkpoint(node)
             return False
-        state_idx = checkpoint.slot
+        slot = checkpoint.slot
         was_published = checkpoint.published
         self._unindex_checkpoint(node)
-        if state_idx >= 0:
-            self._state_manager.free_checkpoint_state(state_idx)
+        if slot >= 0:
+            self._state_manager.free_checkpoint_state(slot)
         node.state_checkpoint = None
         logger.debug('Release stale SSM prefix-cache checkpoint candidate: adapter=%s step=%s state_idx=%s '
-                     'was_published=%s reason=%s', node.adapter_name, node.num_matched, state_idx, was_published,
+                     'was_published=%s reason=%s', node.adapter_name, node.prefix_len, slot, was_published,
                      reason)
-        return state_idx >= 0 or was_published
+        return slot >= 0 or was_published
 
     @staticmethod
     def _find_checkpoint_node(seq: SchedulerSequence, step: int):
         """Find the attached trie node at an exact sequence step."""
-        node = seq.prefix_cache.last_shared_node
-        while node is not None and node.num_matched > step:
+        node = seq.prefix_cache.trie_cursor
+        while node is not None and node.prefix_len > step:
             node = node.parent
-        if node is None or not node.is_attached() or node.num_matched != step:
+        if node is None or not node.is_attached() or node.prefix_len != step:
             return None
         return node
 
@@ -346,23 +346,23 @@ class StateCheckpointLifecycle:
         old_node = prefix_cache.decode_checkpoint_node
         if old_node is None:
             return True
-        if not self._owns_checkpoint_slot(old_node):
+        old_checkpoint = old_node.state_checkpoint
+        if old_checkpoint is None or old_checkpoint.slot < 0:
             prefix_cache.decode_checkpoint_node = None
             return True
-        if self._is_same_published_decode_checkpoint(old_node, new_step):
+        if old_node.prefix_len == new_step and old_checkpoint.published:
             return False
 
-        old_checkpoint = old_node.state_checkpoint
         if old_checkpoint.pin_count > 0:
             return False
         logger.debug('Release previous decode SSM prefix-cache checkpoint: session_id=%s seq_id=%s '
-                     'old_step=%s old_state_idx=%s new_step=%s', seq.session_id, seq.seq_id, old_node.num_matched,
+                     'old_step=%s old_state_idx=%s new_step=%s', seq.session_id, seq.seq_id, old_node.prefix_len,
                      old_checkpoint.slot, new_step)
         self.release_checkpoint(old_node)
         prefix_cache.decode_checkpoint_node = None
         return True
 
-    def _reserve_node(self, node: Node):
+    def _reserve_slot(self, node: Node):
         """Reserve a state-cache slot owned by a trie node.
 
         Replacing a published checkpoint is allowed only while no async copy pins it. If the shared state pool is full,
@@ -375,7 +375,7 @@ class StateCheckpointLifecycle:
             if checkpoint.pin_count > 0:
                 return -1
             logger.debug('Replace SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s', node.adapter_name,
-                         node.num_matched, checkpoint.slot)
+                         node.prefix_len, checkpoint.slot)
             self._unindex_checkpoint(node)
         elif checkpoint is not None:
             return -1
@@ -390,7 +390,7 @@ class StateCheckpointLifecycle:
         checkpoint.last_access_time = 0.0
         return checkpoint.slot
 
-    def _publish_node(self, node: Node, seq: SchedulerSequence):
+    def _publish_checkpoint(self, node: Node, seq: SchedulerSequence):
         """Publish a node-owned checkpoint after its state copy is queued."""
         checkpoint = node.state_checkpoint
         if checkpoint is None or checkpoint.slot < 0:
@@ -409,7 +409,7 @@ class StateCheckpointLifecycle:
         checkpoint.published = True
         checkpoint.last_access_time = time.perf_counter()
         try:
-            self._index_checkpoint(node)
+            self._index.add(node)
         except Exception:
             # Publication is transactional: the caller still owns an
             # unpublished reservation and may release its slot after rollback.
@@ -419,40 +419,41 @@ class StateCheckpointLifecycle:
             checkpoint.last_access_time = 0.0
             raise
 
-    def _pin_save(self, seq: SchedulerSequence, node: Node, state_idx: int):
+    def _pin_save(self, seq: SchedulerSequence, node: Node, slot: int):
         producer_pin = seq.prefix_cache.producer_save_pin
         if producer_pin.is_acquired:
             raise RuntimeError('SSM prefix-cache save checkpoint already has an in-flight producer pin.')
-        if not self._is_published(node, state_idx):
+        if not self._is_published(node, slot):
             return False
         checkpoint = node.state_checkpoint
         checkpoint.pin_count += 1
         checkpoint.last_access_time = time.perf_counter()
-        producer_pin.acquire(state_idx, node)
+        producer_pin.acquire(slot, node)
         logger.debug('Pin SSM prefix-cache save checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.num_matched, state_idx, checkpoint.pin_count)
+                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, slot, checkpoint.pin_count)
         return True
 
     @classmethod
-    def _unpin_checkpoint(cls, node: Node | None, state_idx: int, err_msg: str):
-        if not cls._has_checkpoint_pin(node, state_idx):
-            cls._warn_unexpected_state(f'{err_msg} state_idx={state_idx}')
+    def _unpin_checkpoint(cls, node: Node | None, slot: int, err_msg: str):
+        checkpoint = None if node is None else node.state_checkpoint
+        if checkpoint is None or checkpoint.slot != slot or checkpoint.pin_count <= 0:
+            cls._warn_unexpected_state(f'{err_msg} state_idx={slot}')
             raise RuntimeError(err_msg)
-        node.state_checkpoint.pin_count -= 1
+        checkpoint.pin_count -= 1
         return node
 
     def _release_invalid_reservation(self,
                                      seq: SchedulerSequence,
                                      node: Node | None,
-                                     state_idx: int,
+                                     slot: int,
                                      is_decode: bool):
-        if not self._is_unpublished_reservation(node, state_idx):
+        if not self._is_unpublished_reservation(node, slot):
             return
         if is_decode and seq.prefix_cache.decode_checkpoint_node is node:
             seq.prefix_cache.decode_checkpoint_node = None
         self.release_checkpoint(node)
 
-    def _publication_invalid_reason(self, node: Node | None, state_idx: int, save_step: int):
+    def _publication_invalid_reason(self, node: Node | None, slot: int, save_step: int):
         if node is None:
             return 'missing node'
         if not node.is_attached():
@@ -460,56 +461,35 @@ class StateCheckpointLifecycle:
         checkpoint = node.state_checkpoint
         if checkpoint is None:
             return 'missing state checkpoint'
-        if checkpoint.slot != state_idx:
-            return f'state changed: current={checkpoint.slot}'
-        if node.num_matched != save_step:
-            return f'step changed: current={node.num_matched}'
+        if checkpoint.slot != slot:
+            return f'slot changed: expected={slot} actual={checkpoint.slot}'
+        if node.prefix_len != save_step:
+            return f'step changed: expected={save_step} actual={node.prefix_len}'
         return None
 
     @staticmethod
-    def _owns_checkpoint_slot(node: Node):
+    def _node_has_slot(node: Node):
         checkpoint = node.state_checkpoint
         return checkpoint is not None and checkpoint.slot >= 0
 
     @staticmethod
-    def _is_same_published_decode_checkpoint(node: Node, step: int):
-        checkpoint = node.state_checkpoint
-        return node.num_matched == step and checkpoint is not None and checkpoint.published
-
-    @staticmethod
-    def _is_unpublished_reservation(node: Node | None, state_idx: int):
+    def _is_unpublished_reservation(node: Node | None, slot: int):
         if node is None:
             return False
         checkpoint = node.state_checkpoint
-        return checkpoint is not None and checkpoint.slot == state_idx and not checkpoint.published
+        return checkpoint is not None and checkpoint.slot == slot and not checkpoint.published
 
     @staticmethod
-    def _is_published(node: Node | None, state_idx: int):
+    def _is_published(node: Node | None, slot: int):
         if node is None:
             return False
         checkpoint = node.state_checkpoint
-        return checkpoint is not None and checkpoint.slot == state_idx and checkpoint.published
-
-    @staticmethod
-    def _has_checkpoint_pin(node: Node | None, state_idx: int):
-        if node is None:
-            return False
-        checkpoint = node.state_checkpoint
-        return checkpoint is not None and checkpoint.slot == state_idx and checkpoint.pin_count > 0
+        return checkpoint is not None and checkpoint.slot == slot and checkpoint.published
 
     @staticmethod
     def _is_evictable_checkpoint(node: Node):
         checkpoint = node.state_checkpoint
         return checkpoint is not None and checkpoint.slot >= 0 and checkpoint.published and checkpoint.pin_count == 0
-
-    def _index_checkpoint(self, node: Node):
-        """Add a published checkpoint to the sparse index."""
-        checkpoint = node.state_checkpoint
-        if checkpoint is None or checkpoint.slot < 0 or not checkpoint.published:
-            raise RuntimeError('Cannot index an unpublished SSM prefix-cache checkpoint.')
-        if not node.is_attached():
-            raise RuntimeError('Cannot index a detached SSM prefix-cache checkpoint node.')
-        self._index.add(node)
 
     def _unindex_checkpoint(self, node: Node):
         """Remove a checkpoint from every sparse-index bucket."""

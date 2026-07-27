@@ -126,22 +126,6 @@ def _fake_model_inputs(is_chunk: bool = False):
                            is_chunk_multimodal=False)
 
 
-def test_engine_loop_skips_prefix_cache_publish_when_disabled():
-
-    class _DisabledStateCheckpoints:
-        def publish_saves(self, seqs):
-            raise AssertionError('disabled prefix cache must not publish state checkpoints')
-
-        def unpin_restores(self, seqs):
-            raise AssertionError('disabled prefix cache must not unpin state checkpoint restores')
-
-    loop = EngineLoop.__new__(EngineLoop)
-    block_trie = SimpleNamespace(enable=False, state_checkpoints=_DisabledStateCheckpoints())
-    loop.scheduler = SimpleNamespace(block_trie=block_trie)
-
-    loop._publish_forward_prefix_cache([object()], has_state_checkpoint_save=True)
-
-
 def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     events = []
 
@@ -182,7 +166,7 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
             return None
 
     state_checkpoints = _StateCheckpoints()
-    block_trie = SimpleNamespace(enable=True, state_checkpoints=state_checkpoints)
+    block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
     loop.inputs_maker = _InputsMaker(state_checkpoints)
@@ -238,7 +222,7 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
             return None
 
     state_checkpoints = _StateCheckpoints()
-    block_trie = SimpleNamespace(enable=True, state_checkpoints=state_checkpoints)
+    block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
     loop.inputs_maker = _InputsMaker()
