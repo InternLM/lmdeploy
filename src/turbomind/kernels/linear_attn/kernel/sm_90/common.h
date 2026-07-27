@@ -68,6 +68,23 @@ CUTE_HOST_DEVICE constexpr auto FusedGdrGmmaQkKLayout()
 }
 
 template<class Element>
+CUTE_HOST_DEVICE constexpr auto FusedGdrGmmaSegmentMatrixLayout()
+{
+    // segment_m is row-major [DK, DK]. Its TMA producer copies two
+    // 128-row-by-64-column SW128 boxes into consecutive shared-memory slabs.
+    // Layout_K_SW128 tiled to [DK, DK] is the matching GMMA-A view.
+    return cute::tile_to_shape(cute::SM90::GMMA::Layout_K_SW128_Atom<Element>{},
+                               cute::make_shape(cute::Int<kHeadDim>{}, cute::Int<kHeadDim>{}));
+}
+
+static_assert(cute::cosize_v<decltype(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>())> == kHeadDim * kHeadDim);
+static_assert(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>()(cute::Int<0>{}, cute::Int<kHeadDim / 2>{})
+              == (kHeadDim / 2) * kHeadDim);
+static_assert(FusedGdrGmmaSegmentMatrixLayout<cute::bfloat16_t>()(cute::Int<kHeadDim - 1>{}, cute::Int<kHeadDim - 1>{})
+              == (kHeadDim / 2) * kHeadDim
+                     + cute::Swizzle<3, 4, 3>{}((kHeadDim - 1) * (kHeadDim / 2) + (kHeadDim / 2 - 1)));
+
+template<class Element>
 CUTE_HOST_DEVICE constexpr auto FusedGdrGmmaQkTransposeALayout()
 {
     static_assert(sizeof(Element) == 2);

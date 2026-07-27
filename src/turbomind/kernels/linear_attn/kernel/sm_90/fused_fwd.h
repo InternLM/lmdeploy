@@ -4,9 +4,11 @@
 #pragma once
 
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/common.h"
+#include "src/turbomind/kernels/linear_attn/kernel/sm_90/pdl.h"
 
 #include <cute/algorithm/tuple_algorithms.hpp>
 #include <cute/arch/copy_sm80.hpp>
+#include <cutlass/arch/grid_dependency_control.h>
 #include <cutlass/pipeline/sm90_pipeline.hpp>
 
 namespace turbomind::linear_attn::delta_rule {
@@ -844,6 +846,20 @@ struct Sm90FusedGdrFwd {
                         // bytes; resolvent TMA completion releases them to stage_ready_mbar.
                         cutlass::arch::ClusterTransactionBarrier::expect_transaction(&smem.stage_ready_mbar[stage],
                                                                                      kSquareTmaBytes);
+                    }
+                    IssueGateStageCpAsync(smem.gate_stage[stage][0],
+                                          g_cumsum,
+                                          role_tid - 64,
+                                          valid,
+                                          token0,
+                                          gate_sequence_offset,
+                                          gate_stride);
+                    if (role_tid == 64) {
+                        if constexpr (!ContextParallel) {
+                            if (chunk == 0) {
+                                cutlass::arch::wait_on_dependent_grids();
+                            }
+                        }
                         cute::SM90_TMA_LOAD_4D::copy(resolvent_desc,
                                                      &smem.stage_ready_mbar[stage],
                                                      kTmaNoCacheHint,
@@ -853,13 +869,6 @@ struct Sm90FusedGdrFwd {
                                                      token0,
                                                      0);
                     }
-                    IssueGateStageCpAsync(smem.gate_stage[stage][0],
-                                          g_cumsum,
-                                          role_tid - 64,
-                                          valid,
-                                          token0,
-                                          gate_sequence_offset,
-                                          gate_stride);
                     // Release: each resolvent/g lane attaches its pre-counted arrival to
                     // completion of both per-head g cp.async copies. Consumers acquire
                     // g together with completion of the resolvent transaction bytes.
@@ -940,7 +949,8 @@ struct Sm90FusedGdrFwd {
             if constexpr (ContextParallel) {
                 auto* cp_state_base = reinterpret_cast<float*>(static_cast<uintptr_t>(cp_state_ptrs[segment_id]));
                 auto* state_base    = cp_state_base + static_cast<int64_t>(value_head) * kHeadDim * kHeadDim + dv0;
-                auto  g_state       = cute::make_tensor(cute::make_gmem_ptr(state_base), state_tile_layout);
+                cutlass::arch::wait_on_dependent_grids();
+                auto g_state = cute::make_tensor(cute::make_gmem_ptr(state_base), state_tile_layout);
                 FusedGdrLoadStateFragmentGlobal<float>(tCrState, g_state, thr_mma, role_tid);
             }
             else {
@@ -1425,28 +1435,31 @@ void LaunchSm90FusedGdrFwdTyped(const core::Tensor& q,
     auto*         tma_desc_ptr = reinterpret_cast<CUtensorMap*>(tma_desc_workspace);
 
     SetFusedGdrFwdSharedMemoryLimit<StateT, block_dv, ContextParallel>(smem_bytes);
-    Sm90FusedGdrFwdKernel<__nv_bfloat16, StateT, block_dv, ContextParallel>
-        <<<grid, block, smem_bytes, stream>>>(tma_desc_ptr,
-                                              g_cumsum.data<float>(),
-                                              beta.data<float>(),
-                                              problem.gate_batch_stride,
-                                              problem.gate_stride,
-                                              problem.beta_batch_stride,
-                                              problem.beta_stride,
-                                              problem.token_num,
-                                              q_offsets_ptr,
-                                              finished_ptr,
-                                              data_q_offsets_ptr,
-                                              cp_source_indices_ptr,
-                                              cp_state_ptrs_ptr,
-                                              reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
-                                              state_layer_offset,
-                                              descriptor_sequence_num,
-                                              problem.hq,
-                                              problem.hv,
-                                              problem.num_head_groups,
-                                              problem.heads_per_block);
-    TM_CUDA_CHECK(cudaGetLastError());
+    detail::LaunchPdlKernel(grid,
+                            block,
+                            smem_bytes,
+                            stream,
+                            Sm90FusedGdrFwdKernel<__nv_bfloat16, StateT, block_dv, ContextParallel>,
+                            tma_desc_ptr,
+                            g_cumsum.data<float>(),
+                            beta.data<float>(),
+                            problem.gate_batch_stride,
+                            problem.gate_stride,
+                            problem.beta_batch_stride,
+                            problem.beta_stride,
+                            problem.token_num,
+                            q_offsets_ptr,
+                            finished_ptr,
+                            data_q_offsets_ptr,
+                            cp_source_indices_ptr,
+                            cp_state_ptrs_ptr,
+                            reinterpret_cast<const int64_t*>(state_ptrs.raw_data()),
+                            state_layer_offset,
+                            descriptor_sequence_num,
+                            problem.hq,
+                            problem.hv,
+                            problem.num_head_groups,
+                            problem.heads_per_block);
 }
 
 template<class StateT, int BlockDv>

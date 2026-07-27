@@ -66,6 +66,7 @@ if(LINEAR_ATTN_GDR_SM90_ARCHS)
     add_library(linear_attn_kernels_sm90 STATIC ${LINEAR_ATTN_GDR_SM90_KERNEL_SOURCES})
     set_property(TARGET linear_attn_kernels_sm90 PROPERTY
             CUDA_ARCHITECTURES "${LINEAR_ATTN_GDR_SM90_ARCHS}")
+    target_compile_definitions(linear_attn_kernels_sm90 PRIVATE CUTLASS_ENABLE_GDC_FOR_SM90=1)
     configure_linear_attn_kernel_target(linear_attn_kernels_sm90)
     list(APPEND LINEAR_ATTN_GDR_KERNEL_TARGETS linear_attn_kernels_sm90)
 endif()
