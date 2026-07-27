@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from lmdeploy.pytorch.messages import PrefixCacheExtraHashes
+from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraHashes
 
 if TYPE_CHECKING:
     from .checkpoint import StateCheckpointMatchData

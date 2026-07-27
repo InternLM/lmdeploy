@@ -70,8 +70,10 @@ accelerate lookup and eviction; they are not sources of truth.
 
 ### Per-sequence state
 
-`PrefixCacheState` in [`messages.py`](../../messages.py) groups the mutable
-sequence-side protocol:
+`PrefixCacheState` in
+[`prefix_cache_state.py`](../../prefix_cache_state.py) groups the mutable
+sequence-side protocol. `SchedulerSequence` in [`messages.py`](../../messages.py)
+owns one instance:
 
 | Field group                   | Purpose                                                                     |
 | ----------------------------- | --------------------------------------------------------------------------- |

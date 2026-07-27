@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING, TypeAlias
 
 import numpy as np
 
-from lmdeploy.pytorch.messages import PrefixCacheExtraHashes, SchedulerSequence
+from lmdeploy.pytorch.messages import SchedulerSequence
+from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraHashes
 
 if TYPE_CHECKING:
     from .node import Node
