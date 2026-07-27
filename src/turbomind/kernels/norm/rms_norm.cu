@@ -11,13 +11,14 @@
 #include "src/turbomind/kernels/core/meta.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/kernels/norm/rms_norm_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
 namespace kernel {
 
-template<class T, class Accum, int block_dim, int vec_size>
+template<bool ZeroCentered, class T, class Accum, int block_dim, int vec_size>
 __global__ void RMSNorm(T*       dst,
                         int      dst_ld,
                         const T* src,
@@ -76,8 +77,7 @@ __global__ void RMSNorm(T*       dst,
         Ldg(sv, &weights[i]);
         PRAGMA_UNROLL
         for (int c = 0; c < vec_size; ++c) {
-            vec[c] = (T)((float)vec[c] * sum) * sv[c];
-            // vec[c] = (T)((float)vec[c] * sum * (float)sv[c]);
+            vec[c] = ApplyRMSnorm<ZeroCentered>(vec[c], sum, sv[c]);
         }
         Store(&dst[i], vec);
     }
@@ -85,7 +85,7 @@ __global__ void RMSNorm(T*       dst,
 
 }  // namespace kernel
 
-void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cudaStream_t st)
+void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, bool zero_centered, cudaStream_t st)
 {
     if (x.size() == 0) {
         return;
@@ -106,15 +106,26 @@ void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cud
         constexpr int threads = 512;
         const int     blocks  = num;
 
-        kernel::RMSNorm<T, float, threads, vec_size><<<blocks, threads, 0, st>>>((T*)out.raw_data(),  //
-                                                                                 out.stride(0),
-                                                                                 (const T*)x.raw_data(),
-                                                                                 x.stride(0),
-                                                                                 (const T*)w.raw_data(),
-                                                                                 dim,
-                                                                                 num,
-                                                                                 eps,
-                                                                                 1.f / dim);
+        auto launch = [&](auto zero_centered_c) {
+            constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
+            kernel::RMSNorm<ZeroCentered, T, float, threads, vec_size>
+                <<<blocks, threads, 0, st>>>((T*)out.raw_data(),  //
+                                             out.stride(0),
+                                             (const T*)x.raw_data(),
+                                             x.stride(0),
+                                             (const T*)w.raw_data(),
+                                             dim,
+                                             num,
+                                             eps,
+                                             1.f / dim);
+        };
+
+        if (zero_centered) {
+            launch(constant<true>{});
+        }
+        else {
+            launch(constant<false>{});
+        }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
@@ -123,7 +134,7 @@ void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cud
 
 namespace kernel {
 
-template<class T, class A, int vec_size, int max_dim>
+template<bool ZeroCentered, class T, class A, int vec_size, int max_dim>
 __global__ void RMSNormQK(T*       data,  //
                           int      ld,
                           const T* weight,
@@ -175,7 +186,7 @@ __global__ void RMSNormQK(T*       data,  //
         Ldg(w, &weight[di]);
         PRAGMA_UNROLL
         for (int i = 0; i < vec_size; ++i) {
-            vec[i] = (T)((float)vec[i] * sum) * w[i];
+            vec[i] = ApplyRMSnorm<ZeroCentered>(vec[i], sum, w[i]);
         }
         Store(&data[di], vec);
     }
@@ -191,14 +202,16 @@ void invokeQkRMSNorm(void*        data,
                      int          n,
                      int          token_num,
                      float        eps,
+                     bool         zero_centered,
                      cudaStream_t stream)
 {
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        auto launch = [&](auto max_dim_c) {
-            constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
+        auto launch = [&](auto max_dim_c, auto zero_centered_c) {
+            constexpr int  kMaxDim      = std::decay_t<decltype(max_dim_c)>::value;
+            constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
             TM_CHECK_LE(head_dim, kMaxDim);
 
             constexpr int vec_size   = sizeof(uint4) / sizeof(T);
@@ -210,15 +223,25 @@ void invokeQkRMSNorm(void*        data,
             const int block_dim = 512;
             const int grid_dim  = cdiv(threads, block_dim);
 
-            kernel::RMSNormQK<T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, stream>>>(
+            kernel::RMSNormQK<ZeroCentered, T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, stream>>>(
                 (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
         };
 
         if (head_dim <= 128) {
-            launch(constant<128>{});
+            if (zero_centered) {
+                launch(constant<128>{}, constant<true>{});
+            }
+            else {
+                launch(constant<128>{}, constant<false>{});
+            }
         }
         else {
-            launch(constant<256>{});
+            if (zero_centered) {
+                launch(constant<256>{}, constant<true>{});
+            }
+            else {
+                launch(constant<256>{}, constant<false>{});
+            }
         }
     };
 
@@ -226,7 +249,7 @@ void invokeQkRMSNorm(void*        data,
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
+void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, bool zero_centered, cudaStream_t st)
 {
     TM_CHECK(x.ndim() == 3);
 
@@ -241,8 +264,9 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        auto launch = [&](auto max_dim_c) {
-            constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
+        auto launch = [&](auto max_dim_c, auto zero_centered_c) {
+            constexpr int  kMaxDim      = std::decay_t<decltype(max_dim_c)>::value;
+            constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
             TM_CHECK_LE(head_dim, kMaxDim);
 
             constexpr int vec_size   = sizeof(uint4) / sizeof(T);
@@ -254,15 +278,25 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
             const int block_dim = 512;
             const int grid_dim  = cdiv(threads, block_dim);
 
-            kernel::RMSNormQK<T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, st>>>(
+            kernel::RMSNormQK<ZeroCentered, T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, st>>>(
                 (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
         };
 
         if (head_dim <= 128) {
-            launch(constant<128>{});
+            if (zero_centered) {
+                launch(constant<128>{}, constant<true>{});
+            }
+            else {
+                launch(constant<128>{}, constant<false>{});
+            }
         }
         else {
-            launch(constant<256>{});
+            if (zero_centered) {
+                launch(constant<256>{}, constant<true>{});
+            }
+            else {
+                launch(constant<256>{}, constant<false>{});
+            }
         }
     };
 
@@ -272,7 +306,7 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
 
 // r' <- r + (h + b)
 // h' <- norm(r') * w
-template<class T, class Tacc, int block_dim, int vec_size>
+template<bool ZeroCentered, class T, class Tacc, int block_dim, int vec_size>
 __global__ void BiasResidualRMSNormKernel(T* __restrict__ residual,
                                           T* __restrict__ hidden_states,
                                           const T* __restrict__ weights,
@@ -344,29 +378,45 @@ __global__ void BiasResidualRMSNormKernel(T* __restrict__ residual,
         Ldg(w_vec, &weights[i]);
         PRAGMA_UNROLL
         for (int c = 0; c < vec_size; ++c) {
-            r_vec[c] = (T)((float)r_vec[c] * sum) * w_vec[c];
-            // r_vec[c] = (T)((float)r_vec[c] * sum * (float)w_vec[c]);
+            r_vec[c] = kernel::ApplyRMSnorm<ZeroCentered>(r_vec[c], sum, w_vec[c]);
         }
         Store(&hidden_states[i], r_vec);
     }
 }
 
 template<class T>
-void invokeBiasResidualRMSNorm(
-    T* residual, T* hidden_states, const T* weights, const T* bias, int dims, int num, float eps, cudaStream_t st)
+void invokeBiasResidualRMSNorm(T*           residual,
+                               T*           hidden_states,
+                               const T*     weights,
+                               const T*     bias,
+                               int          dims,
+                               int          num,
+                               float        eps,
+                               bool         zero_centered,
+                               cudaStream_t st)
 {
     constexpr int vec_size = 16 / sizeof(T);
     constexpr int threads  = 512;
     const int     blocks   = num;
 
-    BiasResidualRMSNormKernel<T, float, threads, vec_size><<<blocks, threads, 0, st>>>(residual,  //
-                                                                                       hidden_states,
-                                                                                       weights,
-                                                                                       bias,
-                                                                                       dims,
-                                                                                       num,
-                                                                                       eps,
-                                                                                       1.f / dims);
+    auto launch = [&](auto zero_centered_c) {
+        constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
+        BiasResidualRMSNormKernel<ZeroCentered, T, float, threads, vec_size><<<blocks, threads, 0, st>>>(residual,  //
+                                                                                                         hidden_states,
+                                                                                                         weights,
+                                                                                                         bias,
+                                                                                                         dims,
+                                                                                                         num,
+                                                                                                         eps,
+                                                                                                         1.f / dims);
+    };
+
+    if (zero_centered) {
+        launch(constant<true>{});
+    }
+    else {
+        launch(constant<false>{});
+    }
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -377,6 +427,7 @@ template void invokeBiasResidualRMSNorm(half*        residual,
                                         int          dims,
                                         int          num,
                                         float        eps,
+                                        bool         zero_centered,
                                         cudaStream_t st);
 
 #if ENABLE_BF16
@@ -387,6 +438,7 @@ template void invokeBiasResidualRMSNorm(nv_bfloat16*       residual,
                                         int                dims,
                                         int                num,
                                         float              eps,
+                                        bool               zero_centered,
                                         cudaStream_t       st);
 #endif
 
@@ -398,6 +450,7 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
                                int          dims,
                                int          num,
                                float        eps,
+                               bool         zero_centered,
                                cudaStream_t st)
 {
     if (num == 0) {
@@ -408,14 +461,25 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
         constexpr int vec_size = sizeof(uint4) / sizeof(T);
         constexpr int threads  = 512;
         const int     blocks   = num;
-        BiasResidualRMSNormKernel<T, float, threads, vec_size><<<blocks, threads, 0, st>>>((T*)residual,  //
-                                                                                           (T*)hidden_states,
-                                                                                           (const T*)weights,
-                                                                                           (const T*)bias,
-                                                                                           dims,
-                                                                                           num,
-                                                                                           eps,
-                                                                                           1.f / dims);
+        auto          launch   = [&](auto zero_centered_c) {
+            constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
+            BiasResidualRMSNormKernel<ZeroCentered, T, float, threads, vec_size>
+                <<<blocks, threads, 0, st>>>((T*)residual,  //
+                                             (T*)hidden_states,
+                                             (const T*)weights,
+                                             (const T*)bias,
+                                             dims,
+                                             num,
+                                             eps,
+                                             1.f / dims);
+        };
+
+        if (zero_centered) {
+            launch(constant<true>{});
+        }
+        else {
+            launch(constant<false>{});
+        }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
