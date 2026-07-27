@@ -2,7 +2,8 @@
 
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/common.h"
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/internal.h"
-#include "src/turbomind/kernels/linear_attn/kernel/sm_90/pdl.h"
+
+#include <cutlass/arch/grid_dependency_control.h>
 
 #include <stdexcept>
 #include <string>
@@ -1269,7 +1270,7 @@ __global__ __launch_bounds__(
                          output_gate_batch_stride,
                          smem);
         if (threadIdx.x == 0) {
-            detail::TriggerPdlDependents();
+            cutlass::arch::launch_dependent_grids();
         }
     }
 #endif

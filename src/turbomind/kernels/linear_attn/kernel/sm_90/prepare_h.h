@@ -7,6 +7,7 @@
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/pdl.h"
 
 #include <cute/arch/copy_sm80.hpp>
+#include <cutlass/arch/grid_dependency_control.h>
 
 namespace turbomind::linear_attn::delta_rule {
 namespace {
@@ -322,7 +323,7 @@ struct Sm90FusedGdrH {
                                                      token0,
                                                      0);
                         if (chunk == 0) {
-                            detail::WaitForPdlDependency();
+                            cutlass::arch::wait_on_dependent_grids();
                         }
                         cute::SM90_TMA_LOAD_4D::copy(resolvent_tma_desc,
                                                      &smem.stage_ready_mbar[stage],
@@ -361,7 +362,7 @@ struct Sm90FusedGdrH {
                     }
                 }
                 if (role_tid == 32) {
-                    detail::TriggerPdlDependents();
+                    cutlass::arch::launch_dependent_grids();
                 }
             }
             else {

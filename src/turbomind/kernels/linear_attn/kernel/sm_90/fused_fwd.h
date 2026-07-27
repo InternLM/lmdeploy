@@ -8,6 +8,7 @@
 
 #include <cute/algorithm/tuple_algorithms.hpp>
 #include <cute/arch/copy_sm80.hpp>
+#include <cutlass/arch/grid_dependency_control.h>
 #include <cutlass/pipeline/sm90_pipeline.hpp>
 
 namespace turbomind::linear_attn::delta_rule {
@@ -856,7 +857,7 @@ struct Sm90FusedGdrFwd {
                     if (role_tid == 64) {
                         if constexpr (!ContextParallel) {
                             if (chunk == 0) {
-                                detail::WaitForPdlDependency();
+                                cutlass::arch::wait_on_dependent_grids();
                             }
                         }
                         cute::SM90_TMA_LOAD_4D::copy(resolvent_desc,
@@ -948,7 +949,7 @@ struct Sm90FusedGdrFwd {
             if constexpr (ContextParallel) {
                 auto* cp_state_base = reinterpret_cast<float*>(static_cast<uintptr_t>(cp_state_ptrs[segment_id]));
                 auto* state_base    = cp_state_base + static_cast<int64_t>(value_head) * kHeadDim * kHeadDim + dv0;
-                detail::WaitForPdlDependency();
+                cutlass::arch::wait_on_dependent_grids();
                 auto g_state = cute::make_tensor(cute::make_gmem_ptr(state_base), state_tile_layout);
                 FusedGdrLoadStateFragmentGlobal<float>(tCrState, g_state, thr_mma, role_tid);
             }

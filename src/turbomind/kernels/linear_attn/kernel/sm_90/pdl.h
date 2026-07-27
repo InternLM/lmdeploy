@@ -7,19 +7,7 @@
 #include <cstddef>
 #include <utility>
 
-#include <cutlass/arch/grid_dependency_control.h>
-
 namespace turbomind::linear_attn::delta_rule::detail {
-
-__device__ __forceinline__ void WaitForPdlDependency()
-{
-    cutlass::arch::wait_on_dependent_grids();
-}
-
-__device__ __forceinline__ void TriggerPdlDependents()
-{
-    cutlass::arch::launch_dependent_grids();
-}
 
 template<class... KernelArgs, class... CallArgs>
 void LaunchPdlKernel(dim3         grid,

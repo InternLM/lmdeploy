@@ -20,6 +20,7 @@
 #include <cute/swizzle_layout.hpp>
 #include <cute/tensor.hpp>
 #include <cute/underscore.hpp>
+#include <cutlass/arch/grid_dependency_control.h>
 
 #include <cute/algorithm/clear.hpp>
 #include <cute/algorithm/cooperative_gemm.hpp>
@@ -152,7 +153,7 @@ struct Sm90KktSolve {
     static __device__ __forceinline__ void AcquireAndPrefetchTmaDescriptors(const CUtensorMap* desc, int tid)
     {
         if (tid == kKktKDesc || tid == kKktResolventDesc) {
-            detail::WaitForPdlDependency();
+            cutlass::arch::wait_on_dependent_grids();
             cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(&desc[tid]));
             cute::prefetch_tma_descriptor(&desc[tid]);
         }
@@ -1010,7 +1011,7 @@ struct Sm90KktSolve {
                     }
                 }
                 if (role_tid == 0) {
-                    detail::TriggerPdlDependents();
+                    cutlass::arch::launch_dependent_grids();
                     // Acquire/drain all remaining output stores. The leader keeps the CTA
                     // alive until the final TMA store has completed.
                     cute::tma_store_wait<0>();

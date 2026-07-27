@@ -6,6 +6,8 @@
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/common.h"
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/pdl.h"
 
+#include <cutlass/arch/grid_dependency_control.h>
+
 namespace turbomind::linear_attn::delta_rule {
 namespace {
 
@@ -214,7 +216,7 @@ struct Sm90CorrectInitialStates {
             if (tid != kCorrectInitialStatesProducerTid0) {
                 return;
             }
-            detail::WaitForPdlDependency();
+            cutlass::arch::wait_on_dependent_grids();
             for (int segment_id = first_segment_id; segment_id + 1 < last_segment_id; ++segment_id) {
                 const int iter       = segment_id - first_segment_id;
                 const int stage      = iter & 1;
@@ -254,7 +256,7 @@ struct Sm90CorrectInitialStates {
                                                  segment_id);
                 }
             }
-            detail::TriggerPdlDependents();
+            cutlass::arch::launch_dependent_grids();
             return;
         }
 
@@ -322,7 +324,7 @@ struct Sm90CorrectInitialStates {
             }
 
             if (store_iter == 0) {
-                detail::WaitForPdlDependency();
+                cutlass::arch::wait_on_dependent_grids();
             }
             const int  iter     = segment_id - first_segment_id;
             const int  stage    = iter & 1;
