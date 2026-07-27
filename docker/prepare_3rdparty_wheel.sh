@@ -19,7 +19,7 @@ FLASH_MLA_VERSION=1408756  # no release, pick the latest commit
 
 # DeepEP
 if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
-    export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
+    export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
     pip install nvidia-nvshmem-cu13==3.4.5
 else
     pip install nvidia-nvshmem-cu12==3.4.5
