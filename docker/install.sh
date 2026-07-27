@@ -104,20 +104,22 @@ if [ -f /tmp/requirements/serve.txt ]; then
     pip install -r /tmp/requirements/serve.txt
 fi
 
+# PyTorch cu130 pins an older NCCL release in its wheel metadata. Check the
+# declared dependencies before intentionally upgrading NCCL for GIN support.
+pip check
+
 if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-    # As described in https://github.com/InternLM/lmdeploy/pull/4313,
-    # window registration may cause memory leaks in NCCL 2.27, NCCL 2.28+ resolves the issue,
-    # but turbomind engine will use nccl GIN for EP in future, which is brought in since 2.29
     pip install "nvidia-nccl-cu12>2.29"
 elif [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
-    pip install "nvidia-nccl-cu13>2.29"
+    pip install "nvidia-nccl-cu13>=2.30.4"
 fi
 
 python - <<'PY'
 import os
-from importlib.metadata import distributions
+from importlib.metadata import distributions, version
 
 import torch
+from packaging.version import Version
 
 expected = os.environ['PYTORCH_CUDA_VERSION']
 actual = torch.version.cuda
@@ -128,14 +130,22 @@ installed = {
 }
 if expected == 'cu126':
     assert actual is not None and actual.startswith('12.6'), actual
+    nccl_package = 'nvidia-nccl-cu12'
+    nccl_minimum = Version('2.29')
     unexpected = sorted(name for name in installed if name.endswith('-cu13'))
 elif expected == 'cu130':
     assert actual is not None and actual.startswith('13.0'), actual
+    nccl_package = 'nvidia-nccl-cu13'
+    nccl_minimum = Version('2.30.4')
     unexpected = sorted(name for name in installed if name.endswith('-cu12'))
 else:
     raise AssertionError(f'unsupported PYTORCH_CUDA_VERSION: {expected}')
 assert not unexpected, f'unexpected CUDA packages: {unexpected}'
-print(f'Validated torch {torch.__version__} with CUDA {actual}')
+nccl_version = version(nccl_package)
+if expected == 'cu126':
+    assert Version(nccl_version) > nccl_minimum, nccl_version
+else:
+    assert Version(nccl_version) >= nccl_minimum, nccl_version
+print(f'Validated torch {torch.__version__} with CUDA {actual} and '
+      f'{nccl_package} {nccl_version}')
 PY
-
-pip check
