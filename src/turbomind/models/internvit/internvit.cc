@@ -206,7 +206,6 @@ struct InternVit::Impl {
     void Setup(int phase, TensorMap& env)
     {
         auto&       d    = data_.at(phase);
-        auto&       b    = *env.at("batch").data<BatchData*>()[0];
         auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
         const auto& cfg  = config_;
 
