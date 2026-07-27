@@ -18,9 +18,8 @@ DEEP_GEMM_VERSION=88965b0
 FLASH_MLA_VERSION=1408756  # no release, pick the latest commit
 
 # DeepEP
-if [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
-    # Avoid an empty path entry when CPLUS_INCLUDE_PATH is unset.
-    export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
     pip install nvidia-nvshmem-cu13==3.4.5
 else
     pip install nvidia-nvshmem-cu12==3.4.5
