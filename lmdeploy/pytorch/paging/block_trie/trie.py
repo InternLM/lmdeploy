@@ -432,6 +432,60 @@ class BlockTrie:
                      'max_step=%s published_steps=%s', seq.session_id, seq.seq_id, initial_step, overlap_end_step,
                      max_step, self._checkpoint_index.num_steps(seq.adapter_name))
 
+    def _match_block_prefix(self, seq: SchedulerSequence):
+        """Match the reusable text/VLM block path for one sequence."""
+        block_size = self.block_size
+        initial_cursor = seq.prefix_cache.last_shared_node
+        if initial_cursor is None:
+            initial_cursor = self._get_or_create_root(seq.adapter_name)
+        initial_step = initial_cursor.num_matched
+
+        node = initial_cursor
+        matched_nodes: list[Node] = []
+        while node.num_matched + block_size < seq.num_valid_ids:
+            start = node.num_matched
+            end = start + block_size
+            curr_tokens = seq.history_cache[start:end]
+            extra_hashes = self._get_block_extra_hashes(seq, start, end)
+
+            key = self._make_block_key(curr_tokens, extra_hashes)
+            child = node.children.get(key)
+            if child is None or not self._node_matches_block(child, curr_tokens, extra_hashes):
+                break
+            if seq.return_routed_experts and child.routed_experts is None:
+                break
+
+            matched_nodes.append(child)
+            node = child
+
+        candidate_step = node.num_matched
+        max_match_step = seq.get_prefix_cache_max_match_step()
+        clamped_step = seq.clamp_prefix_cache_match_step(min(candidate_step, max_match_step))
+        accepted_step = max(initial_step, clamped_step)
+        num_accepted_blocks = (accepted_step - initial_step) // block_size
+        if num_accepted_blocks < len(matched_nodes):
+            matched_nodes = matched_nodes[:num_accepted_blocks]
+            node = matched_nodes[-1] if matched_nodes else initial_cursor
+        matched_step = node.num_matched
+
+        seq.prefix_cache.recompute_overlap.set_fresh_block_range(matched_step // block_size,
+                                                                 candidate_step // block_size)
+        if matched_nodes:
+            matched_blocks = np.array([matched_node.block for matched_node in matched_nodes])
+            self.allocator.update_access_time(matched_blocks)
+            self.allocator.add_ref_count(matched_blocks, 1)
+            seq.logical_blocks.append(matched_blocks)
+            seq.set_step(matched_step)
+            self._append_matched_routed_experts(seq, matched_nodes, initial_step)
+
+        self._record_match_stats(seq,
+                                 query_tokens=seq.num_all_ids - initial_step,
+                                 hit_tokens=matched_step - initial_step)
+        seq.prefix_cache.last_shared_node = node
+        logger.debug('Prefix-cache match: session_id=%s seq_id=%s initial_step=%s matched_step=%s '
+                     'candidate_step=%s clamped=%s', seq.session_id, seq.seq_id, initial_step, matched_step,
+                     candidate_step, clamped_step != candidate_step)
+
     def match(self, seq: SchedulerSequence):
         """Tentatively match reusable prefix blocks for a sequence.
 
@@ -454,84 +508,75 @@ class BlockTrie:
             self._match_state_checkpoint_prefix(seq)
             return
 
+        self._match_block_prefix(seq)
+
+    def _ensure_attached_allocation_cursor(self, seq: SchedulerSequence):
+        """Return an attached cursor, resetting a stale sequence cursor."""
+        node = seq.prefix_cache.last_shared_node
+        if node is None:
+            node = self._get_or_create_root(seq.adapter_name)
+        elif not self._cursor_path_is_current(node):
+            logger.debug('Reset detached prefix-cache sequence cursor: session_id=%s seq_id=%s adapter=%s '
+                         'cursor_step=%s', seq.session_id, seq.seq_id, seq.adapter_name, node.num_matched)
+            node = self._get_or_create_root(seq.adapter_name)
+        seq.prefix_cache.last_shared_node = node
+        return node
+
+    def _extend_trie_path(self, seq: SchedulerSequence, node: Node, num_complete_blocks: int):
+        """Attach or deduplicate the sequence's completed block path."""
         block_size = self.block_size
-        matched_blocks = []
+        logical_blocks = seq.logical_blocks
+        recompute_overlap = seq.prefix_cache.recompute_overlap
+        additional_ref_blocks: list[int] = []
+        duplicate_blocks: list[int] = []
 
-        curr: Node = seq.prefix_cache.last_shared_node
-        if curr is None:
-            curr = self._get_or_create_root(seq.adapter_name)
-        initial_cursor = curr
-        initial_step = curr.num_matched
-        num_matched = curr.num_matched
-
-        def accept_node(node: Node):
-            nonlocal curr, num_matched
-            matched_blocks.append(node.block)
-            curr = node
-            num_matched += block_size
-
-        matched_nodes: list[Node] = []
-
-        while num_matched + block_size < seq.num_valid_ids:
-            start = num_matched
-            end = num_matched + block_size
+        self._kv_lifecycle.begin_path_extension(node)
+        start_block_id = node.num_matched // block_size
+        for block_id in range(start_block_id, num_complete_blocks):
+            start = block_id * block_size
+            end = start + block_size
             curr_tokens = seq.history_cache[start:end]
             extra_hashes = self._get_block_extra_hashes(seq, start, end)
+            block = logical_blocks[block_id]
 
-            key = self._make_block_key(curr_tokens, extra_hashes)
-            if key not in curr.children:
+            hash_key = self._make_block_key(curr_tokens, extra_hashes)
+            child = node.children.get(hash_key)
+            if child is not None and not self._node_matches_block(child, curr_tokens, extra_hashes):
                 break
 
-            child = curr.children[key]
-            if not self._node_matches_block(child, curr_tokens, extra_hashes):
-                break
-            if seq.return_routed_experts and child.routed_experts is None:
-                break
+            if child is not None and recompute_overlap.requires_fresh_block(block_id):
+                # Traverse the shared identity path while retaining the fresh,
+                # writable sequence block needed to recompute bridge state.
+                recompute_overlap.remember_canonical_block(block_id, child.block)
+                node = child
+                continue
 
-            matched_nodes.append(child)
-            accept_node(child)
-
-        def truncate_match_to_step(match_step: int):
-            nonlocal curr, num_matched, matched_blocks, matched_nodes
-            match_step = max(initial_step, match_step)
-            if match_step >= num_matched:
-                return
-            # If a candidate hit stopped inside a multimodal span, drop any
-            # blocks beyond the clamped safe boundary before acquiring refs.
-            keep = (match_step - initial_step) // block_size
-            matched_nodes = matched_nodes[:keep]
-            matched_blocks = matched_blocks[:keep]
-            if keep > 0:
-                curr = matched_nodes[-1]
-                num_matched = curr.num_matched
+            recompute_overlap.forget_canonical_block(block_id)
+            if child is None:
+                routed_experts = self._get_routed_experts_for_range(seq, start, end)
+                child = Node(hash_key=hash_key,
+                             block=block,
+                             tokens=curr_tokens,
+                             num_matched=end,
+                             extra_hashes=extra_hashes,
+                             routed_experts=routed_experts,
+                             adapter_name=seq.adapter_name)
+                child.attach_to(node)
+                additional_ref_blocks.append(child.block)
             else:
-                curr = initial_cursor
-                num_matched = initial_step
+                # Another sequence inserted this path first. Substitute its
+                # canonical block and release the sequence's duplicate block.
+                self._try_cache_node_routed_experts(child, seq, start, end)
+                if block != child.block:
+                    duplicate_blocks.append(block)
+                    logical_blocks[block_id] = child.block
+                    additional_ref_blocks.append(child.block)
+            node = child
 
-        max_match_step = seq.get_prefix_cache_max_match_step()
-        candidate_step = num_matched
-        accepted_step = seq.clamp_prefix_cache_match_step(min(candidate_step, max_match_step))
-        truncate_match_to_step(accepted_step)
-        seq.prefix_cache.recompute_overlap.set_fresh_block_range(num_matched // self.block_size,
-                                                                 candidate_step // self.block_size)
-
-        if len(matched_blocks) > 0:
-            matched_blocks = np.array(matched_blocks)
-            self.allocator.update_access_time(matched_blocks)
-            self.allocator.add_ref_count(matched_blocks, 1)
-            seq.logical_blocks.append(matched_blocks)
-            seq.set_step(num_matched)
-            self._append_matched_routed_experts(seq, matched_nodes, initial_step)
-
-        # record prefix hit
-        self._record_match_stats(seq,
-                                 query_tokens=seq.num_all_ids - initial_step,
-                                 hit_tokens=num_matched - initial_step)
-
-        seq.prefix_cache.last_shared_node = curr
-        logger.debug('Prefix-cache match: session_id=%s seq_id=%s initial_step=%s matched_step=%s '
-                     'candidate_step=%s clamped=%s', seq.session_id, seq.seq_id, initial_step, num_matched,
-                     candidate_step, accepted_step != candidate_step)
+        seq.prefix_cache.last_shared_node = node
+        self._kv_lifecycle.commit_path_extension(node,
+                                                 additional_ref_blocks=additional_ref_blocks,
+                                                 duplicate_blocks=duplicate_blocks)
 
     def allocate(self, seq: SchedulerSequence):
         """Attach newly allocated full blocks to the prefix-cache trie.
@@ -548,84 +593,19 @@ class BlockTrie:
             return
 
         block_size = self.block_size
-        logical_blocks = seq.logical_blocks
         recompute_overlap = seq.prefix_cache.recompute_overlap
-        node: Node = seq.prefix_cache.last_shared_node
-        if node is None:
-            node = self._get_or_create_root(seq.adapter_name)
-            seq.prefix_cache.last_shared_node = node
-        elif not self._cursor_path_is_current(node):
-            logger.debug('Reset detached prefix-cache sequence cursor: session_id=%s seq_id=%s adapter=%s '
-                         'cursor_step=%s', seq.session_id, seq.seq_id, seq.adapter_name, node.num_matched)
-            node = self._get_or_create_root(seq.adapter_name)
-            seq.prefix_cache.last_shared_node = node
-
-        num_matched = node.num_matched
+        node = self._ensure_attached_allocation_cursor(seq)
         num_valid_ids = seq.num_valid_ids
         if seq.kv_token_limit is not None:
             num_valid_ids = min(num_valid_ids, seq.kv_token_limit)
 
-        if num_matched + block_size > num_valid_ids:
+        start_block_id = node.num_matched // block_size
+        num_complete_blocks = num_valid_ids // block_size
+        if start_block_id >= num_complete_blocks:
             recompute_overlap.clear_fresh_block_range()
             return
 
-        self._kv_lifecycle.begin_path_extension(node)
-
-        block_id = num_matched // block_size
-        blocks = []
-        free_blocks = []
-        while num_matched + block_size <= num_valid_ids:
-            start = num_matched
-            end = num_matched + block_size
-            curr_tokens = seq.history_cache[start:end]
-            extra_hashes = self._get_block_extra_hashes(seq, start, end)
-
-            block = logical_blocks[block_id]
-
-            hash_key = self._make_block_key(curr_tokens, extra_hashes)
-            parent = node
-            if hash_key in parent.children:
-                child = parent.children[hash_key]
-                if not self._node_matches_block(child, curr_tokens, extra_hashes):
-                    break
-                if recompute_overlap.requires_fresh_block(block_id):
-                    # This block was deliberately dropped from a prefix match so
-                    # the target forward can regenerate hidden-state bridge data.
-                    # Traverse the identity path, but keep the fresh writable
-                    # sequence block instead of substituting the shared trie one.
-                    recompute_overlap.remember_canonical_block(block_id, child.block)
-                    node = child
-                    num_matched += block_size
-                    block_id += 1
-                    continue
-                # Another sequence inserted the same key before us.  Reuse the
-                # trie-owned block and release this sequence's duplicate block.
-                recompute_overlap.forget_canonical_block(block_id)
-                node = child
-                self._try_cache_node_routed_experts(node, seq, start, end)
-                if block != node.block:
-                    free_blocks.append(block)
-                    logical_blocks[block_id] = node.block
-                    blocks.append(node.block)
-            else:
-                recompute_overlap.forget_canonical_block(block_id)
-                routed_experts = self._get_routed_experts_for_range(seq, start, end)
-                node = Node(hash_key=hash_key,
-                            block=block,
-                            tokens=curr_tokens,
-                            num_matched=num_matched + block_size,
-                            extra_hashes=extra_hashes,
-                            routed_experts=routed_experts,
-                            adapter_name=seq.adapter_name)
-                node.attach_to(parent)
-                blocks.append(node.block)
-            num_matched += block_size
-            block_id += 1
-
-        seq.prefix_cache.last_shared_node = node
-        self._kv_lifecycle.commit_path_extension(node,
-                                                 additional_ref_blocks=blocks,
-                                                 duplicate_blocks=free_blocks)
+        self._extend_trie_path(seq, node, num_complete_blocks)
         recompute_overlap.clear_fresh_block_range()
 
     def evict(self, max_num_blocks: int):

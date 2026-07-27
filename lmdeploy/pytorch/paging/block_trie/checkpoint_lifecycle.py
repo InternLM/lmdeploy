@@ -108,22 +108,8 @@ class StateCheckpointLifecycle:
         if node is None or self._owns_checkpoint_slot(node):
             return -1
 
-        prefix_cache = seq.prefix_cache
-        old_node = prefix_cache.decode_checkpoint_node
-        if old_node is not None and not self._owns_checkpoint_slot(old_node):
-            prefix_cache.decode_checkpoint_node = None
-            old_node = None
-        if old_node is not None:
-            if self._is_same_published_decode_checkpoint(old_node, step):
-                return -1
-            old_checkpoint = old_node.state_checkpoint
-            if old_checkpoint.pin_count > 0:
-                return -1
-            logger.debug('Release previous decode SSM prefix-cache checkpoint: session_id=%s seq_id=%s '
-                         'old_step=%s old_state_idx=%s new_step=%s', seq.session_id, seq.seq_id,
-                         old_node.num_matched, old_checkpoint.slot, step)
-            self.release_checkpoint(old_node)
-            prefix_cache.decode_checkpoint_node = None
+        if not self._release_replaceable_decode_checkpoint(seq, step):
+            return -1
 
         return self.reserve_save(seq, step=step, is_decode=True)
 
@@ -353,6 +339,28 @@ class StateCheckpointLifecycle:
         if node is None or not node.is_attached() or node.num_matched != step:
             return None
         return node
+
+    def _release_replaceable_decode_checkpoint(self, seq: SchedulerSequence, new_step: int):
+        """Release the previous decode checkpoint when replacement is safe."""
+        prefix_cache = seq.prefix_cache
+        old_node = prefix_cache.decode_checkpoint_node
+        if old_node is None:
+            return True
+        if not self._owns_checkpoint_slot(old_node):
+            prefix_cache.decode_checkpoint_node = None
+            return True
+        if self._is_same_published_decode_checkpoint(old_node, new_step):
+            return False
+
+        old_checkpoint = old_node.state_checkpoint
+        if old_checkpoint.pin_count > 0:
+            return False
+        logger.debug('Release previous decode SSM prefix-cache checkpoint: session_id=%s seq_id=%s '
+                     'old_step=%s old_state_idx=%s new_step=%s', seq.session_id, seq.seq_id, old_node.num_matched,
+                     old_checkpoint.slot, new_step)
+        self.release_checkpoint(old_node)
+        prefix_cache.decode_checkpoint_node = None
+        return True
 
     def _reserve_node(self, node: Node):
         """Reserve a state-cache slot owned by a trie node.
