@@ -1,3 +1,4 @@
+import os
 from typing import Literal
 
 import pytest
@@ -19,7 +20,7 @@ from utils.restful_return_check import (
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
 BASE_HTTP_URL = 'http://localhost'
-DEFAULT_PORT = 23333
+DEFAULT_PORT = int(os.environ.get('LMDEPLOY_PORT', '23333'))
 MODEL = 'internlm/Intern-S1'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 

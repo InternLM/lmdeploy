@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from utils.config_utils import get_model_path_from_config
 from utils.constant import BACKEND_LIST, RESTFUL_BASE_MODEL_LIST
@@ -6,7 +8,7 @@ from utils.restful_return_check import assert_completions_batch_return, assert_c
 from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = 'http://localhost'
-DEFAULT_PORT = 23333
+DEFAULT_PORT = int(os.environ.get('LMDEPLOY_PORT', '23333'))
 MODEL = 'internlm/internlm2_5-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 

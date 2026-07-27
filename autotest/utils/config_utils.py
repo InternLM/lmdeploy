@@ -640,6 +640,63 @@ def get_interface_matrix(
     return rows
 
 
+def get_interface_run_config_list(
+    backend: str,
+    parallel_config: dict[str, int],
+    model_types: tuple[str, ...] | list[str] = ('chat', 'base'),
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[dict[str, Any]]:
+    """Build ``run_config`` rows for interface REST tests (tools-style).
+
+    Only models with an ``interface`` block for ``backend`` are included.
+    Launch extras use the same dict shape as ``engine_config.extra`` via
+    :func:`build_interface_launch_extra`.
+    """
+    config = get_config()
+    matrix_env = _model_matrix_env_key(config)
+    wanted = {t.replace('_model', '') for t in model_types}
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    profile = deps_profile if deps_profile is not None else 'all'
+
+    for model_id, entry in _iter_per_model_entries(matrix_env, deps_profile=profile):
+        suites = get_interface_suites(entry, backend)
+        if not suites:
+            continue
+        profiles = set(_normalize_profiles(entry.get('model_type', 'chat')))
+        if not (profiles & wanted):
+            continue
+        # chat+vl rows are covered by llm (chat); keep mllm for vl-only.
+        if wanted == {'vl'} and 'chat' in profiles:
+            continue
+        layout = _parallel_layout(_entry_engine_config(entry))
+        if not _parallel_dicts_equal(layout, parallel_config):
+            continue
+        backend_map = _normalize_entry_backends(entry, config, layout)
+        communicators = backend_map.get(backend) or ['nccl']
+        communicator = communicators[0]
+        key = (model_id, backend, communicator, tuple(sorted(layout.items())), tuple(suites))
+        if key in seen:
+            continue
+        seen.add(key)
+        launch_extra = build_interface_launch_extra(
+            entry, backend, suites=suites, model_path=model_id,
+        )
+        case_info = derive_interface_case_info(list(profiles), suites)
+        rows.append({
+            'model': model_id,
+            'backend': backend,
+            'communicator': communicator,
+            'quant_policy': 0,
+            'parallel_config': copy.deepcopy(layout),
+            'extra_params': launch_extra,
+            'interface_suites': list(suites),
+            'case_info': case_info,
+            'generate_marker': derive_generate_marker(suites, backend),
+        })
+    return rows
+
+
 def _entry_matches_profile(entry: dict[str, Any], model_type: str) -> bool:
     profile_name = model_type.replace('_model', '')
     return profile_name in _normalize_profiles(entry.get('model_type', 'chat'))

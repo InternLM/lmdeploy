@@ -347,46 +347,16 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-  prepare_restful_matrix:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
-    needs: download_pkgs
-    runs-on: [self-hosted, linux-a100]
-    outputs:
-      matrix: ${{ steps.gen.outputs.matrix }}
-    container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    env:
-      TEST_ENV: a100
-      # Avoid mkdir under shared paths while only generating matrix JSON.
-      CONFIG_COMPARE_SKIP_MKDIRS: '1'
-    steps:
-      - name: Generate restful matrix from configs
-        id: gen
-        run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
-          BACKENDS='${{ toJSON(fromJSON(inputs.backend || '["turbomind", "pytorch"]')) }}'
-          MATRIX=$(PYTHONPATH=autotest python3 autotest/tools/gen_interface_matrix.py --env a100 --backends "$BACKENDS")
-          echo "Generated interface matrix:"
-          echo "$MATRIX" | python3 -m json.tool
-          {
-            echo "matrix<<EOF"
-            echo "$MATRIX"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, linux-a100]
-    needs: [test_quantization, prepare_restful_matrix]
+    needs: test_quantization
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.prepare_restful_matrix.outputs.matrix) }}
-    timeout-minutes: 60
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -427,58 +397,17 @@ jobs:
           # remove tmp log in testcase
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Start restful api
+      - name: Test interface restful - gpu concurrent
+        timeout-minutes: 280
         run: |
-          SUITES=$(echo '${{ toJSON(matrix.suites) }}' | tr -d '[]"' | tr ',' '_')
-          lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} --allow-terminate-by-client --trust-remote-code > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${SUITES}_start_restful.log 2>&1 &
-          echo "restful_pid=$!"
-          for i in $(seq 1 240)
-          do
-            sleep 5
-            echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              echo "health check success"
-              exit 0
-            fi
-          done
-
-          echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          exit 1
-      - name: Test lmdeploy - chat_completions_v1
-        if: contains(matrix.case_info, 'chat_completions_v1')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - completions_v1
-        if: contains(matrix.case_info, 'completions_v1')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test generate
-        if: contains(matrix.case_info, 'generate')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m '${{matrix.generate_marker}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test toolcall
-        if: contains(matrix.case_info, 'toolcall')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/tool_parser/ -n 8 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'tool_call and not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test reasoning
-        if: contains(matrix.case_info, 'reasoning')
-        timeout-minutes: 60
-        run: |
-          pytest autotest/interface/restful/reasoning_parser/ -n 8 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'reasoning and not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Kill api server
-        if: always()
-        run: |
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_1' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_2' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_4' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_8' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
       - name: Clear workfile
         if: always()
         run: |

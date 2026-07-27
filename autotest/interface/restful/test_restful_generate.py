@@ -16,7 +16,7 @@ from utils.toolkit import encode_text, parse_sse_stream
 from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
-DEFAULT_PORT = 23333
+DEFAULT_PORT = int(os.environ.get('LMDEPLOY_PORT', '23333'))
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 

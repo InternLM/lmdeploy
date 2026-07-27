@@ -162,6 +162,10 @@ Notes:
 - Base-only rows run `completions_v1`.
 - Generate logprob/experts stay in one file and use pytest marks (`-m`).
 - Put `interface` on the main functional row only; do not put it on MTP-only rows.
+- Daily GPU-concurrent entrypoints (tools-style `gpu_num_*` + xdist):
+  `autotest/interface/restful/test_restful_interface_{llm,mllm}.py`
+  (pytorch/turbomind are parametrized together; CI may still split jobs with `-k`).
+  Each case self-starts `api_server` via `worker_id` port/GPU isolation.
 
 ## `quantization`
 
