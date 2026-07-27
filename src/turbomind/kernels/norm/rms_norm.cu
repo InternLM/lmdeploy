@@ -441,12 +441,14 @@ __global__ void biasKernel(T* output, T* data, const B* bias, int num, int dim)
 template<bool inplace>
 void ApplyBias(Tensor& output, Tensor& data, const Tensor& bias, cudaStream_t st)
 {
+    if constexpr (!inplace) {
+        TM_CHECK(output.shape() == data.shape());
+        TM_CHECK_EQ(output.dtype(), data.dtype());
+        TM_CHECK(output.is_contiguous());
+        TM_CHECK(data.is_contiguous());
+    }
     if (!bias) {
         if constexpr (!inplace) {
-            TM_CHECK(output.shape() == data.shape());
-            TM_CHECK_EQ(output.dtype(), data.dtype());
-            TM_CHECK(output.is_contiguous());
-            TM_CHECK(data.is_contiguous());
             if (auto size = data.byte_size()) {
                 TM_CUDA_CHECK(cudaMemcpyAsync(output.raw_data(), data.raw_data(), size, cudaMemcpyDefault, st));
             }
