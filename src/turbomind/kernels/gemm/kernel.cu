@@ -153,13 +153,23 @@ std::string Kernel::GetName() const
        << "_" << desc_.cluster_shape.x << "x" << desc_.cluster_shape.y                   //
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
+    if (desc_.atom_layout.x) {
+        ss << "_atom" << desc_.atom_layout.x << "x" << desc_.atom_layout.y << "x" << desc_.atom_layout.z;
+    }
+    if (desc_.supports_fused_silu) {
+        ss << "_fused_silu";
+    }
     if (desc_.group_axis >= 0) {
         ss << "_"
            << "mn"[desc_.group_axis] << "group";
     }
-    ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                        //
-       << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z  //
-       << "_" << desc_.policy_a << desc_.policy_b;
+    ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y  //
+       << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z;
+    if (desc_.algo) {
+        ss << "_algo" << std::hex << desc_.algo << std::dec  //
+           << "_" << (desc_.raster == kRowMajor ? 'r' : 'c');
+    }
+    ss << "_" << desc_.policy_a << desc_.policy_b;
 
     return ss.str();
 }
@@ -189,6 +199,8 @@ public:
                const MatrixLayout& Cdesc,
                void*               D,
                const MatrixLayout& Ddesc,
+               void*               W,
+               const MatrixLayout& Wdesc,
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
@@ -209,6 +221,8 @@ public:
                                transpose(Cdesc),
                                D,
                                transpose(Ddesc),
+                               W,
+                               Wdesc,
                                swizzle,
                                splits,
                                workspace,

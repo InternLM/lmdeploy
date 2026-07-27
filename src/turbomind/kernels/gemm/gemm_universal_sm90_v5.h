@@ -35,6 +35,7 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 
+#include "src/turbomind/kernels/gemm/prepare_moe_tma_descs_sm90_fp8.h"
 #include "src/turbomind/kernels/gemm/scaled_gmma_fp8_sm90.h"
 #include "src/turbomind/kernels/gemm/sm90_utils.h"
 
@@ -106,7 +107,8 @@ struct GemmUniversalSm90_v5 {
     static constexpr int kTmaTxBytes =
         sizeof(Ta) * (TILE_M * TILE_K) + sizeof(Tb) * (TILE_N * TILE_K) + sizeof(Tu) * kBoxU;
 
-    static constexpr int kTmaDescNum = 7;
+    // Grouped: per-expert maps in workspace [A, B, U, C]. Dense unused.
+    static constexpr int kTmaDescNum = is_grouped_gemm_ ? 4 : 1;
 
     // ! Smem addr must be SBO aligned for TMA load/store
     struct SharedStorage {
@@ -120,7 +122,6 @@ struct GemmUniversalSm90_v5 {
         __align__(1024) Array<Tc, TILE_M * TILE_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
-        __align__(128) CUtensorMap tma_desc_buf[kTmaDescNum];  //
         int                         pipe_count[2];
         typename Scheduler::Storage sched;
     };
@@ -135,6 +136,27 @@ struct GemmUniversalSm90_v5 {
 
     static constexpr int OUTER_N       = GMMA::OUTER_N;
     static constexpr int MMA_SUBTILE_N = GMMA::OP_N / OUTER_N;
+
+    // Host: rebase per-expert A/B/U/C TMA maps into workspace before GEMM launch.
+    static void PrepareTmaDescs(const CUtensorMap& tm_a,
+                                const CUtensorMap& tm_b,
+                                const CUtensorMap& tm_u,
+                                const CUtensorMap& tm_c,
+                                const MatrixParam& param_A,
+                                const MatrixParam& param_B,
+                                const MatrixParam& param_U,
+                                const MatrixParam& param_C,
+                                CUtensorMap*       out,
+                                int                num_experts,
+                                int                N,
+                                cudaStream_t       stream)
+    {
+        if constexpr (!is_grouped_gemm_) {
+            return;
+        }
+        prepare_moe_tma_descs_sm90_fp8<kAlignmentU>
+            <<<num_experts, 32, 0, stream>>>(tm_a, tm_b, tm_u, tm_c, param_A, param_B, param_U, param_C, out, N);
+    }
 
     __device__ void operator()(const CUtensorMap& tm_a,
                                const CUtensorMap& tm_b,
@@ -199,10 +221,6 @@ struct GemmUniversalSm90_v5 {
                 auto& smem_U = storage.source.U;
                 auto& smem_V = storage.source.V;
 
-                if constexpr (is_grouped_gemm) {
-                    init_tma_descs<3>({&tm_a, &tm_b, &tm_u}, storage.tma_desc_buf);
-                }
-
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
 
                 auto sched_state = sched.init_consumer(storage.sched);
@@ -237,35 +255,14 @@ struct GemmUniversalSm90_v5 {
                         const Tv* gmem_V1;
 
                         if constexpr (is_grouped_gemm) {
-                            const int g  = tile->group_idx;
-                            const int m0 = tile->m0;
-                            const int m1 = tile->m1;
-                            const int m  = m1 - m0;
-
-                            Array<void*, 3> global_addrs;
-                            global_addrs[0] = (Ta*)param_A.ptr + m0 * (int64_t)param_A.stride;
-                            global_addrs[1] = ((void**)param_B.ptr)[g];
-
-                            const int beg_u = m0 / kAlignmentU * kAlignmentU;
-                            const int end_u = round_up(m1, kAlignmentU);
-                            global_addrs[2] = (Tu*)param_U.ptr + beg_u;
-
-                            Array<int, 3> dims;
-                            dims[0] = m;
-                            dims[1] = sched.gemm_shape().y;
-                            dims[2] = end_u - beg_u;
-
-                            auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);
-                            Adesc      = &descs[0];
-                            Bdesc      = &descs[1];
-                            Udesc      = &descs[2];
-
-                            gmem_V0 = ((Tv**)gmem_V0)[g];
-
-                            PRAGMA_UNROLL
-                            for (int i = 0; i < 3; ++i) {
-                                cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)&descs[i]);
-                            }
+                            // Descs published by prepare_moe_tma_descs on this stream;
+                            // fence_acquire only needed after in-kernel tensormap replace.
+                            const int          g     = tile->group_idx;
+                            CUtensorMap* const descs = tensormap_buf + g * kTmaDescNum;
+                            Adesc                    = &descs[0];
+                            Bdesc                    = &descs[1];
+                            Udesc                    = &descs[2];
+                            gmem_V0                  = ((Tv**)gmem_V0)[g];
                         }
 
                         if (lane_predicate) {
@@ -350,12 +347,6 @@ struct GemmUniversalSm90_v5 {
             cutlass::arch::warpgroup_reg_alloc<112>();
 
             const int math_group_idx = wg_idx / 2;
-
-            if constexpr (is_grouped_gemm) {
-                if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
-                    init_tma_descs<1>({&tm_c}, storage.tma_desc_buf + 3 + wg_idx);
-                }
-            }
 
             auto& smem_A = storage.source.A;
             auto& smem_B = storage.source.B;
@@ -459,15 +450,6 @@ struct GemmUniversalSm90_v5 {
                         GMMA::apply(smem_iter_A, smem_iter_B, frag_C, accum_C, frag_U, scale_V, pred_V);
                     };
 
-                    if constexpr (is_grouped_gemm) {
-                        if (warp_id % 4 == 0) {
-                            int  m0 = tile->m0, m1 = tile->m1;
-                            auto addr = (Tc*)param_C.ptr + m0 * (int64_t)param_C.stride;
-                            int  idx  = 3 + wg_idx;
-                            update_tma_descs<1>(tensormap_buf + idx, storage.tma_desc_buf + idx, {addr}, {m1 - m0});
-                        }
-                    }
-
                     math_barrier_sync(0);
 
                     pipe_state = {};
@@ -549,8 +531,7 @@ struct GemmUniversalSm90_v5 {
                         const void* Cdesc = &tm_c;
                         const int   tma_n = thread_idx * LayoutC::C0;
                         if constexpr (is_grouped_gemm) {
-                            Cdesc = &tensormap_buf[blockIdx.x * kTmaDescNum + 3 + wg_idx];
-                            cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
+                            Cdesc = &tensormap_buf[tile->group_idx * kTmaDescNum + 3];
                         }
                         cute::SM90_TMA_STORE::copy(Cdesc,
                                                    &smem_C[thread_idx * WG_TILE_M * LayoutC::C0],
@@ -612,55 +593,6 @@ struct GemmUniversalSm90_v5 {
         }
 
     }  // operator()
-
-    template<int N>
-    __device__ void init_tma_descs(Array<const CUtensorMap*, N> param_desc, CUtensorMap* smem_desc)
-    {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        if (lane_id < sizeof(CUtensorMap) / sizeof(uint2)) {
-            PRAGMA_UNROLL
-            for (int i = 0; i < N; ++i) {
-                ((uint2*)&smem_desc[i])[lane_id] = ((uint2*)param_desc[i])[lane_id];
-            }
-        }
-
-        __syncwarp();
-    }
-
-    template<int N>
-    __device__ CUtensorMap*
-    update_tma_descs(CUtensorMap* gmem_desc, CUtensorMap* smem_desc, Array<void*, N> global_addrs, Array<int, N> dims)
-    {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        if (lane_id == 0) {
-            PRAGMA_UNROLL
-            for (int i = 0; i < N; ++i) {
-                uint32_t uint_ptr = cast_smem_ptr_to_uint(&smem_desc[i]);
-                // clang-format off
-                asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;" ::"r"(uint_ptr), "l"(global_addrs[i]));
-                if (i != 2) {
-                    asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 1, %1;" ::"r"(uint_ptr), "r"(dims[i]));
-                } else { // special case for U
-                    asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 0, %1;" ::"r"(uint_ptr), "r"(dims[i]));
-                }
-                // clang-format on
-            }
-        }
-
-        __syncwarp();
-
-        auto gmem_ptr = &gmem_desc[blockIdx.x * kTmaDescNum];
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; ++i) {
-            uint32_t uint_ptr = cast_smem_ptr_to_uint(&smem_desc[i]);
-            // clang-format off
-            asm volatile("tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [%0], [%1], 128;" :: "l"(gmem_ptr + i), "r"(uint_ptr));
-            // clang-format on
-        }
-
-        return gmem_ptr;
-    }
 
     __device__ auto Fetch_V(const MatrixParam&        param_V,
                             int                       K,

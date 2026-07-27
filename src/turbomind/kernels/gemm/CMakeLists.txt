@@ -21,6 +21,7 @@ set(GEMM2_KERNELS_SM90
     kernel/sm90_16816_8.cu
     kernel/sm90_16816_16.cu
     kernel/sm90_64n32_8.cu
+    kernel/sm90_64n16_16.cu
 )
 
 set(GEMM2_ARCH_90_ENABLED FALSE)
@@ -40,6 +41,22 @@ else()
     endif()
 endif()
 
+add_library(gemm2_kernels STATIC
+        ${GEMM2_KERNELS_SM70}
+        ${GEMM2_KERNELS_SM75}
+        ${GEMM2_KERNELS_SM80}
+        cublas.cu
+)
+set_property(TARGET gemm2_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET gemm2_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_compile_options(gemm2_kernels PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:
+                -Xptxas=-v
+                --generate-line-info
+                --threads 16>
+)
+target_link_libraries(gemm2_kernels PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
+
 add_library(gemm2
         gemm.cu
         kernel.cu
@@ -55,15 +72,14 @@ add_library(gemm2
         tuner/sampler.cu
         tuner/stopping_criterion.cc
         tuner/params.cc
-        ${GEMM2_KERNELS_SM70}
-        ${GEMM2_KERNELS_SM75}
-        ${GEMM2_KERNELS_SM80}
-        cublas.cu
         moe_utils_v2.cu
         test/test_utils.cu
 )
 
 target_link_libraries(gemm2 PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
+
+# Retain file-scope Registrar objects (self-registration). Same pattern as attention_kernels.
+target_link_libraries(gemm2 PUBLIC $<LINK_LIBRARY:WHOLE_ARCHIVE,gemm2_kernels>)
 
 # cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE on SM100
 set(_has_sm100 FALSE)
@@ -71,7 +87,7 @@ set(_archs_100 "${CMAKE_CUDA_ARCHITECTURES}")
 list(FILTER _archs_100 INCLUDE REGEX "^100")
 if(_archs_100 AND CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.5")
     set(_has_sm100 TRUE)
-    target_compile_definitions(gemm2 PRIVATE ENABLE_CUBLAS_GROUPED=1)
+    target_compile_definitions(gemm2_kernels PRIVATE ENABLE_CUBLAS_GROUPED=1)
     message(STATUS "GEMM: ENABLE_CUBLAS_GROUPED=1 (cublasGemmGroupedBatchedEx for MoE on SM100)")
 endif()
 
@@ -100,39 +116,5 @@ if(GEMM2_ARCH_90_ENABLED)
             --threads 16>
     )
     target_link_libraries(gemm2_sm90 PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
-    target_link_libraries(gemm2 PRIVATE gemm2_sm90)
-
-    target_compile_definitions(gemm2 PRIVATE GEMM2_ARCH_90_ENABLED)
+    target_link_libraries(gemm2 PUBLIC $<LINK_LIBRARY:WHOLE_ARCHIVE,gemm2_sm90>)
 endif()
-
-if (BUILD_TEST)
-        # add_executable(test_gemm_v2
-        #         test/test_gemm_v2.cc
-        #         ../../models/llama/LlamaLinear.cu
-        #         test/reference.cu)
-        # target_link_libraries(test_gemm_v2 PRIVATE gemm2 core cublas quantization_kernels gpt_kernels)
-
-        # add_executable(test_moe_utils test/test_moe_utils.cu test/test_utils.cu)
-        # target_link_libraries(test_moe_utils PRIVATE gemm2 core cublas)
-
-        # if (NOT MSVC)
-        #         FetchContent_Declare(
-        #         repo-nvbench
-        #         GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
-        #         GIT_TAG        d8dced8a64d9ce305add92fa6d274fd49b569b7e
-        #         )
-
-        #         set(NVBench_ENABLE_EXAMPLES OFF)
-        #         set(NVBench_ENABLE_TESTING OFF)
-        #         set(BUILD_SHARED_LIBS OFF)
-
-        #         FetchContent_MakeAvailable(repo-nvbench)
-
-        #         add_executable(gemm_bench
-        #                 test/gemm_bench.cu
-        #                 # test/test_utils.cu
-        #                 test/quantization.cu
-        #                 test/reference.cu)
-        #         target_link_libraries(gemm_bench PRIVATE gemm2 core nvbench::nvbench cublas)
-        # endif ()
-endif ()
