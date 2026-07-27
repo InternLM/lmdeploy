@@ -11,8 +11,10 @@
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
+#ifdef BUILD_MULTI_GPU  // not defined for windows
 #include "src/turbomind/comm/nccl/deepep/moe_a2a_utils.h"
 #include "src/turbomind/comm/nccl/deepep/token_dispatcher.h"
+#endif
 
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -352,6 +354,8 @@ Tensor MoeFfnDefaultImpl::GetShardFfnInput(Tensor& global_hidden_states, const s
     return global_hidden_states.slice(local_token_begin, local_token_num);
 }
 
+#ifdef BUILD_MULTI_GPU
+
 class MoeFfnA2AImpl final: public MoeFfnLayerImpl {
 public:
     MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx);
@@ -615,12 +619,16 @@ Tensor MoeFfnA2AImpl::GetShardFfnInput(Tensor& global_hidden_states, const std::
     return global_hidden_states.slice(partition.begin, partition.size);
 }
 
+#endif
+
 MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx)
 {
+#ifdef BUILD_MULTI_GPU
     if (engine.ep_size > 1 && engine.moe_a2a_backend == "deepep") {
         impl_ = std::make_unique<MoeFfnA2AImpl>(engine, ctx);
         return;
     }
+#endif
     if (engine.ep_size == 1 || engine.moe_a2a_backend == "default") {
         impl_ = std::make_unique<MoeFfnDefaultImpl>(engine, ctx);
         return;
