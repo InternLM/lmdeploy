@@ -53,6 +53,18 @@ get_filename_component(_nccl_build_root "${NCCL_INCLUDE_DIRS}" DIRECTORY)
 
 find_package(Threads REQUIRED)
 
+add_library(turbomind_nccl_stub SHARED nccl_stub.cc)
+set_target_properties(turbomind_nccl_stub PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+    OUTPUT_NAME turbomind_nccl_stub
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+target_include_directories(turbomind_nccl_stub PRIVATE
+    ${NCCL_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS})
+
 add_library(token_dispatcher STATIC
     token_dispatcher.cc
     moe_a2a_utils.cu
@@ -80,7 +92,10 @@ target_link_libraries(token_dispatcher PRIVATE
     fmt::fmt
     CUDA::cudart
     CUDA::cuda_driver
+    # Keep the real NCCL before the weak compatibility fallbacks. The anchor in
+    # token_dispatcher.cc prevents --as-needed from dropping the stub.
     ${NCCL_LIBRARIES}
+    turbomind_nccl_stub
     Threads::Threads)
 set_property(TARGET token_dispatcher PROPERTY POSITION_INDEPENDENT_CODE ON)
 

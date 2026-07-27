@@ -19,6 +19,8 @@
 using namespace deep_ep;
 using namespace deep_ep::elastic;
 
+extern "C" void turbomind_nccl_stub_anchor();
+
 namespace turbomind::comm {
 
 class TokenDispatcherImpl {
@@ -122,6 +124,10 @@ private:
 
 TokenDispatcherImpl::TokenDispatcherImpl(HostComm h_comm): h_comm_{h_comm}
 {
+    // Keep the NCCL compatibility stub in DT_NEEDED even when the build-time NCCL
+    // already provides every DeepEP symbol and the linker uses --as-needed.
+    turbomind_nccl_stub_anchor();
+
     rank_    = h_comm->rank();
     n_ranks_ = h_comm->n_ranks();
 

@@ -621,7 +621,7 @@ MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx)
         impl_ = std::make_unique<MoeFfnA2AImpl>(engine, ctx);
         return;
     }
-    else if (engine.ep_size == 1 || engine.moe_a2a_backend == "default") {
+    if (engine.ep_size == 1 || engine.moe_a2a_backend == "default") {
         impl_ = std::make_unique<MoeFfnDefaultImpl>(engine, ctx);
         return;
     }
