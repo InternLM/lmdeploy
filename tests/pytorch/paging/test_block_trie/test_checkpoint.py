@@ -200,7 +200,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert seq.num_history_ids == 0
         assert seq.prefix_cache.restore.slot == -1
 
-        state_idx = block_trie.state_checkpoints._reserve_slot(node)
+        state_idx = block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, producer)
 
         seq = sess.add_sequence(token_ids)
@@ -221,7 +221,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_trie.allocate(seq)
         leaf = seq.prefix_cache.trie_cursor
         checkpoint_node = leaf.parent
-        state_idx = block_trie.state_checkpoints._reserve_slot(checkpoint_node)
+        state_idx = block_trie.state_checkpoints._reserve_checkpoint(checkpoint_node, checkpoint_node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(checkpoint_node, seq)
 
         seq = sess.add_sequence(token_ids)
@@ -293,7 +293,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, seq)
 
         miss_token_ids = token_ids.copy()
@@ -325,7 +325,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, seq)
 
         miss_token_ids = [1] * block_size + [4] * block_size + [3]
@@ -521,7 +521,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        state_idx = block_trie.state_checkpoints._reserve_slot(node)
+        state_idx = block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         assert state_idx >= 0
         assert not node.state_checkpoint.published
         key = (node.adapter_name, node.prefix_len, node.block_hash)

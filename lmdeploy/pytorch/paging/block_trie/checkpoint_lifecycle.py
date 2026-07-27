@@ -84,7 +84,7 @@ class StateCheckpointLifecycle:
             return -1
 
         try:
-            slot = self._reserve_slot(node, step)
+            slot = self._reserve_checkpoint(node, step)
         except MemoryError:
             return -1
         except RuntimeError as e:
@@ -377,54 +377,59 @@ class StateCheckpointLifecycle:
             evicted += 1
         return evicted
 
-    def _reserve_slot(self, node: Node, step: int = None):
-        """Reserve state and optional frozen KV owned by one trie anchor.
+    def _reserve_checkpoint(self, node: Node, step: int):
+        """Reserve or replace the checkpoint owned by one trie anchor.
 
         Replacing a published checkpoint at the same anchor is allowed only while no async copy pins it. If the shared
         state pool is full, one old unpinned checkpoint may be evicted without removing its trie/KV node.
         """
-        if step is None:
-            step = node.prefix_len
         anchor_step = step - step % self._block_size
-        is_partial = anchor_step != step
         if (not self._state_checkpoints_enabled or not node.is_attached_or_root()
                 or node.prefix_len != anchor_step):
             return -1
+
         checkpoint = node.state_checkpoint
-        if checkpoint is not None and checkpoint.published:
-            if checkpoint.pin_count > 0:
-                return -1
-            if checkpoint.step == step:
-                return -1
-            frozen_block_id = checkpoint.frozen_block_id
-            if is_partial and frozen_block_id < 0:
-                frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
-            logger.debug('Replace SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s', node.adapter_name,
-                         checkpoint.step, checkpoint.slot)
-            self._unindex_checkpoint(node)
-            if not is_partial and checkpoint.frozen_block_id >= 0:
-                self._allocator.free(np.array([checkpoint.frozen_block_id], dtype=np.int64))
-                frozen_block_id = -1
-        elif checkpoint is not None:
-            return -1
         if checkpoint is None:
-            if self._state_manager.get_num_free_checkpoint() == 0 and self.evict(1) == 0:
-                return -1
-            slot = self._state_manager.allocate_checkpoint_state()
-            try:
-                frozen_block_id = -1
-                if is_partial:
-                    frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
-            except Exception:
-                self._state_manager.free_checkpoint_state(slot)
-                raise
-            checkpoint = NodeStateCheckpoint(slot=slot,
-                                             step=step,
-                                             frozen_block_id=frozen_block_id)
-            node.state_checkpoint = checkpoint
-        else:
-            checkpoint.step = step
-            checkpoint.frozen_block_id = frozen_block_id
+            return self._create_checkpoint(node, step)
+        if not checkpoint.published or checkpoint.pin_count > 0 or checkpoint.step == step:
+            return -1
+        return self._replace_checkpoint(node, checkpoint, step)
+
+    def _create_checkpoint(self, node: Node, step: int):
+        """Allocate a new checkpoint, rolling back state on KV failure."""
+        if self._state_manager.get_num_free_checkpoint() == 0 and self.evict(1) == 0:
+            return -1
+
+        slot = self._state_manager.allocate_checkpoint_state()
+        try:
+            frozen_block_id = -1
+            if step % self._block_size != 0:
+                frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
+        except Exception:
+            self._state_manager.free_checkpoint_state(slot)
+            raise
+
+        node.state_checkpoint = NodeStateCheckpoint(slot=slot,
+                                                    step=step,
+                                                    frozen_block_id=frozen_block_id)
+        return slot
+
+    def _replace_checkpoint(self, node: Node, checkpoint: NodeStateCheckpoint, step: int):
+        """Reuse an unpinned checkpoint while changing its exact step."""
+        is_partial = step % self._block_size != 0
+        frozen_block_id = checkpoint.frozen_block_id
+        if is_partial and frozen_block_id < 0:
+            frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
+
+        logger.debug('Replace SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s', node.adapter_name,
+                     checkpoint.step, checkpoint.slot)
+        self._unindex_checkpoint(node)
+        if not is_partial and checkpoint.frozen_block_id >= 0:
+            self._allocator.free(np.array([checkpoint.frozen_block_id], dtype=np.int64))
+            frozen_block_id = -1
+
+        checkpoint.step = step
+        checkpoint.frozen_block_id = frozen_block_id
         checkpoint.published = False
         checkpoint.exact_match_data = None
         checkpoint.last_access_time = 0.0

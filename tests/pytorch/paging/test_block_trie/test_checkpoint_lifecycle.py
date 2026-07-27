@@ -139,7 +139,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
 
         block_trie.state_checkpoints._publish_checkpoint(node, seq)
         match_data = node.state_checkpoint.exact_match_data
@@ -161,7 +161,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, seq)
         key = block_trie._checkpoint_index.make_node_key(node)
         block_trie._checkpoint_index._buckets[key].extend([node, node])
@@ -732,7 +732,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, seq)
         assert node.state_checkpoint.exact_match_data is not None
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
