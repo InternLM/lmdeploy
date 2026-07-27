@@ -364,7 +364,7 @@ def count_input_tokens(async_engine, messages: list[dict[str, str]]) -> int:
     """Approximate Anthropic token counting using LMDeploy
     tokenizer/template."""
 
-    prompt = async_engine.chat_template.messages2prompt(messages, sequence_start=True)
+    prompt = async_engine.chat_template.messages2prompt(messages)
     token_ids = async_engine.tokenizer.encode(prompt, add_bos=True)
     return len(token_ids)
 

@@ -265,7 +265,7 @@ class BaseResponseParser(ResponseParser):
         it into ``chat_template_kwargs`` so downstream parser behavior can rely
         on one normalized source.
         """
-        chat_template_kwargs = request.chat_template_kwargs or {}
+        chat_template_kwargs = dict(request.chat_template_kwargs or {})
         if request.enable_thinking is not None:
             logger.warning('`enable_thinking` will be deprecated in the future, '
                            'please use `chat_template_kwargs` instead.')
@@ -274,6 +274,8 @@ class BaseResponseParser(ResponseParser):
             else:
                 logger.warning(
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.')
+        if request.reasoning_effort in ('high', 'max'):
+            chat_template_kwargs.setdefault('reasoning_effort', request.reasoning_effort)
         return chat_template_kwargs
 
     def __init__(self, request: ChatCompletionRequest):
@@ -281,6 +283,8 @@ class BaseResponseParser(ResponseParser):
         tcls = type(self).tool_parser_cls
         self._kwargs = type(self).chat_template_kwargs_from_request(request)
         self.enable_thinking: bool | None = self._kwargs.get('enable_thinking', None)
+        if self._kwargs.get('thinking') is True:
+            self.enable_thinking = True
         self.reasoning_parser: ReasoningParser | None = rcls(**self._kwargs) if rcls else None
         self.tool_parser: ToolParser | None = tcls() if tcls else None
         if self.tool_parser is not None:
@@ -674,8 +678,11 @@ class BaseResponseParser(ResponseParser):
                 close_idx = n
                 tool_payload = text[open_idx + len(open_tag):].strip()
             parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
-            if parsed_call is not None:
-                tool_calls.append(parsed_call)
+            if parsed_call:
+                if isinstance(parsed_call, list):
+                    tool_calls.extend(parsed_call)
+                else:
+                    tool_calls.append(parsed_call)
                 pos = close_idx + len(close_tag) if close_tag else n
             else:
                 # Tool call parsing failed — fall back to plain text.

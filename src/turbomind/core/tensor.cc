@@ -3,6 +3,7 @@
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/stream.h"
+#include "src/turbomind/kernels/copy/copy.h"
 
 namespace turbomind::core {
 

@@ -5,7 +5,14 @@ from types import SimpleNamespace
 import torch
 
 import lmdeploy.pytorch.memdecode.agent as agent_module
-from lmdeploy.pytorch.config import BackendConfig, DistConfig, MemDecodeConfig, ModelConfig, QuantizationConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    ModelConfig,
+    QuantizationConfig,
+)
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.memdecode.agent import MemDecodeAgent, build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import BuildModelContext
@@ -202,6 +209,47 @@ def test_async_forward_runs_memory_forward_inside_memory_context(monkeypatch):
 
     assert asyncio.run(agent.async_forward(inputs)) is output
     assert events == ['enter', 'forward', 'exit']
+
+
+def test_build_cache_engine_passes_memory_model_to_state_cache(monkeypatch):
+    states_shapes = [((2, ), torch.float32)]
+    agent = MemDecodeAgent(_memdecode_config(states_shapes), BackendConfig(), _dist_ctx(), device='cpu')
+    agent.cache_config = CacheConfig(max_batches=1,
+                                     block_size=64,
+                                     num_cpu_blocks=0,
+                                     num_gpu_blocks=0,
+                                     num_state_caches=2)
+    calls = []
+
+    @contextmanager
+    def memory_context():
+        yield
+
+    class FakeCacheEngine:
+
+        def __init__(self, *args, **kwargs):
+            calls.append(('cache', args, kwargs))
+
+    class FakeStateCacheEngine:
+
+        def __init__(self, cache_config, model_config):
+            calls.append(('state', cache_config, model_config))
+
+    dist_ctx = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=1), attn_tp_group=SimpleNamespace(rank=0))
+    monkeypatch.setattr(agent_module, 'CacheEngine', FakeCacheEngine)
+    monkeypatch.setattr(agent_module, 'StateCacheEngine', FakeStateCacheEngine)
+    monkeypatch.setattr(agent_module, 'get_dist_manager',
+                        lambda: SimpleNamespace(current_context=lambda: dist_ctx))
+    agent.memory_context = memory_context
+
+    cache_stream = object()
+    agent.build_cache_engine(cache_stream)
+
+    assert calls[0][0] == 'cache'
+    _, state_cache_config, model_config = calls[1]
+    assert state_cache_config is not agent.cache_config
+    assert state_cache_config.states_shapes == states_shapes
+    assert model_config is agent.model_config
 
 
 def test_build_model_honors_supplied_context_and_empty_init(monkeypatch):

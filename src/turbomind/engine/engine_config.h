@@ -13,6 +13,7 @@ namespace turbomind {
 struct EngineConfig {
 #define ENGINE_FIELDS(X)                                                                                               \
     X(DataType, data_type)                                                                                             \
+    X(DataType, state_dtype, kNull)                                                                                    \
     X(int, cache_block_seq_len, 0)                                                                                     \
     X(int, quant_policy, 0)                                                                                            \
     X(int, tune_layer_num, 1)                                                                                          \

@@ -22,6 +22,7 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
+from .parallel_config import derive_parallel_config
 from .supported_models import is_supported
 
 # TODO: find another way import _turbomind
@@ -35,6 +36,7 @@ from .tokenizer_info import TokenizerInfo  # noqa: E402
 logger = get_logger('lmdeploy')
 
 MAX_LOGPROBS = 1024
+_FP32_MAMBA_SSM_DTYPE = os.getenv('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', '0') == '1'
 
 
 def _construct_stop_or_bad_words(words: list[int] = None):
@@ -66,9 +68,11 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
 
 
 def complete_parallel_config(cfg: TurbomindEngineConfig):
-    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
+    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.attn_cp_size, cfg.mlp_dp_size, cfg.mlp_tp_size,
+            cfg.outer_dp_size)):
         cfg.attn_dp_size = cfg.attn_dp_size or 1
         cfg.attn_tp_size = cfg.attn_tp_size or 1
+        cfg.attn_cp_size = cfg.attn_cp_size or 1
         cfg.mlp_dp_size = cfg.mlp_dp_size or 1
         cfg.mlp_tp_size = cfg.mlp_tp_size or 1
         cfg.outer_dp_size = cfg.outer_dp_size or 1
@@ -82,28 +86,18 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
-    assert cfg.ep == 1 or cfg.tp == 1
     if not complete_parallel_config(cfg):
-        total = cfg.dp * cfg.ep * cfg.tp
-        if not cfg.device_num:
-            count = torch.cuda.device_count() * cfg.nnodes
-            if total < count:
-                count = total
-            cfg.device_num = count
-        assert total % cfg.device_num == 0
-        size = max(cfg.ep, cfg.tp)
-        overlap = total // cfg.device_num
-        inner_tp_size = size // overlap
-        cfg.outer_dp_size = cfg.dp // overlap
-        cfg.attn_dp_size = overlap
-        cfg.attn_tp_size = inner_tp_size // cfg.cp
-        cfg.attn_cp_size = cfg.cp
-        comm_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
-        cfg.mlp_dp_size = 1
-        cfg.mlp_tp_size = comm_size // cfg.ep if cfg.ep > 1 else overlap * inner_tp_size
+        available = torch.cuda.device_count() * cfg.nnodes
+        parallel = derive_parallel_config(cfg.dp, cfg.tp, cfg.ep, cfg.cp, cfg.device_num, available)
+        cfg.device_num = parallel.device_num
+        cfg.outer_dp_size = parallel.outer_dp_size
+        cfg.attn_dp_size = parallel.attn_dp_size
+        cfg.attn_tp_size = parallel.attn_tp_size
+        cfg.attn_cp_size = parallel.attn_cp_size
+        cfg.mlp_dp_size = parallel.mlp_dp_size
+        cfg.mlp_tp_size = parallel.mlp_tp_size
     if cfg.ep > 1:
         assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
-        assert cfg.mlp_tp_size == 1, 'Only support mlp_tp_size == 1 when ep > 1'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -231,9 +225,12 @@ class TurboMind:
         dtype_map = {
             'bfloat16': _tm.DataType.TYPE_BF16,
             'float16': _tm.DataType.TYPE_FP16,
+            'float32': _tm.DataType.TYPE_FP32,
         }
+        state_dtype = 'float32' if _FP32_MAMBA_SSM_DTYPE else engine_config.dtype
         ec = _tm.EngineConfig()
         ec.data_type = dtype_map[engine_config.dtype]
+        ec.state_dtype = dtype_map[state_dtype]
         ec.cache_block_seq_len = engine_config.cache_block_seq_len
         ec.quant_policy = engine_config.quant_policy
         ec.max_batch_size = engine_config.max_batch_size
@@ -262,7 +259,8 @@ class TurboMind:
         ec.communicator = engine_config.communicator
 
         logger.info(f'turbomind engine config:\n\n'
-                    f'dtype={engine_config.dtype}, session_len={engine_config.session_len}, '
+                    f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
+                    f'session_len={engine_config.session_len}, '
                     f'max_batch_size={engine_config.max_batch_size}, '
                     f'devices={engine_config.devices}, '
                     f'tp={engine_config.attn_tp_size}, '
@@ -701,9 +699,6 @@ class TurboMindInstance:
                                  input_embedding_ranges=None,
                                  input_meta: dict[str, Any] = None,
                                  multimodal: list[dict[str, Any]] = None,
-                                 sequence_start: bool = True,
-                                 sequence_end: bool = False,
-                                 step=0,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
@@ -715,21 +710,11 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            sequence_start (bool): must be True; TurboMind is stateless-only
-            sequence_end (bool): must be True; TurboMind is stateless-only
-            step (int): the offset of the k/v cache
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
         logger.info(f'[async_stream_infer] session {session_id} start')
-        if not (sequence_start and sequence_end):
-            logger.error(f'[async_stream_infer] session {session_id}: TurboMind supports only '
-                         f'stateless requests; stateful/interactive inference '
-                         f'(sequence_start={sequence_start}, sequence_end={sequence_end}) is not '
-                         f'supported - use prefix caching instead')
-            yield EngineOutput(ResponseType.NOT_SUPPORTED, [])
-            return
         gen_cfg = self._get_generation_config(gen_config)
 
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
@@ -773,7 +758,7 @@ class TurboMindInstance:
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step)
+        session = _tm.SessionParam(id=session_id, step=0)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)
@@ -794,7 +779,7 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        prev_len = step + input_len
+        prev_len = input_len
         try:
             while True:
                 await sem.acquire()

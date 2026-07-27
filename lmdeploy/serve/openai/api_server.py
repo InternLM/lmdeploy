@@ -539,8 +539,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         tools=request.tools,
         reasoning_effort=request.reasoning_effort,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
@@ -851,8 +849,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             session,
             gen_config=gen_config,
             stream_response=True,  # always use stream to enable batching
-            sequence_start=True,
-            sequence_end=True,
             do_preprocess=False,
             adapter_name=adapter_name)
         generators.append(result_generator)
@@ -1018,8 +1014,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
         do_preprocess=False,
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
@@ -1105,13 +1099,12 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     - **input**: the prompt to be encoded. In str or list[str] format.
     - **do_preprocess**: whether do preprocess or not. Default to False.
-    - **add_bos**: True when it is the beginning of a conversation. False when it
-      is not. Default to True.
+    - **add_bos**: Whether to add a BOS token when encoding. Default to True.
     """
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt, sequence_start=add_bos)
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt)
         input_ids = VariableInterface.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
         return input_ids
 

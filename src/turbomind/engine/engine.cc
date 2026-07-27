@@ -114,6 +114,13 @@ struct Engine::Impl {
         executor_.Start();
     }
 
+    void Join()
+    {
+        if (internal_thread_.joinable()) {
+            internal_thread_.join();
+        }
+    }
+
     void UpdateScheduleMetrics();
 
     void MaybeLogCacheStats();
@@ -188,9 +195,10 @@ Engine::Impl::~Impl()
     }
     inbound_.close();
     outbound_.close();
-    if (internal_thread_.joinable()) {
-        internal_thread_.join();
-    }
+    // Normally TurboMind joins every engine loop before destroying any engine,
+    // so this is a no-op. Keep the fallback for partial construction or
+    // exception unwinding: destroying a joinable std::thread calls terminate.
+    Join();
     executor_ = {};
 
     for (auto& state : states_) {
@@ -882,6 +890,13 @@ Engine::Engine(EngineParam                  param,
 void Engine::Start()
 {
     return impl_->Start();
+}
+
+void Engine::Join()
+{
+    if (impl_) {
+        impl_->Join();
+    }
 }
 
 void Engine::Impl::MaybeLogCacheStats()

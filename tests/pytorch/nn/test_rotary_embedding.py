@@ -4,6 +4,22 @@ from transformers import PretrainedConfig
 from lmdeploy.pytorch.nn import build_rotary_embedding_from_config
 
 
+def _rotate_complex(x):
+    x_even = x[..., 0::2]
+    x_odd = x[..., 1::2]
+    return torch.stack((-x_odd, x_even), dim=-1).reshape_as(x)
+
+
+def _complex_rope_reference(x, cos, sin):
+    cos_full = cos.repeat_interleave(2, dim=-1)
+    sin_full = sin.repeat_interleave(2, dim=-1)
+    if cos_full.dim() == x.dim() - 1:
+        cos_full = cos_full.unsqueeze(-2)
+    if sin_full.dim() == x.dim() - 1:
+        sin_full = sin_full.unsqueeze(-2)
+    return x * cos_full + _rotate_complex(x) * sin_full
+
+
 def _make_config(*, mrope_interleaved: bool = False):
     return PretrainedConfig(
         hidden_size=16,
@@ -180,3 +196,33 @@ def test_mrope_config_keeps_text_positions_as_regular_rope():
 
     torch.testing.assert_close(cos, expected_cos)
     torch.testing.assert_close(sin, expected_sin)
+
+
+def test_default_apply_rotary_complex_accepts_half_width_tables():
+    from lmdeploy.pytorch.backends.default.apply_rotary_emb import DefaultApplyRotaryEmbImpl
+
+    q_states = torch.randn(5, 3, 8)
+    k_states = torch.randn(5, 2, 8)
+    cos = torch.randn(5, 4)
+    sin = torch.randn(5, 4)
+
+    q_embed, k_embed = DefaultApplyRotaryEmbImpl().forward(q_states, k_states, cos, sin, inplace=False,
+                                                           complex_mode=True)
+
+    torch.testing.assert_close(q_embed, _complex_rope_reference(q_states, cos, sin))
+    torch.testing.assert_close(k_embed, _complex_rope_reference(k_states, cos, sin))
+
+
+def test_default_apply_rotary_complex_accepts_half_width_tables_with_empty_key():
+    from lmdeploy.pytorch.backends.default.apply_rotary_emb import DefaultApplyRotaryEmbImpl
+
+    q_states = torch.randn(5, 3, 8)
+    k_states = torch.empty(5, 0, 8)
+    cos = torch.randn(5, 4)
+    sin = torch.randn(5, 4)
+
+    q_embed, k_embed = DefaultApplyRotaryEmbImpl().forward(q_states, k_states, cos, sin, inplace=False,
+                                                           complex_mode=True)
+
+    torch.testing.assert_close(q_embed, _complex_rope_reference(q_states, cos, sin))
+    assert k_embed.shape == k_states.shape

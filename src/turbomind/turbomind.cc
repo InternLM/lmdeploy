@@ -136,6 +136,14 @@ TurboMind::Impl::~Impl()
     if (gateway_) {
         gateway_->shutdown();
     }
+    // Keep every engine and executor queue alive until the gateway abort has
+    // propagated through each TP group. Closing one rank's queues before this
+    // handshake completes can strand its peers in the host communicator.
+    for (auto& engine : engines_) {
+        if (engine) {
+            engine.Join();
+        }
+    }
     for (int i = 0; i < (int)engines_.size(); ++i) {
         /// TODO: make device part of core::Context
         CudaDeviceGuard device(engine_param_.devices[i]);
@@ -156,6 +164,9 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
 
     // Copy config into the EngineConfig base of engine_param_
     static_cast<EngineConfig&>(engine_param_) = config;
+    if (engine_param_.state_dtype == kNull) {
+        engine_param_.state_dtype = engine_param_.data_type;
+    }
 
     phases_ = config.async_ ? 2 : 1;
 

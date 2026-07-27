@@ -73,6 +73,16 @@ size_per_head = 128
 仍通过 `max_batch_size` 设置最大批处理量。默认值由原来的 32 改成 64。
 在 TurboMind 2.x 中，`max_batch_size` 和 `cache_max_entry_count`无关。
 
+### 循环状态数据类型
+
+对于包含 GatedDeltaNet 层的模型，TurboMind 默认使用模型激活值的数据类型保存循环状态。在启动 LMDeploy
+前设置 `LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1`，可改用 FP32 保存循环状态。卷积状态仍使用模型激活值的数据
+类型。FP32 循环状态可以提高数值精度，但会使用 FP16 或 BF16 两倍的循环状态显存。
+
+```bash
+LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1 lmdeploy serve api_server <model-path> --backend turbomind
+```
+
 ### k/v 缓存大小
 
 `cache_block_seq_len` 和 `cache_max_entry_count` 用来调节 k/v cache 的内存大小。

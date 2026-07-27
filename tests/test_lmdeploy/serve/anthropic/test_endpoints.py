@@ -66,7 +66,7 @@ class _FakeTokenizer:
 
 class _FakeChatTemplate:
 
-    def messages2prompt(self, messages, sequence_start: bool = True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         parts = [f"{item['role']}:{item['content']}" for item in messages]
         return '\n'.join(parts)
 

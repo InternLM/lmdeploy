@@ -75,8 +75,6 @@ class OpenAIServingResponses:
             gen_config=gen_config,
             tools=parsed_request.tools,
             stream_response=True,
-            sequence_start=True,
-            sequence_end=True,
             do_preprocess=True,
             adapter_name=adapter_name,
         )

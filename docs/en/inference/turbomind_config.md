@@ -71,6 +71,17 @@ In the following sections, we will focus on introducing the inference parameters
 
 The maximum batch size is still set through `max_batch_size`. But its default value has been changed from 32 to 64, and `max_batch_size` is no longer related to `cache_max_entry_count`.
 
+### recurrent state data type
+
+For models with GatedDeltaNet layers, TurboMind stores the recurrent state in the model activation data type by default.
+Set `LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1` before starting LMDeploy to store the recurrent state in FP32 instead. The
+convolution state remains in the model activation data type. FP32 recurrent state can improve numerical precision but
+uses twice the recurrent-state memory of FP16 or BF16.
+
+```bash
+LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1 lmdeploy serve api_server <model-path> --backend turbomind
+```
+
 ### k/v cache size
 
 k/v cache memory is determined by `cache_block_seq_len` and `cache_max_entry_count`.

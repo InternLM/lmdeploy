@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 
@@ -15,6 +16,7 @@ class WarmupMeta:
     max_num_tokens: int
     max_batch_size: int
     dtype: torch.dtype
+    model_config: Any = None
 
 
 @singleton

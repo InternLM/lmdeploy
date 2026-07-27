@@ -39,6 +39,9 @@ def memory_model_forward(
             state_caches=state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
+        context.block_caches = cache_engine.block_caches
+        if state_cache_engine is not None:
+            context.named_state_caches = state_cache_engine.named_state_caches
 
         with ctx_mgr.context(context):
             model_metas = model.update_model_metas(
@@ -163,7 +166,7 @@ class MemDecodeAgent:
                     self.cache_config,
                     states_shapes=list(self.model_config.states_shapes),
                 )
-                self.state_cache_engine = StateCacheEngine(state_cache_config)
+                self.state_cache_engine = StateCacheEngine(state_cache_config, self.model_config)
             else:
                 self.state_cache_engine = None
 
