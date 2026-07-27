@@ -38,6 +38,7 @@ class OpType(Enum):
     V4Compressor = auto()
     HcPrePost = auto()
     Embedding = auto()
+    CacheBlockCopy = auto()
 
     # MoE router
     RouterNoauxTC = auto()

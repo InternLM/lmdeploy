@@ -9,6 +9,7 @@ from operator import index as as_index
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.base import OpType
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
@@ -257,6 +258,7 @@ class CacheEngine:
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
+        self._build_cache_block_copy()
 
         self.migration_backend_impl: MigrationBackendImpl | None = None
 
@@ -270,6 +272,22 @@ class CacheEngine:
 
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
+
+    def _build_cache_block_copy(self) -> None:
+        """Build the optional logical KV-block copy implementation."""
+        self._cache_block_copy_device = None
+        self._cache_block_copy_impl = None
+        if not (self.cache_config.enable_prefix_caching
+                and len(self.cache_config.states_shapes) > 0):
+            return
+
+        pages_per_block = self.cache_config.block_size // self.cache_config.kernel_block_size
+        packed_pools = self._as_mem_pools(self.full_gpu_cache)
+        self._cache_block_copy_device = packed_pools[0].device
+        block_copy_builder = get_backend().get_layer_impl_builder(OpType.CacheBlockCopy)
+        self._cache_block_copy_impl = block_copy_builder.build(packed_caches=packed_pools,
+                                                               num_logical_blocks=self.num_gpu_blocks,
+                                                               pages_per_block=pages_per_block)
 
     @property
     def cpu_cache(self):
@@ -644,7 +662,7 @@ class CacheEngine:
 
     @staticmethod
     def _as_mem_pools(mem_pool: torch.Tensor | list[torch.Tensor]) -> list[torch.Tensor]:
-        """Normalize one or many allocation pools."""
+        """Normalize one or many packed cache allocation pools."""
         if isinstance(mem_pool, torch.Tensor):
             return [mem_pool]
         return mem_pool
@@ -653,6 +671,34 @@ class CacheEngine:
     def _mem_pool_nbytes(mem_pool: torch.Tensor | list[torch.Tensor]) -> int:
         """Return memory size for one or many allocation pools."""
         return sum(pool.numel() * pool.element_size() for pool in CacheEngine._as_mem_pools(mem_pool))
+
+    @torch.inference_mode()
+    def copy_logical_blocks(self, copy_plan: torch.Tensor) -> None:
+        """Copy complete packed KV blocks on the current stream.
+
+        ``copy_plan`` has shape ``[2, num_pairs]`` and contains physical GPU
+        block-table entries at scheduler-block granularity, not allocator
+        logical block IDs.  It must already be on the cache device.  Host-side
+        plan construction validates values before forward-input H2D; this hot
+        path intentionally performs no device-value inspection.
+
+        The caller owns block lifetimes and must keep every source and
+        destination pinned until these stream-ordered copies are safe.
+        """
+        if not isinstance(copy_plan, torch.Tensor):
+            raise TypeError('copy_plan must be a torch.Tensor.')
+        if copy_plan.dim() != 2 or copy_plan.size(0) != 2:
+            raise ValueError('copy_plan must have shape [2, num_pairs].')
+        if copy_plan.dtype != torch.long:
+            raise TypeError('copy_plan must use torch.long indices.')
+        if self._cache_block_copy_impl is None:
+            raise RuntimeError('Logical KV-block copy is not enabled for this cache engine.')
+        if copy_plan.device != self._cache_block_copy_device:
+            raise ValueError('copy_plan must be on the packed cache device.')
+        if copy_plan.size(1) == 0:
+            return
+
+        self._cache_block_copy_impl.forward(copy_plan[0], copy_plan[1])
 
     @torch.inference_mode()
     def _swap(self, src: torch.Tensor | list[torch.Tensor], dst: torch.Tensor | list[torch.Tensor],
@@ -941,33 +987,16 @@ class StateCacheEngine:
         self.mem_pool.masked_fill_(reshaped_mask, 0)
 
     @staticmethod
-    def _index_list(idx: int | Sequence[int]):
-        """Normalize host-side cache indices."""
-        if isinstance(idx, torch.Tensor):
-            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
-        if isinstance(idx, (str, bytes)):
-            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
-        try:
-            return [as_index(idx)]
-        except TypeError:
-            pass
-        if not isinstance(idx, Sequence):
-            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
-        if any(isinstance(item, torch.Tensor) for item in idx):
-            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
-        return [as_index(item) for item in idx]
-
-    @staticmethod
-    def _validate_index_bounds(indices: Sequence[int], num_caches: int):
-        """Check normalized cache indices are valid state slots."""
+    def _validate_index_bounds(indices: tuple[int, ...], num_caches: int):
+        """Check state cache indices are valid slots."""
         for idx in indices:
             if idx < 0 or idx >= num_caches:
                 raise ValueError(f'State cache index {idx} is out of range [0, {num_caches}).')
 
     @staticmethod
-    def _copy_ranges(src_list: list[int], dst_list: list[int]):
+    def _copy_ranges(src_indices: tuple[int, ...], dst_indices: tuple[int, ...]):
         """Yield contiguous copy ranges as (src_start, dst_start, length)."""
-        pairs = sorted(zip(src_list, dst_list))
+        pairs = sorted(zip(src_indices, dst_indices))
         if len(pairs) == 0:
             return
         start_src = prev_src = pairs[0][0]
@@ -985,7 +1014,7 @@ class StateCacheEngine:
             length = 1
         yield start_src, start_dst, length
 
-    def copy_caches(self, src_idx: int | Sequence[int], dst_idx: int | Sequence[int]):
+    def copy_caches(self, src_indices: tuple[int, ...], dst_indices: tuple[int, ...]):
         """Copy state cache slots.
 
         This is the low-level primitive needed by SSM prefix caching: a frozen
@@ -995,22 +1024,20 @@ class StateCacheEngine:
         if len(self._state_caches) <= 0:
             return
 
-        src_list = self._index_list(src_idx)
-        dst_list = self._index_list(dst_idx)
-        if len(src_list) != len(dst_list):
-            raise ValueError('src_idx and dst_idx must have the same number of elements.')
-        if len(src_list) == 0:
+        if len(src_indices) != len(dst_indices):
+            raise ValueError('src_indices and dst_indices must have the same number of elements.')
+        if len(src_indices) == 0:
             return
         num_caches = self.mem_pool.size(0)
-        self._validate_index_bounds(src_list, num_caches)
-        self._validate_index_bounds(dst_list, num_caches)
-        dst_set = set(dst_list)
-        if len(dst_set) != len(dst_list):
-            raise ValueError('dst_idx must not contain duplicate entries.')
-        if not set(src_list).isdisjoint(dst_set):
-            raise ValueError('src_idx and dst_idx must not overlap for stream-ordered state copies.')
+        self._validate_index_bounds(src_indices, num_caches)
+        self._validate_index_bounds(dst_indices, num_caches)
+        dst_set = set(dst_indices)
+        if len(dst_set) != len(dst_indices):
+            raise ValueError('dst_indices must not contain duplicate entries.')
+        if not set(src_indices).isdisjoint(dst_set):
+            raise ValueError('src_indices and dst_indices must not overlap for stream-ordered state copies.')
 
-        for src, dst, length in self._copy_ranges(src_list, dst_list):
+        for src, dst, length in self._copy_ranges(src_indices, dst_indices):
             if length == 1:
                 self.mem_pool[dst].copy_(self.mem_pool[src], non_blocking=True)
             else:
