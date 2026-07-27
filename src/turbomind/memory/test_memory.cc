@@ -912,13 +912,19 @@ TEST_CASE("ObjectAllocator composite atomic rollback on partial OOM", "[memory][
     REQUIRE(obj.Allocate(idx, &h, 1) == 0);  // not placed
     REQUIRE(h.a == nullptr);                 // batch leaves the slot null on OOM
     REQUIRE(obj.IsValid(h, 0) == false);
+    REQUIRE(obj.Usage().live_allocations == 0);
+    REQUIRE(obj.Usage().live_bytes == 0);
 
     // No leak: a simple 32 MiB object (same aligned size -> shared slab class)
     // can fully allocate all 4 pages.
     const int                   sidx = obj.Register(kObj, 1);
     std::vector<object_alloc_t> live(4);
     REQUIRE(obj.Allocate(sidx, live.data(), 4) == 4);
+    REQUIRE(obj.Usage().live_allocations == 4);
+    REQUIRE(obj.Usage().live_bytes == 4 * kObj);
     obj.Deallocate(sidx, live.data(), 4);
+    REQUIRE(obj.Usage().live_allocations == 0);
+    REQUIRE(obj.Usage().live_bytes == 0);
 }
 
 TEST_CASE("ObjectAllocator size dedup", "[memory][object][dedup]")
@@ -1123,7 +1129,7 @@ TEST_CASE("ObjectAllocator simple/composite share one slab class", "[memory][obj
     obj.Deallocate(sidx, &s0, 1);
 }
 
-TEST_CASE("ObjectAllocator Stats tracks live object bytes", "[memory][object][stats]")
+TEST_CASE("ObjectAllocator usage tracks live object bytes", "[memory][object][stats]")
 {
     using core::Allocator;
     using core::Buffer;
@@ -1147,17 +1153,29 @@ TEST_CASE("ObjectAllocator Stats tracks live object bytes", "[memory][object][st
         expected_composite_bytes += obj.PartBytes(composite_id, part);
     }
 
+    auto usage = obj.Usage();
+    REQUIRE(usage.live_allocations == 2);
+    REQUIRE(usage.live_bytes == obj.PartBytes(simple_id, 0) + expected_composite_bytes);
+
     auto stats = obj.Stats();
     REQUIRE(stats.live_allocations == 2);
-    REQUIRE(stats.live_bytes == obj.PartBytes(simple_id, 0) + expected_composite_bytes);
+    REQUIRE(stats.live_bytes == usage.live_bytes);
 
     obj.Deallocate(simple_id, simple);
+    usage = obj.Usage();
+    REQUIRE(usage.live_allocations == 1);
+    REQUIRE(usage.live_bytes == expected_composite_bytes);
+
     stats = obj.Stats();
     REQUIRE(stats.live_allocations == 1);
-    REQUIRE(stats.live_bytes == expected_composite_bytes);
+    REQUIRE(stats.live_bytes == usage.live_bytes);
 
     obj.Deallocate(composite_id, composite);
+    usage = obj.Usage();
+    REQUIRE(usage.live_allocations == 0);
+    REQUIRE(usage.live_bytes == 0);
+
     stats = obj.Stats();
     REQUIRE(stats.live_allocations == 0);
-    REQUIRE(stats.live_bytes == 0);
+    REQUIRE(stats.live_bytes == usage.live_bytes);
 }

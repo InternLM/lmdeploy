@@ -28,6 +28,12 @@ struct SlabStats {
     size_t free_objects;
 };
 
+struct MemoryUsage {
+    size_t live_allocations{};
+    size_t live_bytes{};
+    size_t region_bytes{};
+};
+
 struct MemoryStats {
     PageStats              page;
     std::vector<SlabStats> slabs;

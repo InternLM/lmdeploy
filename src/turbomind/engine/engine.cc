@@ -6,7 +6,6 @@
 #include <memory>
 #include <numeric>
 #include <thread>
-#include <unordered_set>
 
 #include "nvtx3/nvToolsExt.h"
 
@@ -512,22 +511,21 @@ void Engine::Impl::Schedule()
 
     for (auto i : swap_in) {
         auto& c = *eligible[i];
-        if (!c.first_schedule_recorded) {
-            c.first_schedule_recorded = true;
-
-            const int64_t cached_tokens = std::clamp<int64_t>(c.history_len, 0, c.prompt_len);
-            if (!is_warm_up_ && param_.enable_prefix_caching) {
-                prefix_query_tokens_ += c.prompt_len;
-                prefix_hit_tokens_ += cached_tokens;
-            }
-
-            if (auto& m = c.req->metrics; TM_LIKELY(m)) {
-                m->cached_tokens.store(cached_tokens, std::memory_order_relaxed);
-                int64_t expected = 0;
-                m->scheduled_time.compare_exchange_strong(
-                    expected, RequestMetrics::timestamp(), std::memory_order_relaxed);
-            }
+        if (!param_.enable_metrics || c.first_schedule_recorded) {
+            continue;
         }
+        c.first_schedule_recorded = true;
+
+        const int64_t cached_tokens = std::clamp<int64_t>(c.history_len, 0, c.prompt_len);
+        if (!is_warm_up_ && param_.enable_prefix_caching) {
+            prefix_query_tokens_ += c.prompt_len;
+            prefix_hit_tokens_ += cached_tokens;
+        }
+
+        auto& m = *c.req->metrics;
+        m.cached_tokens.store(cached_tokens, std::memory_order_relaxed);
+        int64_t expected = 0;
+        m.scheduled_time.compare_exchange_strong(expected, RequestMetrics::timestamp(), std::memory_order_relaxed);
     }
 
     for (auto i : existing) {
@@ -940,9 +938,8 @@ void Engine::Impl::UpdateScheduleMetrics(bool advance_scheduler)
 
     const auto& state = states_.at(0);
 
-    int                                   total_seqs  = 0;
-    int                                   active_seqs = 0;
-    std::unordered_set<const CacheBlock*> active_blocks;
+    int total_seqs  = 0;
+    int active_seqs = 0;
     for (const auto& p : state.rc) {
         if (!p || p->retiring) {
             continue;
@@ -952,25 +949,17 @@ void Engine::Impl::UpdateScheduleMetrics(bool advance_scheduler)
             continue;
         }
         ++active_seqs;
-        for (const CacheBlock* block : p->involved_blocks) {
-            if (is_valid(block)) {
-                active_blocks.insert(block);
-            }
-        }
     }
 
-    const MemoryStats memory = object_allocator_.Stats();
-    TM_CHECK_LE(active_blocks.size(), memory.live_allocations);
+    const MemoryUsage memory = object_allocator_.Usage();
 
-    auto m           = std::make_shared<ScheduleMetrics>();
-    m->total_seqs    = total_seqs;
-    m->active_seqs   = active_seqs;
-    m->waiting_seqs  = total_seqs - active_seqs;
-    m->total_blocks  = static_cast<int64_t>(memory.live_allocations);
-    m->active_blocks = static_cast<int64_t>(active_blocks.size());
-    m->cached_blocks = m->total_blocks - m->active_blocks;
-    m->free_blocks   = 0;
-    m->cache_usage   = memory.region_bytes ? static_cast<double>(memory.live_bytes) / memory.region_bytes : 0.;
+    auto m          = std::make_shared<ScheduleMetrics>();
+    m->total_seqs   = total_seqs;
+    m->active_seqs  = active_seqs;
+    m->waiting_seqs = total_seqs - active_seqs;
+    m->total_blocks = static_cast<int64_t>(memory.live_allocations);
+    m->free_blocks  = 0;
+    m->cache_usage  = memory.region_bytes ? static_cast<double>(memory.live_bytes) / memory.region_bytes : 0.;
     m->prefix_cache_hit_rate =
         prefix_query_tokens_ ? static_cast<double>(prefix_hit_tokens_) / prefix_query_tokens_ : 0.;
     m->scheduler_tick = scheduler_tick_;

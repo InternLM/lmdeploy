@@ -400,8 +400,6 @@ class TurboMind:
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
-                               active_blocks=tm_metrics.active_blocks,
-                               cached_blocks=tm_metrics.cached_blocks,
                                free_blocks=tm_metrics.free_blocks,
                                cache_usage=tm_metrics.cache_usage,
                                prefix_cache_hit_rate=tm_metrics.prefix_cache_hit_rate,
