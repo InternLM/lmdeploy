@@ -83,7 +83,6 @@ from .checkpoint import (
     StateCheckpointIndex,
     StateCheckpointVerifyStatus,
     freeze_state_checkpoint_match_data,
-    make_node_multimodal_identity,
     make_request_multimodal_identity,
 )
 from .checkpoint_lifecycle import StateCheckpointLifecycle
@@ -154,9 +153,6 @@ class BlockTrie:
             block_size=self.block_size,
             state_manager=state_manager,
             index=self._checkpoint_index,
-            is_attached_node=Node.is_attached,
-            find_checkpoint_node=self._find_state_checkpoint_node,
-            make_node_match_data=self._make_state_checkpoint_match_data_from_node,
             make_sequence_match_data=self._make_state_checkpoint_match_data_from_seq,
         )
         self._kv_lifecycle = KVBlockLifecycle(self.allocator, self._state_checkpoints)
@@ -294,23 +290,6 @@ class BlockTrie:
         for seq in seqs:
             self.cache_routed_experts_for_seq(seq)
 
-    def _make_state_checkpoint_match_data_from_node(self, node: Node):
-        """Build exact match data by reconstructing a node path.
-
-        This fallback serves direct-node tests and diagnostics.  Production publication uses the producer sequence's
-        contiguous buffers instead.
-        """
-        nodes = tuple(node.path_from_root())
-        if len(nodes) * self.block_size != node.num_matched:
-            raise RuntimeError('Cannot publish an SSM checkpoint with a detached ancestor chain.')
-        if any(not block_node.is_attached() for block_node in nodes):
-            raise RuntimeError('Cannot publish an SSM checkpoint with a stale ancestor link.')
-
-        token_ids = np.concatenate([block_node.tokens for block_node in nodes])
-        multimodal_hashes = make_node_multimodal_identity(nodes, self.block_size)
-        blocks = np.fromiter((block_node.block for block_node in nodes), dtype=np.int64, count=len(nodes))
-        return freeze_state_checkpoint_match_data(token_ids, multimodal_hashes, blocks)
-
     def _make_state_checkpoint_match_data_from_seq(self, node: Node, seq: SchedulerSequence):
         """Snapshot exact match data from a checkpoint producer.
 
@@ -335,20 +314,8 @@ class BlockTrie:
             raise RuntimeError('Cannot publish an SSM checkpoint from a mismatched sequence cursor.')
         return freeze_state_checkpoint_match_data(token_ids, multimodal_hashes, blocks)
 
-    # Trie attachment and leaf-index helpers.
-
-    def _find_state_checkpoint_node(self, seq: SchedulerSequence, step: int):
-        """Find the trie node that exactly represents a sequence checkpoint
-        step."""
-        node = seq.prefix_cache.last_shared_node
-        while node is not None and node.num_matched > step:
-            node = node.parent
-        if node is None or node.parent is None or node.num_matched != step:
-            return None
-        return node
-
     def _checkpoint_path_is_current(self, node: Node):
-        """Check a cached checkpoint path through its invalidation contract."""
+        """Check cached checkpoint data on an attached monotonic path."""
         checkpoint = node.state_checkpoint
         if checkpoint is None:
             return False
@@ -358,16 +325,10 @@ class BlockTrie:
         return len(match_data.blocks) * self.block_size == node.num_matched and node.is_attached()
 
     def _cursor_path_is_current(self, node: Node):
-        """Check whether a sequence cursor still reaches the adapter root."""
+        """Check a cursor under the monotonic attach/detach contract."""
         if node.parent is None:
             return node.block < 0 and self._roots.get(node.adapter_name) is node
-        checkpoint = node.state_checkpoint
-        if checkpoint is not None and checkpoint.exact_match_data is not None:
-            return self._checkpoint_path_is_current(node)
-        nodes = node.path_from_root()
-        if len(nodes) * self.block_size != node.num_matched:
-            return False
-        return all(path_node.is_attached() for path_node in nodes)
+        return node.is_attached()
 
     def _handle_state_checkpoint_rejection(self, seq: SchedulerSequence, node: Node, key, match_result):
         """Clean up a rejected sparse candidate according to its status."""
@@ -414,7 +375,8 @@ class BlockTrie:
         prefix_cache.restore.select(checkpoint.slot, node)
         prefix_cache.last_shared_node = node
         if overlap_end_step >= 0:
-            prefix_cache.recompute_overlap.set_pending_window(step, overlap_end_step, self.block_size)
+            prefix_cache.recompute_overlap.set_fresh_block_range(step // self.block_size,
+                                                                 overlap_end_step // self.block_size)
 
         self._record_match_stats(seq,
                                  query_tokens=seq.num_all_ids - initial_step,
@@ -459,7 +421,7 @@ class BlockTrie:
                 return
 
         seq.prefix_cache.last_shared_node = initial_cursor
-        seq.prefix_cache.recompute_overlap.clear_pending_window()
+        seq.prefix_cache.recompute_overlap.clear_fresh_block_range()
         self._record_match_stats(seq, query_tokens=seq.num_all_ids - initial_step)
         logger.debug('SSM prefix-cache miss: session_id=%s seq_id=%s initial_step=%s overlap_end_step=%s '
                      'max_step=%s published_steps=%s', seq.session_id, seq.seq_id, initial_step, overlap_end_step,
@@ -480,7 +442,7 @@ class BlockTrie:
         """
         if not self.enable:
             return
-        seq.prefix_cache.recompute_overlap.clear_pending_window()
+        seq.prefix_cache.recompute_overlap.clear_fresh_block_range()
         seq.prefix_cache.match_start_step = seq.num_history_ids
         seq.prefix_cache.restore.clear()
         if self.requires_state_checkpoint:
@@ -545,7 +507,8 @@ class BlockTrie:
         candidate_step = num_matched
         accepted_step = seq.clamp_prefix_cache_match_step(min(candidate_step, max_match_step))
         truncate_match_to_step(accepted_step)
-        seq.prefix_cache.recompute_overlap.set_pending_window(num_matched, candidate_step, self.block_size)
+        seq.prefix_cache.recompute_overlap.set_fresh_block_range(num_matched // self.block_size,
+                                                                 candidate_step // self.block_size)
 
         if len(matched_blocks) > 0:
             matched_blocks = np.array(matched_blocks)
@@ -598,7 +561,7 @@ class BlockTrie:
             num_valid_ids = min(num_valid_ids, seq.kv_token_limit)
 
         if num_matched + block_size > num_valid_ids:
-            recompute_overlap.clear_pending_window()
+            recompute_overlap.clear_fresh_block_range()
             return
 
         self._kv_lifecycle.begin_path_extension(node)
@@ -620,7 +583,7 @@ class BlockTrie:
                 child = parent.children[hash_key]
                 if not self._node_matches_block(child, curr_tokens, extra_hashes):
                     break
-                if recompute_overlap.requires_fresh_block(start):
+                if recompute_overlap.requires_fresh_block(block_id):
                     # This block was deliberately dropped from a prefix match so
                     # the target forward can regenerate hidden-state bridge data.
                     # Traverse the identity path, but keep the fresh writable
@@ -649,7 +612,7 @@ class BlockTrie:
                             extra_hashes=extra_hashes,
                             routed_experts=routed_experts,
                             adapter_name=seq.adapter_name)
-                node.parent = parent
+                node.attach_to(parent)
                 blocks.append(node.block)
             num_matched += block_size
             block_id += 1
@@ -658,7 +621,7 @@ class BlockTrie:
         self._kv_lifecycle.commit_path_extension(node,
                                                  additional_ref_blocks=blocks,
                                                  duplicate_blocks=free_blocks)
-        recompute_overlap.clear_pending_window()
+        recompute_overlap.clear_fresh_block_range()
 
     def evict(self, max_num_blocks: int):
         """Evict trie-owned KV leaf blocks.

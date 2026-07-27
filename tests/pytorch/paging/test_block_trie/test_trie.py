@@ -107,8 +107,7 @@ class TestBlockTrie(BlockTrieTestMixin):
 
         assert seq.num_history_ids == block_size * 2
         assert len(seq.logical_blocks) == 2
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == block_size * 2
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == block_size * 3
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(2, 3)
         assert block_trie.stats.num_query_tokens == len(token_ids)
         assert block_trie.stats.num_hit_tokens == block_size * 2
 
@@ -119,8 +118,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         block_trie.allocate(seq)
 
         assert seq.logical_blocks[2] == fresh_overlap_block
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == -1
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
         assert allocator.get_ref_count(np.array([cached_blocks[2]])).item() == 2
         assert allocator.get_ref_count(np.array([fresh_overlap_block])).item() == 1
         assert seq.prefix_cache.last_shared_node.num_matched == block_size * 3
@@ -177,8 +175,8 @@ class TestBlockTrie(BlockTrieTestMixin):
         expected_history = max(0, raw_match_blocks - 1) * block_size
         expected_raw = raw_match_blocks * block_size
         assert seq.num_history_ids == expected_history
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == expected_history
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == expected_raw
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(expected_history // block_size,
+                                                                             expected_raw // block_size)
 
         block_mgr.allocate(seq)
         fresh_overlap_blocks = seq.logical_blocks.get_real_blocks()[expected_history // block_size:raw_match_blocks]
@@ -188,8 +186,7 @@ class TestBlockTrie(BlockTrieTestMixin):
 
         block_trie.allocate(seq)
 
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == -1
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
         assert seq.prefix_cache.last_shared_node.num_matched == expected_raw
 
     def test_match_recompute_disabled_keeps_ar_full_hit(self, block_trie, block_mgr, scheduler):
@@ -206,8 +203,7 @@ class TestBlockTrie(BlockTrieTestMixin):
 
         assert seq.prefix_cache.recompute_overlap.required_blocks == 0
         assert seq.num_history_ids == block_size * 3
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == -1
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
 
     def test_match_recompute_overlap_expands_to_multimodal_boundary(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
@@ -228,8 +224,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         block_trie.match(seq)
 
         assert seq.num_history_ids == block_size * 2
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == block_size * 2
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == block_size * 4
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(2, 4)
 
         block_mgr.allocate(seq)
         fresh_overlap_blocks = seq.logical_blocks.get_real_blocks()[2:4].copy()
@@ -238,7 +233,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         block_trie.allocate(seq)
 
         assert np.array_equal(seq.logical_blocks.get_real_blocks()[2:4], fresh_overlap_blocks)
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
         assert seq.prefix_cache.last_shared_node.num_matched == block_size * 4
 
     def test_ssm_match_recompute_overlap_extends_from_checkpoint_to_raw_hit(self, ssm_scheduler):
@@ -268,8 +263,7 @@ class TestBlockTrie(BlockTrieTestMixin):
 
         assert seq.num_history_ids == block_size * 2
         assert seq.prefix_cache.restore.slot == state_idx
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == block_size * 2
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == block_size * 4
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(2, 4)
 
         block_mgr.allocate(seq)
         fresh_overlap_blocks = seq.logical_blocks.get_real_blocks()[2:4].copy()
@@ -278,7 +272,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         block_trie.allocate(seq)
 
         assert np.array_equal(seq.logical_blocks.get_real_blocks()[2:4], fresh_overlap_blocks)
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
         assert seq.prefix_cache.last_shared_node.num_matched == block_size * 4
 
     def test_ssm_match_recompute_falls_back_for_required_overlap(self, ssm_scheduler):
@@ -306,8 +300,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert seq.num_history_ids == shallow_step
         assert seq.prefix_cache.restore.slot == shallow_state
         assert seq.prefix_cache.restore.slot != deep_state
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == shallow_step
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == block_size * 4
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(shallow_step // block_size, 4)
 
     def test_ssm_match_recompute_misses_without_cached_suffix(self, ssm_scheduler):
         block_trie = ssm_scheduler.block_trie
@@ -334,8 +327,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore.slot == -1
         assert seq.prefix_cache.restore.node is None
-        assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
-        assert seq.prefix_cache.recompute_overlap.pending_end_step == -1
+        assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
         assert np.array_equal(block_trie.allocator.get_ref_count(cached_blocks), ref_counts)
 
     @pytest.mark.parametrize('num_new_blocks', [0, 1])
@@ -729,7 +721,10 @@ class TestBlockTrie(BlockTrieTestMixin):
 
         assert len(block0_hashes) == 1
         assert block0_hashes == block1_hashes
+        assert block0_hashes[0] is seq.prefix_cache.metas[0]
         assert len(block2_hashes) == 1
+        assert block2_hashes[0] is seq.prefix_cache.metas[1]
         assert len(block3_hashes) == 1
+        assert block3_hashes[0] is seq.prefix_cache.metas[2]
         assert len(seq.prefix_cache.block_extra_hashes) == 4
         assert seq.prefix_cache.num_indexed_metas == 3

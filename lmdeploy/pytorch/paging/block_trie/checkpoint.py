@@ -72,16 +72,7 @@ def freeze_state_checkpoint_match_data(token_ids: np.ndarray,
 
 def make_request_multimodal_identity(seq: SchedulerSequence, step: int):
     """Get the exact multimodal identity for a request prefix."""
-    hashes = ((meta.start, meta.end, meta.modality, meta.content_hash) for meta in seq.prefix_cache.metas
-              if meta.start < step and meta.end > 0)
-    return tuple(sorted(hashes))
-
-
-def make_node_multimodal_identity(nodes: tuple['Node', ...], block_size: int):
-    """Recover one exact, deduplicated multimodal identity from trie nodes."""
-    hashes = (extra_hash for block_id, block_node in enumerate(nodes) for extra_hash in block_node.extra_hashes
-              if extra_hash[0] // block_size == block_id)
-    return tuple(sorted(hashes))
+    return tuple(sorted(meta for meta in seq.prefix_cache.metas if meta.start < step and meta.end > 0))
 
 
 class StateCheckpointIndex:
@@ -191,8 +182,8 @@ class StateCheckpointIndex:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint owner is detached from its cached path')
 
-        # A current path has already passed BlockTrie's topology-invalidation
-        # contract.  Rewalking every ancestor here would make matching linear
+        # Monotonic topology guarantees that an attached node still has its
+        # original ancestors. Rewalking them here would make matching linear
         # in prefix blocks in Python.
         if index_key != self.make_node_key(node):
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_INDEX_ENTRY,

@@ -172,16 +172,16 @@ instead of deduplicating it back to `C shared`.
 
 `PrefixRecomputeOverlap` makes the three lifetimes explicit:
 
-| State                                    | Lifetime                                                    | Purpose                                                           |
-| ---------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
-| `required_blocks`                        | Sequence strategy                                           | Minimum number of cached suffix blocks the forward must recompute |
-| `pending_start_step`, `pending_end_step` | One match-to-allocation transaction                         | Steps that must keep fresh writable KV during allocation          |
-| `canonical_trie_blocks`                  | While the corresponding fresh blocks remain on the sequence | Maps each fresh logical block to its shared trie identity         |
+| State                   | Lifetime                                                    | Purpose                                                           |
+| ----------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| `required_blocks`       | Sequence strategy                                           | Minimum number of cached suffix blocks the forward must recompute |
+| `fresh_block_range`     | One match-to-allocation transaction                         | Blocks that must keep fresh writable KV during allocation         |
+| `canonical_trie_blocks` | While the corresponding fresh blocks remain on the sequence | Maps each fresh logical block to its shared trie identity         |
 
-The pending window is cleared after allocation. The canonical mapping remains
+The fresh block range is cleared after allocation. The canonical mapping remains
 longer because an SSM checkpoint published by this sequence must record the
 shared trie path, not sequence-private physical KV blocks. Rollback or sequence
-release clears both the pending window and the canonical mapping while keeping
+release clears both the fresh range and the canonical mapping while keeping
 the strategy's `required_blocks` policy.
 
 For SSM matching, the same concept begins at the selected state-checkpoint
@@ -259,9 +259,9 @@ forward output/event boundary
   unpin_save(seq)
 ```
 
-Publication is transactional. It revalidates node attachment, the reserved
-topology epoch, slot ownership, and save step before adding exact metadata to
-the sparse index. An abandoned or invalid reservation releases its state slot.
+Publication is transactional. It revalidates node attachment, slot ownership,
+save step, and producer identity before adding exact metadata to the sparse
+index. An abandoned or invalid reservation releases its state slot.
 
 ### Restore path
 
@@ -327,7 +327,8 @@ state that may contain stale entries.
 - A hash match is never sufficient without exact identity verification.
 - SSM reuse requires both the canonical KV path and an exact published state
   checkpoint.
-- Moving or detaching trie topology invalidates cached checkpoint match data.
+- Trie nodes attach once, and eviction detaches leaves only; attached ancestor
+  paths never change.
 - Pinned state checkpoints and shared KV nodes are not evictable.
 - Blocks in `recompute_overlap` must remain sequence-owned and writable through
   `BlockTrie.allocate()`.
@@ -342,7 +343,7 @@ state that may contain stale entries.
 | Change                                                  | Primary owner                                              |
 | ------------------------------------------------------- | ---------------------------------------------------------- |
 | Token, adapter, or multimodal identity                  | `trie.py`                                                  |
-| Trie topology or checkpoint-path invalidation           | `node.py`                                                  |
+| Monotonic trie attachment or leaf detachment            | `node.py`                                                  |
 | Sparse checkpoint keys or exact verification            | `checkpoint.py`                                            |
 | State reservation, publication, pins, or state eviction | `checkpoint_lifecycle.py`                                  |
 | KV references, leaf bookkeeping, or KV eviction         | `kv_lifecycle.py`                                          |
@@ -363,7 +364,7 @@ Tests are grouped by the same ownership boundaries:
 - [`test_trie.py`](../../../../tests/pytorch/paging/test_block_trie/test_trie.py):
   AR/VLM matching, allocation, identity, recompute, and statistics.
 - [`test_node.py`](../../../../tests/pytorch/paging/test_block_trie/test_node.py):
-  topology and invalidation.
+  monotonic attachment and leaf detachment.
 - [`test_checkpoint.py`](../../../../tests/pytorch/paging/test_block_trie/test_checkpoint.py):
   sparse SSM matching and exact verification.
 - [`test_checkpoint_lifecycle.py`](../../../../tests/pytorch/paging/test_block_trie/test_checkpoint_lifecycle.py):

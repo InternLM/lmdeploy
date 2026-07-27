@@ -890,12 +890,12 @@ class SchedulerSequence:
                 # Full-block lookup is the hot path; the indexed tuple already
                 # contains exactly the spans that overlap this block.
                 return extras
-            return tuple(extra for extra in extras if extra[0] < end and start < extra[1])
+            return tuple(extra for extra in extras if extra.start < end and start < extra.end)
 
         extras = []
         for block_id in range(start_block, end_block + 1):
             extras.extend(prefix_cache.block_extra_hashes.get(block_id, ()))
-        extras = [extra for extra in set(extras) if extra[0] < end and start < extra[1]]
+        extras = [extra for extra in set(extras) if extra.start < end and start < extra.end]
         return tuple(sorted(extras))
 
     def clamp_prefix_cache_match_step(self, step: int):
@@ -996,12 +996,11 @@ class SchedulerSequence:
         for meta in new_metas:
             if meta.end <= meta.start:
                 continue
-            extra = (meta.start, meta.end, meta.modality, meta.content_hash)
             start_block = meta.start // block_size
             end_block = (meta.end - 1) // block_size
             for block_id in range(start_block, end_block + 1):
                 extras = list(prefix_cache.block_extra_hashes.get(block_id, ()))
-                extras.append(extra)
+                extras.append(meta)
                 prefix_cache.block_extra_hashes[block_id] = tuple(sorted(extras))
         prefix_cache.num_indexed_metas = len(prefix_cache.metas)
 

@@ -14,10 +14,10 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_size = sess.seq_meta.block_size
         token_ids = [1] * block_size * 2 + [2]
 
-        seq = sess.add_sequence(token_ids)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        node = seq.prefix_cache.last_shared_node
+        producer = sess.add_sequence(token_ids)
+        block_mgr.allocate(producer)
+        block_trie.allocate(producer)
+        node = producer.prefix_cache.last_shared_node
 
         seq = sess.add_sequence(token_ids)
         block_trie.match(seq)
@@ -26,7 +26,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert seq.prefix_cache.restore.slot == -1
 
         state_idx = block_trie.state_checkpoints._reserve_node(node)
-        block_trie.state_checkpoints._publish_node(node)
+        block_trie.state_checkpoints._publish_node(node, producer)
 
         seq = sess.add_sequence(token_ids)
         block_trie.match(seq)
@@ -47,7 +47,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         leaf = seq.prefix_cache.last_shared_node
         checkpoint_node = leaf.parent
         state_idx = block_trie.state_checkpoints._reserve_node(checkpoint_node)
-        block_trie.state_checkpoints._publish_node(checkpoint_node)
+        block_trie.state_checkpoints._publish_node(checkpoint_node, seq)
 
         seq = sess.add_sequence(token_ids)
         block_trie.match(seq)
@@ -119,7 +119,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_trie.allocate(seq)
         node = seq.prefix_cache.last_shared_node
         block_trie.state_checkpoints._reserve_node(node)
-        block_trie.state_checkpoints._publish_node(node)
+        block_trie.state_checkpoints._publish_node(node, seq)
 
         miss_token_ids = token_ids.copy()
         miss_token_ids[(num_blocks - 1) * block_size:num_blocks * block_size] = [777] * block_size
@@ -151,7 +151,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_trie.allocate(seq)
         node = seq.prefix_cache.last_shared_node
         block_trie.state_checkpoints._reserve_node(node)
-        block_trie.state_checkpoints._publish_node(node)
+        block_trie.state_checkpoints._publish_node(node, seq)
 
         miss_token_ids = [1] * block_size + [4] * block_size + [3]
         seq = sess.add_sequence(miss_token_ids)
@@ -303,7 +303,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         key = block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
-        node.parent = None
+        node.detach_leaf()
         seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [3])
         block_trie.match(seq)
 
@@ -314,63 +314,6 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
 
-    def test_match_ssm_releases_checkpoint_with_detached_ancestor(self, ssm_scheduler):
-        block_size = ssm_scheduler.seq_meta.block_size
-        token_ids = [1] * block_size + [2] * block_size + [3] * block_size
-        _, node, _ = self._add_published_ssm_checkpoint(ssm_scheduler, token_ids)
-        block_trie = ssm_scheduler.block_trie
-        key = block_trie._checkpoint_index.make_node_key(node)
-        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
-
-        ancestor = node.parent
-        ancestor.parent = None
-        assert node.parent is ancestor
-        assert node.state_checkpoint.exact_match_data is None
-
-        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [4])
-        block_trie.match(seq)
-
-        assert len(seq.logical_blocks) == 0
-        assert seq.prefix_cache.restore.slot == -1
-        assert key not in block_trie._checkpoint_index._buckets
-        assert node.state_checkpoint is None
-        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
-
-    def test_replacing_child_detaches_displaced_node(self, ssm_scheduler):
-        block_mgr = ssm_scheduler.block_manager
-        block_trie = ssm_scheduler.block_trie
-        sess = ssm_scheduler.add_session(0)
-        block_size = sess.seq_meta.block_size
-        token_ids = [1] * block_size + [2] * block_size
-
-        seq = sess.add_sequence(token_ids)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        displaced = seq.prefix_cache.last_shared_node
-        parent = displaced.parent
-        replacement = type(displaced)(hash_key=displaced.hash_key,
-                                       block=displaced.block,
-                                       tokens=displaced.tokens.copy(),
-                                       num_matched=displaced.num_matched,
-                                       extra_hashes=displaced.extra_hashes,
-                                       adapter_name=displaced.adapter_name)
-        replacement.parent = parent
-
-        assert displaced.parent is None
-        assert parent.children[replacement.hash_key] is replacement
-        assert block_trie.state_checkpoints._reserve_node(replacement) >= 0
-        block_trie.state_checkpoints._publish_node(replacement)
-        match_data = replacement.state_checkpoint.exact_match_data
-
-        displaced.parent = None
-        assert parent.children[replacement.hash_key] is replacement
-        assert replacement.state_checkpoint.exact_match_data is match_data
-
-        matched = sess.add_sequence(token_ids + [3])
-        block_trie.match(matched)
-        assert matched.num_history_ids == block_size * 2
-        assert matched.prefix_cache.restore.node is replacement
-
     def test_match_ssm_keeps_pinned_stale_checkpoint_candidate(self, ssm_scheduler):
         block_size = ssm_scheduler.seq_meta.block_size
         token_ids = [1] * block_size + [2] * block_size
@@ -380,7 +323,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
         node.state_checkpoint.pin_count = 1
-        node.parent = None
+        node.detach_leaf()
         seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [3])
         block_trie.match(seq)
 

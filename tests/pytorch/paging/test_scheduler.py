@@ -576,7 +576,7 @@ def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
     assert seq.num_history_ids == block_size * 2
     assert seq.cached_tokens == block_size * 2
     assert seq.logical_blocks[2] != cached_blocks[2]
-    assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
+    assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
     assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
 
@@ -606,15 +606,14 @@ def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window():
     scheduler.block_trie.match(seq)
 
     assert seq.num_history_ids == block_size * 2
-    assert seq.prefix_cache.recompute_overlap.pending_start_step == block_size * 2
+    assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(2, 3)
 
     scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
     assert seq.num_history_ids == 0
     assert seq.num_token_ids == len(token_ids)
     assert seq.cached_tokens == 0
-    assert seq.prefix_cache.recompute_overlap.pending_start_step == -1
-    assert seq.prefix_cache.recompute_overlap.pending_end_step == -1
+    assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 

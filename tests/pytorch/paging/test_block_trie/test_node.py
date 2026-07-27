@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from lmdeploy.pytorch.paging.block_trie import Node
 from lmdeploy.pytorch.paging.block_trie.node import NodeStateCheckpoint
@@ -21,63 +22,58 @@ def test_state_checkpoint_is_allocated_lazily():
     assert not node.state_checkpoint.published
 
 
-def test_parent_assignment_maintains_both_sides():
+def test_attach_and_detach_leaf_maintain_both_sides():
     root = _make_node(0)
     child = _make_node(1)
 
-    child.parent = root
+    child.attach_to(root)
 
     assert child.parent is root
     assert child.is_attached()
     assert root.children == {child.hash_key: child}
     assert child.path_from_root() == [child]
 
-    child.parent = None
+    assert child.detach_leaf()
 
     assert child.parent is None
     assert not child.is_attached()
     assert root.children == {}
 
 
-def test_reparent_invalidates_checkpoint_paths_in_subtree():
+def test_attached_node_cannot_move_to_another_parent():
     old_root = _make_node(0)
     new_root = _make_node(10)
     child = _make_node(1)
-    grandchild = _make_node(2)
-    child.parent = old_root
-    grandchild.parent = child
-    child.state_checkpoint = NodeStateCheckpoint(slot=0, exact_match_data=object())
-    grandchild.state_checkpoint = NodeStateCheckpoint(slot=1, exact_match_data=object())
-    child_epoch = child._topology_epoch
-    grandchild_epoch = grandchild._topology_epoch
+    child.attach_to(old_root)
 
-    child.parent = new_root
+    with pytest.raises(RuntimeError, match='Cannot reattach'):
+        child.attach_to(new_root)
 
-    assert child.hash_key not in old_root.children
-    assert new_root.children[child.hash_key] is child
-    assert child.state_checkpoint.exact_match_data is None
-    assert grandchild.state_checkpoint.exact_match_data is None
-    assert child._topology_epoch == child_epoch + 1
-    assert grandchild._topology_epoch == grandchild_epoch + 1
+    assert old_root.children[child.hash_key] is child
+    assert new_root.children == {}
+    assert child.parent is old_root
 
 
-def test_replacing_child_detaches_and_invalidates_displaced_subtree():
+def test_attach_does_not_replace_an_existing_child():
     root = _make_node(0)
     displaced = _make_node(1)
-    descendant = _make_node(2)
-    displaced.parent = root
-    descendant.parent = displaced
-    displaced.state_checkpoint = NodeStateCheckpoint(slot=0, exact_match_data=object())
-    descendant.state_checkpoint = NodeStateCheckpoint(slot=1, exact_match_data=object())
-    displaced_epoch = displaced._topology_epoch
-    descendant_epoch = descendant._topology_epoch
+    displaced.attach_to(root)
     replacement = _make_node(displaced.hash_key)
 
-    replacement.parent = root
+    with pytest.raises(RuntimeError, match='Cannot replace'):
+        replacement.attach_to(root)
 
-    assert displaced.parent is None
-    assert root.children[replacement.hash_key] is replacement
-    assert displaced.state_checkpoint.exact_match_data is None
-    assert descendant.state_checkpoint.exact_match_data is None
-    assert displaced._topology_epoch == displaced_epoch + 1
-    assert descendant._topology_epoch == descendant_epoch + 1
+    assert displaced.parent is root
+    assert replacement.parent is None
+    assert root.children[displaced.hash_key] is displaced
+
+
+def test_non_leaf_cannot_detach():
+    root = _make_node(0)
+    parent = _make_node(1)
+    child = _make_node(2)
+    parent.attach_to(root)
+    child.attach_to(parent)
+
+    with pytest.raises(RuntimeError, match='Cannot detach a non-leaf'):
+        parent.detach_leaf()

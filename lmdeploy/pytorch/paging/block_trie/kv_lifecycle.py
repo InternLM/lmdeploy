@@ -89,7 +89,7 @@ class KVBlockLifecycle:
         self.state_checkpoints.release_checkpoint(leaf)
         parent = leaf.parent
         if parent is not None:
-            leaf.parent = None
+            leaf.detach_leaf()
         self.leaves.discard(leaf)
         return True, parent
 

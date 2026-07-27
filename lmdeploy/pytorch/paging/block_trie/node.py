@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Trie node topology and checkpoint-path invalidation."""
+"""Monotonic prefix-cache trie node topology."""
 
 from __future__ import annotations
 
@@ -18,15 +18,14 @@ if TYPE_CHECKING:
 class NodeStateCheckpoint:
     """State-checkpoint metadata allocated only for checkpoint owners.
 
-    ``slot`` and ``reserved_topology_epoch`` describe the reservation.
-    ``published`` exposes it to exact matching, while ``exact_match_data``
-    caches the immutable prefix identity and logical KV path used after sparse
-    lookup. ``pin_count`` protects async save/restore copies, and
-    ``last_access_time`` drives state-only LRU eviction.
+    ``slot`` describes the reservation. ``published`` exposes it to exact
+    matching, while ``exact_match_data`` caches the immutable prefix identity
+    and logical KV path used after sparse lookup. ``pin_count`` protects async
+    save/restore copies, and ``last_access_time`` drives state-only LRU
+    eviction.
     """
 
     slot: int
-    reserved_topology_epoch: int = -1
     published: bool = False
     exact_match_data: StateCheckpointMatchData | None = None
     pin_count: int = 0
@@ -45,13 +44,11 @@ class Node:
     exact-match data so ordinary KV-only nodes do not carry those lifecycle
     fields individually.
 
-    ``parent`` is intentionally stateful: assigning it updates the old and new
-    parent ``children`` maps and invalidates cached checkpoint paths in the
-    moved subtree. Detached nodes can therefore still exist as stale
-    auxiliary-index entries, but they are no longer trie truth.
-    ``_topology_epoch`` changes during that invalidation. A checkpoint records
-    the version captured by its reservation so a path change before
-    publication is also detectable.
+    Trie topology is monotonic: a fresh node attaches once, and eviction may
+    detach only a leaf. Disallowing subtree moves keeps every attached node's
+    ancestor path stable and removes the need for topology-version bookkeeping.
+    Detached nodes may still remain temporarily in auxiliary indexes, but they
+    are no longer trie truth.
     """
 
     def __init__(self,
@@ -68,7 +65,6 @@ class Node:
         self.num_matched = num_matched
         self.extra_hashes = extra_hashes
         self.state_checkpoint: NodeStateCheckpoint | None = None
-        self._topology_epoch = 0
         self.routed_experts = routed_experts
         self.adapter_name = adapter_name
         self.children: dict[int, Node] = {}
@@ -78,21 +74,27 @@ class Node:
     def parent(self):
         return self._parent
 
-    @parent.setter
-    def parent(self, val: Node | None):
-        old_parent = self._parent
-        if old_parent is val:
-            return
-        if old_parent is not None and old_parent.children.get(self.hash_key) is self:
-            old_parent.children.pop(self.hash_key)
-        if val is not None:
-            displaced = val.children.get(self.hash_key)
-            if displaced is not None and displaced is not self:
-                displaced._parent = None
-                displaced._invalidate_checkpoint_paths()
-            val.children[self.hash_key] = self
-        self._parent = val
-        self._invalidate_checkpoint_paths()
+    def attach_to(self, parent: Node):
+        """Attach a fresh node without replacing an existing trie edge."""
+        if self._parent is not None:
+            raise RuntimeError('Cannot reattach a prefix-cache trie node.')
+        if self.hash_key in parent.children:
+            raise RuntimeError('Cannot replace an existing prefix-cache trie child.')
+        parent.children[self.hash_key] = self
+        self._parent = parent
+
+    def detach_leaf(self):
+        """Detach an evicted leaf while preserving monotonic ancestry."""
+        if len(self.children) > 0:
+            raise RuntimeError('Cannot detach a non-leaf prefix-cache trie node.')
+        parent = self._parent
+        if parent is None:
+            return False
+        if parent.children.get(self.hash_key) is not self:
+            raise RuntimeError('Cannot detach an inconsistent prefix-cache trie edge.')
+        parent.children.pop(self.hash_key)
+        self._parent = None
+        return True
 
     def is_attached(self):
         """Check whether this node is still linked from its parent."""
@@ -108,14 +110,3 @@ class Node:
             node = node.parent
         nodes.reverse()
         return nodes
-
-    def _invalidate_checkpoint_paths(self):
-        """Invalidate checkpoint paths affected by moving this subtree."""
-        pending = [self]
-        while pending:
-            node = pending.pop()
-            node._topology_epoch += 1
-            checkpoint = node.state_checkpoint
-            if checkpoint is not None:
-                checkpoint.exact_match_data = None
-            pending.extend(node.children.values())

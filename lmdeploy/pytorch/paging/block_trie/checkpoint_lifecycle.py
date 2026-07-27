@@ -3,10 +3,9 @@
 
 The lifecycle owns state-slot reservation, publication, async-copy pins, and
 checkpoint-only eviction. It deliberately does not own trie topology or KV
-blocks. :class:`BlockTrie` supplies narrow callbacks for the few topology and
-exact-identity decisions needed while publishing a checkpoint, while
-``KVBlockLifecycle`` consults this owner before evicting a checkpoint-bearing
-KV leaf.
+blocks. :class:`BlockTrie` supplies the exact-identity builder needed while
+publishing a checkpoint, while ``KVBlockLifecycle`` consults this owner before
+evicting a checkpoint-bearing KV leaf.
 """
 
 from __future__ import annotations
@@ -20,18 +19,14 @@ from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.utils import get_logger
 
 from .checkpoint import StateCheckpointIndex
-from .node import NodeStateCheckpoint
+from .node import Node, NodeStateCheckpoint
 
 if TYPE_CHECKING:
     from ..state_manager import StateManager
     from .checkpoint import StateCheckpointKey, StateCheckpointMatchData
-    from .node import Node
 
 logger = get_logger('lmdeploy')
 
-NodePredicate = Callable[['Node'], bool]
-CheckpointNodeFinder = Callable[[SchedulerSequence, int], 'Node | None']
-NodeMatchDataBuilder = Callable[['Node'], 'StateCheckpointMatchData']
 SequenceMatchDataBuilder = Callable[['Node', SchedulerSequence], 'StateCheckpointMatchData']
 
 
@@ -40,9 +35,10 @@ class StateCheckpointLifecycle:
 
     Trie nodes remain the source of truth: a node with state ownership holds a
     lazily allocated :class:`NodeStateCheckpoint`. This component coordinates
-    that record with ``StateManager`` and ``StateCheckpointIndex``. The
-    callbacks keep topology and exact-identity policy in ``BlockTrie`` without
-    giving the lifecycle a back-reference to the whole trie.
+    that record with ``StateManager`` and ``StateCheckpointIndex``. Nodes own
+    their monotonic attachment invariant; the injected builder keeps
+    exact-identity policy in ``BlockTrie`` without giving the lifecycle a
+    back-reference to the whole trie.
     """
 
     def __init__(self,
@@ -52,18 +48,12 @@ class StateCheckpointLifecycle:
                  block_size: int,
                  state_manager: StateManager | None,
                  index: StateCheckpointIndex,
-                 is_attached_node: NodePredicate,
-                 find_checkpoint_node: CheckpointNodeFinder,
-                 make_node_match_data: NodeMatchDataBuilder,
                  make_sequence_match_data: SequenceMatchDataBuilder):
         self._prefix_cache_enabled = prefix_cache_enabled
         self._state_checkpoints_enabled = state_checkpoints_enabled
         self._block_size = block_size
         self._state_manager = state_manager
         self._index = index
-        self._is_attached_node = is_attached_node
-        self._find_checkpoint_node = find_checkpoint_node
-        self._make_node_match_data = make_node_match_data
         self._make_sequence_match_data = make_sequence_match_data
 
     def reserve_save(self, seq: SchedulerSequence, step: int = None, is_decode: bool = False):
@@ -354,6 +344,16 @@ class StateCheckpointLifecycle:
                      reason)
         return state_idx >= 0 or was_published
 
+    @staticmethod
+    def _find_checkpoint_node(seq: SchedulerSequence, step: int):
+        """Find the attached trie node at an exact sequence step."""
+        node = seq.prefix_cache.last_shared_node
+        while node is not None and node.num_matched > step:
+            node = node.parent
+        if node is None or not node.is_attached() or node.num_matched != step:
+            return None
+        return node
+
     def _reserve_node(self, node: Node):
         """Reserve a state-cache slot owned by a trie node.
 
@@ -377,32 +377,26 @@ class StateCheckpointLifecycle:
             slot = self._state_manager.allocate_checkpoint_state()
             checkpoint = NodeStateCheckpoint(slot=slot)
             node.state_checkpoint = checkpoint
-        checkpoint.reserved_topology_epoch = node._topology_epoch
         checkpoint.published = False
         checkpoint.exact_match_data = None
         checkpoint.last_access_time = 0.0
         return checkpoint.slot
 
-    def _publish_node(self, node: Node, seq: SchedulerSequence | None = None):
+    def _publish_node(self, node: Node, seq: SchedulerSequence):
         """Publish a node-owned checkpoint after its state copy is queued."""
         checkpoint = node.state_checkpoint
         if checkpoint is None or checkpoint.slot < 0:
             raise RuntimeError('Cannot publish an unreserved state checkpoint.')
         if checkpoint.pin_count != 0:
             raise RuntimeError('Cannot publish a pinned SSM prefix-cache checkpoint.')
-        if not self._is_attached_node(node):
+        if not node.is_attached():
             raise RuntimeError('Cannot publish a detached SSM prefix-cache checkpoint node.')
-        if checkpoint.reserved_topology_epoch != node._topology_epoch:
-            raise RuntimeError('Cannot publish an SSM checkpoint after its trie path changed.')
         if checkpoint.published:
             if checkpoint.exact_match_data is None:
-                raise RuntimeError('Cannot republish an invalidated SSM prefix-cache checkpoint.')
+                raise RuntimeError('Cannot republish an SSM checkpoint with missing exact-match metadata.')
             return
 
-        if seq is None:
-            match_data = self._make_node_match_data(node)
-        else:
-            match_data = self._make_sequence_match_data(node, seq)
+        match_data = self._make_sequence_match_data(node, seq)
         checkpoint.exact_match_data = match_data
         checkpoint.published = True
         checkpoint.last_access_time = time.perf_counter()
@@ -453,13 +447,11 @@ class StateCheckpointLifecycle:
     def _publication_invalid_reason(self, node: Node | None, state_idx: int, save_step: int):
         if node is None:
             return 'missing node'
-        if not self._is_attached_node(node):
+        if not node.is_attached():
             return 'detached node'
         checkpoint = node.state_checkpoint
         if checkpoint is None:
             return 'missing state checkpoint'
-        if checkpoint.reserved_topology_epoch != node._topology_epoch:
-            return 'trie path changed after reservation'
         if checkpoint.slot != state_idx:
             return f'state changed: current={checkpoint.slot}'
         if node.num_matched != save_step:
@@ -507,7 +499,7 @@ class StateCheckpointLifecycle:
         checkpoint = node.state_checkpoint
         if checkpoint is None or checkpoint.slot < 0 or not checkpoint.published:
             raise RuntimeError('Cannot index an unpublished SSM prefix-cache checkpoint.')
-        if not self._is_attached_node(node):
+        if not node.is_attached():
             raise RuntimeError('Cannot index a detached SSM prefix-cache checkpoint node.')
         self._index.add(node)
 

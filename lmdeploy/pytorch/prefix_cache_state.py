@@ -7,17 +7,12 @@ prefix-cache implementation modules.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from typing import Any, NamedTuple, TypeAlias
 
 import numpy as np
 
-PrefixCacheExtraHash: TypeAlias = tuple[int, int, str, str]
-PrefixCacheExtraHashes: TypeAlias = tuple[PrefixCacheExtraHash, ...]
-PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
 
-
-@dataclass(frozen=True)
-class PrefixCacheMeta:
+class PrefixCacheMeta(NamedTuple):
     """Multimodal span identity used by prefix-cache block keys.
 
     Placeholder token ids alone are not enough for VLM prefix caching: two
@@ -30,6 +25,13 @@ class PrefixCacheMeta:
     end: int
     modality: str
     content_hash: str
+
+
+# The block index stores the same immutable span objects as ``metas``. Keep the
+# established aliases for callers that describe their role in trie keys.
+PrefixCacheExtraHash: TypeAlias = PrefixCacheMeta
+PrefixCacheExtraHashes: TypeAlias = tuple[PrefixCacheMeta, ...]
+PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
 
 
 @dataclass
@@ -116,38 +118,33 @@ class PrefixRecomputeOverlap:
 
     Some strategies need target hidden states from the end of an otherwise
     reusable prefix. ``required_blocks`` is that persistent strategy policy.
-    A match records the cached-but-dropped suffix as a one-shot pending window;
-    allocation must keep fresh sequence-owned KV for this window instead of
+    A match records the cached-but-dropped suffix as a one-shot fresh block
+    range; allocation must keep sequence-owned KV for these blocks instead of
     deduplicating it back to shared trie blocks.
 
     ``canonical_trie_blocks`` preserves the shared trie identity corresponding
-    to those fresh blocks. It outlives the pending window so a later SSM state
+    to those fresh blocks. It outlives the fresh range so a later SSM state
     checkpoint can snapshot the canonical KV path.
     """
 
     required_blocks: int = 0
-    pending_start_step: int = -1
-    pending_end_step: int = -1
+    fresh_block_range: range | None = None
     canonical_trie_blocks: dict[int, int] = field(default_factory=dict, repr=False)
 
-    def set_pending_window(self, start_step: int, end_step: int, block_size: int) -> None:
-        """Set the block-aligned window that needs fresh KV allocation."""
-        start_step = (start_step // block_size) * block_size
-        end_step = (end_step // block_size) * block_size
-        if end_step <= start_step:
-            self.clear_pending_window()
+    def set_fresh_block_range(self, start_block: int, end_block: int) -> None:
+        """Set the half-open block range that needs fresh KV allocation."""
+        if end_block <= start_block:
+            self.clear_fresh_block_range()
             return
-        self.pending_start_step = start_step
-        self.pending_end_step = end_step
+        self.fresh_block_range = range(start_block, end_block)
 
-    def clear_pending_window(self) -> None:
+    def clear_fresh_block_range(self) -> None:
         """Finish the one-shot match-to-allocation window."""
-        self.pending_start_step = -1
-        self.pending_end_step = -1
+        self.fresh_block_range = None
 
-    def requires_fresh_block(self, step: int) -> bool:
-        """Whether this step must keep its sequence-owned writable KV."""
-        return self.pending_start_step >= 0 and self.pending_start_step <= step < self.pending_end_step
+    def requires_fresh_block(self, block_id: int) -> bool:
+        """Whether this block must keep its sequence-owned writable KV."""
+        return self.fresh_block_range is not None and block_id in self.fresh_block_range
 
     def remember_canonical_block(self, block_id: int, trie_block: int) -> None:
         """Associate fresh sequence KV with its canonical shared trie block."""
@@ -165,7 +162,7 @@ class PrefixRecomputeOverlap:
 
     def reset_runtime_state(self) -> None:
         """Clear transient overlap state while preserving strategy policy."""
-        self.clear_pending_window()
+        self.clear_fresh_block_range()
         self.canonical_trie_blocks.clear()
 
 
