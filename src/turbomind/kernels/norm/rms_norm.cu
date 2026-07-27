@@ -99,25 +99,28 @@ void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, boo
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        const auto [num, dim] = x.shapes(0, 1);
+        const int num = x.shape(0);
+        const int dim = x.shape(1);
 
-        constexpr int vec_size = 16 / sizeof(T);
-
-        constexpr int threads = 512;
-        const int     blocks  = num;
+        const int blocks = num;
 
         auto launch = [&](auto zero_centered_c) {
+            // Redeclare these as constexpr inside this nested lambda. MSVC odr-uses
+            // (captures) constexpr locals read from an enclosing lambda and then
+            // refuses them as non-type template arguments.
+            constexpr int  kThreads     = 512;
+            constexpr int  kVecSize     = 16 / sizeof(T);
             constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
-            kernel::RMSNorm<ZeroCentered, T, float, threads, vec_size>
-                <<<blocks, threads, 0, st>>>((T*)out.raw_data(),  //
-                                             out.stride(0),
-                                             (const T*)x.raw_data(),
-                                             x.stride(0),
-                                             (const T*)w.raw_data(),
-                                             dim,
-                                             num,
-                                             eps,
-                                             1.f / dim);
+            kernel::RMSNorm<ZeroCentered, T, float, kThreads, kVecSize>
+                <<<blocks, kThreads, 0, st>>>((T*)out.raw_data(),  //
+                                              out.stride(0),
+                                              (const T*)x.raw_data(),
+                                              x.stride(0),
+                                              (const T*)w.raw_data(),
+                                              dim,
+                                              num,
+                                              eps,
+                                              1.f / dim);
         };
 
         if (zero_centered) {
@@ -369,20 +372,21 @@ void invokeBiasResidualRMSNorm(T*           residual,
                                bool         zero_centered,
                                cudaStream_t st)
 {
-    constexpr int vec_size = 16 / sizeof(T);
-    constexpr int threads  = 512;
-    const int     blocks   = num;
+    const int blocks = num;
 
     auto launch = [&](auto zero_centered_c) {
+        constexpr int  kThreads     = 512;
+        constexpr int  kVecSize     = 16 / sizeof(T);
         constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
-        BiasResidualRMSNormKernel<ZeroCentered, T, float, threads, vec_size><<<blocks, threads, 0, st>>>(residual,  //
-                                                                                                         hidden_states,
-                                                                                                         weights,
-                                                                                                         bias,
-                                                                                                         dims,
-                                                                                                         num,
-                                                                                                         eps,
-                                                                                                         1.f / dims);
+        BiasResidualRMSNormKernel<ZeroCentered, T, float, kThreads, kVecSize>
+            <<<blocks, kThreads, 0, st>>>(residual,  //
+                                          hidden_states,
+                                          weights,
+                                          bias,
+                                          dims,
+                                          num,
+                                          eps,
+                                          1.f / dims);
     };
 
     if (zero_centered) {
@@ -431,21 +435,22 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
         return;
     }
     auto invoke = [&](auto t) {
-        using T                = decltype(t);
-        constexpr int vec_size = sizeof(uint4) / sizeof(T);
-        constexpr int threads  = 512;
-        const int     blocks   = num;
-        auto          launch   = [&](auto zero_centered_c) {
+        using T          = decltype(t);
+        const int blocks = num;
+        auto      launch = [&](auto zero_centered_c) {
+            // Keep kernel template constants local to the nested lambda for MSVC.
+            constexpr int  kThreads     = 512;
+            constexpr int  kVecSize     = sizeof(uint4) / sizeof(T);
             constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
-            BiasResidualRMSNormKernel<ZeroCentered, T, float, threads, vec_size>
-                <<<blocks, threads, 0, st>>>((T*)residual,  //
-                                             (T*)hidden_states,
-                                             (const T*)weights,
-                                             (const T*)bias,
-                                             dims,
-                                             num,
-                                             eps,
-                                             1.f / dims);
+            BiasResidualRMSNormKernel<ZeroCentered, T, float, kThreads, kVecSize>
+                <<<blocks, kThreads, 0, st>>>((T*)residual,  //
+                                              (T*)hidden_states,
+                                              (const T*)weights,
+                                              (const T*)bias,
+                                              dims,
+                                              num,
+                                              eps,
+                                              1.f / dims);
         };
 
         if (zero_centered) {
