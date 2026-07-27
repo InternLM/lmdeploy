@@ -134,34 +134,45 @@ void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, boo
 
 namespace kernel {
 
-template<bool ZeroCentered, class T, class A, int vec_size, int max_dim>
-__global__ void RMSNormQK(T*       data,  //
+template<class T, class A, int vec_size, int max_dim, bool ZeroCentered>
+__global__ void QkRMSNorm(T*       qkv,
                           int      ld,
-                          const T* weight,
+                          const T* q_weight,
+                          const T* k_weight,
                           int      dim,
-                          int      n,
+                          int      q_head_num,
+                          int      k_head_num,
                           int      token_num,
+                          int      q_block_num,
                           float    eps,
-                          float    inv_dim)
+                          float    inv_dim,
+                          constant<ZeroCentered>)
 {
     static_assert((max_dim & (max_dim - 1)) == 0);
 
-    constexpr int thr_per_qk = max_dim / vec_size;
+    constexpr int threads_per_head = max_dim / vec_size;
 
-    const int bi = (threadIdx.x + blockIdx.x * blockDim.x) / thr_per_qk;
-    const int di = threadIdx.x % thr_per_qk * vec_size;
-    const int ti = bi / n;
-    const int hi = bi % n;
+    const bool is_k        = blockIdx.x >= q_block_num;
+    const int  block_idx   = is_k ? blockIdx.x - q_block_num : blockIdx.x;
+    const int  head_num    = is_k ? k_head_num : q_head_num;
+    const int  head_offset = is_k ? q_head_num : 0;
+    const T*   weight      = is_k ? k_weight : q_weight;
 
-    if (bi >= token_num * n) {
+    const int bi = (threadIdx.x + block_idx * blockDim.x) / threads_per_head;
+    const int di = threadIdx.x % threads_per_head * vec_size;
+
+    if (bi >= token_num * head_num) {
         return;
     }
 
-    data += ti * ld + hi * dim;
+    const int ti = bi / head_num;
+    const int hi = bi % head_num;
+
+    qkv += ti * ld + (head_offset + hi) * dim;
 
     Array<T, vec_size> vec{};
     if (di < dim) {
-        Load(vec, &data[di]);
+        Load(vec, &qkv[di]);
     }
 
     using namespace ops;
@@ -175,7 +186,7 @@ __global__ void RMSNormQK(T*       data,  //
     }
 
     PRAGMA_UNROLL
-    for (int mask = thr_per_qk / 2; mask >= 1; mask /= 2) {
+    for (int mask = threads_per_head / 2; mask >= 1; mask /= 2) {
         sum += __shfl_xor_sync((uint32_t)-1, sum, mask);
     }
 
@@ -188,43 +199,61 @@ __global__ void RMSNormQK(T*       data,  //
         for (int i = 0; i < vec_size; ++i) {
             vec[i] = ApplyRMSnorm<ZeroCentered>(vec[i], sum, w[i]);
         }
-        Store(&data[di], vec);
+        Store(&qkv[di], vec);
     }
 }
 
 }  // namespace kernel
 
-void invokeQkRMSNorm(void*        data,
-                     int          ld,
-                     const void*  weight,
-                     DataType     dtype,
-                     int          head_dim,
-                     int          n,
-                     int          token_num,
-                     float        eps,
-                     bool         zero_centered,
-                     cudaStream_t stream)
+void invokeQkRMSNorm(Tensor&       qkv,
+                     const Tensor& q_weight,
+                     const Tensor& k_weight,
+                     int           q_head_num,
+                     int           k_head_num,
+                     float         eps,
+                     bool          zero_centered,
+                     cudaStream_t  stream)
 {
+    TM_CHECK(qkv.ndim() == 3);
+
+    const int token_num = qkv.shape(0);
+    const int head_dim  = qkv.shape(2);
+
+    TM_CHECK(qkv.stride(1) == head_dim);
+
+    auto data   = qkv.raw_data();
+    auto stride = qkv.stride(0);
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
         auto launch = [&](auto max_dim_c, auto zero_centered_c) {
-            constexpr int  kMaxDim      = std::decay_t<decltype(max_dim_c)>::value;
-            constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
+            constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
             TM_CHECK_LE(head_dim, kMaxDim);
 
-            constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-            constexpr int thr_per_qk = kMaxDim / vec_size;
+            constexpr int vec_size         = sizeof(uint4) / sizeof(T);
+            constexpr int threads_per_head = kMaxDim / vec_size;
+            constexpr int block_dim        = 512;
 
             TM_CHECK(head_dim % vec_size == 0);
 
-            const int threads   = thr_per_qk * n * (int64_t)token_num;
-            const int block_dim = 512;
-            const int grid_dim  = cdiv(threads, block_dim);
+            const int q_block_num = cdiv(token_num * q_head_num * threads_per_head, block_dim);
+            const int k_block_num = cdiv(token_num * k_head_num * threads_per_head, block_dim);
+            const int grid_dim    = q_block_num + k_block_num;
 
-            kernel::RMSNormQK<ZeroCentered, T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, stream>>>(
-                (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
+            kernel::QkRMSNorm<T, float, vec_size, kMaxDim>
+                <<<grid_dim, block_dim, 0, stream>>>((T*)data,
+                                                     stride,
+                                                     (const T*)q_weight.raw_data(),
+                                                     (const T*)k_weight.raw_data(),
+                                                     head_dim,
+                                                     q_head_num,
+                                                     k_head_num,
+                                                     token_num,
+                                                     q_block_num,
+                                                     eps,
+                                                     1.f / head_dim,
+                                                     zero_centered_c);
         };
 
         if (head_dim <= 128) {
@@ -245,62 +274,7 @@ void invokeQkRMSNorm(void*        data,
         }
     };
 
-    TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
-void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, bool zero_centered, cudaStream_t st)
-{
-    TM_CHECK(x.ndim() == 3);
-
-    int token_num, head_num, head_dim;
-    std::tie(token_num, head_num, head_dim) = x.shapes(0, 1, 2);
-
-    TM_CHECK(x.stride(1) == head_dim);
-
-    auto data   = x.raw_data();
-    auto stride = x.stride(0);
-
-    auto invoke = [&](auto t) {
-        using T = decltype(t);
-
-        auto launch = [&](auto max_dim_c, auto zero_centered_c) {
-            constexpr int  kMaxDim      = std::decay_t<decltype(max_dim_c)>::value;
-            constexpr bool ZeroCentered = decltype(zero_centered_c)::value;
-            TM_CHECK_LE(head_dim, kMaxDim);
-
-            constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-            constexpr int thr_per_qk = kMaxDim / vec_size;
-
-            TM_CHECK(head_dim % vec_size == 0);
-
-            const int threads   = token_num * head_num * thr_per_qk;
-            const int block_dim = 512;
-            const int grid_dim  = cdiv(threads, block_dim);
-
-            kernel::RMSNormQK<ZeroCentered, T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, st>>>(
-                (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
-        };
-
-        if (head_dim <= 128) {
-            if (zero_centered) {
-                launch(constant<128>{}, constant<true>{});
-            }
-            else {
-                launch(constant<128>{}, constant<false>{});
-            }
-        }
-        else {
-            if (zero_centered) {
-                launch(constant<256>{}, constant<true>{});
-            }
-            else {
-                launch(constant<256>{}, constant<false>{});
-            }
-        }
-    };
-
-    TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
+    TM_DISPATCH_PRIMARY_DTYPES(qkv.dtype(), invoke);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

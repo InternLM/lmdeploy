@@ -8,7 +8,14 @@ namespace turbomind {
 
 void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, bool zero_centered, cudaStream_t st);
 
-void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, bool zero_centered, cudaStream_t st);
+void invokeQkRMSNorm(Tensor&       qkv,
+                     const Tensor& q_weight,
+                     const Tensor& k_weight,
+                     int           q_head_num,
+                     int           k_head_num,
+                     float         eps,
+                     bool          zero_centered,
+                     cudaStream_t  st);
 
 template<class T>
 void invokeBiasResidualRMSNorm(T*           residual,
