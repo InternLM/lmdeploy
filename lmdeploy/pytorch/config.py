@@ -345,7 +345,7 @@ class MemDecodeConfig:
     memory_model_path: str
     memory_model_config: 'ModelConfig'
     lambda_value: float = 1.0
-    adaptive_router: bool = False
+    adaptive_router: bool = True
     router_path: str | None = None
     lambda_base_only_threshold: float = -1.0
 

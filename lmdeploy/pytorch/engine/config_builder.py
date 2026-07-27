@@ -153,7 +153,7 @@ class ConfigBuilder:
 
         fusion_options = {
             'lambda_value': 1.0,
-            'adaptive_router': False,
+            'adaptive_router': True,
             'lambda_base_only_threshold': -1.0,
             'default_router': None,
             'routers': {},
