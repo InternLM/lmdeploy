@@ -77,8 +77,8 @@ from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraHashes
 from lmdeploy.utils import get_logger
 
-from ...config import CacheConfig
-from ..block_manager import BaseBlockManager
+from ..block_manager.base_block_manager import LogicalAllocator
+from ..state_manager import StateManager
 from .checkpoint import (
     StateCheckpointIndex,
     StateCheckpointVerifyStatus,
@@ -135,11 +135,16 @@ class BlockTrie:
     * prefix-cache stats used by scheduler rollback.
     """
 
-    def __init__(self, cache_config: CacheConfig, block_manager: BaseBlockManager, state_manager=None):
-        self.allocator = block_manager.allocator
-        self.block_size = cache_config.block_size
-        self.enable = cache_config.enable_prefix_caching
-        self.requires_state_checkpoint = state_manager is not None and len(cache_config.states_shapes) > 0
+    def __init__(self,
+                 *,
+                 allocator: LogicalAllocator,
+                 block_size: int,
+                 enabled: bool,
+                 checkpoint_state_manager: StateManager | None = None):
+        self.allocator = allocator
+        self.block_size = block_size
+        self.enable = enabled
+        self.requires_state_checkpoint = checkpoint_state_manager is not None
 
         # caches with different adapter should not be shared.
         self._roots: dict[str, Node] = dict()
@@ -151,7 +156,7 @@ class BlockTrie:
             prefix_cache_enabled=self.enable,
             state_checkpoints_enabled=self.requires_state_checkpoint,
             block_size=self.block_size,
-            state_manager=state_manager,
+            state_manager=checkpoint_state_manager,
             index=self._checkpoint_index,
             make_sequence_match_data=self._make_state_checkpoint_match_data_from_seq,
         )

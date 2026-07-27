@@ -481,8 +481,12 @@ class Scheduler:
 
         self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
-        self.block_trie = BlockTrie(self.cache_config, self.block_manager, self.state_manager)
         self.is_ssm = len(self.cache_config.states_shapes) > 0
+        checkpoint_state_manager = self.state_manager if self.is_ssm else None
+        self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
+                                   block_size=self.cache_config.block_size,
+                                   enabled=self.cache_config.enable_prefix_caching,
+                                   checkpoint_state_manager=checkpoint_state_manager)
 
         self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
 
