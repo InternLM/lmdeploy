@@ -115,7 +115,8 @@ struct Sm90FusedGdrH {
                           int     token_num,
                           int     sequence_num,
                           int64_t gate_stride,
-                          int64_t gate_batch_stride)
+                          int64_t gate_batch_stride,
+                          bool    allow_warmup)
     {
         WarmupMetadata out{0, 0};
         const int      sequence_id = cp_source_indices[segment_id];
@@ -134,6 +135,9 @@ struct Sm90FusedGdrH {
         float           gate_sum         = 0.0f;
         out.chunks                       = segment_chunks;
         out.fallback                     = 1;
+        if (!allow_warmup) {
+            return out;
+        }
         for (int chunk = 0; chunk < segment_chunks; ++chunk) {
             const int     flat_token     = segment_end - chunk * kChunkSize - 1;
             const int     physical_batch = flat_token / token_num;
@@ -796,6 +800,7 @@ struct Sm90FusedGdrH {
                                                int64_t        gate_batch_stride,
                                                int64_t        beta_stride,
                                                int64_t        beta_batch_stride,
+                                               bool           allow_warmup,
                                                unsigned char* smem_raw)
     {
         auto& smem = *reinterpret_cast<SharedStorage*>(smem_raw);
@@ -813,7 +818,8 @@ struct Sm90FusedGdrH {
                                            token_num,
                                            sequence_num,
                                            gate_stride,
-                                           gate_batch_stride);
+                                           gate_batch_stride,
+                                           allow_warmup);
             cp_fallback[segment_id * hv + value_head] = warmup.fallback != 0;
         }
         __syncthreads();
@@ -886,7 +892,8 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
     int64_t gate_stride,
     int64_t gate_batch_stride,
     int64_t beta_stride,
-    int64_t beta_batch_stride)
+    int64_t beta_batch_stride,
+    bool    allow_warmup)
 {
 #if __CUDA_ARCH__
     if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
@@ -909,6 +916,7 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
                               gate_batch_stride,
                               beta_stride,
                               beta_batch_stride,
+                              allow_warmup,
                               smem_raw);
     }
 #endif
@@ -967,7 +975,8 @@ void LaunchSm90FusedGdrHTyped(const core::Tensor&        k,
                                               problem.gate_stride,
                                               problem.gate_batch_stride,
                                               problem.beta_stride,
-                                              problem.beta_batch_stride);
+                                              problem.beta_batch_stride,
+                                              cp.cp_level == ContextParallelLevel::kAll);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

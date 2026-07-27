@@ -27,7 +27,7 @@ from .cases import (
 )
 
 VALID_BACKENDS = ('reference', 'turbomind', 'fla', 'flashqla')
-VALID_CP_MODES = ('auto', 'off')
+VALID_CP_LEVELS = ('all', 'exact', 'off')
 VALID_CP_PATTERNS = ('auto', 'warmup', 'fallback', 'alternating')
 CP_FALLBACK_SEGMENT_LOG_DECAY = -5.0
 
@@ -41,7 +41,7 @@ class BenchmarkRequest:
     backend: str
     state_dtype: str
     chunk_size: int | None
-    cp_mode: str
+    cp_level: str
     cp_pattern: str
     validate_outputs: bool
     print_diffs: bool
@@ -89,7 +89,7 @@ def base_row(
     run: RunCase,
     backend: str,
     *,
-    cp_mode: str = 'auto',
+    cp_level: str = 'all',
     cp_pattern: str = 'auto',
     cp_enabled: bool | None = None,
     **extra,
@@ -107,7 +107,7 @@ def base_row(
         'hv': run.input.heads.hv,
         'chunk_size': run.chunk_size,
         'chunks': case_chunks(run),
-        'cp_mode': cp_mode,
+        'cp_level': cp_level,
         'cp_pattern': cp_pattern,
     }
     if cp_enabled is not None:
@@ -126,9 +126,9 @@ def format_row(row: dict[str, object]) -> str:
     return ','.join(parts)
 
 
-def _validate_cp_mode(cp_mode: str) -> None:
-    if cp_mode not in VALID_CP_MODES:
-        raise ValueError(f'unsupported_cp_mode {cp_mode}')
+def _validate_cp_level(cp_level: str) -> None:
+    if cp_level not in VALID_CP_LEVELS:
+        raise ValueError(f'unsupported_cp_level {cp_level}')
 
 
 def _validate_cp_pattern(cp_pattern: str) -> None:
@@ -136,20 +136,11 @@ def _validate_cp_pattern(cp_pattern: str) -> None:
         raise ValueError(f'unsupported_cp_pattern {cp_pattern}')
 
 
-def validate_cp_request(cp_mode: str, cp_pattern: str, backend: str) -> None:
-    _validate_cp_mode(cp_mode)
+def validate_cp_request(cp_level: str, cp_pattern: str, backend: str) -> None:
+    _validate_cp_level(cp_level)
     _validate_cp_pattern(cp_pattern)
     if cp_pattern != 'auto' and backend not in ('turbomind', 'flashqla'):
         raise ValueError('cp_pattern_requires_cp_backend')
-
-
-def enforce_cp_intent(row: dict[str, object], cp_mode: str) -> None:
-    _validate_cp_mode(cp_mode)
-    if cp_mode == 'auto':
-        return
-    cp_enabled = bool(row.get('cp_enabled', False))
-    if cp_mode == 'off' and cp_enabled:
-        raise ValueError('cp_selected')
 
 
 def apply_cp_pattern(
@@ -807,7 +798,6 @@ BACKEND_UNSUPPORTED_REASONS = (
     'flashqla_requires_chunk32',
     'flashqla_requires_chunk64',
     'fla_requires_chunk64',
-    'cp_selected',
     'cp_pattern_requires_cp_backend',
     'cp_not_selected',
     'cp_pattern_requires_multiple_segments',
@@ -826,7 +816,7 @@ def unavailable_row(run: RunCase, request: BenchmarkRequest) -> dict[str, object
     return base_row(
         run,
         request.backend,
-        cp_mode=request.cp_mode,
+        cp_level=request.cp_level,
         cp_pattern=request.cp_pattern,
         status='unavailable',
     )
@@ -836,7 +826,7 @@ def unsupported_row(run: RunCase, request: BenchmarkRequest, reason: str) -> dic
     return base_row(
         run,
         request.backend,
-        cp_mode=request.cp_mode,
+        cp_level=request.cp_level,
         cp_pattern=request.cp_pattern,
         status='unsupported',
         reason=reason,
@@ -845,7 +835,7 @@ def unsupported_row(run: RunCase, request: BenchmarkRequest, reason: str) -> dic
 
 def run_case(run: RunCase, request: BenchmarkRequest, device: torch.device) -> dict[str, object]:
     try:
-        validate_cp_request(request.cp_mode, request.cp_pattern, request.backend)
+        validate_cp_request(request.cp_level, request.cp_pattern, request.backend)
     except ValueError as exc:
         reason = str(exc)
         if reason not in BACKEND_UNSUPPORTED_REASONS:
@@ -874,15 +864,7 @@ def run_case(run: RunCase, request: BenchmarkRequest, device: torch.device) -> d
         if reason not in BACKEND_UNSUPPORTED_REASONS:
             raise
         return unsupported_row(run, request, reason)
-    row = time_task(task, request, device)
-    try:
-        enforce_cp_intent(row, request.cp_mode)
-    except ValueError as exc:
-        reason = str(exc)
-        if reason not in BACKEND_UNSUPPORTED_REASONS:
-            raise
-        return unsupported_row(run, request, reason)
-    return row
+    return time_task(task, request, device)
 
 
 CP_UNSUPPORTED_REASONS = BACKEND_UNSUPPORTED_REASONS
@@ -912,7 +894,7 @@ def request_from_args(args, *, backend: str, run: RunCase) -> BenchmarkRequest:
         backend=backend,
         state_dtype=run.state_dtype,
         chunk_size=args.chunk_size,
-        cp_mode=args.cp_mode,
+        cp_level=args.cp_level,
         cp_pattern=args.cp_pattern,
         validate_outputs=not args.skip_validate,
         print_diffs=args.print_diffs,
@@ -972,7 +954,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--backend', default='reference')
     parser.add_argument('--chunk-size', type=parse_chunk_size, default='auto')
-    parser.add_argument('--cp-mode', choices=VALID_CP_MODES, default='auto')
+    parser.add_argument('--cp-level', choices=VALID_CP_LEVELS, default='all')
     parser.add_argument('--cp-pattern', choices=VALID_CP_PATTERNS, default='auto')
     parser.add_argument('--print-diffs', action='store_true')
     parser.add_argument('--no-l2-flush', action='store_true')

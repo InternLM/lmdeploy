@@ -22,10 +22,11 @@ enum class GdrMode
 constexpr int kAutoGdrChunkSize      = 0;
 constexpr int kRecurrentGdrChunkSize = 1;
 
-enum class ContextParallelMode : int
+enum class ContextParallelLevel : int
 {
-    kAuto = 0,
-    kOff  = 1,
+    kOff   = 0,
+    kExact = 1,
+    kAll   = 2,
 };
 
 struct GdrKernelSpec {
@@ -38,9 +39,9 @@ struct GdrKernelSpec {
 };
 
 struct Operation {
-    GdrMode             mode{GdrMode::kChunked};
-    int                 chunk_size{kAutoGdrChunkSize};
-    ContextParallelMode cp_mode{ContextParallelMode::kAuto};
+    GdrMode              mode{GdrMode::kChunked};
+    int                  chunk_size{kAutoGdrChunkSize};
+    ContextParallelLevel cp_level{ContextParallelLevel::kAll};
 };
 
 struct PlanningContext {
@@ -109,12 +110,13 @@ struct TensorPlan {
 };
 
 struct ContextParallelPlan {
-    bool   enabled{};
-    int    segment_tokens{};
-    int    segment_chunks{};
-    int    total_segments{};
-    int    total_chunks{};
-    size_t workspace_bytes{};
+    ContextParallelLevel cp_level{ContextParallelLevel::kOff};
+    bool                 enabled{};
+    int                  segment_tokens{};
+    int                  segment_chunks{};
+    int                  total_segments{};
+    int                  total_chunks{};
+    size_t               workspace_bytes{};
 
     TensorPlan cp_q_offsets;
     TensorPlan cp_source_indices;
