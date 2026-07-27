@@ -511,7 +511,7 @@ void Engine::Impl::Schedule()
 
     for (auto i : swap_in) {
         auto& c = *eligible[i];
-        if (!param_.enable_metrics || c.first_schedule_recorded) {
+        if (!param_.enable_metrics || c.first_schedule_recorded || !c.req->metrics) {
             continue;
         }
         c.first_schedule_recorded = true;
