@@ -479,9 +479,15 @@ class TestResetGraphRunner:
             def reset_graph_runner(self):
                 events.append('spec_reset')
 
+        class _MemDecodeAgent:
+
+            def reset_graph_runner(self):
+                events.append('memdecode_reset')
+
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = _SpecAgent()
+        agent.memdecode_agent = _MemDecodeAgent()
         agent._prev_chunk_output = {'model_metas': object()}
         agent._prev_chunk_last_logit = torch.ones(1, 2)
 
@@ -499,6 +505,7 @@ class TestResetGraphRunner:
             'enter_all_context',
             'main_reset',
             'spec_reset',
+            'memdecode_reset',
             'exit_all_context',
         ]
         assert agent._prev_chunk_output is None
@@ -597,6 +604,7 @@ class TestModelAgentWakeup:
         model_agent = BaseModelAgent.__new__(BaseModelAgent)
         model_agent.state = SleepWakeupState()
         model_agent.dist_config = SimpleNamespace(dp=1)
+        model_agent.memdecode_agent = None
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
@@ -652,6 +660,7 @@ class TestModelAgentWakeup:
         model_agent.state = SleepWakeupState()
         model_agent.state.is_sleeping = True
         model_agent.dist_config = SimpleNamespace(dp=2)
+        model_agent.memdecode_agent = None
         model_agent.build_cache_engine = lambda: events.append('build_cache_engine')
 
         def _warmup():
@@ -666,4 +675,200 @@ class TestModelAgentWakeup:
         assert events == [
             'build_cache_engine',
             ('warmup', True, False),
+        ]
+
+
+class TestMemDecodeModelAgentLifecycle:
+
+    def _make_agent(self, enabled=True):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
+
+        events = []
+
+        class _MemDecodeAgent:
+
+            def release(self):
+                events.append('memdecode_release')
+
+            def reset_graph_runner(self):
+                events.append('memdecode_reset')
+
+        class _SpecAgent:
+
+            def reset_graph_runner(self):
+                pass
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.memdecode_agent = _MemDecodeAgent() if enabled else None
+        agent.spec_agent = _SpecAgent()
+        agent.state = SleepWakeupState()
+        agent.dist_config = SimpleNamespace(dp=1)
+        agent.patched_model = object()
+        agent.cache_engine = object()
+        agent.state_cache_engine = object()
+
+        @contextmanager
+        def _all_context():
+            yield
+
+        agent.all_context = _all_context
+        return agent, events
+
+    def test_sleep_raises_when_memdecode_enabled(self, event_loop):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        agent, _ = self._make_agent(enabled=True)
+
+        with pytest.raises(NotImplementedError, match='MemDecode sleep/wakeup is not supported yet.'):
+            event_loop.run_until_complete(BaseModelAgent.sleep(agent))
+
+    def test_wakeup_raises_when_memdecode_enabled(self):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        agent, _ = self._make_agent(enabled=True)
+
+        with pytest.raises(NotImplementedError, match='MemDecode sleep/wakeup is not supported yet.'):
+            BaseModelAgent.wakeup(agent)
+
+    def test_release_releases_memdecode_and_clears_base_resources(self, monkeypatch):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+        agent, events = self._make_agent(enabled=True)
+
+        BaseModelAgent.release(agent)
+
+        assert events == ['memdecode_reset', 'memdecode_release']
+        assert agent.patched_model is None
+        assert agent.cache_engine is None
+        assert agent.state_cache_engine is None
+
+    def test_async_model_forward_memdecode_fuses_sliced_logits(self, event_loop):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        calls = []
+        base_hidden = torch.arange(20, dtype=torch.float32).reshape(1, 5, 4)
+        memory_hidden = torch.arange(30, dtype=torch.float32).reshape(1, 5, 6)
+        inputs = SimpleNamespace(seq_length=torch.tensor([2, 3]), is_chunk=False)
+
+        class _MemDecodeAgent:
+
+            async def fuse_with_base(self, inputs, base_output, base_logits, postprocess_output):
+                calls.append(('fuse_inputs', inputs))
+                calls.append(('fuse_base_hidden_shape', tuple(base_output['hidden_states'].shape)))
+                calls.append(('fuse_base_logits_shape', tuple(base_logits.shape)))
+                memory_output = {
+                    'hidden_states': memory_hidden.clone(),
+                    'seq_length': inputs.seq_length,
+                }
+                memory_output = postprocess_output(memory_output, inputs)
+                calls.append(('fuse_memory_hidden_shape', tuple(memory_output['hidden_states'].shape)))
+                fused = base_logits + memory_output['hidden_states'].sum(dim=-1, keepdim=True)
+                base_output['logits'] = fused
+                return base_output
+
+        class _Strategy:
+
+            def slice_outputs(self, hidden_states, seq_length):
+                indices = seq_length.cumsum(0) - 1
+                return hidden_states[indices]
+
+        async def _base_forward(forward_inputs):
+            calls.append(('base_forward', forward_inputs))
+            return {'hidden_states': base_hidden.clone(), 'seq_length': forward_inputs.seq_length}
+
+        def _base_logits(hidden_states):
+            calls.append(('base_logits_shape', tuple(hidden_states.shape)))
+            return hidden_states.sum(dim=-1, keepdim=True)
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.memdecode_agent = _MemDecodeAgent()
+        agent.agent_strategy = _Strategy()
+        agent.async_forward = _base_forward
+        agent.get_logits = _base_logits
+
+        output = event_loop.run_until_complete(BaseModelAgent._async_model_forward(agent, inputs, return_logits=False))
+
+        assert calls == [
+            ('base_forward', inputs),
+            ('base_logits_shape', (1, 2, 4)),
+            ('fuse_inputs', inputs),
+            ('fuse_base_hidden_shape', (1, 2, 4)),
+            ('fuse_base_logits_shape', (1, 2, 1)),
+            ('fuse_memory_hidden_shape', (1, 2, 6)),
+        ]
+        assert torch.equal(output['logits'], torch.tensor([[[73.], [229.]]]))
+        assert 'all_routed_experts' not in output
+
+    def test_async_model_forward_memdecode_rejects_returned_logits(self, event_loop):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        class _MemDecodeAgent:
+            pass
+
+        async def _base_forward(_inputs):
+            raise AssertionError('base forward should not run')
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.memdecode_agent = _MemDecodeAgent()
+        agent.async_forward = _base_forward
+        inputs = SimpleNamespace()
+
+        with pytest.raises(RuntimeError, match='MemDecode does not support returned prompt logits yet.'):
+            event_loop.run_until_complete(BaseModelAgent._async_model_forward(agent, inputs, return_logits=True))
+
+    def test_async_step_swaps_memdecode_cache_with_base_cache(self, event_loop, monkeypatch):
+        import lmdeploy.pytorch.engine.model_agent.agent as agent_module
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        calls = []
+        swap_in_map = {1: 2}
+        swap_out_map = {3: 4}
+
+        class _StopAfterSwap(Exception):
+            pass
+
+        class _MemDecodeAgent:
+
+            cache_engine = 'memory_cache'
+
+        class _DistManager:
+
+            def current_context(self):
+                return SimpleNamespace(dist_config=SimpleNamespace(attn_tp=1, dp=1))
+
+        def _cache_swapping(cache_engine, swap_in_map=None, swap_out_map=None):
+            calls.append((cache_engine, swap_in_map, swap_out_map))
+
+        async def _async_model_forward(_inputs, return_logits):
+            raise _StopAfterSwap
+
+        monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: _DistManager())
+        monkeypatch.setattr(agent_module, 'cache_swapping', _cache_swapping)
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.rank = 0
+        agent.cache_engine = 'base_cache'
+        agent.memdecode_agent = _MemDecodeAgent()
+        agent._async_model_forward = _async_model_forward
+        inputs = SimpleNamespace(is_dummy=True,
+                                 is_decoding=False,
+                                 input_ids=torch.tensor([1, 2]),
+                                 seq_length=torch.tensor([2]),
+                                 is_chunk=False,
+                                 is_first_chunk=False,
+                                 is_last_chunk=False,
+                                 dp_meta=None)
+
+        with pytest.raises(_StopAfterSwap):
+            event_loop.run_until_complete(
+                BaseModelAgent._async_step(agent,
+                                           inputs,
+                                           swap_in_map=swap_in_map,
+                                           swap_out_map=swap_out_map,
+                                           return_logits=False))
+
+        assert calls == [
+            ('base_cache', swap_in_map, swap_out_map),
+            ('memory_cache', swap_in_map, swap_out_map),
         ]

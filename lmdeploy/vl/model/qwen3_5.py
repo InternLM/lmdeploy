@@ -7,6 +7,11 @@ import torch
 from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
+_INTERN_S2_ARCHS = [
+    'InternS2PreviewForConditionalGeneration',
+    'InternS2PreviewForCausalLM',
+]
+
 
 def check_transformers():
     try:
@@ -25,8 +30,7 @@ class Qwen3_5Model(Qwen3VLModel):
     _arch = [
         'Qwen3_5ForConditionalGeneration',
         'Qwen3_5MoeForConditionalGeneration',
-        'InternS2PreviewForConditionalGeneration',
-        'InternS2PreviewForCausalLM',
+        *_INTERN_S2_ARCHS,
     ]
     _turbomind_native_vision = True
 
@@ -114,7 +118,7 @@ class Qwen3_5Model(Qwen3VLModel):
             from transformers import Qwen3_5ForConditionalGeneration as AutoModelCls
         elif arch == 'Qwen3_5MoeForConditionalGeneration':
             from transformers import Qwen3_5MoeForConditionalGeneration as AutoModelCls
-        elif arch in ['InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM']:
+        elif arch in _INTERN_S2_ARCHS:
             from transformers import AutoModelForImageTextToText as AutoModelCls
         else:
             raise ValueError(f'Unsupported arch={arch}')

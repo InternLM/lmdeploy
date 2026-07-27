@@ -4,8 +4,10 @@
 #pragma once
 
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/common.h"
+#include "src/turbomind/kernels/linear_attn/kernel/sm_90/pdl.h"
 
 #include <cute/arch/copy_sm80.hpp>
+#include <cutlass/arch/grid_dependency_control.h>
 
 namespace turbomind::linear_attn::delta_rule {
 namespace {
@@ -115,7 +117,8 @@ struct Sm90FusedGdrH {
                           int     token_num,
                           int     sequence_num,
                           int64_t gate_stride,
-                          int64_t gate_batch_stride)
+                          int64_t gate_batch_stride,
+                          bool    allow_warmup)
     {
         WarmupMetadata out{0, 0};
         const int      sequence_id = cp_source_indices[segment_id];
@@ -134,6 +137,9 @@ struct Sm90FusedGdrH {
         float           gate_sum         = 0.0f;
         out.chunks                       = segment_chunks;
         out.fallback                     = 1;
+        if (!allow_warmup) {
+            return out;
+        }
         for (int chunk = 0; chunk < segment_chunks; ++chunk) {
             const int     flat_token     = segment_end - chunk * kChunkSize - 1;
             const int     physical_batch = flat_token / token_num;
@@ -316,6 +322,9 @@ struct Sm90FusedGdrH {
                                                      value_head,
                                                      token0,
                                                      0);
+                        if (chunk == 0) {
+                            cutlass::arch::wait_on_dependent_grids();
+                        }
                         cute::SM90_TMA_LOAD_4D::copy(resolvent_tma_desc,
                                                      &smem.stage_ready_mbar[stage],
                                                      kTmaNoCacheHint,
@@ -351,6 +360,9 @@ struct Sm90FusedGdrH {
                         // registered transaction bytes complete asynchronously.
                         cute::arrive_barrier(smem.stage_ready_mbar[stage]);
                     }
+                }
+                if (role_tid == 32) {
+                    cutlass::arch::launch_dependent_grids();
                 }
             }
             else {
@@ -796,6 +808,7 @@ struct Sm90FusedGdrH {
                                                int64_t        gate_batch_stride,
                                                int64_t        beta_stride,
                                                int64_t        beta_batch_stride,
+                                               bool           allow_warmup,
                                                unsigned char* smem_raw)
     {
         auto& smem = *reinterpret_cast<SharedStorage*>(smem_raw);
@@ -813,7 +826,8 @@ struct Sm90FusedGdrH {
                                            token_num,
                                            sequence_num,
                                            gate_stride,
-                                           gate_batch_stride);
+                                           gate_batch_stride,
+                                           allow_warmup);
             cp_fallback[segment_id * hv + value_head] = warmup.fallback != 0;
         }
         __syncthreads();
@@ -886,7 +900,8 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
     int64_t gate_stride,
     int64_t gate_batch_stride,
     int64_t beta_stride,
-    int64_t beta_batch_stride)
+    int64_t beta_batch_stride,
+    bool    allow_warmup)
 {
 #if __CUDA_ARCH__
     if constexpr (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1000) {
@@ -909,6 +924,7 @@ __global__ __launch_bounds__(Sm90FusedGdrH<T>::kThreads, Sm90FusedGdrH<T>::kMinB
                               gate_batch_stride,
                               beta_stride,
                               beta_batch_stride,
+                              allow_warmup,
                               smem_raw);
     }
 #endif
@@ -949,26 +965,30 @@ void LaunchSm90FusedGdrHTyped(const core::Tensor&        k,
     const size_t smem_bytes = Kernel::SharedBytes();
 
     SetFusedGdrHSharedMemoryLimit(smem_bytes);
-    Sm90FusedGdrHKernel<__nv_bfloat16>
-        <<<grid, block, smem_bytes, stream>>>(reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
-                                              g_cumsum.data<float>(),
-                                              beta.data<float>(),
-                                              segment_state.data<__nv_bfloat16>(),
-                                              segment_m.data<__nv_bfloat16>(),
-                                              q_offsets.data<int32_t>(),
-                                              cp_source_indices.data<int32_t>(),
-                                              cp_q_offsets.data<int32_t>(),
-                                              cp_finished.data<bool>(),
-                                              cp_fallback.data<bool>(),
-                                              problem.token_num,
-                                              problem.sequence_num,
-                                              problem.hq,
-                                              problem.hv,
-                                              problem.gate_stride,
-                                              problem.gate_batch_stride,
-                                              problem.beta_stride,
-                                              problem.beta_batch_stride);
-    TM_CUDA_CHECK(cudaGetLastError());
+    detail::LaunchPdlKernel(grid,
+                            block,
+                            smem_bytes,
+                            stream,
+                            Sm90FusedGdrHKernel<__nv_bfloat16>,
+                            reinterpret_cast<CUtensorMap*>(tma_desc_workspace),
+                            g_cumsum.data<float>(),
+                            beta.data<float>(),
+                            segment_state.data<__nv_bfloat16>(),
+                            segment_m.data<__nv_bfloat16>(),
+                            q_offsets.data<int32_t>(),
+                            cp_source_indices.data<int32_t>(),
+                            cp_q_offsets.data<int32_t>(),
+                            cp_finished.data<bool>(),
+                            cp_fallback.data<bool>(),
+                            problem.token_num,
+                            problem.sequence_num,
+                            problem.hq,
+                            problem.hv,
+                            problem.gate_stride,
+                            problem.gate_batch_stride,
+                            problem.beta_stride,
+                            problem.beta_batch_stride,
+                            cp.cp_level == ContextParallelLevel::kAll);
 }
 
 }  // namespace
