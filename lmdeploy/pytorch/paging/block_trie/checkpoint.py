@@ -60,6 +60,16 @@ class StateCheckpointVerifyResult:
     matched_block_ids: np.ndarray | None = None
 
 
+def checkpoint_anchor_step(step: int, block_size: int):
+    """Return the full-block trie boundary owning an exact checkpoint."""
+    return step - step % block_size
+
+
+def checkpoint_tail_start(step: int, block_size: int):
+    """Return the start of the final nonempty range used by the sparse key."""
+    return ((step - 1) // block_size) * block_size
+
+
 def freeze_state_checkpoint_match_data(token_ids: np.ndarray,
                                        extra_identity: PrefixCacheExtraIdentity,
                                        block_ids: np.ndarray,
@@ -94,7 +104,7 @@ class StateCheckpointIndex:
 
     def make_request_key(self, seq: SchedulerSequence, step: int) -> StateCheckpointKey:
         """Make the sparse lookup key for one request checkpoint step."""
-        tail_start = ((step - 1) // self.block_size) * self.block_size
+        tail_start = checkpoint_tail_start(step, self.block_size)
         token_ids = seq.history_cache[tail_start:step]
         extra_identity = seq.get_prefix_cache_extra_identity(tail_start, step)
         return (seq.adapter_name, step, self._hash_block(token_ids, extra_identity))
@@ -177,7 +187,7 @@ class StateCheckpointIndex:
         if step <= 0:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason=f'invalid checkpoint step: {step}')
-        anchor_step = step - step % self.block_size
+        anchor_step = checkpoint_anchor_step(step, self.block_size)
         is_partial = anchor_step != step
         if is_partial and checkpoint.frozen_block_id < 0:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,

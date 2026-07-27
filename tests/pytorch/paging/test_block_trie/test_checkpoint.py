@@ -2,8 +2,26 @@ import numpy as np
 import pytest
 
 from lmdeploy.pytorch.messages import SamplingParam
+from lmdeploy.pytorch.paging.block_trie.checkpoint import (
+    checkpoint_anchor_step,
+    checkpoint_tail_start,
+)
 
 from ._utils import BlockTrieTestMixin
+
+
+@pytest.mark.parametrize(('step', 'anchor_step', 'tail_start'), [
+    (1, 0, 0),
+    (15, 0, 0),
+    (16, 16, 0),
+    (17, 16, 16),
+    (32, 32, 16),
+])
+def test_checkpoint_step_geometry(step, anchor_step, tail_start):
+    block_size = 16
+
+    assert checkpoint_anchor_step(step, block_size) == anchor_step
+    assert checkpoint_tail_start(step, block_size) == tail_start
 
 
 class TestStateCheckpointMatching(BlockTrieTestMixin):

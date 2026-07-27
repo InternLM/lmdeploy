@@ -21,7 +21,7 @@ import numpy as np
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.utils import get_logger
 
-from .checkpoint import StateCheckpointIndex
+from .checkpoint import StateCheckpointIndex, checkpoint_anchor_step
 from .node import Node, NodeStateCheckpoint
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ class StateCheckpointLifecycle:
         if not seq.is_prefix_cache_boundary_safe(step):
             return -1
 
-        anchor_step = step - step % self._block_size
+        anchor_step = checkpoint_anchor_step(step, self._block_size)
         node = self._find_checkpoint_node(seq, anchor_step)
         if node is None:
             return -1
@@ -383,7 +383,7 @@ class StateCheckpointLifecycle:
         Replacing a published checkpoint at the same anchor is allowed only while no async copy pins it. If the shared
         state pool is full, one old unpinned checkpoint may be evicted without removing its trie/KV node.
         """
-        anchor_step = step - step % self._block_size
+        anchor_step = checkpoint_anchor_step(step, self._block_size)
         if (not self._state_checkpoints_enabled or not node.is_attached_or_root()
                 or node.prefix_len != anchor_step):
             return -1
@@ -403,7 +403,7 @@ class StateCheckpointLifecycle:
         slot = self._state_manager.allocate_checkpoint_state()
         try:
             frozen_block_id = -1
-            if step % self._block_size != 0:
+            if checkpoint_anchor_step(step, self._block_size) != step:
                 frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
         except Exception:
             self._state_manager.free_checkpoint_state(slot)
@@ -416,7 +416,7 @@ class StateCheckpointLifecycle:
 
     def _replace_checkpoint(self, node: Node, checkpoint: NodeStateCheckpoint, step: int):
         """Reuse an unpinned checkpoint while changing its exact step."""
-        is_partial = step % self._block_size != 0
+        is_partial = checkpoint_anchor_step(step, self._block_size) != step
         frozen_block_id = checkpoint.frozen_block_id
         if is_partial and frozen_block_id < 0:
             frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
@@ -510,7 +510,7 @@ class StateCheckpointLifecycle:
             return f'slot changed: expected={slot} actual={checkpoint.slot}'
         if checkpoint.step != save_step:
             return f'step changed: expected={save_step} actual={checkpoint.step}'
-        anchor_step = save_step - save_step % self._block_size
+        anchor_step = checkpoint_anchor_step(save_step, self._block_size)
         if node.prefix_len != anchor_step:
             return f'anchor changed: expected={anchor_step} actual={node.prefix_len}'
         return None

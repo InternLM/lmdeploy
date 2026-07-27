@@ -86,6 +86,8 @@ from ..state_manager import StateManager
 from .checkpoint import (
     StateCheckpointIndex,
     StateCheckpointVerifyStatus,
+    checkpoint_anchor_step,
+    checkpoint_tail_start,
     freeze_state_checkpoint_match_data,
     make_request_multimodal_identity,
 )
@@ -307,25 +309,25 @@ class BlockTrie:
         if checkpoint is None:
             raise RuntimeError('Cannot publish an SSM checkpoint without a reservation.')
         step = checkpoint.step
-        anchor_step = step - step % self.block_size
-        num_blocks = anchor_step // self.block_size
+        anchor_step = checkpoint_anchor_step(step, self.block_size)
+        num_full_blocks = anchor_step // self.block_size
         token_ids = seq.history_cache[:step].copy()
-        block_ids = seq.logical_blocks.get_real_blocks()[:num_blocks].copy()
+        block_ids = seq.logical_blocks.get_real_blocks()[:num_full_blocks].copy()
         seq.prefix_cache.recompute_overlap.apply_trie_blocks(block_ids)
         prefix_extra_identity = make_request_multimodal_identity(seq, step)
-        tail_start = ((step - 1) // self.block_size) * self.block_size
+        tail_start = checkpoint_tail_start(step, self.block_size)
         tail_extra_identity = seq.get_prefix_cache_extra_identity(tail_start, step)
         tail_hash = self._hash_block(token_ids[tail_start:step], tail_extra_identity)
-        if num_blocks > 0:
-            block_start = anchor_step - self.block_size
-            block_extra_identity = seq.get_prefix_cache_extra_identity(block_start, anchor_step)
+        if num_full_blocks > 0:
+            owner_start = anchor_step - self.block_size
+            block_extra_identity = seq.get_prefix_cache_extra_identity(owner_start, anchor_step)
         owner_matches = (self._cursor_belongs_to_trie(node) and seq.adapter_name == node.adapter_name
                          and node.prefix_len == anchor_step)
-        if owner_matches and num_blocks > 0:
+        if owner_matches and num_full_blocks > 0:
             owner_matches = (block_ids[-1] == node.block_id
-                             and self._node_matches_block(node, token_ids[block_start:anchor_step],
+                             and self._node_matches_block(node, token_ids[owner_start:anchor_step],
                                                           block_extra_identity))
-        has_complete_identity = len(token_ids) == step and len(block_ids) == num_blocks
+        has_complete_identity = len(token_ids) == step and len(block_ids) == num_full_blocks
         if not has_complete_identity or not owner_matches:
             raise RuntimeError('Cannot publish an SSM checkpoint from a mismatched sequence cursor.')
         return freeze_state_checkpoint_match_data(token_ids, prefix_extra_identity, block_ids, tail_hash)
@@ -380,14 +382,15 @@ class BlockTrie:
         prefix_cache = seq.prefix_cache
         prefix_cache.restore.select(checkpoint.slot, node)
         prefix_cache.trie_cursor = node
-        fresh_end_block = (step + self.block_size - 1) // self.block_size
+        fresh_start_idx = step // self.block_size
+        fresh_end_idx = (step + self.block_size - 1) // self.block_size
         if checkpoint.frozen_block_id >= 0:
             # Forward resumes inside a private partial block. Complete suffix
             # blocks already present in the request must remain private too.
-            fresh_end_block = max(fresh_end_block, seq.num_valid_ids // self.block_size)
+            fresh_end_idx = max(fresh_end_idx, seq.num_valid_ids // self.block_size)
         if overlap_end_step >= 0:
-            fresh_end_block = max(fresh_end_block, overlap_end_step // self.block_size)
-        prefix_cache.recompute_overlap.set_fresh_block_range(step // self.block_size, fresh_end_block)
+            fresh_end_idx = max(fresh_end_idx, overlap_end_step // self.block_size)
+        prefix_cache.recompute_overlap.set_fresh_block_range(fresh_start_idx, fresh_end_idx)
 
         self._record_match_stats(seq,
                                  query_tokens=seq.num_all_ids - initial_step,
