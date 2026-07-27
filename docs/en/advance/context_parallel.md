@@ -13,6 +13,8 @@ kv_cache stored on cp_rank0: 0, 2, 4, 6, 8
 kv_cache stored on cp_rank1: 1, 3, 5, 7
 ```
 
+Under context parallelism, `cache_block_seq_len` remains the physical number of tokens stored by one rank in a k/v cache block. The scheduler treats the corresponding logical block as `cache_block_seq_len * cp` global tokens. Therefore k/v block memory on each rank is unchanged, while full-block prefix reuse and read-only cache boundaries use the larger global span.
+
 ## Usage
 
 Taking Intern-S1 / Qwen3-235B-A22B as an example, their `num_key_value_heads` is 4. If you want to deploy with `TP=8` and avoid duplication of kv_cache, you can deploy in the following way:

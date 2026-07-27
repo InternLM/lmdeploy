@@ -123,8 +123,10 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
     auto& d = *data_.at(phase);
 
-    const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
-    auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
+    // const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
+    Buffer_<Sequence*> rs = env.at("requests").buffer();
+
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     const int bsz = rs.size();
 
@@ -154,7 +156,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
         // min_length
         min_lengths[i] = rs[i]->prompt_len + g.min_new_tokens;
-        if (rs[i]->seq_len + rs[i]->beta < min_lengths[i]) {
+        if (rs[i]->seq_len + rs[i]->inflight_new_tokens < min_lengths[i]) {
             d.has_min_length_penalty = true;
         }
     }

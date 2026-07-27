@@ -341,7 +341,7 @@ class TestSimulatedRejectionSamplingGrammarState:
         assert allowed != allowed_initial, 'Grammar should have advanced from initial state'
 
     def test_grammar_state_partial_rejection_greedy(self, compiler, tokenizer_info, guided_manager):
-        """Partial rejection (greedy) → grammar state reflects only accepted
+        """Partial rejection (greedy) -> grammar state reflects only accepted
         tokens + replacement + bonus."""
         schema = {'type': 'object', 'properties': {'x': {'type': 'integer'}}, 'required': ['x']}
         original = _json_matcher(compiler, schema)
@@ -1133,7 +1133,7 @@ class TestEagle3GetOutputs:
     def test_get_outputs_multi_step_with_fork(self, compiler, tokenizer_info,
                                                 guided_manager):
         """Multi-step draft loop calling get_outputs repeatedly with the same
-        fork — same pattern as _async_model_forward."""
+        fork - same pattern as _async_model_forward."""
         schema = {'type': 'object', 'properties': {'x': {'type': 'integer'}}, 'required': ['x']}
         original = _json_matcher(compiler, schema)
         vocab_size = tokenizer_info.vocab_size

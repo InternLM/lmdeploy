@@ -112,7 +112,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
     // [B, S/s, 2, H, s, D]
     // blocks.resize(batch_size * n_blocks * 2 * kHsD);
-    blocks.resize(batch_size * n_blocks * layout.block_size(1));
+    blocks.resize(batch_size * n_blocks * layout.layer_size());
     thrust::fill(blocks.begin(), blocks.end(), NAN);
     k_ptrs.resize(batch_size * n_blocks + 1);  // +1 padding
 
@@ -125,7 +125,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
     for (size_t i = 0; i < idxs.size(); ++i) {
         // k_ptrs[i] = blocks.data().get() + idxs[i] * 2 * kHsD;
-        k_ptrs[i] = blocks.data().get() + idxs[i] * layout.block_size(1);
+        k_ptrs[i] = blocks.data().get() + idxs[i] * layout.layer_size();
     }
 
     thrust::universal_vector<int> seq_lens(batch_size);
@@ -152,6 +152,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                                          cu_seq_lens.data().get(),
                                          cu_seq_lens.data().get(),
                                          cu_block_cnts.data().get(),
+                                         nullptr,  // readonly_block_num (test writes all)
                                          RopeKernelParam{},
                                          2 * head_num * seq_len,
                                          0,

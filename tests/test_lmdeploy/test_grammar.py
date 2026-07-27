@@ -55,6 +55,20 @@ SCHEMA_MAP = {
     'json_object': None,
 }
 
+MIXED_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'name': {
+            'type': 'string'
+        },
+        'age': {
+            'type': 'integer'
+        },
+    },
+    'required': ['name', 'age'],
+    'additionalProperties': False,
+}
+
 
 @pytest.mark.parametrize('model_id', MODEL_IDS)
 @pytest.mark.parametrize('backend_name,backend_factory', BACKEND_FACTORIES)
@@ -110,14 +124,15 @@ def test_mix_guided_matrix(model_id, backend_name, backend_factory):
 
     schema_type = 'json_schema'
     response_format = {'type': schema_type}
-    schema = SCHEMA_MAP[schema_type]
+    schema = MIXED_SCHEMA
     response_format[schema_type] = dict(name='test', schema=schema)
 
     prompts = ['Make a self introduction please.'] * 4
     try:
-        config = GenerationConfig(response_format=response_format)
-
-        gen_config = [None if idx % 3 else config for idx in range(4)]
+        gen_config = [
+            GenerationConfig(max_new_tokens=128, response_format=response_format)
+            if idx % 3 == 0 else None for idx in range(4)
+        ]
 
         responses = pipe.batch_infer(prompts, gen_config=gen_config)
 

@@ -13,6 +13,8 @@ kv_cache stored on cp_rank0: 0, 2, 4, 6, 8
 kv_cache stored on cp_rank1: 1, 3, 5, 7
 ```
 
+在序列并行模式下，`cache_block_seq_len` 仍表示每个 rank 的一个 k/v cache block 实际存放的 token 数。调度器中对应的逻辑块覆盖 `cache_block_seq_len * cp` 个全局 token。因此每个 rank 上 k/v block 的显存大小不变，而整块前缀复用和只读 cache 边界按更大的全局跨度计算。
+
 ## 使用说明
 
 以 `Intern-S1` / `Qwen3-235B-A22B` 为例，他们的 `num_key_value_heads` 为 4，若要用 `TP=8` 的方式部署，并避免 kv_cache 的拷贝，可以用如下的方式部署

@@ -40,11 +40,12 @@ class TextModel(ABC):
         return self.cfg.vocab_size
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp):
         self._ctx = ctx
         self._root_handles = root_handles
         self._attn_tp = attn_tp
         self._mlp_tp = mlp_tp
+        self._ep = ep
         self._model_tp = model_tp
 
     def _linear(self, pfx: Prefix, *,

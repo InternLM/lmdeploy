@@ -19,8 +19,10 @@ transformer blocks and merger linears shard with the model TP group.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
+import struct
 from typing import TYPE_CHECKING, Any
 
 import _turbomind as _tm
@@ -166,7 +168,7 @@ class Qwen3_5TextModel(TextModel):
 
     def linear_attn(self, pfx):
         cfg = self._dn_cfg.clone()
-        builder = DeltaNetBuilder(cfg, self._ctx, tp=self._attn_tp)
+        builder = DeltaNetBuilder(cfg, self._ctx, tp=self._model_tp)
 
         builder.add_input_projections(
             in_proj_qkv=self._linear(pfx + 'in_proj_qkv'),
@@ -204,13 +206,13 @@ class Qwen3_5TextModel(TextModel):
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts_pfx = pfx + 'experts'
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(self._n_experts):
+        for e in m.range(self._n_experts):
             experts[e] = self._moe_expert_ffn(
                 experts_pfx, e, self.cfg.moe_intermediate_size)
         m.experts = experts.build()
@@ -328,6 +330,49 @@ def _split_packed_vision_qkv(qkv):
     return tuple(x.contiguous() for x in qkv.chunk(3, dim=-1))
 
 
+def _image_fingerprint(input_mm: dict) -> bytes:
+    """SHA-256 over the Qwen3.5 ViT-forward inputs plus the mRoPE scalar.
+
+    Post-preprocess (phase A): every input is already on the item dict. Two requests hash equal iff their ViT embeddings
+    and cached LM KV for the image span are identical -- i.e. reuse is correct.
+    """
+    modality = input_mm['modality']
+    is_video = modality in (Modality.VIDEO, Modality.VIDEO.value)
+    pv   = input_mm['pixel_values_videos'] if is_video else input_mm['pixel_values']
+    gthw = input_mm['video_grid_thw']      if is_video else input_mm['image_grid_thw']
+    if isinstance(gthw, torch.Tensor):
+        values = gthw.flatten().tolist()
+    else:
+        values = list(gthw)
+    t, h, w = int(values[0]), int(values[1]), int(values[2])
+    spg = input_mm.get('second_per_grid')          # video only; float | None
+
+    h_obj = hashlib.sha256()
+    h_obj.update(struct.pack('<B', 1 if is_video else 0))
+    h_obj.update(struct.pack('<3i', t, h, w))
+    h_obj.update(struct.pack('<B', 0 if spg is None else 1))
+    if spg is not None:
+        h_obj.update(struct.pack('<d', float(spg)))
+    # Reinterpret the raw storage as uint8 so the digest is dtype-agnostic and
+    # works for bfloat16 (numpy cannot consume bfloat16 directly). Same dtype +
+    # same values -> same bytes; the dtype is constant per engine instance.
+    h_obj.update(pv.contiguous().cpu().view(torch.uint8).numpy().tobytes())
+    return h_obj.digest()                          # 32 bytes; never all-zero
+
+
+def _resolve_fingerprint(input_mm: dict) -> bytes:
+    """Use a pre-placed fingerprint if present (future pre-preprocess
+    generator, or a test forcing empty/dormant); otherwise derive it from the
+    ViT inputs.
+
+    `is not None` (not `or`) so an explicit b'' stays empty rather than falling
+    through to compute -- the empty-fingerprint sentinel must be preserved
+    (empty never compares equal -> image-span reuse stays dormant).
+    """
+    fp = input_mm.get('fingerprint')
+    return fp if fp is not None else _image_fingerprint(input_mm)
+
+
 class Qwen3_5VisionModel(TextModel):
     """Vision sub-tree for Qwen3.5 VLM, rooted at ModelRoot.vision_model.
 
@@ -401,6 +446,7 @@ class Qwen3_5VisionModel(TextModel):
                 raise ValueError(f'Qwen3.5 TurboMind does not support modality {modality!r}')
 
             token_begin, token_end = self._offset_pair(input_mm['offset'])
+            fingerprint = _resolve_fingerprint(input_mm)
             items.append(
                 _tm.multimodal.Qwen3_5VitItem(
                     modality=tm_modality,
@@ -408,6 +454,7 @@ class Qwen3_5VisionModel(TextModel):
                     token_begin=token_begin,
                     token_end=token_end,
                     grid_thw=grid_thw,
+                    fingerprint=fingerprint,
                 ))
 
         return _tm.multimodal.Qwen3_5VitInput(items)
@@ -592,7 +639,7 @@ class Qwen3_5Model:
                 vision_cfg, resolver=vision_resolver or resolver)
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp):
         for m in (self.text_model, self.vision_model):
             if m is not None:
                 m.bind_runtime(
@@ -600,6 +647,7 @@ class Qwen3_5Model:
                     root_handles=root_handles,
                     attn_tp=attn_tp,
                     mlp_tp=mlp_tp,
+                    ep=ep,
                     model_tp=model_tp,
                 )
 

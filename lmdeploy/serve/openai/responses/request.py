@@ -9,6 +9,7 @@ from typing import Any, Literal
 from fastapi.responses import JSONResponse
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
 from lmdeploy.utils import get_logger
@@ -264,20 +265,16 @@ def _response_format_from_text(text: Any) -> dict[str, Any] | None:
     raise ValueError(f'Unsupported text.format type: {format_type!r}.')
 
 
-def to_generation_config(request: ResponsesRequest) -> GenerationConfig:
+def to_generation_config(
+    request: ResponsesRequest,
+    default_gen_config: dict | None = None,
+) -> GenerationConfig:
     stop_words = [request.stop] if isinstance(request.stop, str) else request.stop
-    return GenerationConfig(
+    return build_generation_config(
+        request,
+        default_gen_config or {},
         max_new_tokens=request.max_output_tokens,
-        do_sample=True,
-        top_k=40 if request.top_k is None else request.top_k,
-        top_p=1.0 if request.top_p is None else request.top_p,
-        temperature=1.0 if request.temperature is None else request.temperature,
         stop_words=stop_words,
-        ignore_eos=request.ignore_eos,
-        skip_special_tokens=request.skip_special_tokens,
-        include_stop_str_in_output=request.include_stop_str_in_output,
         response_format=_response_format_from_text(request.text),
-        min_p=request.min_p,
         random_seed=request.seed,
-        repetition_penalty=1.0 if request.repetition_penalty is None else request.repetition_penalty,
     )

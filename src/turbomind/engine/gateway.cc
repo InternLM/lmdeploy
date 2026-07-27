@@ -30,32 +30,16 @@ void Gateway::shutdown()
 
 void Gateway::push(std::shared_ptr<Request> r)
 {
-    int rank = -1;
-
-    if (TM_UNLIKELY(!r->session.start_flag)) {
-        // route to corresponding rank
-        rank = binding_.find(r->session.id);
-    }
-    else if (TM_LIKELY(size_)) {
-        rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
-    }
-    else {
+    if (TM_UNLIKELY(!size_)) {
         TM_LOG_ERROR("No queues available for submitting the request");
         notify({[r = std::move(r)] { UpdateState(*r, Request::kNoQueue, 0); }});
         return;
     }
-
-    if (TM_LIKELY(rank >= 0)) {
-        queues_[rank]->push({std::move(r)});
-    }
-    else {
-        TM_LOG_ERROR("Failed to find a binded queue for {}", r->session.id);
-        notify({[r = std::move(r)] { UpdateState(*r, Request::kInvalid, 0); }});
-    }
+    const int rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
+    queues_[rank]->push({std::move(r)});
 }
 
 void Gateway::pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-                  std::vector<std::shared_ptr<Request>>& kill_reqs,
                   unsigned                               max_infer,
                   bool                                   blocking,
                   bool&                                  abort,
@@ -67,10 +51,9 @@ void Gateway::pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
     auto& q = *queues_.at(qid);
 
     infer_reqs.clear();
-    kill_reqs.clear();
 
     if (dp_group->n_ranks() == 1) {
-        q.pop(infer_reqs, kill_reqs, max_infer, blocking, abort);
+        q.pop(infer_reqs, max_infer, blocking, abort);
     }
     else {
         union {
@@ -78,8 +61,8 @@ void Gateway::pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
             uint32_t value;
         };
         while (true) {
-            q.pop(infer_reqs, kill_reqs, max_infer, false, abort);
-            data[0] = !(blocking && infer_reqs.empty() && kill_reqs.empty());  // ready?
+            q.pop(infer_reqs, max_infer, false, abort);
+            data[0] = !(blocking && infer_reqs.empty());  // ready?
             data[1] = abort;
             value   = comm::AllReduce(dp_group, value, comm::RedOp::kSum);
             if (data[0] >= dp_thr_ || data[1]) {
@@ -91,28 +74,6 @@ void Gateway::pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
 
     // Assign a monotonic increasing id for each infer request
     q.assign_unique_ids(infer_reqs);
-
-    // Bind for stateful inference
-    std::vector<uint64_t> bind_ids;
-    for (const auto& r : infer_reqs) {
-        if (r->session.start_flag && !r->session.end_flag) {  // started but not ended
-            bind_ids.push_back(r->session.id);
-        }
-    }
-
-    /// TODO: fix qid <-> rank mapping
-    if (!bind_ids.empty()) {
-        binding_.bind(bind_ids, qid);
-    }
-
-    // Unbind for stateful kill
-    std::vector<uint64_t> unbind_ids;
-    for (const auto& r : kill_reqs) {
-        unbind_ids.push_back(r->session.id);
-    }
-    if (!unbind_ids.empty()) {
-        binding_.unbind(unbind_ids, qid);
-    }
 }
 
 void Gateway::cancel(std::shared_ptr<Request> r)
@@ -125,19 +86,6 @@ void Gateway::cancel(std::shared_ptr<Request> r)
     }
     else {
         // request is picked up by engine
-    }
-}
-
-void Gateway::kill(std::shared_ptr<Request> r)
-{
-    if (auto rank = binding_.find(r->session.id); rank >= 0) {
-        queues_[rank]->kill(std::move(r));
-    }
-    else {
-        TM_LOG_ERROR("Failed to find a binded queue for {}", r->session.id);
-        notify({[r = std::move(r)] {  //
-            UpdateState(*r, Request::kInvalid, 0);
-        }});
     }
 }
 

@@ -40,6 +40,7 @@ class Pipeline:
                  max_log_len: int | None = None,
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs):
         """Initialize Pipeline.
 
@@ -51,6 +52,7 @@ class Pipeline:
             max_log_len: Max number of prompt characters or prompt tokens being printed in log.
             trust_remote_code: whether to trust remote code from model repositories.
             speculative_config: Speculative decoding configuration.
+            allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
             **kwargs: Additional keyword arguments.
         """
 
@@ -82,11 +84,13 @@ class Pipeline:
                                            max_log_len=max_log_len,
                                            trust_remote_code=trust_remote_code,
                                            speculative_config=speculative_config,
+                                           allowed_media_domains=allowed_media_domains,
                                            **kwargs)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
         self.session_mgr = self.async_engine.session_mgr
         self.backend_config = self.async_engine.backend_config
+        self.allowed_media_domains = allowed_media_domains
         self.async_engine.start_loop(self.internal_thread.loop, use_async_api=False)
 
     def infer(self,
@@ -112,7 +116,7 @@ class Pipeline:
         """
         is_single = self._is_single(prompts)
         # format prompts to openai message format, which is a list of dicts
-        prompts = MultimodalProcessor.format_prompts(prompts)
+        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
         pbar = tqdm.tqdm(total=len(prompts)) if use_tqdm else None
         outputs = []
         try:
@@ -162,7 +166,7 @@ class Pipeline:
         Returns:
             Iterator: A generator that yields the output (i.e. instance of class ``Response``) of the inference.
         """
-        prompts = MultimodalProcessor.format_prompts(prompts)
+        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
         requests = self._request_generator(prompts,
                                            sessions=sessions,
                                            gen_config=gen_config,
@@ -176,6 +180,27 @@ class Pipeline:
         """Close the pipeline."""
         self.internal_thread.close()
         self.async_engine.close()
+
+    @staticmethod
+    def _history_to_messages(history, prompt, allowed_media_domains=None):
+        def _messages(prompt):
+            messages = []
+            for item in MultimodalProcessor.format_prompts(
+                    prompt, allowed_media_domains=allowed_media_domains):
+                if isinstance(item, str):
+                    messages.append({'role': 'user', 'content': item})
+                elif isinstance(item, dict):
+                    messages.append(item)
+                else:
+                    messages.extend(item)
+            return messages
+
+        messages = []
+        for user_prompt, assistant_text in history:
+            messages.extend(_messages(user_prompt))
+            messages.append({'role': 'assistant', 'content': assistant_text})
+        messages.extend(_messages(prompt))
+        return messages
 
     def chat(self,
              prompt: str | tuple[str, Image | list[Image]],
@@ -201,18 +226,14 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        prompt = MultimodalProcessor.format_prompts(prompt)
-
-        sequence_start = session.step == 0
-        generator = self.stream_infer(prompts=prompt,
+        messages = self._history_to_messages(
+            session.history, prompt, allowed_media_domains=self.allowed_media_domains)
+        generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
                                       adapter_name=adapter_name,
                                       multiplex=True,
-                                      sequence_start=sequence_start,
-                                      sequence_end=False,
-                                      step=session.step,
                                       **kwargs)
 
         def _gen():
@@ -226,7 +247,6 @@ class Pipeline:
                 raise
             else:
                 session.response = resp
-                session.step += resp.generate_token_len + resp.input_token_len
                 session.history.append((session.prompt, resp.text))
 
         if stream_response:

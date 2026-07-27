@@ -9,7 +9,6 @@
 #include "src/turbomind/kernels/norm/layer_norm.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/layer_norm_weight.h"
-#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/qwen3_5vit/bias_gelu.h"
 #include "src/turbomind/models/qwen3_5vit/fast_pos_embed.h"
 #include "src/turbomind/models/qwen3_5vit/fast_rotary_pos_emb.h"
@@ -204,15 +203,12 @@ struct Qwen3_5Vit::Impl {
         return output;
     }
 
-    int Add(RequestCache& c)
+    int Add(Sequence& s)
     {
-        const auto& [r, s] = std::tie(*c.req, *c.seq);
+        auto& r = *s.req;
         if (r.mm_inputs) {
-            if ((not r.session.start_flag) or (not r.session.end_flag)) {
-                // only support non-interactive inference
-                return Request::kInvalid;
-            }
-
+            // The stateful-session subsystem was removed: every request is a single
+            // start+end shot, so there is no interactive (start_flag/end_flag) guard.
             const auto mm_inputs = std::dynamic_pointer_cast<multimodal::Qwen3_5VitInput>(r.mm_inputs);
             if (!mm_inputs) {
                 return Request::kInvalid;
@@ -228,9 +224,10 @@ struct Qwen3_5Vit::Impl {
                     return Request::kInvalid;
                 }
 
-                auto mm_item = std::make_shared<MultiModalData>(
-                    MultiModalData{item.data, Interval{item.token_begin, Interval::Size{tokens}}, item.grid_thw});
+                const Interval interval{item.token_begin, Interval::Size{tokens}};
+                auto mm_item = std::make_shared<MultiModalData>(MultiModalData{item.data, interval, item.grid_thw});
                 s.multimodal_inputs.push_back(mm_item);
+                s.multimodal_spans.push_back(MultiModalSpan{interval, item.fingerprint});
             }
         }
 
@@ -240,11 +237,11 @@ struct Qwen3_5Vit::Impl {
     void Add(int phase, TensorMap& env)
     {
         // convert model-specific multimodal inputs to internal MultiModalData
-        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        const Buffer_<Sequence*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
-            auto& c = *TM_CHECK_NOTNULL(rc[i]);
-            if (c.status == 0) {
-                c.status = Add(c);
+            auto& s = *TM_CHECK_NOTNULL(rc[i]);
+            if (s.status == 0) {
+                s.status = Add(s);
             }
         }
     }
@@ -261,9 +258,9 @@ struct Qwen3_5Vit::Impl {
     // ownership via shared_ptr; UAL borrows safely across env clears.
     void SetupMrope(int phase, TensorMap& env)
     {
-        auto& d  = data_.at(phase);
-        auto& b  = *env.at("batch").data<BatchData*>()[0];
-        auto& rc = b.rc;
+        auto& d = data_.at(phase);
+
+        Buffer_<Sequence*> rc = env.at("requests").buffer();
 
         const int bsz = (int)rc.size();
         if (bsz <= 0) {
@@ -276,9 +273,9 @@ struct Qwen3_5Vit::Impl {
         //    Worst case per prefill slot with mrope: 2*num_images + 1 segments.
         int upper_segs = 0;
         for (int i = 0; i < bsz; ++i) {
-            const auto& c = *rc[i];
-            if (!c.autoregres && !c.seq->multimodal_inputs.empty()) {
-                upper_segs += 2 * (int)c.seq->multimodal_inputs.size() + 1;
+            const auto& s = *rc[i];
+            if (!s.autoregres && !s.multimodal_inputs.empty()) {
+                upper_segs += 2 * (int)s.multimodal_inputs.size() + 1;
             }
         }
         const ssize_t upper_ints = (ssize_t)upper_segs * kMropeSegInts;
@@ -296,12 +293,11 @@ struct Qwen3_5Vit::Impl {
         int   max_seg_len = 0;
 
         for (int i = 0; i < bsz; ++i) {
-            const auto& c            = *rc[i];
-            const auto& s            = *c.seq;
-            const int   seq_len      = (int)c.req->inputs.at("input_ids").shape(0);
-            const bool  needs_table  = !c.autoregres && !s.multimodal_inputs.empty();
-            const int   active_start = c.history_len + c.alpha;
-            const int   active_end   = active_start + c.input_len;
+            const auto& s            = *rc[i];
+            const int   seq_len      = (int)s.req->inputs.at("input_ids").shape(0);
+            const bool  needs_table  = !s.autoregres && !s.multimodal_inputs.empty();
+            const int   active_start = s.history_len + s.inflight_input_len;
+            const int   active_end   = active_start + s.input_len;
 
             auto emit = [&](int run_start, int run_n, int run_base, int h2, int w2) {
                 const int a = std::max(run_start, active_start);
@@ -377,7 +373,6 @@ struct Qwen3_5Vit::Impl {
     {
         // create batch data according to scheduled sequences
         auto& d    = data_.at(phase);
-        auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
         auto& cfg  = weights_.config();
 
@@ -387,13 +382,16 @@ struct Qwen3_5Vit::Impl {
         std::vector<Tensor> pixel_values;
 
         // collect image/video pixel values, grid_thws and embeds_coords
-        const auto& rc = b.rc;
+        Buffer_<Sequence*> rc              = env.at("requests").buffer();
+        int                mm_prefill_seqs = 0;  // prefill sequences carrying multimodal inputs
+        int                images_total    = 0;  // total images across those sequences
         for (int i = 0; i < rc.size(); ++i) {
-            const auto& c = *rc[i];
-            const auto& s = *c.seq;
+            const auto& s = *rc[i];
 
-            if ((not c.autoregres) && (not s.multimodal_inputs.empty())) {
-                Interval text{c.history_len + c.alpha, Interval::Size{c.input_len}};
+            if ((not s.autoregres) && (not s.multimodal_inputs.empty())) {
+                ++mm_prefill_seqs;
+                images_total += (int)s.multimodal_inputs.size();
+                Interval text{s.history_len + s.inflight_input_len, Interval::Size{s.input_len}};
                 for (const auto& mm : s.multimodal_inputs) {
                     auto o = mm->interval & text;
                     if (auto size = (int)o.size()) {
@@ -413,7 +411,19 @@ struct Qwen3_5Vit::Impl {
                 }
             }
 
-            input_ids_offsets += c.autoregres ? 1 : c.input_len;
+            input_ids_offsets += s.autoregres ? 1 : s.input_len;
+        }
+
+        // Prefix-cache observability: on a fully-cached image, the window filter
+        // above batches 0 images (ViT skipped). Only logged for multimodal
+        // prefill passes so decode steps stay quiet.
+        if (mm_prefill_seqs > 0) {
+            const int images_batched = (int)pixel_values.size();
+            TM_LOG_INFO("Qwen3.5 ViT setup: mm_seqs={} images_batched={} images_skipped={} patches={}",
+                        mm_prefill_seqs,
+                        images_batched,
+                        images_total - images_batched,
+                        d.batch_size);
         }
 
         // copy pixel values to batch input

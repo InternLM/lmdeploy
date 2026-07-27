@@ -6,7 +6,6 @@
 
 #include "src/turbomind/engine/request.h"
 
-#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/vision_model.h"
 
 namespace turbomind {
@@ -36,16 +35,16 @@ public:
         }
     }
 
-    int Add(RequestCache& c)
+    int Add(Sequence& c)
     {
-        const auto& [r, s] = std::tie(*c.req, *c.seq);
+        const auto& r = *c.req;
 
         // trim input embeds
-        if (!s.input_embeds_offsets.empty()) {
-            Interval l{0, (int)s.tokens.size()};
+        if (!c.input_embeds_offsets.empty()) {
+            Interval l{0, (int)c.tokens.size()};
             using Size    = Interval::Size;
-            auto& embeds  = s.input_embeds;
-            auto& offsets = s.input_embeds_offsets;
+            auto& embeds  = c.input_embeds;
+            auto& offsets = c.input_embeds_offsets;
             int   i       = embeds.size() - 1;
             for (; i >= 0; --i) {
                 Interval r{offsets[i], Size{(int)embeds[i].shape(0)}};
@@ -65,12 +64,6 @@ public:
             if (ranges_ptr->ndim() != 2 || embeds.ndim() != 2 || ranges_ptr->shape(1) != 2) {
                 /// TODO: reject for invalid shapes
                 return Request::kInvalid;
-            }
-
-            // clone the embeds if the request persists
-            if (!r.session.end_flag) {
-                auto tmp = std::exchange(embeds, empty_like(embeds));
-                std::copy_n((const uint8_t*)tmp.raw_data(), tmp.byte_size(), (uint8_t*)embeds.raw_data());
             }
 
             const auto [sum, dim] = embeds.shapes(0, 1);
@@ -94,8 +87,8 @@ public:
                     /// TODO: reject for src range OOB
                     return Request::kInvalid;
                 }
-                s.input_embeds_offsets.push_back(range.begin());
-                s.input_embeds.push_back(embeds.slice(offset, size));  // reference into `embeds`
+                c.input_embeds_offsets.push_back(range.begin());
+                c.input_embeds.push_back(embeds.slice(offset, size));  // reference into `embeds`
                 offset += size;
                 last = range.end();
             }
@@ -106,7 +99,7 @@ public:
 
     void Add(int phase, TensorMap& env)
     {
-        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        const Buffer_<Sequence*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
             auto& c = *TM_CHECK_NOTNULL(rc[i]);
             if (c.status == 0) {
@@ -121,13 +114,13 @@ public:
         auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-        const auto& rc = b.rc;
+        Buffer_<Sequence*> rc = env.at("requests").buffer();
 
         input_ids_offsets_buf_[0] = 0;
         for (int i = 0; i < rc.size(); ++i) {
             input_ids_offsets_buf_[i + 1] = input_ids_offsets_buf_[i];
             if (const auto& c = *rc[i]; TM_UNLIKELY(!c.autoregres)) {
-                const auto src = c.token_ids + c.history_len + c.alpha;
+                const auto src = c.token_ids + c.history_len + c.inflight_input_len;
                 std::copy_n(src, c.input_len, input_ids_buf_.data() + input_ids_offsets_buf_[i]);
                 // dbg(std::vector<int>(src, src + c.input_len));
                 d.autoreg_ids_pos[i] = -1;
@@ -160,10 +153,10 @@ public:
         auto embed_ptr = (uint8_t*)d.input_embeds_buf.raw_data();
         for (int k = 0; k < rc.size(); ++k) {
             if (auto& c = *rc[k]; !c.autoregres) {
-                const auto& embeds  = c.seq->input_embeds;
-                const auto& offsets = c.seq->input_embeds_offsets;
+                const auto& embeds  = c.input_embeds;
+                const auto& offsets = c.input_embeds_offsets;
                 Interval    p{input_ids_offsets_buf_[k], input_ids_offsets_buf_[k + 1]};
-                Interval    s{c.history_len + c.alpha, p.size()};
+                Interval    s{c.history_len + c.inflight_input_len, p.size()};
                 for (int i = (int)offsets.size() - 1; i >= 0; --i) {
                     Interval r{offsets[i], Interval::Size{(int)embeds[i].shape(0)}};
                     auto     o = r & s;

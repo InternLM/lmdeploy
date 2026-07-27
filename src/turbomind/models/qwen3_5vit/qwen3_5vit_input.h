@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/multimodal_input.h"
 
 #include <array>
@@ -18,11 +19,22 @@ struct Qwen3_5VitItem {
     int                token_begin;
     int                token_end;
     std::array<int, 3> grid_thw;
+    Fingerprint        fingerprint{};  // image content hash from the converter (empty if none supplied)
 
     Qwen3_5VitItem() = default;
 
-    Qwen3_5VitItem(Modality modality, Tensor data, int token_begin, int token_end, std::array<int, 3> grid_thw):
-        modality{modality}, data{std::move(data)}, token_begin{token_begin}, token_end{token_end}, grid_thw{grid_thw}
+    Qwen3_5VitItem(Modality           modality,
+                   Tensor             data,
+                   int                token_begin,
+                   int                token_end,
+                   std::array<int, 3> grid_thw,
+                   Fingerprint        fingerprint = {}):
+        modality{modality},
+        data{std::move(data)},
+        token_begin{token_begin},
+        token_end{token_end},
+        grid_thw{grid_thw},
+        fingerprint{fingerprint}
     {
     }
 };

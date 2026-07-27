@@ -26,21 +26,29 @@ void invokeMoeGate_V2(int*         f2n,
                       int          tokens_padded,
                       int          experts,
                       int          exp_per_tok,
+                      int          local_expert_offset,
+                      int          local_expert_num,
                       bool         softmax,
                       bool         norm_topk,
                       float        routed_scale,
                       cudaStream_t st);
 
+// num_worst_tokens is the output capacity / launch upper bound for f2n/out.
+// If num_valid_tokens is set, it points to a device-side count of valid rows and
+// rows >= *num_valid_tokens return before reading f2n.
 void invokeMoeDispatch(Ref<Tensor>   out_,  //
                        const Tensor& src,
                        const int*    f2n,
-                       int           expert_per_token,
+                       int           num_worst_tokens,
+                       const int*    num_valid_tokens,
                        cudaStream_t  st);
 
+// Same num_worst_tokens / num_valid_tokens contract as invokeMoeDispatch
 void invokeMoeDispatchScales(Ref<Tensor>   out_,  //
                              const Tensor& src,
                              const int*    f2n,
-                             int           expert_per_token,
+                             int           num_worst_tokens,
+                             const int*    num_valid_tokens,
                              cudaStream_t  st);
 
 void invokeMoeCombine(Ref<Tensor>   out_,
@@ -75,6 +83,8 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                            int          tokens_padded,
                            int          experts,
                            int          exp_per_tok,
+                           int          local_expert_offset,
+                           int          local_expert_num,
                            bool         norm_topk_prob,
                            float        routed_scale,
                            bool         use_sigmoid,

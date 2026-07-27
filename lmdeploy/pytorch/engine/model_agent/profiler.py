@@ -26,6 +26,7 @@ class AgentProfiler:
 
         self.profiler = self._build_profiler()
         self.prefix = envs.torch_profile_output_prefix
+        self.use_gzip = envs.torch_profile_use_gzip
         self._task = None
         self._started = False
         if self.dp > 1 and self.duration < 0 and self.profiler is not None:
@@ -59,7 +60,8 @@ class AgentProfiler:
         try:
             self.profiler.stop()
             rank = self.rank
-            dump_path = f'{self.prefix}{rank}.json'
+            suffix = '.json.gz' if self.use_gzip else '.json'
+            dump_path = f'{self.prefix}{rank}{suffix}'
             self.profiler.export_chrome_trace(dump_path)
             logger.warning(f'Profiler {self.name} dump to {dump_path}.')
         except Exception as e:

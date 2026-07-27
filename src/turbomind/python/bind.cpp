@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <array>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -20,8 +21,10 @@
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/engine_config.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/multimodal_input.h"
+#include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
@@ -43,6 +46,10 @@
 namespace py = pybind11;
 namespace ft = turbomind;
 using namespace pybind11::literals;
+
+namespace turbomind::linear_attn::delta_rule {
+void bind_delta_rule(pybind11::module_& m);
+}
 
 using ft::core::Tensor;
 
@@ -237,12 +244,79 @@ std::shared_ptr<Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
     assert(dl_tensor.ndim > 0);
     std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
 
-    std::shared_ptr<void> ptr{dl_tensor.data, [tensor](void* p) {
+    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    std::shared_ptr<void> ptr{data, [tensor](void* p) {
                                   if (tensor->deleter) {
                                       tensor->deleter(tensor);
                                   }
                               }};
     return std::make_shared<Tensor>(ptr, std::move(shape), dtype, where);
+}
+
+ft::core::ssize_t TorchStorageCapacityElements(py::handle source, ft::DataType dtype, ft::core::ssize_t fallback)
+{
+    if (!source || !py::hasattr(source, "untyped_storage") || !py::hasattr(source, "storage_offset")) {
+        return fallback;
+    }
+
+    try {
+        const auto elem_bytes = ft::byte_size(dtype);
+        if (elem_bytes <= 0) {
+            return fallback;
+        }
+        auto storage       = source.attr("untyped_storage")();
+        auto storage_bytes = py::cast<ft::core::ssize_t>(storage.attr("nbytes")());
+        auto offset        = py::cast<ft::core::ssize_t>(source.attr("storage_offset")());
+        if (storage_bytes < 0 || offset < 0) {
+            return fallback;
+        }
+        const auto offset_bytes = offset * elem_bytes;
+        if (offset_bytes < 0 || offset_bytes > storage_bytes) {
+            return fallback;
+        }
+        const auto capacity = (storage_bytes - offset_bytes) / elem_bytes;
+        return capacity > fallback ? capacity : fallback;
+    }
+    catch (py::error_already_set& e) {
+        e.restore();
+        PyErr_Clear();
+        return fallback;
+    }
+}
+
+std::shared_ptr<Tensor> DLManagedTensorToTritonTensorWithStrides(DLManagedTensor* tensor, py::handle source = {})
+{
+    auto& dl_tensor = tensor->dl_tensor;
+    auto  where     = getMemoryType(dl_tensor.device);
+    auto  dtype     = getDataType(dl_tensor.dtype);
+    assert(dl_tensor.ndim > 0);
+    std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
+
+    // Compute row-major strides if DLPack strides are NULL (contiguous tensor)
+    std::vector<ft::core::ssize_t> strides;
+    if (dl_tensor.strides) {
+        strides.assign(dl_tensor.strides, dl_tensor.strides + dl_tensor.ndim);
+    }
+    else {
+        strides.resize(dl_tensor.ndim, 1);
+        for (int i = dl_tensor.ndim - 2; i >= 0; --i) {
+            strides[i] = strides[i + 1] * shape[i + 1];
+        }
+    }
+
+    ft::core::Layout layout(std::move(shape), std::move(strides));
+
+    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    std::shared_ptr<void> ptr{data, [tensor](void* p) {
+                                  if (tensor->deleter) {
+                                      tensor->deleter(tensor);
+                                  }
+                              }};
+
+    const auto capacity =
+        layout.is_contiguous() ? layout.cosize() : TorchStorageCapacityElements(source, dtype, layout.cosize());
+    auto buffer = ft::core::Buffer{ptr, capacity, dtype, where};
+    return std::make_shared<Tensor>(std::move(buffer), std::move(layout), Tensor::PreserveBufferCapacity{});
 }
 
 static void safe_memcpy(void* dst, const void* src, size_t size)
@@ -344,20 +418,41 @@ PYBIND11_MODULE(_turbomind, m)
         .value("AUDIO", MMModality::kAudio)
         .value("TIME_SERIES", MMModality::kTimeSeries)
         .export_values();
+    auto fp_from_bytes = [](const py::bytes& b) -> ft::Fingerprint {
+        ft::Fingerprint fp{};
+        char*           buf = nullptr;
+        Py_ssize_t      len = 0;
+        if (PyBytes_AsStringAndSize(b.ptr(), &buf, &len) != 0) {
+            throw py::error_already_set();
+        }
+        if (len == 0) {
+            return fp;  // empty sentinel
+        }
+        if (len != 32) {
+            throw std::invalid_argument("Qwen3_5VitItem.fingerprint must be 0 or 32 bytes (SHA-256)");
+        }
+        std::memcpy(fp.words.data(), buf, 32);
+        return fp;
+    };
+    auto fp_to_bytes = [](const ft::Fingerprint& fp) -> py::bytes {
+        return py::bytes(reinterpret_cast<const char*>(fp.words.data()), 32);
+    };
     py::class_<QwenVitItem>(multimodal, "Qwen3_5VitItem")
         .def(py::init<>())
-        .def(py::init([](MMModality              modality,
-                         std::shared_ptr<Tensor> data,
-                         int                     token_begin,
-                         int                     token_end,
-                         std::array<int, 3>      grid_thw) {
-                 return QwenVitItem{modality, *data, token_begin, token_end, grid_thw};
+        .def(py::init([fp_from_bytes](MMModality              modality,
+                                      std::shared_ptr<Tensor> data,
+                                      int                     token_begin,
+                                      int                     token_end,
+                                      std::array<int, 3>      grid_thw,
+                                      py::bytes               fingerprint) {
+                 return QwenVitItem{modality, *data, token_begin, token_end, grid_thw, fp_from_bytes(fingerprint)};
              }),
              "modality"_a,
              "data"_a,
              "token_begin"_a,
              "token_end"_a,
-             "grid_thw"_a)
+             "grid_thw"_a,
+             "fingerprint"_a = py::bytes())
         .def_readwrite("modality", &QwenVitItem::modality)
         .def_property(
             "data",
@@ -365,7 +460,11 @@ PYBIND11_MODULE(_turbomind, m)
             [](QwenVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
         .def_readwrite("token_begin", &QwenVitItem::token_begin)
         .def_readwrite("token_end", &QwenVitItem::token_end)
-        .def_readwrite("grid_thw", &QwenVitItem::grid_thw);
+        .def_readwrite("grid_thw", &QwenVitItem::grid_thw)
+        .def_property(
+            "fingerprint",
+            [fp_to_bytes](const QwenVitItem& self) { return fp_to_bytes(self.fingerprint); },
+            [fp_from_bytes](QwenVitItem& self, py::bytes b) { self.fingerprint = fp_from_bytes(b); });
     py::class_<QwenVitInput, MMInput, std::shared_ptr<QwenVitInput>>(multimodal, "Qwen3_5VitInput")
         .def(py::init<>())
         .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
@@ -390,25 +489,16 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
 
     py::class_<ft::SessionParam>(m, "SessionParam")
-        .def(py::init([](uint64_t id, int step, bool start, bool end) {
-                 if (!start && end) {
-                     throw std::logic_error("unsupported arguments: start=false, end=true");
-                 }
+        .def(py::init([](uint64_t id, int step) {
                  ft::SessionParam param{};
-                 param.id         = id;
-                 param.step       = step;
-                 param.start_flag = start;
-                 param.end_flag   = end;
+                 param.id   = id;
+                 param.step = step;
                  return param;
              }),
              "id"_a,
-             "step"_a,
-             "start"_a,
-             "end"_a)
+             "step"_a)
         .def_readwrite("id", &ft::SessionParam::id)
-        .def_readwrite("step", &ft::SessionParam::step)
-        .def_readwrite("start", &ft::SessionParam::start_flag)
-        .def_readwrite("end", &ft::SessionParam::end_flag);
+        .def_readwrite("step", &ft::SessionParam::step);
 
     py::class_<ft::GenerationConfig>(m, "GenerationConfig")
         .def(py::init())
@@ -567,6 +657,27 @@ PYBIND11_MODULE(_turbomind, m)
             return ret;
         },
         "dl_managed_tensor"_a);
+    m.def(
+        "from_dlpack_with_strides",
+        [](py::object obj) {
+            py::capsule      cap = obj.attr("__dlpack__")();
+            DLManagedTensor* dlmt =
+                static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+            auto ret = DLManagedTensorToTritonTensorWithStrides(dlmt, obj);
+            // take ownership of capsule's payload
+            cap.set_name("used_dltensor");
+            return ret;
+        },
+        "dl_managed_tensor"_a);
+    m.def(
+        "generic_copy_on_stream",
+        [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
+            using ft::core::GenericCopy;
+            GenericCopy(*src, *dst, reinterpret_cast<cudaStream_t>(stream_ptr));
+        },
+        "src"_a,
+        "dst"_a,
+        "stream_ptr"_a);
 
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
@@ -614,14 +725,6 @@ PYBIND11_MODULE(_turbomind, m)
                 model_request->Cancel();  //
             },
             py::call_guard<py::gil_scoped_release>())
-        .def(
-            "end",
-            [](ModelRequest* model_request, std::function<void(int)> cb, uint64_t session_id) {
-                model_request->End(std::move(cb), session_id);  //
-            },
-            py::call_guard<py::gil_scoped_release>(),
-            "cb"_a,
-            "session_id"_a)
         .def(
             "set_grammar",
             [](ModelRequest* model_request, const xgrammar::CompiledGrammar& grammar) {
@@ -793,5 +896,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); })
         .def("attn_tp_rank", &TurboMind::GetAttnTpRank, "index"_a)
         .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a)
+        .def("ep_rank", &TurboMind::GetEpRank, "index"_a)
         .def("model_tp_rank", &TurboMind::GetModelTpRank, "index"_a);
+
+    turbomind::linear_attn::delta_rule::bind_delta_rule(m);
 }

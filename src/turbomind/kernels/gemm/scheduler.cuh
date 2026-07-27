@@ -153,6 +153,7 @@ struct TileScheduler {
         PipelineState  pipe;
         int            group_id_offset;
         int            cluster_idx;
+        int            cluster_count;
         Storage&       store;
         TileScheduler& sched;
 
@@ -255,10 +256,19 @@ public:
         if constexpr (!is_dynamic) {
             cluster_id = (int)cute::cluster_id_in_grid().x;
         }
+
+        int cluster_count = clusters_;
+        if constexpr (is_grouped_gemm) {
+            // gemm_shape_.x is only the allocation capacity. EP may route fewer
+            // tokens locally, so use the final offsets sentinel as the true end.
+            cluster_count = get_start_index(gemm_shape_.w);
+        }
+
         return {
             PipelineState{0, 1, 0},
             0,
             cluster_id,
+            cluster_count,
             store,
             *this,
         };
@@ -392,7 +402,7 @@ public:
             }
         }
 
-        const int alive = cluster_idx < clusters_;
+        const int alive = cluster_idx < state.cluster_count;
 
         if (alive) {
             int  group_id      = 0;

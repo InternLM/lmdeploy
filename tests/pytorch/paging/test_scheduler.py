@@ -1238,6 +1238,25 @@ def test_reserve_long_context_chunk_failure_preserves_committed_prefix():
     assert long_seq.num_blocks == 2
 
 
+def test_reserve_last_long_context_chunk_failure_restores_chunk_limit():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(num_gpu_blocks=3)
+    long_seq = scheduler.add_session(100).add_sequence([1] * (block_size * 4))
+
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [long_seq]
+    scheduler.activate_seqs([long_seq])
+    long_seq.set_step(block_size * 2)
+
+    assert not scheduler.reserve_long_context_chunk(long_seq,
+                                                    block_size * 2,
+                                                    prealloc_size=1,
+                                                    is_last_chunk=True)
+    assert long_seq.status == MessageStatus.RUNNING
+    assert long_seq.kv_token_limit == block_size * 2
+    assert long_seq.num_blocks == 2
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 1
+
+
 def test_scheduler_accepts_prefix_hit_that_starts_middle_long_context_chunk():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16

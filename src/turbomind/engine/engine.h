@@ -3,16 +3,17 @@
 
 #include <memory>
 
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/gateway.h"
 
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/models/vision_model.h"
 
 namespace turbomind {
 
 struct ScheduleMetrics;
+class VisionModel;
 
 class Engine {
 public:
@@ -28,9 +29,10 @@ public:
     }
 
     Engine(EngineParam                  param,
+           ObjectAllocator              alloc,
+           CacheRegistry                cache_registry,
            LanguageModel                model,
-           std::unique_ptr<VisionModel> vision_model,  // null for text-only
-           const ModelWeight&           weights,
+           std::unique_ptr<VisionModel> vision_model,  // null for text-only checkpoints
            Context&                     ctx,
            Gateway&                     gateway,
            int                          device_id,
@@ -38,6 +40,10 @@ public:
            int                          phases);
 
     void Start();
+
+    // Wait for the engine loop to observe gateway shutdown. This intentionally
+    // leaves the executor queues open until every TP peer has exited its loop.
+    void Join();
 
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics();
 

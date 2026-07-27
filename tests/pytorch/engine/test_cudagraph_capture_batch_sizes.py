@@ -3,6 +3,7 @@ import pytest
 
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
+from lmdeploy.pytorch.backends.graph_runner import GraphRunnerMeta
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 
@@ -53,3 +54,17 @@ def test_graph_runner_defensively_normalizes_capture_batch_sizes():
     runner.cache_config = cache_config
 
     assert runner.get_capture_batch_sizes() == [1, 4, 8]
+
+
+def test_graph_runner_reset_clears_padding_batch_size(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda import graph_runner as cuda_graph_runner
+
+    runner = object.__new__(CUDAGraphRunner)
+    runner._runner_meta = GraphRunnerMeta(padding_batch_size=1)
+    runner._runner_map = {'stale': object()}
+    monkeypatch.setattr(cuda_graph_runner.get_deepep_state(), 'enabled', lambda: False)
+
+    runner.reset()
+
+    assert runner.get_meta().padding_batch_size is None
+    assert runner._runner_map == {}

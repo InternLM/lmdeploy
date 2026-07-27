@@ -118,7 +118,7 @@ class ConfigBuilder:
         def _build_draft_dist_ctx(dist_config):
             # TODO support tp > 1, ep > 1 for other methods
             if speculative_config.method == 'qwen3_5_mtp':
-                draft_dist_config = copy.deepcopy(dist_config)
+                draft_dist_config = dist_config
             else:
                 draft_dist_config = DistConfig()
             return draft_dist_config

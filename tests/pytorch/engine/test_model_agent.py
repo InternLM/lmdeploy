@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from collections import deque
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -79,6 +80,110 @@ def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
 
     assert final_chunk.model_metas == [{'chunk': 1}]
     assert agent._prev_chunk_output is None
+
+
+def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    old_step_inputs = object()
+    new_step_inputs = object()
+
+    class _StrategyFactory:
+
+        def build_step_inputs(self):
+            events.append('build_step_inputs')
+            return new_step_inputs
+
+    class _SpecAgent:
+
+        def reset_runtime_state(self):
+            events.append('reset_spec')
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.strategy_factory = _StrategyFactory()
+    agent.spec_agent = _SpecAgent()
+    agent.step_inputs = old_step_inputs
+    agent._prev_chunk_output = {'model_metas': [object()]}
+    agent._prev_chunk_last_logit = object()
+
+    agent.reset_runtime_state()
+
+    assert agent.step_inputs is new_step_inputs
+    assert agent._prev_chunk_output is None
+    assert agent._prev_chunk_last_logit is None
+    assert events == ['build_step_inputs', 'reset_spec']
+
+
+def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import build_spec_agent
+
+    guided_manager = object()
+    specdecode_config = SpecDecodeConfig(
+        model='draft-model',
+        method='deepseek_mtp',
+        dist_config=DistConfig(),
+        num_speculative_tokens=3,
+    )
+    spec_agent = build_spec_agent(
+        specdecode_config,
+        backend_config=None,
+        dist_ctx=DistContext(rank=1, dist_config=DistConfig(tp=2)),
+        inputs_strategy=None,
+        agent_strategy=None,
+        misc_config=None,
+        device='cpu',
+        guided_decoding_manager=guided_manager,
+    )
+    assert spec_agent.is_enabled()
+    assert spec_agent.proposer is None
+    assert not hasattr(spec_agent, 'guided_helper')
+
+
+def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import build_spec_agent
+
+    guided_manager = object()
+    proposer = SimpleNamespace(guided_helper=None)
+    monkeypatch.setattr(spec_agent_mod, 'build_specdecode_proposer', lambda *args, **kwargs: proposer)
+    inputs_strategy = SimpleNamespace(create_make_dummy_meta=lambda model_config: None)
+    specdecode_config = SpecDecodeConfig(
+        model='draft-model',
+        method='deepseek_mtp',
+        dist_config=DistConfig(),
+        num_speculative_tokens=3,
+    )
+
+    spec_agent = build_spec_agent(
+        specdecode_config,
+        backend_config=None,
+        dist_ctx=DistContext(rank=0, dist_config=DistConfig(tp=2)),
+        inputs_strategy=inputs_strategy,
+        agent_strategy=None,
+        misc_config=None,
+        device='cpu',
+        guided_decoding_manager=guided_manager,
+    )
+
+    assert spec_agent.proposer is proposer
+    assert spec_agent.guided_helper.manager is guided_manager
+    assert proposer.guided_helper is spec_agent.guided_helper
+
+
+def test_spec_agent_reset_runtime_state_discards_chunk_carry():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {'hidden_states': object()}
+
+    agent.reset_runtime_state()
+
+    assert agent._prev_chunk_last == {}
 
 
 class TestDrainQueues:
@@ -181,6 +286,102 @@ class TestDrainQueues:
         assert agent._out_que.get_nowait() == 'new'
 
 
+class TestDPForwardInputsMaker:
+
+    @staticmethod
+    def _make_ready_event():
+
+        class _ReadyEvent:
+
+            def query(self):
+                return True
+
+        return _ReadyEvent()
+
+    @staticmethod
+    def _make_maker(is_sleeping=False, dummy_forward_inputs=None):
+        from lmdeploy.pytorch.engine.model_agent.inputs_maker import DPForwardInputsMaker
+
+        maker = DPForwardInputsMaker.__new__(DPForwardInputsMaker)
+        maker.model_agent = SimpleNamespace(state=SimpleNamespace(is_sleeping=is_sleeping))
+        maker._pre_in_que = asyncio.Queue()
+        maker._in_que = asyncio.Queue()
+        maker._ready_event = TestDPForwardInputsMaker._make_ready_event()
+
+        async def _gather_has_inputs(has_inputs=False):
+            return has_inputs
+
+        def _make_dummy_forward_inputs():
+            if dummy_forward_inputs is not None:
+                return dummy_forward_inputs
+            raise AssertionError('pending real input must not be replaced with a dummy')
+
+        maker._gather_has_inputs = _gather_has_inputs
+        maker._make_dummy_forward_inputs = _make_dummy_forward_inputs
+        return maker
+
+    def test_get_waits_for_queued_preprocess_input(self):
+        async def _run():
+            maker = self._make_maker()
+            maker._pre_in_que.put_nowait({'inputs': 'queued'})
+
+            task = asyncio.create_task(maker.get())
+            await asyncio.sleep(0.01)
+            assert not task.done()
+
+            real_inputs = {'inputs': 'real'}
+            maker._pre_in_que.get_nowait()
+            maker._in_que.put_nowait(real_inputs)
+
+            assert await asyncio.wait_for(task, timeout=1.0) is real_inputs
+
+        asyncio.run(_run())
+
+    def test_get_yields_for_worker_forward_rpc_before_dummy(self):
+
+        async def _run():
+            maker = self._make_maker()
+            real_inputs = {'inputs': 'real'}
+
+            async def _enqueue_after_model_agent_yields():
+                await asyncio.sleep(0)
+                maker._pre_in_que.put_nowait({'inputs': 'queued'})
+                await asyncio.sleep(0)
+                maker._pre_in_que.get_nowait()
+                maker._in_que.put_nowait(real_inputs)
+
+            enqueue_task = asyncio.create_task(_enqueue_after_model_agent_yields())
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is real_inputs
+            await asyncio.wait_for(enqueue_task, timeout=1.0)
+
+        asyncio.run(_run())
+
+    def test_get_uses_dummy_for_sleeping_preprocess_queue(self):
+        async def _run():
+            dummy_inputs = {'inputs': 'sleep_dummy'}
+            maker = self._make_maker(is_sleeping=True, dummy_forward_inputs=dummy_inputs)
+            maker._pre_in_que.put_nowait({'inputs': 'stale'})
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is dummy_inputs
+            assert maker._pre_in_que.qsize() == 1
+            assert maker._in_que.qsize() == 0
+
+        asyncio.run(_run())
+
+    def test_get_uses_dummy_for_sleeping_ready_queue(self):
+        async def _run():
+            dummy_inputs = {'inputs': 'sleep_dummy'}
+            maker = self._make_maker(is_sleeping=True, dummy_forward_inputs=dummy_inputs)
+            maker._in_que.put_nowait({'inputs': 'stale_ready'})
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is dummy_inputs
+            assert maker._pre_in_que.qsize() == 0
+            assert maker._in_que.qsize() == 1
+
+        asyncio.run(_run())
+
+
 class TestDPForwardMeta:
 
     def test_field_names_follow_enabled_features(self):
@@ -281,6 +482,8 @@ class TestResetGraphRunner:
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = _SpecAgent()
+        agent._prev_chunk_output = {'model_metas': object()}
+        agent._prev_chunk_last_logit = torch.ones(1, 2)
 
         @contextmanager
         def _all_context():
@@ -298,6 +501,8 @@ class TestResetGraphRunner:
             'spec_reset',
             'exit_all_context',
         ]
+        assert agent._prev_chunk_output is None
+        assert agent._prev_chunk_last_logit is None
 
     def test_spec_agent_reset_graph_runner_uses_draft_context(self):
         from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
@@ -311,6 +516,7 @@ class TestResetGraphRunner:
 
         agent = SpecModelAgent.__new__(SpecModelAgent)
         agent.proposer = type('Proposer', (), {'model': _Model()})()
+        agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
 
         @contextmanager
         def _draft_context():
@@ -327,9 +533,115 @@ class TestResetGraphRunner:
             'reset',
             'exit_draft_context',
         ]
+        assert agent._prev_chunk_last == {}
 
 
 class TestModelAgentWakeup:
+
+    def test_sleep_clears_middle_chunk_carryover_state(self, event_loop, monkeypatch):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
+        from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+        events = []
+
+        class _Moveable:
+
+            def __init__(self, name):
+                self.name = name
+
+            def to(self, *args, **kwargs):
+                events.append((self.name, 'to', args, kwargs))
+                return self
+
+        class _PatchedModel:
+
+            def __init__(self):
+                self.model = _Moveable('main_model')
+
+            def reset(self):
+                events.append('main_reset')
+
+            def get_model(self):
+                return self.model
+
+        class _SpecGraphRunner:
+
+            def __init__(self):
+                self.model = _Moveable('spec_model')
+
+            def reset(self):
+                events.append('spec_reset')
+
+            def get_model(self):
+                return self.model
+
+        class _StrategyFactory:
+
+            def build_step_inputs(self):
+                events.append('build_step_inputs')
+                return {'fresh': 'step_inputs'}
+
+        spec_agent = SpecModelAgent.__new__(SpecModelAgent)
+        spec_agent.proposer = type('Proposer', (), {'model': _SpecGraphRunner()})()
+        spec_agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
+        spec_agent.cache_engine = object()
+
+        @contextmanager
+        def _draft_context():
+            events.append('enter_draft_context')
+            yield
+            events.append('exit_draft_context')
+
+        spec_agent.draft_context = _draft_context
+
+        model_agent = BaseModelAgent.__new__(BaseModelAgent)
+        model_agent.state = SleepWakeupState()
+        model_agent.dist_config = SimpleNamespace(dp=1)
+        model_agent.cache_engine = object()
+        model_agent.state_cache_engine = object()
+        model_agent.patched_model = _PatchedModel()
+        model_agent.spec_agent = spec_agent
+        model_agent.strategy_factory = _StrategyFactory()
+        model_agent.step_inputs = {'stale': 'step_inputs'}
+        model_agent._prev_chunk_output = {'model_metas': object()}
+        model_agent._prev_chunk_last_logit = torch.ones(1, 2)
+        model_agent._pre_in_que = asyncio.Queue()
+        model_agent._in_que = asyncio.Queue()
+        model_agent._out_que = asyncio.Queue()
+        model_agent._pending_h2d_transfers = deque()
+        model_agent._pre_in_que.put_nowait('stale_middle_chunk_input')
+        model_agent._in_que.put_nowait('stale_middle_chunk_cuda_input')
+        model_agent._out_que.put_nowait('stale_middle_chunk_output')
+        model_agent._update_params_ipc_tensor = object()
+        model_agent._update_params_ipc_event = object()
+
+        @contextmanager
+        def _all_context():
+            events.append('enter_all_context')
+            yield
+            events.append('exit_all_context')
+
+        model_agent.all_context = _all_context
+        monkeypatch.setattr(torch.cuda, 'synchronize', lambda: events.append('cuda_synchronize'))
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: events.append('cuda_empty_cache'))
+
+        event_loop.run_until_complete(model_agent.sleep(level=1))
+
+        assert model_agent._prev_chunk_output is None
+        assert model_agent._prev_chunk_last_logit is None
+        assert model_agent.step_inputs == {'fresh': 'step_inputs'}
+        assert spec_agent._prev_chunk_last == {}
+        assert model_agent.cache_engine is None
+        assert model_agent.state_cache_engine is None
+        assert spec_agent.cache_engine is None
+        assert model_agent._pre_in_que.empty()
+        assert model_agent._in_que.empty()
+        assert model_agent._out_que.empty()
+        assert model_agent._update_params_ipc_tensor is None
+        assert model_agent._update_params_ipc_event is None
+        assert 'main_reset' in events
+        assert 'spec_reset' in events
+        assert 'build_step_inputs' in events
 
     def test_dp_kv_cache_wakeup_warms_before_releasing_forward_task(self):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState

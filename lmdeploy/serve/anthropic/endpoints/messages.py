@@ -174,11 +174,12 @@ def register(router: APIRouter, server_context) -> None:
         result_generator = server_context.async_engine.generate(
             engine_messages,
             session,
-            gen_config=to_generation_config(request),
+            gen_config=to_generation_config(
+                request,
+                default_gen_config=server_context.default_gen_config,
+            ),
             tools=parsed_request.tools,
             stream_response=True,
-            sequence_start=True,
-            sequence_end=True,
             do_preprocess=False if resolved_input_ids is not None else True,
             adapter_name=adapter_name,
             input_ids=resolved_input_ids,

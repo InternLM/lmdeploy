@@ -20,7 +20,7 @@ struct LinearIteratorParams {
 struct BlockIteratorParams {
     char**     block_ptrs;
     const int* cu_block_nums;
-    int        layer_id;
+    int        offset;  //  cache block offset
     int        block_len;
 };
 
@@ -44,6 +44,7 @@ struct AttentionParams {
     // sequence-level buffers
     const int*   cu_q_len;
     const int*   cu_k_len;
+    const int*   readonly_block_num;  // per-batch read-only leading block count
     const bool*  finished;
     const float* rope_theta;
 

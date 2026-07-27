@@ -310,9 +310,9 @@ public:
         const int N = Bdesc.cols;
         const int K = Adesc.cols;
 
-        if (ptr_offsets[group_count] != Adesc.rows) {
+        if (ptr_offsets[group_count] > Adesc.rows) {
             fprintf(stderr,
-                    "[TM][GEMM] CublasGrouped: offsets[%d]=%d != Adesc.rows=%d (would OOB)\n",
+                    "[TM][GEMM] CublasGrouped: offsets[%d]=%d exceeds Adesc.rows=%d (would OOB)\n",
                     group_count,
                     ptr_offsets[group_count],
                     Adesc.rows);

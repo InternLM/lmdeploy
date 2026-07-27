@@ -2,15 +2,21 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <ostream>
+#include <utility>
+#include <vector>
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/interval.h"
+#include "src/turbomind/engine/block.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -57,12 +63,7 @@ std::ostream& operator<<(std::ostream& os, const GenerationConfig& c);
 
 struct SessionParam {
     uint64_t id;
-
-    int step;
-
-    bool start_flag;
-    bool end_flag;
-    bool kill_flag;
+    int      step;
 };
 
 struct RequestState {
@@ -91,7 +92,8 @@ struct Request {
     uint64_t id;         // sequence id
     uint64_t unique_id;  // monotonic increasing
 
-    SessionParam     session;
+    int step;  // KV/output offset (replaces SessionParam session; start/end/kill removed)
+
     GenerationConfig gen_cfg;
 
     bool stream_output;
@@ -104,8 +106,6 @@ struct Request {
     // fast path for accessing common output buffers
     Tensor_<int> output_ids;
     Tensor_<int> sequence_length;
-
-    std::function<void(int)> end_cb;
 
     std::atomic<int> cancel_flag;
 
@@ -120,16 +120,15 @@ struct Request {
     enum
     {
         kOk            = 0,
-        kInvalid       = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
-        kConflict      = 2,  // Concurrent requests to the same sequence
-        kBusy          = 3,  // Sequence is already running
-        kInactive      = 4,  // Sequence to `stop` is not active
-        kFail          = 5,  // Can't find sequence for `stop` request or internal error during inference
-        kTooLong       = 6,  // history + prompt > session_len,
+        kInvalid       = 1,  // Malformed request (e.g. invalid input embeddings) or routing failure
+        kConflict      = 2,  // Concurrent requests to the same sequence id
+        kFail          = 5,  // Internal error during inference
+        kTooLong       = 6,  // history + prompt > session_len
         kFinish        = 7,
         kCancel        = 8,
-        kInconsistency = 9,   // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
-        kNoQueue       = 10,  // No queue available for submitting the request (in current process)
+        kInconsistency = 9,  // Prefix caching incompatible with nonzero step or all-token logits/hidden-state output
+        kNoQueue       = 10,
+        kOutOfMemory   = 11,
     };
 
     std::shared_ptr<xgrammar::CompiledGrammar> grammar;
@@ -138,23 +137,52 @@ struct Request {
 
 void UpdateState(Request& r, int status, int seq_len);
 
-class Sequence;
+struct Sequence;
 
-// Unlike `Request` which is shared by all local TP ranks, each rank has its own `RequestCache`.
-struct RequestCache {
+struct MultiModalData;  // defined in models/vision_model.h
+
+// The prefix-cache projection of one multimodal input: its token span and
+// content identity. The engine never sees MultiModalData / pixels.
+struct MultiModalSpan {
+    Interval    interval;     // absolute token span [begin, end)
+    Fingerprint fingerprint;  // empty until the generation PR
+};
+
+// A scheduler-planned device copy between two cache blocks of the same category.
+// Setup resolves each block's allocation into byte ranges/device addresses, then
+// the model executor runs it as a whole-object copy.
+struct CacheCopy {
+    CacheBlock* src{};
+    CacheBlock* dst{};
+};
+
+// What set this pass's resume_len. resume_len is a single number, produced by
+// whichever mechanism reached the highest skip position in Scheduler::PlanResume().
+// Observability-only; the scheduler stays category-agnostic.
+enum class ResumeSource
+{
+    kNone = 0,    // resume_len == 0, nothing skipped
+    kPrefix,      // contiguous valid prefix-category cache (no checkpoint category)
+    kFrontier,    // request's own checkpoint frontier (no restore copy)
+    kCheckpoint,  // restored a published block checkpoint into the frontier
+    kFork,        // sibling-sourced: KV fork extension or partial-sibling checkpoint restore
+};
+
+// Unlike `Request` which is shared by all local TP ranks, each rank has its own `Sequence`.
+struct Sequence {
+
     std::shared_ptr<Request> req;
-    const Sequence*          seq;  // May be NULL in `Update` (seq get erased when req is done)
-    const GenerationConfig&  gen_cfg;
 
-    RequestCache(std::shared_ptr<Request> r, const Sequence& s): req{std::move(r)}, seq{&s}, gen_cfg{req->gen_cfg} {}
+    const GenerationConfig& gen_cfg;
+
+    explicit Sequence(std::shared_ptr<Request> r): req{std::move(r)}, gen_cfg{req->gen_cfg} {}
 
     int status = Request::kOk;
 
     // These members may be opaque handles from individual modules (pointers to forward declared types), but we tend to
     // keep it simple as long as the complexity is manageable
 
-    int*     token_ids    = nullptr;  // currently the `output_ids` buf of request
-    uint8_t* random_state = nullptr;
+    int* token_ids = nullptr;  // currently the `output_ids` buf of request
 
     int step0       = 0;  // set at request init, constant, first prefill step
     int prompt_len  = 0;  // set at request init, constant, first decode step
@@ -165,23 +193,75 @@ struct RequestCache {
 
     int seq_len = 0;  // set at request init, updated per step
 
-    int input_len   = 0;  // set at schedule (set to `seq.input_len`)
-    int history_len = 0;  // set at schedule (set to `seq.cache_len`)
+    int input_len   = 0;  // set at schedule
+    int history_len = 0;  // set at schedule from `resume_len`
 
     bool autoregres = false;  // set at schedule, `seq_len` and `input_ids` taken from the engine
     bool generating = false;  // set at schedule
 
     bool done = false;  // set at cancel / update, is the request finished / canceled
 
-    int alpha = 0;  // pending growth of cache_len (draft_len + input_len)
-    int beta  = 0;  // pending growth of seq_len (draft_len + {0,1})
+    bool retiring = false;  // finished/canceled; never schedule again
+    int  inflight = 0;      // submitted executor batches containing this request
+
+    int generation_token_ids_row    = -1;  // owned by Generation, allocated lazily
+    int generation_random_state_row = -1;  // owned by Generation, allocated lazily
+
+    int inflight_input_len  = 0;  // submitted input tokens not yet reflected into filled_len
+    int inflight_new_tokens = 0;  // submitted generated tokens not yet reflected into seq_len
 
     float rope_base = 0.f;
 
     Interval output_hidden_states;
     Interval output_logits;
-    Interval input_ce_loss;
 
+    ////////////////////////// Engine-local execution state ///////////////////////////
+
+    std::vector<LogicalBlockPtr> block_ids;  // logical (each holds one request ref)
+
+    std::vector<CacheBlock*> alloc_blocks;     // cache blocks needing allocation this schedule pass
+    std::vector<CacheBlock*> involved_blocks;  // cache blocks stamped for eviction protection (= required alloc set);
+                                               // persistent across PlanContinue, rebuilt by PlanResume
+
+    std::vector<CacheCopy> restore_copies;  // run before BatchOp::kPrepare
+    std::vector<CacheCopy> publish_copies;  // run after BatchOp::kUnprep
+
+    int resume_len = 0;  // prefix length every stateful module agrees can be skipped
+    int filled_len = 0;  // prefix state actually produced by the latest completed forward
+
+    int readonly_block_num = 0;  // leading block_ids reused read-only (no KV re-write)
+
+    // Prefix-cache logging only; never read by scheduling/admission logic.
+    int          matched_blocks = 0;                    // set at AdmitPrompt: leading prompt blocks found in trie
+    bool         resuming       = false;                // transient: planned by PlanResume() this pass
+    ResumeSource resume_source  = ResumeSource::kNone;  // transient: mechanism that set resume_len
+
+    CacheBlockPtr frontier;                  // checkpoint working state for the next forward
+    int           frontier_pos   = 0;        // sequence position the frontier corresponds to
+    LogicalBlock* publish_target = nullptr;  // logical block selected for publication this pass
+    int           publish_end    = 0;        // sequence position of the pending publication
+    int           last_ckpt_pos  = 0;        // end of the last published checkpoint
+    bool          prompt_boundary_node =
+        false;  // a reusable prompt-boundary exists and WILL be published: a partial sibling
+                // node when B is mid-block, else a block-aligned checkpoint clamp target. The
+                // producer clamps its forward to prompt_boundary_pos to populate the node's KV
+                // (and publish a checkpoint when the model is recurrent). Decided in SetupPartialSiblings.
+    int prompt_boundary_pos = 0;  // resolved boundary B = prompt_len - cache_prompt_boundary_skip; 0 = none
+
+    std::vector<int> tokens;
+
+    std::vector<Tensor> input_embeds;
+    std::vector<int>    input_embeds_offsets;
+
+    // persistent per-sequence vision features (qwen3.5-vit, W1)
+    std::vector<MultiModalSpan>                  multimodal_spans;   // engine-visible projection; consumed by scheduler
+    std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;  // opaque (unchanged)
+
+    bool is_active   = false;
+    bool is_canceled = false;
+
+    // get_ppl / CE-loss (W2)
+    Interval       input_ce_loss;
     Buffer_<float> ce_loss;  // device, size 1; rank-0 CE-loss accumulator.
 };
 
@@ -247,7 +327,7 @@ void serdes(Archive& ar, Request& r)
     // clang-format off
     ar & r.id;
     ar & r.unique_id;
-    ar & r.session;
+    ar & r.step;
     ar & r.gen_cfg;
     ar & r.stream_output;
     ar & r.inputs;
@@ -261,5 +341,80 @@ void serdes(Archive& ar, Request& r)
     ar & r.ec;
     // clang-format on
 }
+
+class Resource {
+public:
+    virtual ~Resource() = default;
+
+    virtual int  Test(const Sequence& s) const noexcept = 0;
+    virtual void Commit(const Sequence& s) noexcept     = 0;
+};
+
+class ScheduleResources final: public Resource {
+public:
+    template<class T, class... Args>
+    T& Add(Args&&... args)
+    {
+        auto  resource = std::make_unique<T>(std::forward<Args>(args)...);
+        auto& ref      = *resource;
+        resources_.push_back(std::move(resource));
+        return ref;
+    }
+
+    int Test(const Sequence& s) const noexcept override
+    {
+        int admitted = std::numeric_limits<int>::max();
+        for (const auto& resource : resources_) {
+            const int next = resource->Test(s);
+            if (next == 0) {
+                return 0;
+            }
+            admitted = std::min(admitted, next);
+        }
+        return admitted == std::numeric_limits<int>::max() ? 0 : admitted;
+    }
+
+    void Commit(const Sequence& s) noexcept override
+    {
+        for (const auto& resource : resources_) {
+            resource->Commit(s);
+        }
+    }
+
+private:
+    std::vector<std::unique_ptr<Resource>> resources_;
+};
+
+class ForwardTokenResource final: public Resource {
+public:
+    explicit ForwardTokenResource(int max_fwd_tokens) noexcept: max_fwd_tokens_{max_fwd_tokens} {}
+
+    int Test(const Sequence& s) const noexcept override
+    {
+        const int input_len = InputLen(s);
+        if (input_len <= 0 || max_fwd_tokens_ <= 0) {
+            return 0;
+        }
+        return std::min(input_len, max_fwd_tokens_);
+    }
+
+    void Commit(const Sequence& s) noexcept override
+    {
+        max_fwd_tokens_ -= s.input_len;
+    }
+
+    int remaining_tokens() const noexcept
+    {
+        return max_fwd_tokens_;
+    }
+
+private:
+    static int InputLen(const Sequence& s) noexcept
+    {
+        return s.seq_len + s.inflight_new_tokens - s.inflight_input_len - s.resume_len;
+    }
+
+    int max_fwd_tokens_{};
+};
 
 }  // namespace turbomind

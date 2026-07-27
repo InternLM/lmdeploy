@@ -378,7 +378,7 @@ struct Testbed_v3: Parameter {
         Tensor xe{{x.shape(0) * experts_per_token, input_dim}, data_type, kDEVICE};
         Tensor de{{x.shape(0) * experts_per_token, output_dim}, data_type, kDEVICE};
 
-        TM_SCOPE_CALL(invokeMoeDispatch(xe, x, f2n_.data(), experts_per_token, stream_));
+        TM_SCOPE_CALL(invokeMoeDispatch(xe, x, f2n_.data(), x.shape(0) * experts_per_token, nullptr, stream_));
 
         for (int i = 0; i < expert_num; ++i) {
             const int base = h_offsets_[i], size = h_offsets_[i + 1] - base;

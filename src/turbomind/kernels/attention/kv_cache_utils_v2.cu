@@ -24,14 +24,16 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                                                     const int*      cu_q_len,
                                                     const int*      cu_k_len,
                                                     const int*      cu_block_num,
+                                                    const int*      readonly_block_num,
                                                     RopeKernelParam rope_param,
                                                     int64_t         stride_b,
                                                     int64_t         stride_c,
                                                     int64_t         stride_h,
                                                     int64_t         stride_s,
-                                                    int             layer_id,
+                                                    int             cache_block_offset,
                                                     int             cp_rank,
                                                     FastDivmod      cp_size,
+                                                    int             block_seq_len,
                                                     BlockLayout     block_layout)
 {
 
@@ -168,14 +170,19 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
 
     blocks += cu_block_num[batch_idx];
 
-    block::Head<T, Tkv, BlockLayout> block_head{block_layout, layer_id, head_idx};
+    block::Head<T, Tkv, BlockLayout> block_head{block_layout, cache_block_offset, head_idx};
+
+    // Read-only prefix: leading whole logical blocks whose KV is already valid are
+    // read for context but not re-written. Precompute the boundary in global tokens.
+    const int logical_block_size = block_seq_len * (int)cp_size;
+    const int readonly_len       = readonly_block_num ? readonly_block_num[batch_idx] * logical_block_size : 0;
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
         const int ti = history_len + qi;                         // timestep
         local_ti     = cp_size.divmod(local_ti_rank, ti);
-        if (qi < q_len && local_ti_rank == cp_rank) {
+        if (qi < q_len && ti >= readonly_len && local_ti_rank == cp_rank) {
             block_head.with((char**)blocks, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
@@ -210,13 +217,14 @@ void invokeProcessKV_v2(char**                 blocks,
                         const int*             cu_q_len,
                         const int*             cu_k_len,
                         const int*             cu_block_num,
+                        const int*             readonly_block_num,
                         const RopeKernelParam& rope_param,
                         int64_t                stride_b,
                         int64_t                stride_c,
                         int64_t                stride_h,
                         int64_t                stride_s,
                         int                    block_seq_len,
-                        int                    layer_id,
+                        int                    cache_block_offset,
                         int                    cp_rank,
                         FastDivmod             cp_size,
                         int                    max_q_len,
@@ -251,14 +259,16 @@ void invokeProcessKV_v2(char**                 blocks,
                                                                               cu_q_len,
                                                                               cu_k_len,
                                                                               cu_block_num,
+                                                                              readonly_block_num,
                                                                               rope_param,
                                                                               stride_b,
                                                                               stride_c,
                                                                               stride_h,
                                                                               stride_s,
-                                                                              layer_id,
+                                                                              cache_block_offset,
                                                                               cp_rank,
                                                                               cp_size,
+                                                                              block_seq_len,
                                                                               block_layout);
     };
 
@@ -304,13 +314,14 @@ void invokeProcessKV_v2(char**                 blocks,
                                      const int*             cu_q_len,                                                  \
                                      const int*             cu_k_len,                                                  \
                                      const int*             cu_block_num,                                              \
+                                     const int*             readonly_block_num,                                        \
                                      const RopeKernelParam& rope_param,                                                \
                                      int64_t                stride_b,                                                  \
                                      int64_t                stride_c,                                                  \
                                      int64_t                stride_h,                                                  \
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
-                                     int                    layer_id,                                                  \
+                                     int                    cache_block_offset,                                        \
                                      int                    cp_rank,                                                   \
                                      FastDivmod             cp_size,                                                   \
                                      int                    max_q_len,                                                 \
@@ -336,7 +347,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
                                                     int64_t         stride_c,
                                                     int64_t         stride_h,
                                                     int64_t         stride_s,
-                                                    int             layer_id,
+                                                    int             cache_block_offset,
                                                     int             cp_rank,
                                                     FastDivmod      cp_size,
                                                     BlockLayout     block_layout)
@@ -377,7 +388,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
 
     blocks += cu_block_num[batch_idx];
 
-    block::Head<T, Tkv, BlockLayout> block_head{block_layout, layer_id, head_idx};
+    block::Head<T, Tkv, BlockLayout> block_head{block_layout, cache_block_offset, head_idx};
 
     Array<T, 2> param_K[ITER_S];
     Array<T, 2> param_V[ITER_S];
@@ -467,7 +478,7 @@ void invokeFlattenKV_v2(T*                     k,
                         int64_t                stride_h,
                         int64_t                stride_s,
                         int                    block_seq_len,
-                        int                    layer_id,
+                        int                    cache_block_offset,
                         int                    cp_rank,
                         FastDivmod             cp_size,
                         int                    max_seq_len,
@@ -504,7 +515,7 @@ void invokeFlattenKV_v2(T*                     k,
                                                                             stride_c,
                                                                             stride_h,
                                                                             stride_s,
-                                                                            layer_id,
+                                                                            cache_block_offset,
                                                                             cp_rank,
                                                                             cp_size,
                                                                             block_layout);
@@ -555,7 +566,7 @@ void invokeFlattenKV_v2(T*                     k,
                                      int64_t                stride_h,                                                  \
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
-                                     int                    layer_id,                                                  \
+                                     int                    cache_block_offset,                                        \
                                      int                    cp_rank,                                                   \
                                      FastDivmod             cp_size,                                                   \
                                      int                    max_seq_len,                                               \
