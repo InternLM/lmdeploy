@@ -1,19 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Ownership lifecycle for node-backed SSM state checkpoints.
+"""Ownership lifecycle for node-backed SSM cache checkpoints.
 
-The lifecycle owns state-slot reservation, publication, async-copy pins, and
-checkpoint-only eviction. It deliberately does not own trie topology or KV
-blocks. :class:`BlockTrie` supplies the exact-identity builder needed while
-publishing a checkpoint, while ``KVBlockLifecycle`` consults this owner before
-evicting a checkpoint-bearing KV leaf.
+The lifecycle owns state-slot reservation, optional frozen partial KV blocks,
+publication, async-copy pins, and checkpoint-only eviction. It deliberately
+does not own trie topology or normal trie KV blocks. :class:`BlockTrie`
+supplies the exact-identity builder needed while publishing a checkpoint,
+while ``KVBlockLifecycle`` consults this owner before evicting a
+checkpoint-bearing KV leaf.
 """
 
 from __future__ import annotations
 
 import heapq
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
+
+import numpy as np
 
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.utils import get_logger
@@ -22,6 +25,7 @@ from .checkpoint import StateCheckpointIndex
 from .node import Node, NodeStateCheckpoint
 
 if TYPE_CHECKING:
+    from ..block_manager.base_block_manager import LogicalAllocator
     from ..state_manager import StateManager
     from .checkpoint import StateCheckpointKey, StateCheckpointMatchData
 
@@ -31,14 +35,14 @@ SequenceMatchDataBuilder = Callable[['Node', SchedulerSequence], 'StateCheckpoin
 
 
 class StateCheckpointLifecycle:
-    """Manage recurrent-state checkpoint ownership independently of KV.
+    """Manage node-owned state and optional frozen partial-KV checkpoints.
 
-    Trie nodes remain the source of truth: a node with state ownership holds a
-    lazily allocated :class:`NodeStateCheckpoint`. This component coordinates
-    that record with ``StateManager`` and ``StateCheckpointIndex``. Nodes own
-    their monotonic attachment invariant; the injected builder keeps
-    exact-identity policy in ``BlockTrie`` without giving the lifecycle a
-    back-reference to the whole trie.
+    Trie nodes remain the source of truth: a node with checkpoint ownership
+    holds a lazily allocated :class:`NodeStateCheckpoint`. This component
+    coordinates that record with ``StateManager``, ``LogicalAllocator``, and
+    ``StateCheckpointIndex``. Nodes own their monotonic attachment invariant;
+    the injected builder keeps exact-identity policy in ``BlockTrie`` without
+    giving the lifecycle a back-reference to the whole trie.
     """
 
     def __init__(self,
@@ -46,18 +50,20 @@ class StateCheckpointLifecycle:
                  prefix_cache_enabled: bool,
                  state_checkpoints_enabled: bool,
                  block_size: int,
+                 allocator: LogicalAllocator,
                  state_manager: StateManager | None,
                  index: StateCheckpointIndex,
                  make_sequence_match_data: SequenceMatchDataBuilder):
         self._prefix_cache_enabled = prefix_cache_enabled
         self._state_checkpoints_enabled = state_checkpoints_enabled
         self._block_size = block_size
+        self._allocator = allocator
         self._state_manager = state_manager
         self._index = index
         self._make_sequence_match_data = make_sequence_match_data
 
     def reserve_save(self, seq: SchedulerSequence, step: int = None, is_decode: bool = False):
-        """Reserve a checkpoint at an attached, block-aligned trie step."""
+        """Reserve a checkpoint at an exact safe prefill boundary."""
         self.discard_save(seq)
 
         if not self._prefix_cache_enabled or not self._state_checkpoints_enabled:
@@ -65,19 +71,22 @@ class StateCheckpointLifecycle:
 
         if step is None:
             step = seq.num_valid_ids
-        if step <= 0 or step % self._block_size != 0:
+        if step <= 0 or (is_decode and step % self._block_size != 0):
             return -1
         if step > seq.num_valid_ids:
             return -1
-        if seq.clamp_prefix_cache_match_step(step) != step:
+        if not seq.is_prefix_cache_boundary_safe(step):
             return -1
 
-        node = self._find_checkpoint_node(seq, step)
-        if node is None or self._node_has_slot(node):
+        anchor_step = step - step % self._block_size
+        node = self._find_checkpoint_node(seq, anchor_step)
+        if node is None:
             return -1
 
         try:
-            slot = self._reserve_slot(node)
+            slot = self._reserve_slot(node, step)
+        except MemoryError:
+            return -1
         except RuntimeError as e:
             if 'No free states' not in str(e):
                 raise
@@ -121,6 +130,7 @@ class StateCheckpointLifecycle:
             pending_save.clear()
             return False
         slot = pending_save.slot
+        save_step = pending_save.step
         node = pending_save.node
         is_decode = pending_save.is_decode
         pending_save.clear()
@@ -128,7 +138,7 @@ class StateCheckpointLifecycle:
             if is_decode and prefix_cache.decode_checkpoint_node is node:
                 prefix_cache.decode_checkpoint_node = None
             logger.debug('Discard SSM prefix-cache checkpoint reservation: session_id=%s seq_id=%s step=%s '
-                         'state_idx=%s is_decode=%s', seq.session_id, seq.seq_id, node.prefix_len, slot,
+                         'state_idx=%s is_decode=%s', seq.session_id, seq.seq_id, save_step, slot,
                          is_decode)
             self.release_checkpoint(node)
             return True
@@ -190,7 +200,7 @@ class StateCheckpointLifecycle:
         checkpoint.last_access_time = time.perf_counter()
         restore.pinned = True
         logger.debug('Pin SSM prefix-cache restore checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, checkpoint.slot,
+                     'pin_count=%s', seq.session_id, seq.seq_id, checkpoint.step, checkpoint.slot,
                      checkpoint.pin_count)
         return True
 
@@ -211,7 +221,7 @@ class StateCheckpointLifecycle:
         )
         checkpoint = node.state_checkpoint
         logger.debug('Unpin SSM prefix-cache restore checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, checkpoint.slot,
+                     'pin_count=%s', seq.session_id, seq.seq_id, checkpoint.step, checkpoint.slot,
                      checkpoint.pin_count)
         restore.clear()
         return True
@@ -235,7 +245,7 @@ class StateCheckpointLifecycle:
         )
         checkpoint = node.state_checkpoint
         logger.debug('Unpin SSM prefix-cache save checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, checkpoint.slot,
+                     'pin_count=%s', seq.session_id, seq.seq_id, checkpoint.step, checkpoint.slot,
                      checkpoint.pin_count)
         producer_pin.clear()
         return True
@@ -254,45 +264,33 @@ class StateCheckpointLifecycle:
         return checkpoint is not None and checkpoint.pin_count > 0
 
     def release_checkpoint(self, node: Node):
-        """Release a node-owned state checkpoint while keeping its KV node."""
+        """Release a node-owned checkpoint while keeping its trie KV node."""
         checkpoint = node.state_checkpoint
         if checkpoint is None:
             return
         if checkpoint.pin_count > 0:
             raise RuntimeError('Cannot release a pinned SSM prefix-cache checkpoint.')
+        self._unindex_checkpoint(node)
+        if checkpoint.frozen_block_id >= 0:
+            self._allocator.free(np.array([checkpoint.frozen_block_id], dtype=np.int64))
         if checkpoint.slot < 0:
             if checkpoint.published:
                 self._warn_unexpected_state(
                     f'published SSM checkpoint has no state slot: adapter={node.adapter_name} '
-                    f'step={node.prefix_len}')
-                self._unindex_checkpoint(node)
-            node.state_checkpoint = None
-            return
-        if checkpoint.published:
-            self._unindex_checkpoint(node)
-        self._state_manager.free_checkpoint_state(checkpoint.slot)
+                    f'step={checkpoint.step}')
+        else:
+            self._state_manager.free_checkpoint_state(checkpoint.slot)
         node.state_checkpoint = None
 
-    def evict(self, max_num_states: int):
-        """Evict published state checkpoints without removing KV trie nodes."""
-        if not self._state_checkpoints_enabled or max_num_states <= 0:
-            return 0
+    def evict(self, max_num_checkpoints: int):
+        """Evict published checkpoints without removing trie nodes."""
+        return self._evict_checkpoints(self._index.unique_nodes(), max_num_checkpoints)
 
-        candidates = [(node.state_checkpoint.last_access_time, id(node), node) for node in self._index.unique_nodes()
-                      if self._is_evictable_checkpoint(node)]
-        heapq.heapify(candidates)
-
-        evicted = 0
-        while candidates and evicted < max_num_states:
-            _, _, node = heapq.heappop(candidates)
-            if not self._is_evictable_checkpoint(node):
-                continue
-            checkpoint = node.state_checkpoint
-            logger.debug('Evict SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s', node.adapter_name,
-                         node.prefix_len, checkpoint.slot)
-            self.release_checkpoint(node)
-            evicted += 1
-        return evicted
+    def evict_frozen_checkpoints(self, max_num_blocks: int):
+        """Evict checkpoints that each release one frozen KV block."""
+        nodes = (node for node in self._index.unique_nodes()
+                 if node.state_checkpoint is not None and node.state_checkpoint.frozen_block_id >= 0)
+        return self._evict_checkpoints(nodes, max_num_blocks)
 
     def discard_stale_index_entry(self, node: Node, key: StateCheckpointKey, reason: str):
         """Remove a stale index entry without releasing a valid checkpoint."""
@@ -320,23 +318,21 @@ class StateCheckpointLifecycle:
             self._unindex_checkpoint(node)
             return False
         slot = checkpoint.slot
+        step = checkpoint.step
         was_published = checkpoint.published
-        self._unindex_checkpoint(node)
-        if slot >= 0:
-            self._state_manager.free_checkpoint_state(slot)
-        node.state_checkpoint = None
+        self.release_checkpoint(node)
         logger.debug('Release stale SSM prefix-cache checkpoint candidate: adapter=%s step=%s state_idx=%s '
-                     'was_published=%s reason=%s', node.adapter_name, node.prefix_len, slot, was_published,
+                     'was_published=%s reason=%s', node.adapter_name, step, slot, was_published,
                      reason)
         return slot >= 0 or was_published
 
     @staticmethod
     def _find_checkpoint_node(seq: SchedulerSequence, step: int):
-        """Find the attached trie node at an exact sequence step."""
+        """Find the attached trie anchor at a full-block step."""
         node = seq.prefix_cache.trie_cursor
         while node is not None and node.prefix_len > step:
             node = node.parent
-        if node is None or not node.is_attached() or node.prefix_len != step:
+        if node is None or not node.is_attached_or_root() or node.prefix_len != step:
             return None
         return node
 
@@ -350,41 +346,85 @@ class StateCheckpointLifecycle:
         if old_checkpoint is None or old_checkpoint.slot < 0:
             prefix_cache.decode_checkpoint_node = None
             return True
-        if old_node.prefix_len == new_step and old_checkpoint.published:
+        if old_checkpoint.step == new_step and old_checkpoint.published:
             return False
 
         if old_checkpoint.pin_count > 0:
             return False
         logger.debug('Release previous decode SSM prefix-cache checkpoint: session_id=%s seq_id=%s '
-                     'old_step=%s old_state_idx=%s new_step=%s', seq.session_id, seq.seq_id, old_node.prefix_len,
+                     'old_step=%s old_state_idx=%s new_step=%s', seq.session_id, seq.seq_id, old_checkpoint.step,
                      old_checkpoint.slot, new_step)
         self.release_checkpoint(old_node)
         prefix_cache.decode_checkpoint_node = None
         return True
 
-    def _reserve_slot(self, node: Node):
-        """Reserve a state-cache slot owned by a trie node.
+    def _evict_checkpoints(self, nodes: Iterable[Node], limit: int):
+        if not self._state_checkpoints_enabled or limit <= 0:
+            return 0
 
-        Replacing a published checkpoint is allowed only while no async copy pins it. If the shared state pool is full,
-        one old unpinned checkpoint may be evicted without removing its trie/KV node.
+        candidates = [(node.state_checkpoint.last_access_time, id(node), node) for node in nodes
+                      if self._is_evictable_checkpoint(node)]
+        heapq.heapify(candidates)
+        evicted = 0
+        while candidates and evicted < limit:
+            _, _, node = heapq.heappop(candidates)
+            if not self._is_evictable_checkpoint(node):
+                continue
+            checkpoint = node.state_checkpoint
+            logger.debug('Evict SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s block_id=%s',
+                         node.adapter_name, checkpoint.step, checkpoint.slot, checkpoint.frozen_block_id)
+            self.release_checkpoint(node)
+            evicted += 1
+        return evicted
+
+    def _reserve_slot(self, node: Node, step: int = None):
+        """Reserve state and optional frozen KV owned by one trie anchor.
+
+        Replacing a published checkpoint at the same anchor is allowed only while no async copy pins it. If the shared
+        state pool is full, one old unpinned checkpoint may be evicted without removing its trie/KV node.
         """
-        if not self._state_checkpoints_enabled or node.parent is None:
+        if step is None:
+            step = node.prefix_len
+        anchor_step = step - step % self._block_size
+        is_partial = anchor_step != step
+        if (not self._state_checkpoints_enabled or not node.is_attached_or_root()
+                or node.prefix_len != anchor_step):
             return -1
         checkpoint = node.state_checkpoint
         if checkpoint is not None and checkpoint.published:
             if checkpoint.pin_count > 0:
                 return -1
+            if checkpoint.step == step:
+                return -1
+            frozen_block_id = checkpoint.frozen_block_id
+            if is_partial and frozen_block_id < 0:
+                frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
             logger.debug('Replace SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s', node.adapter_name,
-                         node.prefix_len, checkpoint.slot)
+                         checkpoint.step, checkpoint.slot)
             self._unindex_checkpoint(node)
+            if not is_partial and checkpoint.frozen_block_id >= 0:
+                self._allocator.free(np.array([checkpoint.frozen_block_id], dtype=np.int64))
+                frozen_block_id = -1
         elif checkpoint is not None:
             return -1
         if checkpoint is None:
             if self._state_manager.get_num_free_checkpoint() == 0 and self.evict(1) == 0:
                 return -1
             slot = self._state_manager.allocate_checkpoint_state()
-            checkpoint = NodeStateCheckpoint(slot=slot)
+            try:
+                frozen_block_id = -1
+                if is_partial:
+                    frozen_block_id = int(self._allocator.allocate(1, 'gpu')[0])
+            except Exception:
+                self._state_manager.free_checkpoint_state(slot)
+                raise
+            checkpoint = NodeStateCheckpoint(slot=slot,
+                                             step=step,
+                                             frozen_block_id=frozen_block_id)
             node.state_checkpoint = checkpoint
+        else:
+            checkpoint.step = step
+            checkpoint.frozen_block_id = frozen_block_id
         checkpoint.published = False
         checkpoint.exact_match_data = None
         checkpoint.last_access_time = 0.0
@@ -397,7 +437,7 @@ class StateCheckpointLifecycle:
             raise RuntimeError('Cannot publish an unreserved state checkpoint.')
         if checkpoint.pin_count != 0:
             raise RuntimeError('Cannot publish a pinned SSM prefix-cache checkpoint.')
-        if not node.is_attached():
+        if not node.is_attached_or_root():
             raise RuntimeError('Cannot publish a detached SSM prefix-cache checkpoint node.')
         if checkpoint.published:
             if checkpoint.exact_match_data is None:
@@ -430,7 +470,7 @@ class StateCheckpointLifecycle:
         checkpoint.last_access_time = time.perf_counter()
         producer_pin.acquire(slot, node)
         logger.debug('Pin SSM prefix-cache save checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'pin_count=%s', seq.session_id, seq.seq_id, node.prefix_len, slot, checkpoint.pin_count)
+                     'pin_count=%s', seq.session_id, seq.seq_id, checkpoint.step, slot, checkpoint.pin_count)
         return True
 
     @classmethod
@@ -456,15 +496,18 @@ class StateCheckpointLifecycle:
     def _publication_invalid_reason(self, node: Node | None, slot: int, save_step: int):
         if node is None:
             return 'missing node'
-        if not node.is_attached():
+        if not node.is_attached_or_root():
             return 'detached node'
         checkpoint = node.state_checkpoint
         if checkpoint is None:
             return 'missing state checkpoint'
         if checkpoint.slot != slot:
             return f'slot changed: expected={slot} actual={checkpoint.slot}'
-        if node.prefix_len != save_step:
-            return f'step changed: expected={save_step} actual={node.prefix_len}'
+        if checkpoint.step != save_step:
+            return f'step changed: expected={save_step} actual={checkpoint.step}'
+        anchor_step = save_step - save_step % self._block_size
+        if node.prefix_len != anchor_step:
+            return f'anchor changed: expected={anchor_step} actual={node.prefix_len}'
         return None
 
     @staticmethod

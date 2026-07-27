@@ -16,16 +16,19 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class NodeStateCheckpoint:
-    """State-checkpoint metadata allocated only for checkpoint owners.
+    """State and optional partial-KV checkpoint owned by one trie anchor.
 
-    ``slot`` describes the reservation. ``published`` exposes it to exact
-    matching, while ``exact_match_data`` caches the immutable prefix identity
-    and logical KV path used after sparse lookup. ``pin_count`` protects async
-    save/restore copies, and ``last_access_time`` drives state-only LRU
-    eviction.
+    ``step`` is the exact model-forward boundary. ``frozen_block_id`` owns a
+    copy of the partial logical block when ``step`` is not block-aligned.
+    ``published`` exposes the reservation to exact matching, while
+    ``exact_match_data`` caches the immutable prefix identity and logical KV
+    path used after sparse lookup. ``pin_count`` protects async save/restore
+    copies, and ``last_access_time`` drives checkpoint LRU eviction.
     """
 
     slot: int
+    step: int
+    frozen_block_id: int = -1
     published: bool = False
     exact_match_data: StateCheckpointMatchData | None = None
     pin_count: int = 0
@@ -101,6 +104,12 @@ class Node:
         """Check whether this node is still linked from its parent."""
         parent = self.parent
         return parent is not None and parent.children.get(self.block_hash) is self
+
+    def is_attached_or_root(self):
+        """Check whether this node is attached or is an adapter root."""
+        if self.parent is None:
+            return self.block_id < 0
+        return self.is_attached()
 
     def path_from_root(self):
         """Return non-root nodes from the adapter root to this node."""

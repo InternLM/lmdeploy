@@ -20,9 +20,10 @@ Pipeline summary:
 3. Text/VLM matching walks trie blocks by adapter root.  Each block key is
    token ids plus multimodal extra hashes; matches are clamped so forward never
    starts inside a multimodal span.
-4. SSM matching cannot reuse KV alone. It uses sparse published-checkpoint lookup,
-   verifies the full ancestor chain, then asks ``ModelAgent`` to copy the
-   frozen checkpoint state into the request runtime state on the forward stream.
+4. SSM matching cannot reuse KV alone. It uses sparse published-checkpoint
+   lookup, verifies exact host identity, then asks ``ModelAgent`` to restore
+   any frozen partial KV block before the checkpoint state on the forward
+   stream.
 5. SSM checkpoint saves are reserved through ``state_checkpoints``, copied by
    ``ModelAgent`` after forward, and published by ``EngineLoop`` once the
    producer forward is queued.
@@ -39,14 +40,15 @@ SSM checkpoint detail:
   slots stored in a trie's optional ``Node.state_checkpoint`` record. A trie
   node may own KV only, KV plus an unpublished checkpoint reservation, or KV
   plus a published checkpoint.
-* Saving a checkpoint starts from an already-attached block-aligned trie node.
-  ``state_checkpoints.reserve_save()`` records a ``pending_save`` reservation
-  on ``seq.prefix_cache``.  Prefill and
-  long-context chunks save at the produced chunk end; decode saves are optional
-  and bounded by ``prefix_cache_decode_state_interval``.
-* ``InputsMaker`` converts those pending saves into compact host integer
-  src/dst pairs.  ``ModelAgent`` then copies ``runtime_state -> checkpoint`` on
-  the model forward stream after the model has produced the new SSM state.
+* Saving a checkpoint starts from the full-block trie node at or before the
+  exact save step. A partial step also reserves one checkpoint-owned frozen KV
+  block. ``state_checkpoints.reserve_save()`` records a ``pending_save``
+  reservation on ``seq.prefix_cache``. Prefill and long-context chunks save at
+  the produced chunk end; decode saves remain block-aligned and bounded by
+  ``prefix_cache_decode_state_interval``.
+* ``InputsMaker`` converts pending saves into compact host copy plans.
+  ``ModelAgent`` copies a partial producer block into its frozen destination,
+  then copies ``runtime_state -> checkpoint`` after forward on the same stream.
   ``EngineLoop`` calls ``state_checkpoints.publish_save()`` after the forward
   is queued; only then is the checkpoint published into the sparse
   match index. The producing forward holds a producer pin
@@ -55,18 +57,20 @@ SSM checkpoint detail:
   Abandoned reservations are discarded.
 * Matching a SSM prefix never walks KV blocks as the source of truth.
   ``_match_state_checkpoint_prefix()`` searches published checkpoint steps, filters by
-  ``(adapter, step, last_block_hash)``, then proves the complete prefix against
+  ``(adapter, step, tail_hash)``, then proves the complete prefix against
   immutable exact-match metadata built when the checkpoint is published.  A
   hit appends trie-owned KV blocks, advances ``seq.num_history_ids``, records a
   selected ``restore``, and may replay routed experts.
 * Restore is two-phase. The scheduler/input maker pins the published checkpoint
-  by incrementing its pin count. ``ModelAgent`` copies
-  ``checkpoint -> runtime_state`` before the suffix forward.  ``EngineLoop``
+  by incrementing its pin count. For a partial checkpoint, ``ModelAgent`` first
+  copies the frozen tail into the request's private writable block, then copies
+  ``checkpoint -> runtime_state`` before the suffix forward. ``EngineLoop``
   releases the pin once the copy has been queued, so LRU eviction cannot reuse
   the checkpoint source slot too early.
-* Checkpoint eviction is state-only LRU over published, unpinned nodes. KV leaf
-  eviction also releases any checkpoint owned by that leaf.  A KV match without
-  an exact published SSM checkpoint is intentionally a miss.
+* State pressure uses checkpoint LRU. KV pressure first releases unpinned
+  checkpoints with frozen blocks, then evicts trie leaves. A KV leaf eviction
+  also releases any checkpoint owned by that leaf. A KV match without an exact
+  published SSM checkpoint is intentionally a miss.
 """
 
 from dataclasses import dataclass
@@ -156,6 +160,7 @@ class BlockTrie:
             prefix_cache_enabled=self.enabled,
             state_checkpoints_enabled=self._use_checkpoints,
             block_size=self.block_size,
+            allocator=self.allocator,
             state_manager=checkpoint_state_manager,
             index=self._checkpoint_index,
             make_sequence_match_data=self._make_state_checkpoint_match_data_from_seq,
@@ -298,24 +303,35 @@ class BlockTrie:
         contiguous logical-block copy back into the shared trie path
         without rebuilding thousands of Python ``Node`` objects per save.
         """
-        step = node.prefix_len
-        num_blocks = step // self.block_size
+        checkpoint = node.state_checkpoint
+        if checkpoint is None:
+            raise RuntimeError('Cannot publish an SSM checkpoint without a reservation.')
+        step = checkpoint.step
+        anchor_step = step - step % self.block_size
+        num_blocks = anchor_step // self.block_size
         token_ids = seq.history_cache[:step].copy()
         block_ids = seq.logical_blocks.get_real_blocks()[:num_blocks].copy()
         seq.prefix_cache.recompute_overlap.apply_trie_blocks(block_ids)
         prefix_extra_identity = make_request_multimodal_identity(seq, step)
-        start = step - self.block_size
-        block_extra_identity = seq.get_prefix_cache_extra_identity(start, step)
+        tail_start = ((step - 1) // self.block_size) * self.block_size
+        tail_extra_identity = seq.get_prefix_cache_extra_identity(tail_start, step)
+        tail_hash = self._hash_block(token_ids[tail_start:step], tail_extra_identity)
+        if num_blocks > 0:
+            block_start = anchor_step - self.block_size
+            block_extra_identity = seq.get_prefix_cache_extra_identity(block_start, anchor_step)
+        owner_matches = (self._cursor_belongs_to_trie(node) and seq.adapter_name == node.adapter_name
+                         and node.prefix_len == anchor_step)
+        if owner_matches and num_blocks > 0:
+            owner_matches = (block_ids[-1] == node.block_id
+                             and self._node_matches_block(node, token_ids[block_start:anchor_step],
+                                                          block_extra_identity))
         has_complete_identity = len(token_ids) == step and len(block_ids) == num_blocks
-        has_matching_owner = (seq.adapter_name == node.adapter_name and len(block_ids) > 0
-                              and block_ids[-1] == node.block_id
-                              and self._node_matches_block(node, token_ids[start:], block_extra_identity))
-        if not has_complete_identity or not has_matching_owner:
+        if not has_complete_identity or not owner_matches:
             raise RuntimeError('Cannot publish an SSM checkpoint from a mismatched sequence cursor.')
-        return freeze_state_checkpoint_match_data(token_ids, prefix_extra_identity, block_ids)
+        return freeze_state_checkpoint_match_data(token_ids, prefix_extra_identity, block_ids, tail_hash)
 
-    def _cursor_is_attached(self, node: Node):
-        """Check a cursor under the monotonic attach/detach contract."""
+    def _cursor_belongs_to_trie(self, node: Node):
+        """Check whether a cursor is an attached node or registered root."""
         if node.parent is None:
             return node.block_id < 0 and self._roots.get(node.adapter_name) is node
         return node.is_attached()
@@ -328,13 +344,13 @@ class BlockTrie:
             self.state_checkpoints.release_stale_checkpoint(node, match_result.reason)
         checkpoint = node.state_checkpoint
         state_idx = -1 if checkpoint is None else checkpoint.slot
+        step = node.prefix_len if checkpoint is None else checkpoint.step
         logger.debug('Reject SSM prefix-cache checkpoint candidate: session_id=%s seq_id=%s step=%s '
-                     'state_idx=%s status=%s reason=%s', seq.session_id, seq.seq_id, node.prefix_len, state_idx,
+                     'state_idx=%s status=%s reason=%s', seq.session_id, seq.seq_id, step, state_idx,
                      match_result.status.name, match_result.reason)
 
-    def _find_recompute_overlap_end(self, seq: SchedulerSequence, node: Node, recompute_blocks: int):
+    def _find_recompute_overlap_end(self, seq: SchedulerSequence, node: Node, step: int, recompute_blocks: int):
         """Return the cached overlap end, or ``-1`` when it is too short."""
-        step = node.prefix_len
         cached_end_step = self._find_deepest_block_match_step(seq, node)
         required_step = step + recompute_blocks * self.block_size
         if cached_end_step >= required_step:
@@ -352,7 +368,8 @@ class BlockTrie:
                                     initial_step: int,
                                     overlap_end_step: int):
         """Apply a verified checkpoint hit to sequence state."""
-        step = node.prefix_len
+        checkpoint = node.state_checkpoint
+        step = checkpoint.step
         new_blocks = matched_block_ids[initial_step // self.block_size:]
         self.allocator.update_access_time(new_blocks)
         self.allocator.add_ref_count(new_blocks, 1)
@@ -361,12 +378,16 @@ class BlockTrie:
         self._append_state_checkpoint_routed_experts(seq, node, initial_step)
 
         prefix_cache = seq.prefix_cache
-        checkpoint = node.state_checkpoint
         prefix_cache.restore.select(checkpoint.slot, node)
         prefix_cache.trie_cursor = node
+        fresh_end_block = (step + self.block_size - 1) // self.block_size
+        if checkpoint.frozen_block_id >= 0:
+            # Forward resumes inside a private partial block. Complete suffix
+            # blocks already present in the request must remain private too.
+            fresh_end_block = max(fresh_end_block, seq.num_valid_ids // self.block_size)
         if overlap_end_step >= 0:
-            prefix_cache.recompute_overlap.set_fresh_block_range(step // self.block_size,
-                                                                 overlap_end_step // self.block_size)
+            fresh_end_block = max(fresh_end_block, overlap_end_step // self.block_size)
+        prefix_cache.recompute_overlap.set_fresh_block_range(step // self.block_size, fresh_end_block)
 
         self._record_match_stats(seq,
                                  query_tokens=seq.num_all_ids - initial_step,
@@ -387,11 +408,10 @@ class BlockTrie:
 
         recompute_blocks = max(0, seq.prefix_cache.recompute_overlap.recompute_blocks)
         overlap_end_step = -1
-        max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
-        max_step = seq.clamp_prefix_cache_match_step(max_step)
+        max_step = seq.num_valid_ids - 1
         candidate_steps = self._checkpoint_index.candidate_steps(seq.adapter_name, initial_step, max_step)
         for step in candidate_steps:
-            if seq.clamp_prefix_cache_match_step(step) != step:
+            if not seq.is_prefix_cache_boundary_safe(step):
                 continue
             key = self._checkpoint_index.make_request_key(seq, step)
             for node in self._checkpoint_index.candidates(key):
@@ -401,7 +421,7 @@ class BlockTrie:
                     continue
 
                 if recompute_blocks > 0:
-                    overlap_end_step = self._find_recompute_overlap_end(seq, node, recompute_blocks)
+                    overlap_end_step = self._find_recompute_overlap_end(seq, node, step, recompute_blocks)
                     if overlap_end_step < 0:
                         continue
 
@@ -503,7 +523,7 @@ class BlockTrie:
         node = seq.prefix_cache.trie_cursor
         if node is None:
             node = self._get_or_create_root(seq.adapter_name)
-        elif not self._cursor_is_attached(node):
+        elif not self._cursor_belongs_to_trie(node):
             logger.debug('Reset detached prefix-cache sequence cursor: session_id=%s seq_id=%s adapter=%s '
                          'cursor_step=%s', seq.session_id, seq.seq_id, seq.adapter_name, node.prefix_len)
             node = self._get_or_create_root(seq.adapter_name)
@@ -534,9 +554,12 @@ class BlockTrie:
             if child is not None and not self._node_matches_block(child, token_ids, extra_identity):
                 break
 
-            if child is not None and fresh_block_range is not None and block_idx in fresh_block_range:
-                # Traverse the shared identity path while retaining the fresh,
-                # writable sequence block needed to recompute bridge state.
+            if fresh_block_range is not None and block_idx in fresh_block_range:
+                # Traverse an existing identity path while retaining the fresh,
+                # writable sequence block. A missing child ends path extension:
+                # the private block must not become trie-owned before forward.
+                if child is None:
+                    break
                 trie_block_map[block_idx] = child.block_id
                 node = child
                 continue
@@ -570,7 +593,7 @@ class BlockTrie:
         """Attach newly allocated full blocks to the prefix-cache trie.
 
         Allocation starts from ``seq.prefix_cache.trie_cursor`` when that
-        cursor still reaches the current trie.  Existing identical children are
+        cursor remains attached to this trie. Existing identical children are
         deduplicated back to the trie-owned block, except for the recompute
         overlap where the sequence must keep fresh writable KV.
         New nodes take one trie-owned allocator ref. The facade decides the
@@ -597,12 +620,17 @@ class BlockTrie:
         recompute_overlap.clear_fresh_block_range()
 
     def evict(self, max_num_blocks: int):
-        """Evict trie-owned KV leaf blocks.
+        """Evict checkpoint-frozen and trie-owned KV blocks.
 
-        ``KVBlockLifecycle`` owns the auxiliary leaf index and rechecks every
-        candidate against topology, allocator refs, and checkpoint pins.
+        Frozen partial blocks are cheaper to release because their trie anchor
+        remains cached. ``KVBlockLifecycle`` then owns normal leaf eviction and
+        rechecks every candidate against topology, allocator refs, and
+        checkpoint pins.
         """
         if not self.enabled:
             return 0
 
-        return self._kv_lifecycle.evict(max_num_blocks)
+        evicted = self._state_checkpoints.evict_frozen_checkpoints(max_num_blocks)
+        if evicted < max_num_blocks:
+            evicted += self._kv_lifecycle.evict(max_num_blocks - evicted)
+        return evicted

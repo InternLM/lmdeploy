@@ -177,11 +177,12 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         block_trie = ssm_scheduler.block_trie
         sess = ssm_scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
-        token_ids = [1] * block_size * 2
+        token_ids = [1] * block_size * 2 + [2]
 
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
+        free_blocks = block_mgr.get_num_free_gpu_blocks()
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.state_checkpoints.reserve_save(seq)
         node = seq.prefix_cache.trie_cursor
@@ -189,6 +190,8 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert state_idx >= 0
         assert node.state_checkpoint.slot == state_idx
         assert not node.state_checkpoint.published
+        assert node.state_checkpoint.frozen_block_id >= 0
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks - 1
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states - 1
 
         assert block_trie.state_checkpoints.discard_save(seq)
@@ -196,6 +199,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert seq.prefix_cache.pending_save.step == 0
         assert seq.prefix_cache.pending_save.node is None
         assert node.state_checkpoint is None
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
     def test_ssm_checkpoint_publish_allows_sequence_to_advance_past_save_step(self, ssm_scheduler):
@@ -283,7 +287,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.state_checkpoints.reserve_save(seq)
         node = seq.prefix_cache.trie_cursor
-        key = block_trie._checkpoint_index.make_node_key(node)
+        key = (node.adapter_name, node.prefix_len, node.block_hash)
         checkpoint_lifecycle = block_trie.state_checkpoints
         add_to_index = checkpoint_lifecycle._index.add
 
@@ -458,7 +462,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert seq.num_history_ids == checkpoint_step
         assert seq.prefix_cache.restore.slot == state_idx
 
-    def test_ssm_checkpoint_save_skips_partial_tail(self, ssm_scheduler):
+    def test_ssm_checkpoint_save_owns_and_releases_partial_tail(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
         block_trie = ssm_scheduler.block_trie
         sess = ssm_scheduler.add_session(0)
@@ -468,9 +472,97 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
+        source_block = seq.logical_blocks[2]
+        free_blocks = block_mgr.get_num_free_gpu_blocks()
+        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
 
-        assert block_trie.state_checkpoints.reserve_save(seq) == -1
+        state_idx = block_trie.state_checkpoints.reserve_save(seq)
+        node = seq.prefix_cache.pending_save.node
+
+        assert state_idx >= 0
+        checkpoint = node.state_checkpoint
+        assert checkpoint.step == block_size * 2 + 1
+        assert checkpoint.frozen_block_id >= 0
+        assert checkpoint.frozen_block_id != source_block
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks - 1
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states - 1
+
+        assert block_trie.state_checkpoints.publish_save(seq)
+        block_trie.state_checkpoints.release_checkpoint(node)
+
+        assert node.state_checkpoint is None
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+    def test_ssm_checkpoint_partial_tail_allocation_failure_rolls_back_state(self, ssm_cache_config,
+                                                                             scheduler_config, seq_meta):
+        ssm_cache_config.num_gpu_blocks = 3
+        scheduler = Scheduler(scheduler_config=scheduler_config,
+                              cache_config=ssm_cache_config,
+                              seq_meta=seq_meta)
+        block_size = scheduler.seq_meta.block_size
+        seq = scheduler.add_session(0).add_sequence([1] * (block_size * 2 + 1))
+        scheduler.block_manager.allocate(seq)
+        scheduler.block_trie.allocate(seq)
+        node = seq.prefix_cache.trie_cursor
+        free_states = scheduler.state_manager.get_num_free_checkpoint()
+
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+        assert scheduler.block_trie.state_checkpoints.reserve_save(seq) == -1
         assert seq.prefix_cache.pending_save.slot == -1
+        assert node.state_checkpoint is None
+        assert scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+    def test_ssm_checkpoint_replaces_partial_variant_at_same_anchor(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        seq = ssm_scheduler.add_session(0).add_sequence([1] * (block_size * 2 + 5))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        first_step = block_size * 2 + 1
+        second_step = block_size * 2 + 3
+
+        first_state = block_trie.state_checkpoints.reserve_save(seq, step=first_step)
+        node = seq.prefix_cache.pending_save.node
+        assert block_trie.state_checkpoints.publish_save(seq)
+        first_key = block_trie._checkpoint_index.make_node_key(node)
+        frozen_block = node.state_checkpoint.frozen_block_id
+        free_blocks = block_mgr.get_num_free_gpu_blocks()
+
+        second_state = block_trie.state_checkpoints.reserve_save(seq, step=second_step)
+
+        assert second_state == first_state
+        assert first_key not in block_trie._checkpoint_index._buckets
+        assert node.state_checkpoint.step == second_step
+        assert node.state_checkpoint.frozen_block_id == frozen_block
+        assert not node.state_checkpoint.published
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks
+
+        assert block_trie.state_checkpoints.publish_save(seq)
+        second_key = block_trie._checkpoint_index.make_node_key(node)
+        assert second_key in block_trie._checkpoint_index._buckets
+
+    def test_kv_pressure_evicts_unpinned_frozen_tail(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        seq = ssm_scheduler.add_session(0).add_sequence([1])
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        assert block_trie.state_checkpoints.reserve_save(seq) >= 0
+        node = seq.prefix_cache.pending_save.node
+        assert node.parent is None
+        assert block_trie.state_checkpoints.publish_save(seq, pin_save=True)
+        free_blocks = block_mgr.get_num_free_gpu_blocks()
+
+        assert block_trie.evict(1) == 0
+        assert node.state_checkpoint is not None
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks
+
+        assert block_trie.state_checkpoints.unpin_save(seq)
+        assert block_trie.evict(1) == 1
+        assert node.state_checkpoint is None
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks + 1
 
     def test_ssm_checkpoint_save_skips_when_no_state_slot(self, ssm_cache_config, scheduler_config, seq_meta):
         cache_config = ssm_cache_config
