@@ -541,8 +541,8 @@ def derive_interface_server_extra(
 def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]) -> list[str]:
     """Derive REST case groups from model profiles + interface suites.
 
-    Directory-based suites (toolcall / reasoning) are selected by path in CI;
-    generate logprob/experts stay in one file and are filtered by pytest marks.
+    Directory-based suites (toolcall / reasoning) are selected by path in CI; generate logprob/experts stay in one file
+    and are filtered by pytest marks.
     """
     suite_set = set(suites)
     case_info: list[str] = []
@@ -584,7 +584,8 @@ def get_interface_matrix(
     backends: list[str] | None = None,
     deps_profile: DepsProfileSelector | None = 'all',
 ) -> list[dict[str, Any]]:
-    """Build flat REST interface matrix rows from per-model ``interface`` config.
+    """Build flat REST interface matrix rows from per-model ``interface``
+    config.
 
     Each row: model, model_path, tp, backend, suites, case_info, extra,
     generate_marker. ``extra`` is CLI text from the same ``extra`` dict shape
