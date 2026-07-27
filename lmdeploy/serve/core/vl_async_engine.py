@@ -18,6 +18,7 @@ class VLAsyncEngine(AsyncEngine):
                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
                  vision_config: VisionConfig | None = None,
                  trust_remote_code: bool = False,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs) -> None:
         from lmdeploy.serve.processors import MultimodalProcessor
         from lmdeploy.utils import try_import_deeplink
@@ -44,12 +45,14 @@ class VLAsyncEngine(AsyncEngine):
                          backend=backend,
                          backend_config=backend_config,
                          trust_remote_code=trust_remote_code,
+                         allowed_media_domains=allowed_media_domains,
                          **kwargs)
         # Update prompt_processor to support multimodal processing
         self.prompt_processor = MultimodalProcessor(self.tokenizer,
                                                     self.chat_template,
                                                     vl_encoder=self.vl_encoder,
-                                                    backend=backend)
+                                                    backend=backend,
+                                                    allowed_media_domains=allowed_media_domains)
         if self.model_name == 'base':
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501

@@ -626,6 +626,14 @@ def test_long_context_chunk_runs_after_decode_forward():
                                    is_chunk_multimodal=False)
     maker = _make_policy_maker(long_seq, decode_seq)
     maker._last_forward_kind = 'decode'
+    maker.engine_strategy = SimpleNamespace(get_prealloc_size=lambda is_prefill: 99)
+    reserve_calls = []
+
+    def _reserve_long_context_chunk(seq, chunk_size, prealloc_size=0, is_last_chunk=False):
+        reserve_calls.append((seq, chunk_size, prealloc_size, is_last_chunk))
+        return True
+
+    maker.scheduler.reserve_long_context_chunk = _reserve_long_context_chunk
     maker.create_model_inputs_delta = lambda: (_ for _ in ()).throw(AssertionError('decode should not repeat'))
     maker.create_model_inputs_long_context = lambda seq, chunk_size, multimodals: model_inputs
 
@@ -635,6 +643,7 @@ def test_long_context_chunk_runs_after_decode_forward():
     assert forward_inputs['delta'] is None
     assert not model_inputs.is_first_chunk
     assert not model_inputs.is_last_chunk
+    assert reserve_calls == [(long_seq, 512, 0, False)]
 
 
 def test_abandoned_long_context_chunk_is_dropped_without_cleanup_forward():
@@ -1107,6 +1116,14 @@ def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
                                    is_chunk_multimodal=False)
     maker = _make_policy_maker(long_seq, decode_seq)
     maker._last_forward_kind = 'long_context_chunk'
+    maker.engine_strategy = SimpleNamespace(get_prealloc_size=lambda is_prefill: 7)
+    reserve_calls = []
+
+    def _reserve_long_context_chunk(seq, chunk_size, prealloc_size=0, is_last_chunk=False):
+        reserve_calls.append((seq, chunk_size, prealloc_size, is_last_chunk))
+        return True
+
+    maker.scheduler.reserve_long_context_chunk = _reserve_long_context_chunk
     maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
     maker.create_model_inputs_delta_valid_only = lambda: (None, [decode_seq], [])
 
@@ -1117,6 +1134,7 @@ def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
     assert model_inputs.is_last_chunk
     assert model_inputs.is_chunk_multimodal
     assert not maker.long_context_chunker.enabled()
+    assert reserve_calls == [(long_seq, 256, 7, True)]
 
 
 def test_do_prefill_default_forces_pending_last_chunk_prefill():

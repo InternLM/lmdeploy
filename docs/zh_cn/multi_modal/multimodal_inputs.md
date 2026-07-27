@@ -392,6 +392,12 @@ ______________________________________________________________________
 
 ## 本地文件与 Base64
 
+当 API 服务面向不可信客户端时，建议在启动服务时使用 `--allowed-media-domains` 限制 HTTP(S) 媒体 URL 可访问的域名，降低 SSRF 风险。该参数按精确 hostname 匹配；例如 `--allowed-media-domains example.com` 只允许 `https://example.com/...`，不允许 `https://cdn.example.com/...`。
+
+```shell
+lmdeploy serve api_server <model_path> --allowed-media-domains example.com
+```
+
 除 HTTP URL 外，lmdeploy 还支持：
 
 - **本地文件路径**，使用 `file://` 协议：`file:///absolute/path/to/file.jpg`

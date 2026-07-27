@@ -424,11 +424,8 @@ class Tokenizer:
     """
 
     def __init__(self, model_path: str, trust_remote_code: bool = False):
-        from transformers import AutoConfig, PretrainedConfig
-        try:
-            model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
-        except Exception as e:  # noqa
-            model_cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+        from lmdeploy.hf_configs import config_from_pretrained
+        model_cfg = config_from_pretrained(model_path, trust_remote_code=trust_remote_code)
         is_gpt_oss = getattr(model_cfg, 'model_type', '') == 'gpt_oss'
         from transformers.models.auto.tokenization_auto import get_tokenizer_config
         tokenizer_config = get_tokenizer_config(model_path, trust_remote_code=trust_remote_code)

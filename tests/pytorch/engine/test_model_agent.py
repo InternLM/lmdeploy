@@ -115,6 +115,66 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
     assert events == ['build_step_inputs', 'reset_spec']
 
 
+def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import build_spec_agent
+
+    guided_manager = object()
+    specdecode_config = SpecDecodeConfig(
+        model='draft-model',
+        method='deepseek_mtp',
+        dist_config=DistConfig(),
+        num_speculative_tokens=3,
+    )
+    spec_agent = build_spec_agent(
+        specdecode_config,
+        backend_config=None,
+        dist_ctx=DistContext(rank=1, dist_config=DistConfig(tp=2)),
+        inputs_strategy=None,
+        agent_strategy=None,
+        misc_config=None,
+        device='cpu',
+        guided_decoding_manager=guided_manager,
+    )
+    assert spec_agent.is_enabled()
+    assert spec_agent.proposer is None
+    assert not hasattr(spec_agent, 'guided_helper')
+
+
+def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.distributed import DistContext
+    from lmdeploy.pytorch.spec_decode import build_spec_agent
+
+    guided_manager = object()
+    proposer = SimpleNamespace(guided_helper=None)
+    monkeypatch.setattr(spec_agent_mod, 'build_specdecode_proposer', lambda *args, **kwargs: proposer)
+    inputs_strategy = SimpleNamespace(create_make_dummy_meta=lambda model_config: None)
+    specdecode_config = SpecDecodeConfig(
+        model='draft-model',
+        method='deepseek_mtp',
+        dist_config=DistConfig(),
+        num_speculative_tokens=3,
+    )
+
+    spec_agent = build_spec_agent(
+        specdecode_config,
+        backend_config=None,
+        dist_ctx=DistContext(rank=0, dist_config=DistConfig(tp=2)),
+        inputs_strategy=inputs_strategy,
+        agent_strategy=None,
+        misc_config=None,
+        device='cpu',
+        guided_decoding_manager=guided_manager,
+    )
+
+    assert spec_agent.proposer is proposer
+    assert spec_agent.guided_helper.manager is guided_manager
+    assert proposer.guided_helper is spec_agent.guided_helper
+
+
 def test_spec_agent_reset_runtime_state_discards_chunk_carry():
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 
@@ -224,6 +284,102 @@ class TestDrainQueues:
         agent._out_que.put_nowait('new')
         assert agent._out_que.qsize() == 1
         assert agent._out_que.get_nowait() == 'new'
+
+
+class TestDPForwardInputsMaker:
+
+    @staticmethod
+    def _make_ready_event():
+
+        class _ReadyEvent:
+
+            def query(self):
+                return True
+
+        return _ReadyEvent()
+
+    @staticmethod
+    def _make_maker(is_sleeping=False, dummy_forward_inputs=None):
+        from lmdeploy.pytorch.engine.model_agent.inputs_maker import DPForwardInputsMaker
+
+        maker = DPForwardInputsMaker.__new__(DPForwardInputsMaker)
+        maker.model_agent = SimpleNamespace(state=SimpleNamespace(is_sleeping=is_sleeping))
+        maker._pre_in_que = asyncio.Queue()
+        maker._in_que = asyncio.Queue()
+        maker._ready_event = TestDPForwardInputsMaker._make_ready_event()
+
+        async def _gather_has_inputs(has_inputs=False):
+            return has_inputs
+
+        def _make_dummy_forward_inputs():
+            if dummy_forward_inputs is not None:
+                return dummy_forward_inputs
+            raise AssertionError('pending real input must not be replaced with a dummy')
+
+        maker._gather_has_inputs = _gather_has_inputs
+        maker._make_dummy_forward_inputs = _make_dummy_forward_inputs
+        return maker
+
+    def test_get_waits_for_queued_preprocess_input(self):
+        async def _run():
+            maker = self._make_maker()
+            maker._pre_in_que.put_nowait({'inputs': 'queued'})
+
+            task = asyncio.create_task(maker.get())
+            await asyncio.sleep(0.01)
+            assert not task.done()
+
+            real_inputs = {'inputs': 'real'}
+            maker._pre_in_que.get_nowait()
+            maker._in_que.put_nowait(real_inputs)
+
+            assert await asyncio.wait_for(task, timeout=1.0) is real_inputs
+
+        asyncio.run(_run())
+
+    def test_get_yields_for_worker_forward_rpc_before_dummy(self):
+
+        async def _run():
+            maker = self._make_maker()
+            real_inputs = {'inputs': 'real'}
+
+            async def _enqueue_after_model_agent_yields():
+                await asyncio.sleep(0)
+                maker._pre_in_que.put_nowait({'inputs': 'queued'})
+                await asyncio.sleep(0)
+                maker._pre_in_que.get_nowait()
+                maker._in_que.put_nowait(real_inputs)
+
+            enqueue_task = asyncio.create_task(_enqueue_after_model_agent_yields())
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is real_inputs
+            await asyncio.wait_for(enqueue_task, timeout=1.0)
+
+        asyncio.run(_run())
+
+    def test_get_uses_dummy_for_sleeping_preprocess_queue(self):
+        async def _run():
+            dummy_inputs = {'inputs': 'sleep_dummy'}
+            maker = self._make_maker(is_sleeping=True, dummy_forward_inputs=dummy_inputs)
+            maker._pre_in_que.put_nowait({'inputs': 'stale'})
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is dummy_inputs
+            assert maker._pre_in_que.qsize() == 1
+            assert maker._in_que.qsize() == 0
+
+        asyncio.run(_run())
+
+    def test_get_uses_dummy_for_sleeping_ready_queue(self):
+        async def _run():
+            dummy_inputs = {'inputs': 'sleep_dummy'}
+            maker = self._make_maker(is_sleeping=True, dummy_forward_inputs=dummy_inputs)
+            maker._in_que.put_nowait({'inputs': 'stale_ready'})
+
+            assert await asyncio.wait_for(maker.get(), timeout=1.0) is dummy_inputs
+            assert maker._pre_in_que.qsize() == 0
+            assert maker._in_que.qsize() == 1
+
+        asyncio.run(_run())
 
 
 class TestDPForwardMeta:

@@ -11,9 +11,6 @@ def _apply_rotary_impl(x_l, x_h, cos_l, cos_h, sin_l, sin_h):
     # x_l, x_h: [BLOCK, BLOCK_N]
     # cos_l, cos_h, sin_l, sin_h: [BLOCK, BLOCK_N]
 
-    # qe_l = q_l * cos_l - q_h * sin_l
-    # qe_h = q_h * cos_h + q_l * sin_h
-
     # triton 3.4 would do fma 3 times to perform the above computation,
     # which causes higher numerical error. So we manually expand the
     # computation to avoid fma.
@@ -49,6 +46,7 @@ def apply_rotary_pos_emb_qk_kernel(
     BLOCK: tl.constexpr,
     BLOCK_QH: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    COMPLEX: tl.constexpr = False,
 ):
     """Apply rotary on key AND query kernel."""
     seq_block_id = tl.program_id(1)
@@ -62,10 +60,23 @@ def apply_rotary_pos_emb_qk_kernel(
     feat_offset_l = tl.arange(0, BLOCK_N)
     feat_mask = feat_offset_l < half_size
     feat_offset_l = feat_offset_l % half_size
-    feat_offset_h = half_size + feat_offset_l
+    if COMPLEX:
+        # Complex mode: adjacent element pairs (x_{2i}, x_{2i+1})
+        # x_l = even indices, x_h = odd indices
+        # cos/sin are [seq_len, half_size] (not duplicated)
+        cs_stride = half_size  # cos/sin row stride is half_size, not feat_size
+        feat_offset_h = feat_offset_l  # same frequency index for the pair
+        data_offset_l = feat_offset_l * 2      # even indices: 0, 2, 4, ...
+        data_offset_h = feat_offset_l * 2 + 1  # odd indices:  1, 3, 5, ...
+    else:
+        # rotate_half mode: front/back halves (x_i, x_{i+d/2})
+        cs_stride = feat_size
+        feat_offset_h = half_size + feat_offset_l
+        data_offset_l = feat_offset_l
+        data_offset_h = feat_offset_h
     seq_mask = pos_mask[:, None] & feat_mask[None, :]
-    cs_offset_l = pos_offset[:, None] * feat_size + feat_offset_l[None, :]
-    cs_offset_h = pos_offset[:, None] * feat_size + feat_offset_h[None, :]
+    cs_offset_l = pos_offset[:, None] * cs_stride + feat_offset_l[None, :]
+    cs_offset_h = pos_offset[:, None] * cs_stride + feat_offset_h[None, :]
     q_elem_type = Q.dtype.element_ty
     cos_l = tl.load(COS + cs_offset_l).to(q_elem_type)
     cos_h = tl.load(COS + cs_offset_h).to(q_elem_type)
@@ -75,10 +86,10 @@ def apply_rotary_pos_emb_qk_kernel(
     if head_id < BLOCK_QH:
         q_ptr = Q + pos_offset * stride_qs
         qe_ptr = Q_EMB + pos_offset * stride_qes
-        ql_ptrs = q_ptr[:, None] + feat_offset_l[None, :] * stride_qd
-        qh_ptrs = q_ptr[:, None] + feat_offset_h[None, :] * stride_qd
-        qel_ptrs = qe_ptr[:, None] + feat_offset_l[None, :] * stride_qed
-        qeh_ptrs = qe_ptr[:, None] + feat_offset_h[None, :] * stride_qed
+        ql_ptrs = q_ptr[:, None] + data_offset_l[None, :] * stride_qd
+        qh_ptrs = q_ptr[:, None] + data_offset_h[None, :] * stride_qd
+        qel_ptrs = qe_ptr[:, None] + data_offset_l[None, :] * stride_qed
+        qeh_ptrs = qe_ptr[:, None] + data_offset_h[None, :] * stride_qed
         ql_ptrs += head_id * stride_qh
         qh_ptrs += head_id * stride_qh
         qel_ptrs += head_id * stride_qeh
@@ -95,10 +106,10 @@ def apply_rotary_pos_emb_qk_kernel(
         head_id = head_id - BLOCK_QH
         k_ptr = K + pos_offset * stride_ks
         ke_ptr = K_EMB + pos_offset * stride_kes
-        kl_ptrs = k_ptr[:, None] + feat_offset_l[None, :] * stride_kd
-        kh_ptrs = k_ptr[:, None] + feat_offset_h[None, :] * stride_kd
-        kel_ptrs = ke_ptr[:, None] + feat_offset_l[None, :] * stride_ked
-        keh_ptrs = ke_ptr[:, None] + feat_offset_h[None, :] * stride_ked
+        kl_ptrs = k_ptr[:, None] + data_offset_l[None, :] * stride_kd
+        kh_ptrs = k_ptr[:, None] + data_offset_h[None, :] * stride_kd
+        kel_ptrs = ke_ptr[:, None] + data_offset_l[None, :] * stride_ked
+        keh_ptrs = ke_ptr[:, None] + data_offset_h[None, :] * stride_ked
         kl_ptrs += head_id * stride_kh
         kh_ptrs += head_id * stride_kh
         kel_ptrs += head_id * stride_keh
@@ -117,16 +128,22 @@ def apply_rotary_pos_emb(q: Tensor,
                          cos: Tensor,
                          sin: Tensor,
                          q_embed: Tensor = None,
-                         k_embed: Tensor = None):
+                         k_embed: Tensor = None,
+                         complex_mode: bool = False):
     """Apply rotary positional embedding on query and key.
 
     Args:
         q (Tensor): Query state.
         k (Tensor): Key state.
-        cos (Tensor): cosine matrix (seq_len, dim).
-        sin (Tensor): sine matrix (seq_len, dim).
+        cos (Tensor): cosine matrix.
+        sin (Tensor): sine matrix.
         q_embed (Tensor): output q, can be same as q
         k_embed (Tensor): output k, can be same as k
+        complex_mode (bool): if True, use complex-number rotation where
+            adjacent element pairs (x_{2i}, x_{2i+1}) are rotated together.
+            cos/sin should be (seq_len, dim//2). If False (default), use
+            rotate_half style where front/back halves are paired.
+            cos/sin should be (seq_len, dim).
 
     Returns:
         tuple[Tensor, Tensor]: Embedded query and key.
@@ -135,6 +152,9 @@ def apply_rotary_pos_emb(q: Tensor,
         cos = cos.to(device=q.device)
     if sin.device != q.device:
         sin = sin.to(device=q.device)
+    # Kernel uses flat offset indexing, so cos/sin must be contiguous
+    cos = cos.contiguous()
+    sin = sin.contiguous()
 
     if q_embed is None:
         q_embed = torch.empty_like(q)
@@ -143,7 +163,9 @@ def apply_rotary_pos_emb(q: Tensor,
 
     seq_len = cos.numel() // cos.size(-1)
 
-    if q.size(-1) == cos.size(-1):
+    if complex_mode:
+        half_size = cos.size(-1)
+    elif q.size(-1) == cos.size(-1):
         half_size = q.size(-1) // 2
     elif q.size(-1) > cos.size(-1):
         # only do rope with rope_dim size
@@ -192,6 +214,7 @@ def apply_rotary_pos_emb(q: Tensor,
                                          BLOCK=BLOCK,
                                          BLOCK_QH=num_heads_q,
                                          BLOCK_N=BLOCK_N,
+                                         COMPLEX=complex_mode,
                                          num_warps=num_warps,
                                          num_stages=num_stages)
 

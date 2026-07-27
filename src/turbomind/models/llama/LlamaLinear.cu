@@ -84,13 +84,13 @@ struct LlamaLinear::Impl {
         // SM100+ grouped bf16/fp16: use chunk() weights so Activation() runs separately.
         const bool is_cublas_grouped = offsets && getSMVersion() == 100 && weight.weight_format.dtype == kBfloat16;
         if (indices && (A.dtype() == kFloat8_e4m3 || is_cublas_grouped)) {
-            const auto [bsz, k] = A.shapes(0, 1);
-            const int e         = indices.size() / bsz;
-            Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), e, st));
+            const int  k                = A.shape(1);
+            Tensor     A_e              = {{m, k}, A.dtype(), kDEVICE};
+            const int* num_valid_tokens = offsets ? offsets.data() + offsets.size() - 1 : nullptr;
+            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), m, num_valid_tokens, st));
             if (U) {
                 Tensor U_e;
-                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
+                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), m, num_valid_tokens, st));
                 U = U_e;
             }
             A       = A_e;

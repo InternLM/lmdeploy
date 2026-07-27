@@ -449,12 +449,13 @@ class InternVLModel:
                 raise ValueError(f'InternVL TurboMind vision architecture {arch!r} is not supported.')
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp):
         self.text_model.bind_runtime(
             ctx=ctx,
             root_handles=root_handles,
             attn_tp=attn_tp,
             mlp_tp=mlp_tp,
+            ep=ep,
             model_tp=model_tp,
         )
         if self.vision_model is not None:

@@ -63,6 +63,25 @@ def test_stale_session_cleanup_does_not_remove_reused_session_id():
     assert session_mgr.user_session_id_map[42] == session_id
 
 
+async def _run_idle_async_close_removes_session_and_allows_reuse():
+    session_mgr = SessionManager()
+    session_mgr.build_request_handle_pool(_FakeEngine(), 1)
+    session_id = 260606
+    session = session_mgr.get(session_id)
+
+    await session.async_close()
+
+    assert session_id not in session_mgr.sessions
+
+    new_session = session_mgr.get(session_id)
+    async with new_session.request_handle():
+        pass
+
+
+def test_idle_async_close_removes_session_and_allows_reuse():
+    asyncio.run(_run_idle_async_close_removes_session_and_allows_reuse())
+
+
 async def _run_api_wrapper_cleanup_after_cancel():
     from lmdeploy.serve.openai.api_server import VariableInterface, _with_request_cleanup
 
@@ -207,7 +226,7 @@ def test_prompt_cancel_updates_metrics():
     asyncio.run(_run_prompt_cancel_updates_metrics())
 
 
-async def _run_max_new_tokens_zero_keeps_history_len():
+async def _run_max_new_tokens_zero_cleans_up_session():
     from lmdeploy.metrics.metrics_processor import metrics_processor
     from lmdeploy.metrics.stats import SchedulerStats
     from lmdeploy.serve.core.async_engine import AsyncEngine
@@ -220,24 +239,21 @@ async def _run_max_new_tokens_zero_keeps_history_len():
         engine.session_mgr.build_request_handle_pool(_FakeEngine(), 1)
         engine._determine_gen_config = lambda session, input_ids, gen_config=None: gen_config
 
-        session = engine.session_mgr.get(260606, step=5)
+        session = engine.session_mgr.get(260606)
         generator = engine.generate(None,
                                     session,
                                     input_ids=[1, 2],
-                                    gen_config=GenerationConfig(max_new_tokens=0),
-                                    sequence_start=False,
-                                    sequence_end=True)
+                                    gen_config=GenerationConfig(max_new_tokens=0))
 
         out = await generator.__anext__()
 
-        assert out.history_token_len == 5
         assert out.input_token_len == 2
         assert out.finish_reason == 'length'
-        assert session.step == 0
+        assert not hasattr(session, 'step')
         assert engine.session_mgr.sessions == {}
     finally:
         metrics_processor.scheduler_stats = old_stats
 
 
-def test_max_new_tokens_zero_keeps_history_len_after_close():
-    asyncio.run(_run_max_new_tokens_zero_keeps_history_len())
+def test_max_new_tokens_zero_cleans_up_session():
+    asyncio.run(_run_max_new_tokens_zero_cleans_up_session())

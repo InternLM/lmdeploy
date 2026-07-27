@@ -187,7 +187,9 @@ struct Layout {
 
     TM_HOST_DEVICE int k_param(int head, int token) const
     {
-        return head_param(head) + token_param(token);
+        // Params follow the full K/V data region for all heads (same as pre-#4717
+        // layer_param = layer_data + head_data(head_num)).
+        return head_data(config().head_num()) + head_param(head) + token_param(token);
     }
 
     TM_HOST_DEVICE int v_param(int head, int token) const

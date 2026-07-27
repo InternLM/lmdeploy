@@ -12,7 +12,9 @@ if(NOT pybind11_FOUND)
     find_package(pybind11 CONFIG)
 endif()
 
-pybind11_add_module(${PROJECT_NAME} bind.cpp)
+pybind11_add_module(${PROJECT_NAME}
+    bind.cpp
+    ../kernels/linear_attn/python_bind.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
 
 pybind11_add_module(_xgrammar xgrammar_bind.cpp)
