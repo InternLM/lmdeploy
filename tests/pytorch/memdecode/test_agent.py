@@ -41,6 +41,7 @@ def _memdecode_config(states_shapes=None):
     return MemDecodeConfig(
         memory_model_path='memory-model',
         memory_model_config=_model_config(states_shapes=states_shapes),
+        adaptive_router=False,
     )
 
 
