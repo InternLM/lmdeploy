@@ -8,7 +8,7 @@ from torch import nn
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
-from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
@@ -248,14 +248,28 @@ class Indexer(nn.Module):
                 qr: torch.Tensor,
                 freqs_cis: torch.Tensor,
                 index_cache: tuple[torch.Tensor, torch.Tensor],
-                attn_metadata: Any = None):
-        q = self.wq_b(qr)
-        q = q.unflatten(-1, (-1, self.head_dim))
+                attn_metadata: Any = None,
+                use_dense_index: bool = False):
         if self.use_fusion:
             # Fused kernels consume these projections without rotated BF16 Q/K temporaries.
             kw = self.wk_weights_proj(x)
             k, weights = kw.split([self.head_dim, self.n_heads], dim=-1)
             cos, sin = freqs_cis
+            if use_dense_index:
+                # Every visible position is selected below index_topk. Only K
+                # still needs preparation so later sparse layers can reuse it.
+                return self.indexer_topk.forward_k_only(k[0],
+                                                        self.k_norm.weight,
+                                                        self.k_norm.bias,
+                                                        cos,
+                                                        sin,
+                                                        index_cache[0],
+                                                        index_cache[1],
+                                                        norm_eps=self.k_norm.eps,
+                                                        rope_interleaved=self.rope_interleave,
+                                                        attn_metadata=attn_metadata)
+            q = self.wq_b(qr)
+            q = q.unflatten(-1, (-1, self.head_dim))
             return self.indexer_topk.forward_fused(q[0],
                                                    k[0],
                                                    weights[0],
@@ -270,6 +284,8 @@ class Indexer(nn.Module):
                                                    rope_interleaved=self.rope_interleave,
                                                    attn_metadata=attn_metadata)
 
+        q = self.wq_b(qr)
+        q = q.unflatten(-1, (-1, self.head_dim))
         q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         k = self.wk(x)
         k = self.k_norm(k)
@@ -449,6 +465,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
         skip_topk: bool = False,
+        use_dense_index: bool = False,
     ):
         """Rewrite of LlamaAttention.forward."""
         dist_config = get_dist_manager().current_config()
@@ -483,7 +500,8 @@ class DeepseekV32Attention(DeepseekV2Attention):
                              qr,
                              rotary_pos_emb,
                              past_key_value[-2:],
-                             attn_metadata=attn_metadata))
+                             attn_metadata=attn_metadata,
+                             use_dense_index=use_dense_index))
         else:
             topk_indices = topk_indices_buffer.read(q_len, hidden_states.device)
 
@@ -549,6 +567,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
         skip_topk: bool = False,
+        use_dense_index: bool = False,
         all_routed_experts: torch.Tensor | None = None,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
 
@@ -566,6 +585,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
                 attn_metadata=attn_metadata,
                 topk_indices_buffer=topk_indices_buffer,
                 skip_topk=skip_topk,
+                use_dense_index=use_dense_index,
             )
         else:
             hidden_states = self.self_attn(
@@ -631,6 +651,7 @@ class DeepseekV32Model(DeepseekV2Model):
         attn_metadata: Any = None,
         inputs_embeds: torch.FloatTensor | None = None,
         all_routed_experts: torch.Tensor | None = None,
+        use_dense_index: bool = False,
     ):
         """forward."""
         if inputs_embeds is None:
@@ -651,6 +672,7 @@ class DeepseekV32Model(DeepseekV2Model):
                 attn_metadata=attn_metadata,
                 topk_indices_buffer=self.topk_indices_buffer,
                 all_routed_experts=all_routed_experts,
+                use_dense_index=use_dense_index,
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -665,6 +687,7 @@ class DeepseekV32Model(DeepseekV2Model):
         attn_metadata: Any = None,
         inputs_embeds: torch.FloatTensor | None = None,
         all_routed_experts: torch.Tensor | None = None,
+        use_dense_index: bool = False,
     ):
         """forward_microbatch."""
         # DSA shared top-k indices are model-global; use normal forward until
@@ -676,6 +699,7 @@ class DeepseekV32Model(DeepseekV2Model):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             all_routed_experts=all_routed_experts,
+            use_dense_index=use_dense_index,
         )
 
 
@@ -709,6 +733,7 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
+        use_dense_index: bool = False,
         **kwargs,
     ):
         """Model forward."""
@@ -731,10 +756,27 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             all_routed_experts=all_routed_experts,
+            use_dense_index=use_dense_index,
         )
         if all_routed_experts is None:
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
+        context: StepContext = None,
+    ):
+        """Prepare inputs and select the exact dense-index shortcut."""
+        inputs = super().prepare_inputs_for_generation(
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            context=context,
+        )
+        inputs['use_dense_index'] = (
+            context.is_decoding and context.max_kv_seqlen <= self.config.index_topk)
+        return inputs
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):

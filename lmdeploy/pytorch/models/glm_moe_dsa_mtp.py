@@ -84,6 +84,7 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
         skip_topk: bool = False,
+        use_dense_index: bool = False,
     ) -> torch.Tensor:
         inputs_embeds = self.enorm(inputs_embeds)
         previous_hidden_states = self.hnorm(previous_hidden_states)
@@ -98,6 +99,7 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
             attn_metadata=attn_metadata,
             topk_indices_buffer=topk_indices_buffer,
             skip_topk=skip_topk,
+            use_dense_index=use_dense_index,
         )
         return residual + hidden_states
 
@@ -134,6 +136,7 @@ class GlmMoeDsaMultiTokenPredictor(nn.Module):
         attn_metadata: Any = None,
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
         skip_topk: bool = False,
+        use_dense_index: bool = False,
         spec_step_idx: int = 0,
     ) -> torch.Tensor:
         if inputs_embeds is None:
@@ -149,6 +152,7 @@ class GlmMoeDsaMultiTokenPredictor(nn.Module):
             attn_metadata=attn_metadata,
             topk_indices_buffer=topk_indices_buffer,
             skip_topk=skip_topk,
+            use_dense_index=use_dense_index,
         )
 
     def prepare_hidden_states_for_logits(
@@ -218,6 +222,7 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor | None = None,
         skip_topk: bool = False,
+        use_dense_index: bool = False,
         spec_step_idx: int = 0,
     ) -> torch.Tensor:
         return self.model(
@@ -229,6 +234,7 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
             attn_metadata=attn_metadata,
             topk_indices_buffer=self.topk_indices_buffer,
             skip_topk=skip_topk,
+            use_dense_index=use_dense_index,
             spec_step_idx=spec_step_idx,
         )
 
@@ -247,6 +253,8 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
         inputs['skip_topk'] = (
             self.uses_dsa_topk_buffer and model_metas is not None and len(model_metas) > 0
             and all(meta is not None and meta.get('skip_topk', False) for meta in model_metas))
+        inputs['use_dense_index'] = (
+            context.is_decoding and context.max_kv_seqlen <= self.config.index_topk)
         return inputs
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor,

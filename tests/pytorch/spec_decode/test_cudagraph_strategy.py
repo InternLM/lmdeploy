@@ -157,9 +157,22 @@ def test_cuda_graph_key_separates_dsa_seed_and_reuse(monkeypatch):
         inputs_embeds=None,
     )
 
-    seed_key = runner.get_graph_key(**kwargs, skip_topk=False)
-    reuse_key = runner.get_graph_key(**kwargs, skip_topk=True)
+    seed_key = runner.get_graph_key(**kwargs,
+                                    skip_topk=False,
+                                    use_dense_index=False)
+    reuse_key = runner.get_graph_key(**kwargs,
+                                     skip_topk=True,
+                                     use_dense_index=False)
+    reuse_dense_key = runner.get_graph_key(**kwargs,
+                                           skip_topk=True,
+                                           use_dense_index=True)
+    dense_key = runner.get_graph_key(**kwargs,
+                                     skip_topk=False,
+                                     use_dense_index=True)
 
     assert seed_key != reuse_key
-    assert seed_key[-1] is False
-    assert reuse_key[-1] is True
+    assert seed_key != dense_key
+    assert reuse_key == reuse_dense_key
+    assert seed_key[-2:] == (False, False)
+    assert reuse_key[-2:] == (True, False)
+    assert dense_key[-2:] == (False, True)

@@ -6,7 +6,7 @@ from torch import Tensor
 
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
+from lmdeploy.pytorch.kernels.cuda.ds_index import dense_index, fp8_index
 from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k_cache, prepare_dsa_indexer_q
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 
@@ -138,6 +138,29 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
         return self._forward_index(q, q_s, k_cache, k_s_cache, meta)
+
+    def forward_k_only(self, k: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor, sin: Tensor,
+                       k_cache: Tensor, k_s_cache: Tensor, norm_eps: float, rope_interleaved: bool,
+                       meta: NSAIndexMeta) -> Tensor:
+        """Cache K and skip score/top-k work when all positions are selected."""
+        prepare_dsa_indexer_k_cache(k,
+                                    norm_weight,
+                                    norm_bias,
+                                    cos,
+                                    sin,
+                                    k_cache,
+                                    k_s_cache[..., 0],
+                                    cu_seqlen_q=meta.cu_seqlen_q,
+                                    kv_seqlens=meta.k_seqlens,
+                                    block_offsets=meta.block_offset,
+                                    max_q_seqlen=meta.max_q_seqlen,
+                                    eps=norm_eps,
+                                    rope_interleaved=rope_interleaved)
+        return dense_index(meta.q_seqlens,
+                           meta.k_seqlens,
+                           meta.max_q_seqlen,
+                           self.topk,
+                           fill=self.fill)
 
 
 class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):
