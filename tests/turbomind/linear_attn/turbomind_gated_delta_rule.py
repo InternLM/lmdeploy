@@ -10,7 +10,6 @@ from .benchmark import (
     apply_cp_pattern,
     base_row,
     diff_metrics,
-    enforce_cp_intent,
 )
 from .cases import (
     Fixed,
@@ -66,7 +65,7 @@ class NativeBridge:
         state_dtype='f32',
         mode='chunked',
         chunk_size=None,
-        cp_mode='auto',
+        cp_level='all',
         num_head_groups=1,
         heads_per_block=0,
     ):
@@ -80,7 +79,7 @@ class NativeBridge:
             state_dtype=state_dtype,
             mode=mode,
             chunk_size=chunk_size,
-            cp_mode=cp_mode,
+            cp_level=cp_level,
             num_head_groups=num_head_groups,
             heads_per_block=heads_per_block,
         )
@@ -235,7 +234,7 @@ def chunk_gated_delta_rule_fwd(
     state_dtype: str = 'f32',
     mode: str | None = None,
     chunk_size: int | None = None,
-    cp_mode: str = 'auto',
+    cp_level: str = 'all',
     state_layer_offset: int = 0,
     num_head_groups: int = 1,
     heads_per_block: int = 0,
@@ -269,7 +268,7 @@ def chunk_gated_delta_rule_fwd(
             state_dtype=state_dtype,
             mode='recurrent' if recurrent else 'chunked',
             chunk_size=chunk_size,
-            cp_mode=cp_mode,
+            cp_level=cp_level,
             num_head_groups=num_head_groups,
             heads_per_block=heads_per_block or v.shape[2],
         )
@@ -341,7 +340,7 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         state_dtype=state_arg,
         mode='recurrent' if recurrent else 'chunked',
         chunk_size=chunk_size,
-        cp_mode=request.cp_mode,
+        cp_level=request.cp_level,
         num_head_groups=1,
         heads_per_block=run.input.heads.hv,
     )
@@ -406,12 +405,10 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         'turbomind',
         state_dtype=request.state_dtype,
         chunk_size=planned_chunk_size,
-        cp_mode=request.cp_mode,
+        cp_level=request.cp_level,
         cp_pattern=request.cp_pattern,
         cp_enabled=cp_enabled,
     )
-    enforce_cp_intent(row, request.cp_mode)
-
     def prepare():
         state.reset(inputs.h0)
 
@@ -427,7 +424,7 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
             finished=kwargs['finished'],
             state_dtype=state_arg,
             chunk_size=planned_chunk_size,
-            cp_mode=request.cp_mode,
+            cp_level=request.cp_level,
             out=out,
             workspace=workspace,
             state_tma_descs=kwargs.get('state_tma_descs'),

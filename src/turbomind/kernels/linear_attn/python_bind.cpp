@@ -90,6 +90,17 @@ py::dict TensorPlanToDict(const TensorPlan& plan)
 py::dict ContextParallelPlanToDict(const ContextParallelPlan& plan)
 {
     py::dict out;
+    switch (plan.cp_level) {
+        case ContextParallelLevel::kOff:
+            out["cp_level"] = "off";
+            break;
+        case ContextParallelLevel::kExact:
+            out["cp_level"] = "exact";
+            break;
+        case ContextParallelLevel::kAll:
+            out["cp_level"] = "all";
+            break;
+    }
     out["enabled"]            = plan.enabled;
     out["segment_tokens"]     = plan.segment_tokens;
     out["segment_chunks"]     = plan.segment_chunks;
@@ -166,15 +177,18 @@ py::dict PlanToDict(const Plan& plan)
     return out;
 }
 
-ContextParallelMode ParseContextParallelMode(const std::string& mode)
+ContextParallelLevel ParseContextParallelLevel(const std::string& level)
 {
-    if (mode == "auto") {
-        return ContextParallelMode::kAuto;
+    if (level == "off") {
+        return ContextParallelLevel::kOff;
     }
-    if (mode == "off") {
-        return ContextParallelMode::kOff;
+    if (level == "exact") {
+        return ContextParallelLevel::kExact;
     }
-    throw py::value_error("cp_mode must be one of: auto, off");
+    if (level == "all") {
+        return ContextParallelLevel::kAll;
+    }
+    throw py::value_error("cp_level must be one of: off, exact, all");
 }
 
 GdrMode ParseMode(const std::string& mode)
@@ -202,9 +216,9 @@ DataType ParseStateDtype(const std::string& dtype)
     throw py::value_error("state_dtype must be one of: f16, float16, f32, float32, bf16, bfloat16");
 }
 
-Operation MakeOperation(GdrMode mode, std::optional<int> chunk_size, ContextParallelMode cp_mode)
+Operation MakeOperation(GdrMode mode, std::optional<int> chunk_size, ContextParallelLevel cp_level)
 {
-    return Operation{mode, chunk_size.value_or(kAutoGdrChunkSize), cp_mode};
+    return Operation{mode, chunk_size.value_or(kAutoGdrChunkSize), cp_level};
 }
 
 PlanningContext MakePlanningContext(const core::Tensor& q,
@@ -303,7 +317,7 @@ py::dict PlanBridge(const py::object&  q,
                     const std::string& state_dtype,
                     const std::string& mode,
                     std::optional<int> chunk_size,
-                    const std::string& cp_mode,
+                    const std::string& cp_level,
                     int                num_head_groups,
                     int                heads_per_block)
 {
@@ -318,7 +332,7 @@ py::dict PlanBridge(const py::object&  q,
 
     const auto parsed_mode        = ParseMode(mode);
     const auto parsed_state_dtype = ParseStateDtype(state_dtype);
-    const auto operation          = MakeOperation(parsed_mode, chunk_size, ParseContextParallelMode(cp_mode));
+    const auto operation          = MakeOperation(parsed_mode, chunk_size, ParseContextParallelLevel(cp_level));
     const auto context            = MakePlanningContext(q_tensor,
                                              v_tensor,
                                              g_tensor,
@@ -429,7 +443,7 @@ void bind_delta_rule(py::module_& module)
                "state_dtype"_a     = "f32",
                "mode"_a            = "chunked",
                "chunk_size"_a      = py::none(),
-               "cp_mode"_a         = "auto",
+               "cp_level"_a        = "all",
                "num_head_groups"_a = 1,
                "heads_per_block"_a = 0);
 
