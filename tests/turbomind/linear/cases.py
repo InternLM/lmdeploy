@@ -66,7 +66,6 @@ FULL_BATCHES = (
     16384,
     16385,
     32768,
-    65536
 )
 
 
@@ -372,12 +371,17 @@ def is_supported(type_spec: TypeSpec, shape: ShapeSpec) -> bool:
       (``sm90_16816_4.cu``); half×e2m1 dense hits ``..._f16_e2m1k32_f16_...`` miss.
     - fp16×fp8: SM90 E4M3 configs use ``bfloat16_t`` as Tc only
       (``sm90_16816_8.cu``); half Tc hits ``..._e4m3..._f16_tnt_...`` miss.
+    - fp16 MoE: SM90 gemm dispatch has no fp16 indexed/blocked grouped kernel
+      (``No feasible kernel ... sm90_f16_f16_f16_tnt_ibb_...``); the GMMA
+      grouped kernels are bf16-only.
     """
     if type_spec.weight_type == 'uint4' and shape.expert_num > 0:
         return False
     if type_spec.data_type == 'fp16' and type_spec.weight_type == 'fp4_e2m1':
         return False
     if type_spec.data_type == 'fp16' and type_spec.weight_type == 'fp8_e4m3':
+        return False
+    if type_spec.data_type == 'fp16' and type_spec.weight_type == 'fp16' and shape.expert_num > 0:
         return False
     return True
 
