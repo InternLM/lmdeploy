@@ -142,7 +142,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
     def forward_k_only(self, k: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor, sin: Tensor,
                        k_cache: Tensor, k_s_cache: Tensor, norm_eps: float, rope_interleaved: bool,
                        meta: NSAIndexMeta) -> Tensor:
-        """Cache K and skip score/top-k work when all positions are selected."""
+        """Cache K and skip score/top-k work when all positions are
+        selected."""
         prepare_dsa_indexer_k_cache(k,
                                     norm_weight,
                                     norm_bias,
