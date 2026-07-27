@@ -4,10 +4,13 @@
 
 namespace turbomind::linear_attn::delta_rule::detail {
 
-bool PlanPreSm90Operation(const GdrKernelSpec& spec, const PlanningContext& context, Plan* plan)
+bool PlanPreSm90Operation(const GdrKernelSpec&   spec,
+                          const Operation&       operation,
+                          const PlanningContext& context,
+                          Plan*                  plan)
 {
     plan->problem                        = BuildProblem(context, spec);
-    plan->cp                             = BuildDisabledContextParallelPlan(plan->problem);
+    plan->cp                             = BuildDisabledContextParallelPlan(plan->problem, operation.cp_level);
     const core::ssize_t value_row_size   = core::ssize_t(plan->problem.hv) * 128;
     const core::ssize_t value_batch_size = core::ssize_t(plan->problem.token_num) * value_row_size;
     const size_t        value_elements   = size_t(plan->problem.batch) * size_t(value_batch_size);

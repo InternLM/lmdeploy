@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -16,6 +17,27 @@
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
+namespace {
+
+using linear_attn::delta_rule::ContextParallelLevel;
+
+ContextParallelLevel GetCPLevel()
+{
+    const char* value = std::getenv("TM_GDR_CP_LEVEL");
+    if (value == nullptr || std::strcmp(value, "2") == 0) {
+        return ContextParallelLevel::kAll;
+    }
+    if (std::strcmp(value, "1") == 0) {
+        return ContextParallelLevel::kExact;
+    }
+    if (std::strcmp(value, "0") == 0) {
+        return ContextParallelLevel::kOff;
+    }
+    TM_CHECK(false) << "TM_GDR_CP_LEVEL must be 0 (off), 1 (exact), or 2 (all), got " << value;
+    return ContextParallelLevel::kAll;
+}
+
+}  // namespace
 
 auto get_lc_state_size(const DeltaNetWeight& weights, int tp)
 {
@@ -37,6 +59,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                                        int                          phases):
     tp_size_{engine.attn_tp_size * engine.attn_cp_size},
     recurrent_state_dtype_{engine.state_dtype},
+    gdr_cp_level_{GetCPLevel()},
     linear_{*context.linear}
 {
     TM_CHECK(!weights.empty());
@@ -115,7 +138,8 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
             planning.q_offsets = {0, 16};
         }
         Operation operation{};
-        operation.mode = mode;
+        operation.mode     = mode;
+        operation.cp_level = gdr_cp_level_;
         Plan plan;
         TM_CHECK(delta_rule_.Plan(operation, planning, &plan));
     };
@@ -133,11 +157,12 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     registry.checkpoint().Register(conv_total_bytes_, 1);
 
     const size_t prefix_bytes = registry.prefix().accumulation_bytes();
-    TM_LOG_INFO("[GDN] input_dtype={} state_dtype={} block config L_b={} H_b={} -> "
+    TM_LOG_INFO("[GDN] input_dtype={} state_dtype={} gdr_cp_level={} block config L_b={} H_b={} -> "
                 "num_layer_groups={} num_head_groups={} num_blocks={} block_bytes={} "
                 "prefix_object_bytes={} ({})",
                 input_dtype_,
                 recurrent_state_dtype_,
+                static_cast<int>(gdr_cp_level_),
                 layers_per_block_,
                 heads_per_block_,
                 num_layer_groups_,
@@ -278,7 +303,8 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         planning.beta_batch_stride = planning.gate_batch_stride;
         planning.q_offsets.assign(host_offsets.begin() + data.decode_count, host_offsets.end());
         linear_attn::delta_rule::Operation operation{};
-        operation.mode = linear_attn::delta_rule::GdrMode::kChunked;
+        operation.mode     = linear_attn::delta_rule::GdrMode::kChunked;
+        operation.cp_level = gdr_cp_level_;
         linear_attn::delta_rule::Plan plan;
         TM_CHECK(delta_rule_.Plan(operation, planning, &plan));
         data.chunked_plan.emplace(std::move(plan));

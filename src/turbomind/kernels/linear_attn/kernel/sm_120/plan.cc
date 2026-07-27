@@ -96,9 +96,10 @@ size_t BuildCpWorkspaceBytes(const Problem& problem, const ContextParallelPlan& 
     return bytes;
 }
 
-ContextParallelPlan BuildContextParallelPlan(const Problem& problem, const std::vector<int32_t>& q_offsets)
+ContextParallelPlan
+BuildContextParallelPlan(const Problem& problem, const std::vector<int32_t>& q_offsets, ContextParallelLevel cp_level)
 {
-    auto cp               = BuildDisabledContextParallelPlan(problem);
+    auto cp               = BuildDisabledContextParallelPlan(problem, cp_level);
     int  max_chunks       = 0;
     int  total_raw_chunks = 0;
     for (int sequence = 0; sequence < problem.sequence_num; ++sequence) {
@@ -169,10 +170,10 @@ bool PlanSm120Operation(const GdrKernelSpec&   spec,
                         const PlanningContext& context,
                         Plan*                  plan)
 {
-    plan->problem = BuildProblem(context, spec);
-    plan->cp      = operation.mode == GdrMode::kChunked && operation.cp_mode == ContextParallelMode::kAuto ?
-                        BuildContextParallelPlan(plan->problem, context.q_offsets) :
-                        BuildDisabledContextParallelPlan(plan->problem);
+    plan->problem         = BuildProblem(context, spec);
+    const bool cp_allowed = operation.mode == GdrMode::kChunked && operation.cp_level != ContextParallelLevel::kOff;
+    plan->cp = cp_allowed ? BuildContextParallelPlan(plan->problem, context.q_offsets, operation.cp_level) :
+                            BuildDisabledContextParallelPlan(plan->problem, operation.cp_level);
     const size_t descriptor_bytes =
         KktTmaDescriptorBytes(plan->problem) + FusedGdrTmaDescriptorBytes(plan->problem) + 127;
     BuildOptimizedTensorPlans(plan, descriptor_bytes);
