@@ -366,7 +366,12 @@ class StepContext:
 
         # position ids
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
-        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+        if inputs.max_q_seqlen == 1:
+            # Active decode sequences all contain one query token, so their
+            # flattened offsets are simply the batch indices.
+            q_start_loc = torch.arange(q_seqlens.numel(), dtype=q_seqlens.dtype, device=q_seqlens.device)
+        else:
+            q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
@@ -426,11 +431,13 @@ class StepContext:
         target_position_ids = inputs.target_position_ids
         # decoding
         if max_q_seqlen == 1:
-            attention_mask = torch.ones_like(q_seqlens)[:, None]
+            # Positive sequence lengths with max_q_seqlen == 1 are already an
+            # all-ones mask; use views to avoid two decode-only materializations.
+            attention_mask = q_seqlens[:, None]
             if target_position_ids is not None:
                 position_ids = target_position_ids
             else:
-                position_ids = history_seqlens.unsqueeze(0).clone()
+                position_ids = history_seqlens.unsqueeze(0)
             return attention_mask, position_ids
 
         num_tokens = inputs.input_ids.numel()

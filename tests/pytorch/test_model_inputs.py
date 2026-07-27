@@ -48,3 +48,28 @@ def test_step_context_global_is_decoding_uses_dp_global_state():
         dp_meta=DPMeta(dp_is_decoding=False),
     )
     assert not step_ctx.global_is_decoding()
+
+
+def test_step_context_single_token_decode_metadata(monkeypatch):
+    import lmdeploy.pytorch.model_inputs as model_inputs
+
+    monkeypatch.setattr(model_inputs, 'get_backend',
+                        lambda: type('Backend', (), {'update_step_context': staticmethod(lambda ctx: ctx)})())
+    inputs = ModelInputs(
+        input_ids=torch.tensor([[10, 11, 12]]),
+        seq_length=torch.ones(3, dtype=torch.long),
+        history_lengths=torch.tensor([4, 9, 11]),
+        block_offsets=torch.zeros((3, 1), dtype=torch.long),
+        is_decoding=True,
+        num_ignored_history=torch.tensor([0, 2, 3]),
+        max_q_seqlen=1,
+        max_kv_seqlen=12,
+        sum_kv_seqlen=22,
+    )
+
+    context = StepContext.new(inputs, model_config=None, cache_config=None)
+
+    torch.testing.assert_close(context.attention_mask, torch.ones((3, 1), dtype=torch.long))
+    torch.testing.assert_close(context.position_ids, torch.tensor([[4, 9, 11]]))
+    torch.testing.assert_close(context.q_start_loc, torch.tensor([0, 1, 2]))
+    torch.testing.assert_close(context.kv_seqlens, torch.tensor([5, 8, 9]))
