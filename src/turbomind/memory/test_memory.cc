@@ -1131,13 +1131,15 @@ TEST_CASE("ObjectAllocator simple/composite share one slab class", "[memory][obj
 
 TEST_CASE("ObjectAllocator usage tracks live object bytes", "[memory][object][stats]")
 {
-    using core::Allocator;
     using core::Buffer;
+    using core::Device;
 
     constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
 
-    Allocator alloc{kCPU};
-    Buffer    buf{kBytes, data_type_v<int8_t>, alloc};
+    // The three registered size classes require three slabs. Keep the base
+    // page-aligned so PageAllocator does not lose one page to alignment.
+    AlignedRegion region{kObjectAllocatorPageBytes, kBytes};
+    Buffer        buf{region.data(), static_cast<ssize_t>(region.size()), data_type_v<int8_t>, Device{kCPU}};
 
     ObjectAllocator obj{buf};
     const int       simple_id    = obj.Register(64UL << 10, 64);
