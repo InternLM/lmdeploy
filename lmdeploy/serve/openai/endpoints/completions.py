@@ -257,8 +257,7 @@ def register(router: APIRouter, server_context) -> None:
                 async for res in cleanup_generator:
                     if await raw_request.is_disconnected():
                         # Abort the request if the client disconnects.
-                        await server_context.async_engine.stop_session(
-                            request.session_id)
+                        await session.async_abort()
                         return create_error_response(HTTPStatus.BAD_REQUEST,
                                                      'Client disconnected')
                     final_res = res
@@ -289,10 +288,14 @@ def register(router: APIRouter, server_context) -> None:
             usage.completion_tokens += final_res.generate_token_len
             usage.total_tokens += total_tokens
 
-        await asyncio.gather(*[
+        call_results = await asyncio.gather(*[
             _inner_call(i, generators[i], sessions[i])
             for i in range(len(generators))
         ])
+        error_response = next(
+            (result for result in call_results if result is not None), None)
+        if error_response is not None:
+            return error_response
 
         response = CompletionResponse(
             id=request_id,

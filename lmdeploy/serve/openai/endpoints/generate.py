@@ -154,8 +154,6 @@ def register(router: APIRouter, server_context) -> None:
             return StreamingResponse(stream_generator,
                                      media_type='text/event-stream')
 
-        response = None
-
         async def _inner_call():
             text = ''
             output_ids = []
@@ -179,7 +177,6 @@ def register(router: APIRouter, server_context) -> None:
                 for tok, tok_logprobs in zip(output_ids, logprobs):
                     output_token_logprobs.append((tok_logprobs[tok], tok))
 
-            nonlocal response
             meta = GenerateReqMetaOutput(
                 finish_reason=dict(
                     type=res.finish_reason) if res.finish_reason else None,
@@ -187,9 +184,8 @@ def register(router: APIRouter, server_context) -> None:
                 prompt_tokens=res.input_token_len,
                 routed_experts=res.routed_experts,
                 completion_tokens=res.generate_token_len)
-            response = GenerateReqOutput(text=text,
-                                         output_ids=output_ids,
-                                         meta_info=meta)
+            return GenerateReqOutput(text=text,
+                                     output_ids=output_ids,
+                                     meta_info=meta)
 
-        await _inner_call()
-        return response
+        return await _inner_call()
