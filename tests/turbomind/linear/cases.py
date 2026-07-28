@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import cast
 
-from tests.turbomind.linear.model_specs import (
+from .model_specs import (
     SUPPORTED_TP_SIZES,
     ModelSpec,
     MoeSpec,

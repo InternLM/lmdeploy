@@ -34,7 +34,7 @@ BATCHES = '1,3,16,17,64,65,256,1024,4096'
 def discover_cases(kind: str = 'moe') -> list[str]:
     """All tp=1, ep=1 cases; kind='moe': gate_up/down with experts;
     kind='dense': expert_num==0."""
-    from tests.turbomind.linear.cases import TYPE_BF16, expand_suite
+    from .cases import TYPE_BF16, expand_suite
 
     names = set()
     for r in expand_suite('full', None, None, (TYPE_BF16.name,)):

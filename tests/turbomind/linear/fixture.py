@@ -7,8 +7,8 @@ from contextlib import contextmanager
 
 import torch
 
-from tests.turbomind.linear.cases import LinearCase
-from tests.turbomind.linear.linear import (
+from .cases import LinearCase
+from .linear import (
     Linear,
     Weight,
     activation_needs_quantize,
@@ -17,7 +17,7 @@ from tests.turbomind.linear.linear import (
     link_experts,
     quantize_symm,
 )
-from tests.turbomind.linear.reference import (
+from .reference import (
     apply_block_fused_silu,
     block_pack_w1w3,
     compare_tensors,
@@ -278,7 +278,7 @@ class LinearFixture:
         return torch.randn(c.input_dim, c.output_dim, device=self.device, dtype=dtype) * scale
 
     def _apply_fuse_silu_epilogue(self, weight: Weight) -> None:
-        from tests.turbomind.linear.linear import _tm
+        from .linear import _tm
 
         weight.set_epilogue(_tm().Epilogue.kGatedSilu)
 
@@ -361,7 +361,7 @@ class LinearFixture:
         if not activation_needs_quantize(self.w_quant):
             self.x_dequant = None
             return
-        from tests.turbomind.linear.linear import _tm
+        from .linear import _tm
 
         with self.on_tm_stream():
             x_tm = _tm().from_dlpack_with_strides(self.x_original)

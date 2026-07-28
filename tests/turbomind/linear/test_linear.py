@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.turbomind.linear import linear as linear_mod
-from tests.turbomind.linear.cases import expand_suite
-from tests.turbomind.linear.fixture import LinearFixture
+from . import linear as linear_mod
+from .cases import expand_suite
+from .fixture import LinearFixture
 
 cuda_required = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 tm_required = pytest.mark.skipif(not linear_mod.is_available(), reason='_turbomind required')

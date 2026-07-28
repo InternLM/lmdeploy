@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import torch
 
-from tests.turbomind.linear.cases import VALID_SUITES, expand_suite
-from tests.turbomind.linear.fixture import LinearFixture
+from .cases import VALID_SUITES, expand_suite
+from .fixture import LinearFixture
 
 
 @dataclass(frozen=True)

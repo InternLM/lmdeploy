@@ -27,7 +27,7 @@ import sys
 import threading
 from pathlib import Path
 
-from tests.turbomind.linear.cases import expand_suite
+from .cases import expand_suite
 
 
 def chunk_names(names: list[str], size: int) -> list[list[str]]:
