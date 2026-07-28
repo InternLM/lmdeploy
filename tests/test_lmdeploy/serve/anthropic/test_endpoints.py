@@ -142,18 +142,12 @@ class _FakeServerContext:
             logprobs_mode=logprobs_mode,
             enable_return_routed_experts=enable_return_routed_experts,
         )
+        self.async_engine.session_mgr = self.session_mgr
         self.default_gen_config = {}
         self.response_parser_cls = response_parser_cls
 
     def create_session(self, _session_id: int | None = None):
         return self.session_mgr.get()
-
-    def get_session_manager(self):
-        return self.session_mgr
-
-    def get_engine_config(self):
-        return self.async_engine.backend_config
-
 
 class _FakeRawRequest:
 

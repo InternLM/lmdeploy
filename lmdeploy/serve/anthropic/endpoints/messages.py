@@ -45,7 +45,7 @@ def _is_tool_choice_auto(tool_choice):
 
 def _validate_extended_outputs(request: MessagesRequest, server_context):
     # TurbomindEngineConfig has neither field; treat missing attrs as disabled.
-    engine_config = server_context.get_engine_config()
+    engine_config = server_context.async_engine.backend_config
     logprobs_mode = getattr(engine_config, 'logprobs_mode', None)
     if request.return_logprob and logprobs_mode is None:
         return create_error_response(
@@ -187,7 +187,7 @@ def register(router: APIRouter, server_context) -> None:
         )
 
         request_id = f'msg_{shortuuid.random()}'
-        session_mgr = server_context.get_session_manager()
+        session_mgr = server_context.async_engine.session_mgr
 
         if request.stream:
             return StreamingResponse(

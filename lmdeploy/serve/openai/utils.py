@@ -1,20 +1,45 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from http import HTTPStatus
 from typing import Any, TypeVar
+
+from fastapi.responses import JSONResponse
 
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponseChoice,
     ChatCompletionResponseStreamChoice,
+    ErrorResponse,
 )
 
 _ToolCallT = TypeVar('_ToolCallT')
-_ChatCompletionResponseChoiceT = TypeVar('_ChatCompletionResponseChoiceT', ChatCompletionResponseChoice,
+_ChatCompletionResponseChoiceT = TypeVar('_ChatCompletionResponseChoiceT',
+                                         ChatCompletionResponseChoice,
                                          ChatCompletionResponseStreamChoice)
 
 
-def filter_parallel_tool_calls(tool_calls: list[_ToolCallT] | None,
-                               parallel_tool_calls: bool | None) -> list[_ToolCallT] | None:
+def get_model_list(server_context) -> list[str]:
+    """Return the model and adapter names exposed by a server."""
+    model_names = [server_context.async_engine.model_name]
+    cfg = server_context.async_engine.backend_config
+    model_names += getattr(cfg, 'adapters', None) or []
+    return model_names
+
+
+def create_error_response(
+        status: HTTPStatus,
+        message: str,
+        error_type: str = 'invalid_request_error') -> JSONResponse:
+    """Create an OpenAI-compatible error response."""
+    payload = ErrorResponse(message=message,
+                            type=error_type,
+                            code=status.value)
+    return JSONResponse(payload.model_dump(), status_code=status.value)
+
+
+def filter_parallel_tool_calls(
+        tool_calls: list[_ToolCallT] | None,
+        parallel_tool_calls: bool | None) -> list[_ToolCallT] | None:
     """Filter to the first tool call only when parallel_tool_calls is false."""
 
     if parallel_tool_calls is not False or not tool_calls:
@@ -22,8 +47,9 @@ def filter_parallel_tool_calls(tool_calls: list[_ToolCallT] | None,
     return tool_calls[:1]
 
 
-def filter_parallel_tool_call_deltas(tool_calls: list[Any] | None,
-                                     parallel_tool_calls: bool | None) -> list[Any] | None:
+def filter_parallel_tool_call_deltas(
+        tool_calls: list[Any] | None,
+        parallel_tool_calls: bool | None) -> list[Any] | None:
     """Filter to index zero tool deltas only when parallel_tool_calls is
     false."""
 
@@ -41,10 +67,13 @@ def maybe_filter_parallel_tool_calls(
     if request.parallel_tool_calls is not False:
         return choice
 
-    if isinstance(choice, ChatCompletionResponseChoice) and choice.message.tool_calls:
+    if isinstance(choice,
+                  ChatCompletionResponseChoice) and choice.message.tool_calls:
         choice.message.tool_calls = filter_parallel_tool_calls(
             choice.message.tool_calls, request.parallel_tool_calls)
-    elif isinstance(choice, ChatCompletionResponseStreamChoice) and choice.delta.tool_calls:
+    elif isinstance(
+            choice,
+            ChatCompletionResponseStreamChoice) and choice.delta.tool_calls:
         choice.delta.tool_calls = filter_parallel_tool_call_deltas(
             choice.delta.tool_calls, request.parallel_tool_calls)
 
