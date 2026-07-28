@@ -15,7 +15,7 @@ def check_request(request: GenerateReqInput, server_context: 'VariableInterface'
     session_manager = server_context.get_session_manager()
     logprobs_mode = getattr(engine_config, 'logprobs_mode', None)
     return_logprob = request.return_logprob
-    if logprobs_mode is None and return_logprob:
+    if hasattr(engine_config, 'logprobs_mode') and logprobs_mode is None and return_logprob:
         return f'return_logprob({return_logprob}) requested but not enabled logprobs_mode in engine configuration.'
 
     if (request.prompt is not None) ^ (request.input_ids is None):
