@@ -912,13 +912,19 @@ TEST_CASE("ObjectAllocator composite atomic rollback on partial OOM", "[memory][
     REQUIRE(obj.Allocate(idx, &h, 1) == 0);  // not placed
     REQUIRE(h.a == nullptr);                 // batch leaves the slot null on OOM
     REQUIRE(obj.IsValid(h, 0) == false);
+    REQUIRE(obj.Usage().live_allocations == 0);
+    REQUIRE(obj.Usage().live_bytes == 0);
 
     // No leak: a simple 32 MiB object (same aligned size -> shared slab class)
     // can fully allocate all 4 pages.
     const int                   sidx = obj.Register(kObj, 1);
     std::vector<object_alloc_t> live(4);
     REQUIRE(obj.Allocate(sidx, live.data(), 4) == 4);
+    REQUIRE(obj.Usage().live_allocations == 4);
+    REQUIRE(obj.Usage().live_bytes == 4 * kObj);
     obj.Deallocate(sidx, live.data(), 4);
+    REQUIRE(obj.Usage().live_allocations == 0);
+    REQUIRE(obj.Usage().live_bytes == 0);
 }
 
 TEST_CASE("ObjectAllocator size dedup", "[memory][object][dedup]")
@@ -1121,4 +1127,57 @@ TEST_CASE("ObjectAllocator simple/composite share one slab class", "[memory][obj
 
     obj.Deallocate(cidx, &comp, 1);
     obj.Deallocate(sidx, &s0, 1);
+}
+
+TEST_CASE("ObjectAllocator usage tracks live object bytes", "[memory][object][stats]")
+{
+    using core::Buffer;
+    using core::Device;
+
+    constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
+
+    // The three registered size classes require three slabs. Keep the base
+    // page-aligned so PageAllocator does not lose one page to alignment.
+    AlignedRegion region{kObjectAllocatorPageBytes, kBytes};
+    Buffer        buf{region.data(), static_cast<ssize_t>(region.size()), data_type_v<int8_t>, Device{kCPU}};
+
+    ObjectAllocator obj{buf};
+    const int       simple_id    = obj.Register(64UL << 10, 64);
+    const int       composite_id = obj.Register({{32UL << 10, 64, 2}, {128UL << 10, 128, 1}});
+
+    object_alloc_t simple    = obj.Allocate(simple_id);
+    object_alloc_t composite = obj.Allocate(composite_id);
+    REQUIRE(simple.a);
+    REQUIRE(composite.a);
+
+    size_t expected_composite_bytes = 0;
+    for (int part = 0; part < obj.PartCount(composite_id); ++part) {
+        expected_composite_bytes += obj.PartBytes(composite_id, part);
+    }
+
+    auto usage = obj.Usage();
+    REQUIRE(usage.live_allocations == 2);
+    REQUIRE(usage.live_bytes == obj.PartBytes(simple_id, 0) + expected_composite_bytes);
+
+    auto stats = obj.Stats();
+    REQUIRE(stats.live_allocations == 2);
+    REQUIRE(stats.live_bytes == usage.live_bytes);
+
+    obj.Deallocate(simple_id, simple);
+    usage = obj.Usage();
+    REQUIRE(usage.live_allocations == 1);
+    REQUIRE(usage.live_bytes == expected_composite_bytes);
+
+    stats = obj.Stats();
+    REQUIRE(stats.live_allocations == 1);
+    REQUIRE(stats.live_bytes == usage.live_bytes);
+
+    obj.Deallocate(composite_id, composite);
+    usage = obj.Usage();
+    REQUIRE(usage.live_allocations == 0);
+    REQUIRE(usage.live_bytes == 0);
+
+    stats = obj.Stats();
+    REQUIRE(stats.live_allocations == 0);
+    REQUIRE(stats.live_bytes == usage.live_bytes);
 }

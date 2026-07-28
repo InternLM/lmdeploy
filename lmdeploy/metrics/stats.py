@@ -90,7 +90,10 @@ class SchedulerStats:
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
         self.num_running_reqs = scheduled_metrics.active_seqs
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
-        self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
+        if scheduled_metrics.cache_usage is None:
+            self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
+        else:
+            self.gpu_cache_usage = scheduled_metrics.cache_usage
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
 
 
