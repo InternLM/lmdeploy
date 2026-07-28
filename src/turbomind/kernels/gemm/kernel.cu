@@ -231,6 +231,10 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
+        // The fused-SiLU gate pairing is defined along n and does not transpose.
+        if ((int)desc.epilogue & (int)Epilogue::kGatedSilu) {
+            return false;
+        }
         return kernel_->is_feasible(desc);
     }
 
