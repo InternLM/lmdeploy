@@ -228,7 +228,7 @@ void invokeLayerNorm(
         auto launch = [&](auto has_bias_c) {
             // Redeclare these as constexpr inside this nested lambda. MSVC odr-uses
             // (captures) constexpr locals read from an enclosing lambda and then
-            // refuses them as non-type template arguments; see rms_norm.cu (RMSNormQK).
+            // refuses them as non-type template arguments; see rms_norm.cu (QkRMSNorm).
             constexpr int  kThreads = 512;
             constexpr int  kVecSize = 16 / sizeof(T);
             constexpr bool kHasBias = decltype(has_bias_c)::value;
@@ -286,7 +286,7 @@ void invokeResidualBiasLayerNorm(void*        hidden_states,
         auto launch = [&](auto has_norm_bias_c, auto has_residual_bias_c) {
             // Redeclare these as constexpr inside this nested lambda. MSVC odr-uses
             // (captures) constexpr locals read from an enclosing lambda and then
-            // refuses them as non-type template arguments; see rms_norm.cu (RMSNormQK).
+            // refuses them as non-type template arguments; see rms_norm.cu (QkRMSNorm).
             constexpr int  kThreads         = 512;
             constexpr int  kVecSize         = 16 / sizeof(T);
             constexpr bool kHasNormBias     = decltype(has_norm_bias_c)::value;
