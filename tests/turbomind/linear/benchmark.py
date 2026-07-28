@@ -186,8 +186,8 @@ def main(argv: list[str] | None = None) -> int:
             if export_path:
                 # Per-case export so a full-suite scan does not overwrite previous records;
                 # the dispatch cache is per-LinearFixture (per-Linear / per-Gemm).
-                suffix = f"{case_runs[0].case.name}__tp{case_runs[0].case.tp}__ep{case_runs[0].case.ep}"
-                fx.linear.export_records(f"{export_path}.{suffix}")
+                suffix = f'{case_runs[0].case.name}__tp{case_runs[0].case.tp}__ep{case_runs[0].case.ep}'
+                fx.linear.export_records(f'{export_path}.{suffix}')
         finally:
             fx.close()
             # Release PyTorch cache between case groups; the MoE cases can be large and

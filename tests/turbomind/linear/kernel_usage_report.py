@@ -47,19 +47,19 @@ def main(argv: list[str] | None = None) -> int:
     unused = {name: c for name, c in counts.items() if c == 0}
 
     if not args.unused_only:
-        print(f"SM90 BF16 kernels found in log: {len(counts)}")
-        print(f"  used   : {len(used)}")
-        print(f"  unused : {len(unused)}")
-        print(f"  total dispatch records across all case exports: {sum(counts.values())}")
+        print(f'SM90 BF16 kernels found in log: {len(counts)}')
+        print(f'  used   : {len(used)}')
+        print(f'  unused : {len(unused)}')
+        print(f'  total dispatch records across all case exports: {sum(counts.values())}')
         print()
         print('Used kernels (sorted by count):')
         for name, c in sorted(used.items(), key=lambda kv: (-kv[1], kv[0])):
-            print(f"  {c:6d}  {name}")
+            print(f'  {c:6d}  {name}')
         print()
 
     print('Unused kernels (candidates for pruning):')
     for name in sorted(unused):
-        print(f"  0  {name}")
+        print(f'  0  {name}')
 
     if args.json:
         args.json.write_text(json.dumps({

@@ -44,7 +44,7 @@ def main() -> int:
     only_new = set(new) - set(old)
     only_old = set(old) - set(new)
     if only_new or only_old:
-        print(f"problems only in new: {len(only_new)}, only in old: {len(only_old)}")
+        print(f'problems only in new: {len(only_new)}, only in old: {len(only_old)}')
 
     ratios = []
     improved, regressed = [], []
@@ -63,17 +63,17 @@ def main() -> int:
     for r in ratios:
         geo *= r
     geo **= 1.0 / n
-    print(f"problems: {n}  mean new/old={mean:.4f}  geomean={geo:.4f}")
-    print(f"improved >{args.threshold:.1%}: {len(improved)} ({len(improved)/n:.1%})  "
-          f"regressed: {len(regressed)} ({len(regressed)/n:.1%})")
+    print(f'problems: {n}  mean new/old={mean:.4f}  geomean={geo:.4f}')
+    print(f'improved >{args.threshold:.1%}: {len(improved)} ({len(improved)/n:.1%})  '
+          f'regressed: {len(regressed)} ({len(regressed)/n:.1%})')
 
     print('\n== top improvements ==')
     for r, key, o, nn in sorted(improved)[:15]:
-        print(f"{r:.3f}  {key[0]} {key[1]}  {o[0]:.4f}->{nn[0]:.4f}ms  "
+        print(f'{r:.3f}  {key[0]} {key[1]}  {o[0]:.4f}->{nn[0]:.4f}ms  '
               f"old={o[1].split('tnt_')[-1]} sw{o[2]} new={nn[1].split('tnt_')[-1]} sw{nn[2]}")
     print('\n== top regressions ==')
     for r, key, o, nn in sorted(regressed, reverse=True)[:15]:
-        print(f"{r:.3f}  {key[0]} {key[1]}  {o[0]:.4f}->{nn[0]:.4f}ms  "
+        print(f'{r:.3f}  {key[0]} {key[1]}  {o[0]:.4f}->{nn[0]:.4f}ms  '
               f"old={o[1].split('tnt_')[-1]} sw{o[2]} new={nn[1].split('tnt_')[-1]} sw{nn[2]}")
     return 0
 

@@ -43,14 +43,14 @@ def main() -> int:
     # Deterministic modulo split of the case list across GPUs.
     for i, gpu in enumerate(gpus):
         shard = [str(r) for j, r in enumerate(records) if j % len(gpus) == i]
-        (args.outdir / f"_shard{gpu}.txt").write_text('\n'.join(shard))
+        (args.outdir / f'_shard{gpu}.txt').write_text('\n'.join(shard))
 
     running = []
     for gpu in gpus:
         env = os.environ.copy()
         env['CUDA_VISIBLE_DEVICES'] = gpu
         env['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-        script = args.outdir / f"_run{gpu}.sh"
+        script = args.outdir / f'_run{gpu}.sh'
         script.write_text(f"""#!/bin/bash
 while read -r rec || [ -n "$rec" ]; do
   case_name="${{rec##*records.}}"; case_name="${{case_name%__tp1__ep1}}"
@@ -78,12 +78,12 @@ done < "{args.outdir}/_shard{gpu}.txt"
                 fails.append((name, rc))
     tracebacks = [p.stem for p in args.outdir.glob('*.log')
                   if 'Traceback' in p.read_text(errors='ignore')]
-    print(f"validated: {done}/{len(records)}  worker_rcs={rcs}")
-    print(f"nonzero exits: {len(fails)}  logs with Traceback: {len(tracebacks)}")
+    print(f'validated: {done}/{len(records)}  worker_rcs={rcs}')
+    print(f'nonzero exits: {len(fails)}  logs with Traceback: {len(tracebacks)}')
     for name, rc in fails:
-        print(f"  FAIL rc={rc}: {name}")
+        print(f'  FAIL rc={rc}: {name}')
     for name in tracebacks:
-        print(f"  TRACEBACK: {name}")
+        print(f'  TRACEBACK: {name}')
     return 0 if not fails and not tracebacks and done == len(records) else 1
 
 

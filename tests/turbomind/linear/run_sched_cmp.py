@@ -59,7 +59,7 @@ def main() -> int:
     args = p.parse_args()
 
     case_names = args.cases.split(',') if args.cases else discover_cases(args.kind)
-    print(f"cases: {len(case_names)}", file=sys.stderr)
+    print(f'cases: {len(case_names)}', file=sys.stderr)
 
     args.outdir.mkdir(parents=True, exist_ok=True)
 
@@ -70,7 +70,7 @@ def main() -> int:
     env['TM_GEMM_TUNE_VERBOSE'] = '1'
 
     for name in case_names:
-        log = args.outdir / f"{name}.log"
+        log = args.outdir / f'{name}.log'
         cmd = [
             sys.executable,
             'tests/turbomind/linear/bench_linear.py',
@@ -84,11 +84,11 @@ def main() -> int:
             '--no-validate',
             '--export', str(args.outdir / 'records'),
         ]
-        print(f"=== {name} ===", file=sys.stderr)
+        print(f'=== {name} ===', file=sys.stderr)
         with log.open('w') as f:
             rc = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, env=env,
                                  cwd=str(Path(__file__).resolve().parents[3]))
-        print(f"  exit={rc} log={log}", file=sys.stderr)
+        print(f'  exit={rc} log={log}', file=sys.stderr)
 
     return 0
 

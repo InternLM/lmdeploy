@@ -70,7 +70,7 @@ def run_chunk(
     ]
     with log.open('ab') as f:
         # Append a small marker so we know where each chunk starts.
-        f.write(f"\n# CHUNK: {case_names[0]} .. {case_names[-1]}\n".encode())
+        f.write(f'\n# CHUNK: {case_names[0]} .. {case_names[-1]}\n'.encode())
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -100,17 +100,17 @@ def worker(
 ) -> None:
     env = base_env.copy()
     env['CUDA_VISIBLE_DEVICES'] = gpu
-    log = outdir / f"bench.gpu{gpu}.log"
+    log = outdir / f'bench.gpu{gpu}.log'
     while True:
         try:
             chunk = chunks.get_nowait()
         except queue.Empty:
             return
         with lock:
-            print(f"[gpu{gpu}] start ({len(chunk)} cases): {chunk[0]} .. {chunk[-1]}", flush=True)
+            print(f'[gpu{gpu}] start ({len(chunk)} cases): {chunk[0]} .. {chunk[-1]}', flush=True)
         rc = run_chunk(chunk, type_name, outdir, log, env, python, tps, eps)
         with lock:
-            print(f"[gpu{gpu}] done rc={rc}: {chunk[0]} .. {chunk[-1]}", flush=True)
+            print(f'[gpu{gpu}] done rc={rc}: {chunk[0]} .. {chunk[-1]}', flush=True)
             if rc != 0:
                 failures.append(chunk)
 
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
 
     runs = expand_suite('full', None, None, (args.type,), tps=tps, eps=eps)
     names = sorted({r.case.name for r in runs})
-    print(f"Total {args.type} case names: {len(names)}, runs: {len(runs)}", file=sys.stderr)
+    print(f'Total {args.type} case names: {len(names)}, runs: {len(runs)}', file=sys.stderr)
 
     base_env = os.environ.copy()
     base_env['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     threads = [
         threading.Thread(
             target=worker,
-            args=(f"w{i}", gpu, chunks, args.type, args.outdir, base_env, args.python, tps, eps, failures, lock),
+            args=(f'w{i}', gpu, chunks, args.type, args.outdir, base_env, args.python, tps, eps, failures, lock),
         )
         for i, gpu in enumerate(gpus)
     ]
@@ -162,18 +162,18 @@ def main(argv: list[str] | None = None) -> int:
     merged = args.outdir / 'bench.log'
     with merged.open('wb') as out:
         for gpu in gpus:
-            part = args.outdir / f"bench.gpu{gpu}.log"
+            part = args.outdir / f'bench.gpu{gpu}.log'
             if part.exists():
                 out.write(part.read_bytes())
 
     if failures:
-        print(f"\n{len(failures)} chunk(s) failed:", file=sys.stderr)
+        print(f'\n{len(failures)} chunk(s) failed:', file=sys.stderr)
         for chunk in failures:
-            print(f"  {chunk[0]} .. {chunk[-1]}", file=sys.stderr)
+            print(f'  {chunk[0]} .. {chunk[-1]}', file=sys.stderr)
 
-    print(f"\nDone. Log: {merged}", file=sys.stderr)
+    print(f'\nDone. Log: {merged}', file=sys.stderr)
     print(
-        f"Aggregate usage: python tests/turbomind/linear/kernel_usage_report.py {merged}",
+        f'Aggregate usage: python tests/turbomind/linear/kernel_usage_report.py {merged}',
         file=sys.stderr,
     )
     return 1 if failures else 0

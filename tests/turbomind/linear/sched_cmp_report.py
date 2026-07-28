@@ -80,25 +80,25 @@ def main() -> int:
         row_str = f"{row_best if row_best else float('nan'):>9.4f}"
         col_str = f"{col_best if col_best else float('nan'):>9.4f}"
         print(f"{desc:<46} {w_order:<12} {(w_tile.group(1) if w_tile else ''):<14} "
-              f"{row_str} {col_str} {ratio:>8.3f}")
+              f'{row_str} {col_str} {ratio:>8.3f}')
         if args.detail:
             for base in sorted(per_tile):
                 v = per_tile[base]
                 r = v.get('row')
                 c = v.get('col')
                 tile = re.search(r'_(\d+x\d+x\d+)_', base).group(1)
-                r_s = f"{r:.4f}" if r else '-'
-                c_s = f"{c:.4f}" if c else '-'
+                r_s = f'{r:.4f}' if r else '-'
+                c_s = f'{c:.4f}' if c else '-'
                 mark = ''
                 if r and c:
-                    mark = f"row/col={r / c:.3f}"
-                print(f"    {tile:<12} row={r_s:<9} col={c_s:<9} {mark}")
+                    mark = f'row/col={r / c:.3f}'
+                print(f'    {tile:<12} row={r_s:<9} col={c_s:<9} {mark}')
 
-    print(f"\noverall winner scheduler: row={n_row_wins} col={n_col_wins} (of {len(best)} problems)")
+    print(f'\noverall winner scheduler: row={n_row_wins} col={n_col_wins} (of {len(best)} problems)')
 
     print('\nbenchmark rows (tuned winner tflops):')
     for (case, m), tf in sorted(rows.items()):
-        print(f"  {case:<52} m={m:<6} {tf:8.2f} TFLOPS")
+        print(f'  {case:<52} m={m:<6} {tf:8.2f} TFLOPS')
     return 0
 
 
