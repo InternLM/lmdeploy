@@ -631,7 +631,8 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         tail_lens = torch.where(q_seqlens > 0, tail_lens, torch.zeros_like(tail_lens))
         has_tail = tail_lens > 0
 
-        tail_rows = source_states.new_zeros((batch_size, source_states.size(1), source_states.size(2)))
+        tail_rows = source_states.new_zeros((batch_size, source_states.size(1), source_states.size(2)),
+                                            dtype=torch.float32)
         if source_states.size(0) == 0:
             return tail_rows
         if self.merge_method == 'first':
@@ -651,7 +652,7 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         token_pos = token_ids - cu_q_seqlens[token_seq]
         token_tail_start = q_seqlens[token_seq] - tail_lens[token_seq]
         valid_tail = (tail_lens[token_seq] > 0) & (token_pos >= token_tail_start)
-        weighted_source = source_states * valid_tail.to(dtype=source_states.dtype).view(-1, 1, 1)
+        weighted_source = source_states.float() * valid_tail.to(dtype=torch.float32).view(-1, 1, 1)
         tail_rows.index_add_(0, token_seq, weighted_source)
         return tail_rows
 
@@ -814,7 +815,9 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
 
         valid_state_mask = state_ids >= 0
         safe_state_ids = state_ids.clamp(min=0)
+        accumulator_dtype = chunk_source_state_cache.dtype
         previous_rows = chunk_source_state_cache.index_select(0, safe_state_ids)
+        current_rows = current_source_states.to(dtype=accumulator_dtype)
 
         chunk_size = int(chunk_size)
         chunk_pos = torch.remainder(position_ids, chunk_size)
@@ -823,19 +826,24 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         merge_method = str(merge_method)
 
         if merge_method == 'first':
-            update_rows = torch.where(first_token_mask.view(batch_size, 1, 1), current_source_states, previous_rows)
+            update_rows = torch.where(first_token_mask.view(batch_size, 1, 1), current_rows, previous_rows)
             concept_input_states = update_rows
         elif merge_method == 'last':
-            update_rows = current_source_states
-            concept_input_states = current_source_states
+            update_rows = current_rows
+            concept_input_states = current_rows
         else:
-            update_rows = previous_rows + current_source_states
+            update_rows = previous_rows + current_rows
             concept_input_states = update_rows / chunk_size
 
         zero_rows = torch.zeros_like(update_rows)
         next_rows = torch.where(update_mask.view(batch_size, 1, 1), zero_rows, update_rows)
         next_rows = torch.where(valid_state_mask.view(batch_size, 1, 1), next_rows, previous_rows)
-        concept_input_states = torch.where(update_mask.view(batch_size, 1, 1), concept_input_states, zero_rows)
+        concept_zero_rows = torch.zeros_like(current_source_states)
+        concept_input_states = torch.where(
+            update_mask.view(batch_size, 1, 1),
+            concept_input_states.to(dtype=current_source_states.dtype),
+            concept_zero_rows,
+        )
 
         for batch_idx in range(batch_size):
             state_id = int(state_ids[batch_idx])

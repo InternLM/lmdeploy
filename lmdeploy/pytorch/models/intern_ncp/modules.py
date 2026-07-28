@@ -877,9 +877,9 @@ class OlmoBlock(nn.Module):
     @staticmethod
     def _layer_sliding_window(layer_number: int, window_size: int | None, skip_frequency: int | None):
         """Match reference OLMo window/full attention alternation."""
-        if window_size is None:
+        if window_size is None or skip_frequency is None:
             return None
-        if skip_frequency is not None and layer_number % skip_frequency == 0:
+        if layer_number % skip_frequency == 0:
             return None
         return window_size
 

@@ -68,12 +68,18 @@ class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
         model_config.llm_config.concept_kv_total_layers = model_config.num_layers
 
         hidden_size = int(hf_config.hidden_size)
-        state_dtype = _get_concept_state_dtype(hf_config)
+        last_state_dtype = _get_concept_state_dtype(hf_config)
         concept_encoder_read_sources = max(enc_layers - 1, 0)
         # Decode accumulates the current chunk for every state needed when a
-        # chunk boundary emits one concept. Row 0 is the final encoder hidden
-        # used as concept-predictor input; following rows are encoder raw states
-        # consumed by concept-read-encoder residual routes.
+        # chunk boundary emits one concept. Keep this accumulator in fp32 to
+        # match the reference chunk merge: reduce the whole chunk, then cast the
+        # emitted concept input back to model dtype. Using bf16 here would round
+        # the partial sum after every decode token and drift from full-forward
+        # semantics.
+        #
+        # Row 0 is the final encoder hidden used as concept-predictor input;
+        # following rows are encoder raw states consumed by concept-read-encoder
+        # residual routes.
         concept_chunk_state_sources = 1 + concept_encoder_read_sources
         # Last emitted concept snapshot. Row 0 is the final concept vector,
         # rows 1: are raw concept-layer states. Keep this packed so decode can
@@ -81,9 +87,9 @@ class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
         concept_last_state_sources = 1 + concept_layers
         state_specs = [
             StateCacheSpec(CONCEPT_STATE_NAMES[CONCEPT_STATE_CHUNK_SOURCE],
-                           (concept_chunk_state_sources, hidden_size), state_dtype),
+                           (concept_chunk_state_sources, hidden_size), torch.float32),
             StateCacheSpec(CONCEPT_STATE_NAMES[CONCEPT_STATE_LAST], (concept_last_state_sources, hidden_size),
-                           state_dtype),
+                           last_state_dtype),
         ]
         model_config.state_cache_specs = state_specs
         # Backward-compat bridge used by scheduler/state-cache sizing. The
