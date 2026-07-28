@@ -86,6 +86,11 @@ def test_generate_input_logprob_validation():
                          logprob_start_len=0,
                          max_tokens=0), context) == ''
 
+    assert 'not enabled logprobs_mode' in check_request(
+        GenerateReqInput(prompt='Paris is the capital of',
+                         max_tokens=2,
+                         return_logprob=True),
+        _ServerContext(PytorchEngineConfig(role=EngineRole.Hybrid)))
     assert check_request(
         GenerateReqInput(prompt='Paris is the capital of',
                          max_tokens=2,
