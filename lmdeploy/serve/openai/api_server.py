@@ -277,16 +277,15 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
     return ChoiceLogprobs(content=content)
 
 
-def _create_output_token_logprobs(token_ids: list[int] | None = None,
-                                  logprobs: list[dict[int, float]] | None = None):
-    """Create raw (logprob, token_id) pairs for output tokens."""
+def _create_token_logprobs(token_ids: list[int] | None = None,
+                           logprobs: list[dict[int, float]] | None = None):
+    """Create raw (logprob, token_id) pairs."""
     if token_ids is None or logprobs is None:
         return None
 
-    output_token_logprobs = []
-    for tok, tok_logprobs in zip(token_ids, logprobs):
-        output_token_logprobs.append((tok_logprobs[tok], tok))
-    return output_token_logprobs or None
+    token_logprobs = [(tok_logprobs[tok], tok)
+                      for tok, tok_logprobs in zip(token_ids, logprobs, strict=True)]
+    return token_logprobs or None
 
 
 @router.get('/health')
@@ -593,7 +592,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.logprobs and res.logprobs:
                 logprobs = _create_chat_completion_logprobs(tokenizer, res.token_ids, res.logprobs)
             if request.return_logprob:
-                output_token_logprobs = _create_output_token_logprobs(res.token_ids, res.logprobs)
+                output_token_logprobs = _create_token_logprobs(res.token_ids, res.logprobs)
             if res.finish_reason and include_usage:
                 final_usage = UsageInfo.build(
                     prompt_tokens=res.input_token_len,
@@ -712,7 +711,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         logprobs = _create_chat_completion_logprobs(tokenizer, final_token_ids, final_logprobs)
     output_token_logprobs = None
     if request.return_logprob and len(final_logprobs):
-        output_token_logprobs = _create_output_token_logprobs(final_token_ids, final_logprobs)
+        output_token_logprobs = _create_token_logprobs(final_token_ids, final_logprobs)
 
     assert final_res is not None
     choices = []
@@ -983,10 +982,15 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     if error_check_ret is not None:
         return error_check_ret
 
-    session = VariableInterface.create_session(request.session_id)
-
     prompt = request.prompt
     input_ids = request.input_ids
+    input_logprobs_requested = request.logprob_start_len >= 0
+    input_logprob_token_ids = (input_ids[request.logprob_start_len + 1:]
+                               if input_logprobs_requested
+                               and input_ids is not None else None)
+
+    session = VariableInterface.create_session(request.session_id)
+
     image_data = request.image_data
     if image_data is not None:
         # convert to openai format
@@ -1005,6 +1009,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     gen_config = _build_serving_generation_config(
         request,
         logprobs=1 if request.return_logprob else None,
+        logprob_start_len=request.logprob_start_len,
         stop_words=request.stop,
     )
 
@@ -1018,11 +1023,18 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
-    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
+    def create_generate_response_json(res,
+                                      text,
+                                      output_ids,
+                                      logprobs,
+                                      input_logprobs,
+                                      finish_reason,
+                                      routed_experts=None):
         # only output router experts in last chunk
         routed_experts = None if finish_reason is None else routed_experts
         meta = GenerateReqMetaOutput(finish_reason=dict(type=finish_reason) if finish_reason else None,
-                                     output_token_logprobs=logprobs or None,
+                                     output_token_logprobs=logprobs,
+                                     input_token_logprobs=input_logprobs,
                                      prompt_tokens=res.input_token_len,
                                      routed_experts=routed_experts,
                                      completion_tokens=res.generate_token_len)
@@ -1035,14 +1047,17 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
             text = res.response or ''
             output_ids = res.token_ids
             routed_experts = res.routed_experts
-            logprobs = []
-            if res.logprobs:
-                for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
-                    logprobs.append((tok_logprobs[tok], tok))
+            if input_logprobs_requested:
+                logprobs = None
+                input_logprobs = _create_token_logprobs(input_logprob_token_ids, res.logprobs)
+            else:
+                logprobs = _create_token_logprobs(res.token_ids, res.logprobs)
+                input_logprobs = None
             response_json = create_generate_response_json(res,
                                                           text,
                                                           output_ids,
                                                           logprobs,
+                                                          input_logprobs,
                                                           res.finish_reason,
                                                           routed_experts=routed_experts)
             yield f'data: {response_json}\n\n'
@@ -1058,6 +1073,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''
         output_ids = []
         logprobs = []
+        input_token_logprobs = None
         async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
             async for res in generator:
                 if await raw_request.is_disconnected():
@@ -1066,16 +1082,20 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                     return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
                 text += res.response or ''
                 output_ids.extend(res.token_ids or [])
-                logprobs.extend(res.logprobs or [])
+                if input_logprobs_requested:
+                    cur_input_logprobs = _create_token_logprobs(input_logprob_token_ids,
+                                                                      res.logprobs)
+                    if cur_input_logprobs is not None:
+                        input_token_logprobs = cur_input_logprobs
+                elif res.logprobs:
+                    logprobs.extend(res.logprobs)
 
-        output_token_logprobs = []
-        if len(logprobs) and len(output_ids):
-            for tok, tok_logprobs in zip(output_ids, logprobs):
-                output_token_logprobs.append((tok_logprobs[tok], tok))
+        output_token_logprobs = _create_token_logprobs(output_ids, logprobs) if logprobs else None
 
         nonlocal response
         meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
                                      output_token_logprobs=output_token_logprobs or None,
+                                     input_token_logprobs=input_token_logprobs,
                                      prompt_tokens=res.input_token_len,
                                      routed_experts=res.routed_experts,
                                      completion_tokens=res.generate_token_len)

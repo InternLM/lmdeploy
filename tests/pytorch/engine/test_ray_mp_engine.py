@@ -1,6 +1,8 @@
 import asyncio
 from contextlib import suppress
 
+import pytest
+
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.engine.mp_engine.base_worker import EngineOutputGather
 from lmdeploy.pytorch.engine.mp_engine.ray_engine import RayEngineWorker, RayMPEngine
@@ -88,14 +90,15 @@ async def _async_test_ray_get_stream_task_result_after_drop_is_idempotent():
 
     stream_id = 123
     event = asyncio.Event()
-    stream_out = [event, None]
+    stream_out = [event, None, False]
     worker._stream_aiter[stream_id] = stream_out
 
     get_task = asyncio.create_task(worker.get_stream_task_result(stream_id))
     await asyncio.sleep(0)
     worker._stream_aiter.pop(stream_id)
 
-    stream_out[1] = (EngineOutput(ResponseType.FINISH, [7]), True)
+    stream_out[1] = EngineOutput(ResponseType.FINISH, [7])
+    stream_out[2] = True
     event.set()
     result, stopped = await asyncio.wait_for(get_task, timeout=1)
 
@@ -106,3 +109,69 @@ async def _async_test_ray_get_stream_task_result_after_drop_is_idempotent():
 
 def test_ray_get_stream_task_result_after_drop_is_idempotent():
     asyncio.run(_async_test_ray_get_stream_task_result_after_drop_is_idempotent())
+
+
+async def _async_test_ray_completion_wakeup_does_not_replay_output():
+    worker = RayEngineWorker.__new__(RayEngineWorker)
+    worker._stream_id = 0
+    worker._stream_aiter = {}
+    worker._stream_task = {}
+    worker._engine_output_gather = EngineOutputGather()
+    allow_finish = asyncio.Event()
+
+    async def stream(notify_add_msg_func=None):
+        notify_add_msg_func()
+        yield EngineOutput(ResponseType.FINISH, [], logprobs=[{2: -0.5}])
+        await allow_finish.wait()
+
+    worker.instance_async_stream_infer = stream
+    stream_id = await worker.create_stream_task(
+        'instance_async_stream_infer')
+
+    first, stopped = await worker.get_stream_task_result(stream_id)
+    assert stopped is False
+    assert first.logprobs == [{2: -0.5}]
+
+    allow_finish.set()
+    second, stopped = await worker.get_stream_task_result(stream_id)
+    assert stopped is True
+    assert second is None
+
+
+def test_ray_completion_wakeup_does_not_replay_output():
+    asyncio.run(_async_test_ray_completion_wakeup_does_not_replay_output())
+
+
+async def _async_test_ray_completion_keeps_unconsumed_empty_carrier():
+    worker = RayEngineWorker.__new__(RayEngineWorker)
+    worker._stream_id = 0
+    worker._stream_aiter = {}
+    worker._stream_task = {}
+    worker._engine_output_gather = EngineOutputGather()
+
+    async def stream(notify_add_msg_func=None):
+        notify_add_msg_func()
+        yield EngineOutput(ResponseType.FINISH, [], logprobs=[])
+
+    worker.instance_async_stream_infer = stream
+    stream_id = await worker.create_stream_task(
+        'instance_async_stream_infer')
+    await worker._stream_task[stream_id]
+
+    result, stopped = await worker.get_stream_task_result(stream_id)
+    assert stopped is True
+    assert result.logprobs == []
+    assert stream_id not in worker._stream_aiter
+
+
+def test_ray_completion_keeps_unconsumed_empty_carrier():
+    asyncio.run(_async_test_ray_completion_keeps_unconsumed_empty_carrier())
+
+
+@pytest.mark.parametrize('carrier', [None, [], [{2: -0.5}]])
+def test_engine_output_gather_preserves_logprob_carrier_states(carrier):
+    gather = EngineOutputGather()
+    final = EngineOutput(ResponseType.FINISH, [], logprobs=carrier)
+    gather.add(1, final)
+    assert gather.pop(1, final).logprobs == carrier
+    assert 1 not in gather._output

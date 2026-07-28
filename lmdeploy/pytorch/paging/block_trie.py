@@ -1007,7 +1007,7 @@ class BlockTrie:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_INDEX_ENTRY,
                                                reason='checkpoint adapter differs from lookup adapter')
 
-        max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
+        max_step = seq.get_prefix_cache_max_candidate_step()
         if step > max_step:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
                                                reason='checkpoint is longer than this request')
@@ -1046,15 +1046,20 @@ class BlockTrie:
         init_num_matched = init_curr.num_matched
 
         recompute_blocks = max(0, seq.prefix_cache.match_recompute_blocks)
+        max_candidate_step = seq.get_prefix_cache_max_candidate_step()
+        normal_candidate_step = max(0, seq.num_valid_ids - 1)
+        input_scoring_caps_match = max_candidate_step < normal_candidate_step
         raw_match_step = -1
-        if recompute_blocks == 0:
-            max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
+        if recompute_blocks == 0 and not input_scoring_caps_match:
+            max_step = seq.get_prefix_cache_max_match_step()
         else:
-            # SSM checkpoint lookup is sparse, but MTP overlap needs the raw KV
-            # trie depth so the whole checkpoint-to-raw-hit span stays private.
+            # SSM checkpoint lookup is sparse, but both MTP overlap and input
+            # scoring need the raw KV trie depth so the whole
+            # checkpoint-to-raw-hit span stays private while it is recomputed.
             raw_match_step = self._find_raw_block_match_step(seq, init_curr)
-            max_step = max(init_num_matched, raw_match_step - recompute_blocks * self.block_size)
-        max_step = seq.clamp_prefix_cache_match_step(max_step)
+            capped_match_step = seq.clamp_prefix_cache_match_step(min(raw_match_step, max_candidate_step))
+            max_step = max(init_num_matched, capped_match_step - recompute_blocks * self.block_size)
+            max_step = seq.clamp_prefix_cache_match_step(max_step)
         steps = self._state_checkpoint_steps.get(seq.adapter_name, ())
         for step in sorted((step for step in steps if init_num_matched < step <= max_step), reverse=True):
             if seq.clamp_prefix_cache_match_step(step) != step:
@@ -1086,8 +1091,7 @@ class BlockTrie:
                 seq.prefix_cache.restore_state = node.state_idx
                 seq.prefix_cache.restore_node = node
                 seq.prefix_cache.last_shared_node = node
-                if recompute_blocks > 0:
-                    self._set_private_recompute_range(seq, step, raw_match_step)
+                self._set_private_recompute_range(seq, step, raw_match_step)
                 self._record_match_stats(seq,
                                          query_tokens=seq.num_all_ids - init_num_matched,
                                          hit_tokens=step - init_num_matched)
@@ -1098,7 +1102,10 @@ class BlockTrie:
                 return
 
         seq.prefix_cache.last_shared_node = init_curr
-        self._clear_private_recompute_range(seq)
+        if raw_match_step > init_num_matched:
+            self._set_private_recompute_range(seq, init_num_matched, raw_match_step)
+        else:
+            self._clear_private_recompute_range(seq)
         self._record_match_stats(seq, query_tokens=seq.num_all_ids - init_num_matched)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'SSM prefix-cache miss: session_id={seq.session_id} seq_id={seq.seq_id} '
@@ -1180,9 +1187,9 @@ class BlockTrie:
                 curr = init_curr
                 num_matched = init_num_matched
 
-        max_match_step = seq.get_prefix_cache_max_match_step()
         raw_num_matched = num_matched
-        effective_num_matched = seq.clamp_prefix_cache_match_step(min(raw_num_matched, max_match_step))
+        effective_num_matched = seq.clamp_prefix_cache_match_step(
+            min(raw_num_matched, seq.get_prefix_cache_max_match_step()))
         __clamp_match_step(effective_num_matched)
         self._set_private_recompute_range(seq, num_matched, raw_num_matched)
 
@@ -1205,7 +1212,7 @@ class BlockTrie:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f'Prefix-cache match: session_id={seq.session_id} seq_id={seq.seq_id} '
                          f'init_step={init_num_matched} matched_step={num_matched} '
-                         f'candidate_step={raw_num_matched} '
+                         f'effective_step={effective_num_matched} raw_candidate_step={raw_num_matched} '
                          f'clamped={effective_num_matched != raw_num_matched}')
 
     def allocate(self, seq: SchedulerSequence):

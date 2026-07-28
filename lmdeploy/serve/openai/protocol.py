@@ -545,6 +545,7 @@ class GenerateReqInput(BaseModel):
     input_ids: list[int] | None = None
     image_data: ImageDataFormat | None = None
     return_logprob: bool | None = None
+    logprob_start_len: int = Field(default=-1, ge=-1)
     max_tokens: int = 128
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
@@ -578,6 +579,7 @@ class GenerateReqMetaOutput(BaseModel):
     completion_tokens: int | None = None
     finish_reason: dict[str, Any] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
+    input_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
     routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
 
 

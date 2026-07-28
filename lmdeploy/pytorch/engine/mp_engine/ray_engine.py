@@ -39,7 +39,8 @@ class RayEngineWorker(EngineWorkerBase):
     async def _stream_task_wrapper(self, stream_id: int, init_event: asyncio.Event, func: str, *args, **kwargs):
         """Create a stream task."""
         method = getattr(self, func)
-        event = self._stream_aiter[stream_id][0]
+        stream_out = self._stream_aiter[stream_id]
+        event = stream_out[0]
 
         # notify after add msg
         def _notify_add_msg():
@@ -50,18 +51,28 @@ class RayEngineWorker(EngineWorkerBase):
             kwargs['notify_add_msg_func'] = _notify_add_msg
 
         result = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+        has_yielded = False
+        failed = False
         try:
             generator = method(*args, **kwargs)
             async for result in generator:
+                has_yielded = True
                 self._engine_output_gather.add(stream_id, result)
-                self._stream_aiter[stream_id][1] = (result, False)
+                stream_out[1] = result
                 event.set()
         except Exception:
+            failed = True
+            result = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
             logger.exception(f'Stream task {stream_id} failed.')
         finally:
             if not init_event.is_set():
                 init_event.set()
-            self._stream_aiter[stream_id][1] = (result, True)
+            # Completion is a wake-up, not another copy of the last output.
+            # Keep an unconsumed result in place and mark the stream stopped;
+            # if it was already consumed, wake the poller with result=None.
+            stream_out[2] = True
+            if failed or (not has_yielded and stream_out[1] is None):
+                stream_out[1] = result
             event.set()
 
     async def create_stream_task(self, func, *args, **kwargs):
@@ -69,7 +80,9 @@ class RayEngineWorker(EngineWorkerBase):
         stream_id = self._stream_id
         self._stream_id += 1
         event_loop = asyncio.get_event_loop()
-        self._stream_aiter[stream_id] = [asyncio.Event(), None]
+        # [wake event, pending result, stopped].  The stopped flag is kept
+        # separately so the completion wake-up cannot replay the last result.
+        self._stream_aiter[stream_id] = [asyncio.Event(), None, False]
         init_event = asyncio.Event()
         task = event_loop.create_task(self._stream_task_wrapper(stream_id, init_event, func, *args, **kwargs))
         self._stream_task[stream_id] = task
@@ -84,13 +97,13 @@ class RayEngineWorker(EngineWorkerBase):
             return None, True
         event = stream_out[0]
         await event.wait()
-        stream_result = stream_out[1]
+        result = stream_out[1]
+        stopped = stream_out[2]
+        stream_out[1] = None
         event.clear()
-        if stream_result is None:
-            return None, True
-        result, stopped = stream_result
 
-        result = self._engine_output_gather.pop(stream_id, result)
+        if result is not None:
+            result = self._engine_output_gather.pop(stream_id, result)
 
         if stopped:
             self._stream_aiter.pop(stream_id, None)
@@ -123,8 +136,7 @@ class RayEngineWorker(EngineWorkerBase):
                 logger.exception(f'Ray MP abandoned stream task failed during drop: stream_id={stream_id}.')
         if stream_out is not None:
             event = stream_out[0]
-            if stream_out[1] is None:
-                stream_out[1] = (None, True)
+            stream_out[2] = True
             event.set()
         self._stream_aiter.pop(stream_id, None)
         self._stream_task.pop(stream_id, None)
