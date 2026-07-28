@@ -108,7 +108,7 @@ def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) ->
 
 def _fused_silu_block(w1: Linear) -> int | None:
     """Return the gate/up block width required by the fused SiLU kernel."""
-    if w1.weight_format.name == 'fp8':
+    if w1.weight_format.name == 'fp8' and _is_sm90():
         return _SM90_FP8_FUSED_SILU_BLOCK
     if _is_sm90() and w1.tensors['weight'].dtype == torch.bfloat16:
         return _SM90_BF16_FUSED_SILU_BLOCK
