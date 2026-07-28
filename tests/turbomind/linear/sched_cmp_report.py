@@ -8,6 +8,7 @@ Kernel-name suffix: `_00` = col-major scheduler, `_01` = row-major scheduler.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from collections import defaultdict
@@ -58,7 +59,7 @@ def main() -> int:
             elif "{'case':" in line:
                 mrow = ROW_RE.search(line)
                 if mrow:
-                    d = eval(mrow.group(0))  # noqa: S307 - benchmark's own row dict
+                    d = ast.literal_eval(mrow.group(0))
                     if d.get('tflops'):
                         rows[(case, d['m'])] = d['tflops']
 

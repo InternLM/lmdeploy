@@ -1,5 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <cstdlib>
+#include <iostream>
+
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/registry.h"

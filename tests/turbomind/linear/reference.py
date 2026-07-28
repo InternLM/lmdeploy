@@ -71,7 +71,7 @@ def quantize_symm_row_fp8(
         qmax: float = 448.0):
     """Match QuantizeSymm: per-row group-absmax → e4m3 + float scales [ceil(N/gs), M].
 
-    Returns (fp8_tensor as uint8 view for storage, scales float32, dequant bf16).
+    Returns (fp8 e4m3 tensor, scales float32, dequant bf16).
     """
     m, n = src.shape
     xf = src.float()

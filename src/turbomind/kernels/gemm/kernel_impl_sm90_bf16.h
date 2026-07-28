@@ -20,7 +20,7 @@
 
 namespace turbomind::gemm {
 
-extern __shared__ char smem_buf[];
+extern __shared__ __align__(1024) char smem_buf[];
 
 // Distinct symbol from gemm_kernel_sm90 (FP8) to avoid ODR clash.
 template<class Kernel>
