@@ -37,6 +37,14 @@ class _FakeServerContext:
             session_mgr=_FakeSessionManager(),
         )
 
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
+
+    @property
+    def session_manager(self):
+        return self.async_engine.session_mgr
+
 
 def test_merge_gen_config_priority():
     merged = merge_gen_config(

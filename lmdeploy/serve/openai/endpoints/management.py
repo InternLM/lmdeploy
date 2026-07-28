@@ -170,6 +170,6 @@ def register(router: APIRouter, server_context) -> None:
                     HTTPStatus.BAD_REQUEST,
                     f'Session {request.session_id} not found.')
             await session.async_abort()
-            session_mgr = server_context.async_engine.session_mgr
+            session_mgr = server_context.session_manager
             session_mgr.remove(session)
         return Response(status_code=200)

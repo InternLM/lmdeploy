@@ -146,6 +146,14 @@ class _FakeServerContext:
         self.default_gen_config = {}
         self.response_parser_cls = response_parser_cls
 
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
+
+    @property
+    def session_manager(self):
+        return self.async_engine.session_mgr
+
     def create_session(self, _session_id: int | None = None):
         return self.session_mgr.get()
 

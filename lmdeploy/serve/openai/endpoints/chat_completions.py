@@ -42,8 +42,8 @@ logger = get_logger('lmdeploy')
 
 
 def check_request(request: ChatCompletionRequest, server_context) -> str:
-    engine_config = server_context.async_engine.backend_config
-    session_manager = server_context.async_engine.session_mgr
+    engine_config = server_context.engine_config
+    session_manager = server_context.session_manager
     try:
         # Check logprobs settings
         logprobs_mode = engine_config.logprobs_mode
@@ -530,7 +530,7 @@ def register(router: APIRouter, server_context) -> None:
         if request.stream:
             stream_generator = with_request_cleanup(
                 completion_stream_generator(), [result_generator], [session],
-                server_context.async_engine.session_mgr)
+                server_context.session_manager)
             return StreamingResponse(stream_generator,
                                      media_type='text/event-stream')
 
@@ -544,7 +544,7 @@ def register(router: APIRouter, server_context) -> None:
         async with aclosing(
                 with_request_cleanup(
                     result_generator, [result_generator], [session],
-                    server_context.async_engine.session_mgr)) as generator:
+                    server_context.session_manager)) as generator:
             async for res in generator:
                 if await raw_request.is_disconnected():
                     # Abort the request if the client disconnects.

@@ -18,7 +18,7 @@ def register(router: APIRouter, server_context) -> None:
 
     @router.get('/distserve/engine_info')
     async def engine_info():
-        engine_config = server_context.async_engine.backend_config
+        engine_config = server_context.engine_config
 
         response = DistServeEngineConfig(
             tp_size=engine_config.tp,

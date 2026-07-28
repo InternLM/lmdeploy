@@ -61,8 +61,16 @@ class ServerContext:
         self.response_parser_cls: type[ResponseParser] | None = None
         self.default_gen_config: dict = {}
 
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
+
+    @property
+    def session_manager(self):
+        return self.async_engine.session_mgr
+
     def create_session(self, user_session_id: int | None = None) -> Session:
-        session_mgr = self.async_engine.session_mgr
+        session_mgr = self.session_manager
         if user_session_id is None or user_session_id == -1:
             # user doesn't input session_id, so we need to generate a new one
             session = session_mgr.get()
@@ -80,7 +88,7 @@ class ServerContext:
 
         Users cannot access inner session_id directly.
         """
-        session_mgr = self.async_engine.session_mgr
+        session_mgr = self.session_manager
         session_id = session_mgr.user_session_id_map.get(user_session_id, None)
         if session_id is None:
             return None
@@ -116,7 +124,7 @@ async def startup_event():
         return
     try:
         import requests
-        engine_config = server_context.async_engine.backend_config
+        engine_config = server_context.engine_config
         engine_role = engine_config.role.value if hasattr(
             engine_config, 'role') else 1
         url = f'{server_context.proxy_url}/nodes/add'
