@@ -1,0 +1,20 @@
+[package]
+name = "lmdeploy-serving"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+lmdeploy-parser = { path = "../lmdeploy-parser" }
+minijinja.workspace = true
+minijinja-contrib.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokenizers.workspace = true
+tokio.workspace = true
+turbomind-runtime = { path = "../turbomind-runtime" }
+uuid.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "turbomind-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio.workspace = true
+turbomind-sys = { path = "../turbomind-sys" }

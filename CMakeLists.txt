@@ -40,6 +40,7 @@ set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
 
 option(BUILD_MULTI_GPU "Build multi-gpu support" ON)
 option(BUILD_PY_FFI "Build python ffi" ON)
+option(BUILD_RUST_API_SERVER "Build the Rust TurboMind API server" ON)
 option(BUILD_TEST "Build tests" OFF)
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 option(BUILD_FAST_MATH "Build in fast math mode" ON)
@@ -122,6 +123,13 @@ if(NOT xgrammar_POPULATED)
   if(TARGET xgrammar)
     target_compile_options(xgrammar PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     target_compile_options(xgrammar PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
+    # xgrammar unconditionally enables GCC LTO.  Combining its LTO objects with
+    # the Rust static library can trigger a GCC 11 lto-partition ICE while
+    # linking _turbomind, so keep this dependency as ordinary PIC objects for
+    # Rust-enabled builds.
+    if(BUILD_RUST_API_SERVER AND NOT MSVC)
+      target_compile_options(xgrammar PRIVATE -fno-lto)
+    endif()
   endif()
 endif()
 

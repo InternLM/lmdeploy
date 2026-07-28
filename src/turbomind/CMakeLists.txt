@@ -21,11 +21,9 @@ add_subdirectory(generation)
 add_subdirectory(models)
 add_subdirectory(engine)
 
-if(BUILD_PY_FFI)
-    add_subdirectory(python)
-endif()
-
-add_library(turbomind STATIC turbomind.cc)
+add_library(turbomind STATIC
+        turbomind.cc
+        rust/c_api.cc)
 set_property(TARGET turbomind PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(turbomind PUBLIC
         engine
@@ -40,3 +38,43 @@ target_link_libraries(turbomind PUBLIC
         CUDA::cublasLt
         CUDA::cudart
         )
+
+if(BUILD_RUST_API_SERVER)
+    find_program(CARGO_EXECUTABLE cargo
+                 HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
+    if(NOT CARGO_EXECUTABLE)
+        message(FATAL_ERROR
+                "BUILD_RUST_API_SERVER=ON requires Cargo. Install Rust with rustup and ensure cargo is on PATH.")
+    endif()
+    file(GLOB_RECURSE RUST_API_SERVER_SOURCES CONFIGURE_DEPENDS
+         "${PROJECT_SOURCE_DIR}/rust/Cargo.toml"
+         "${PROJECT_SOURCE_DIR}/rust/Cargo.lock"
+         "${PROJECT_SOURCE_DIR}/rust/crates/*.toml"
+         "${PROJECT_SOURCE_DIR}/rust/crates/*.rs")
+    set(RUST_TARGET_DIR "${CMAKE_BINARY_DIR}/rust-target")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(RUST_PROFILE_DIR "debug")
+        set(RUST_PROFILE_ARG)
+    else()
+        set(RUST_PROFILE_DIR "release")
+        set(RUST_PROFILE_ARG --release)
+    endif()
+    set(RUST_API_SERVER_LIBRARY
+        "${RUST_TARGET_DIR}/${RUST_PROFILE_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}rust_api_server${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    add_custom_command(
+        OUTPUT "${RUST_API_SERVER_LIBRARY}"
+        COMMAND "${CMAKE_COMMAND}" -E env "CARGO_TARGET_DIR=${RUST_TARGET_DIR}"
+                "${CARGO_EXECUTABLE}" build --locked -p rust-api-server --features ffi ${RUST_PROFILE_ARG}
+        DEPENDS ${RUST_API_SERVER_SOURCES}
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/rust"
+        COMMENT "Building Rust API server"
+        VERBATIM)
+    add_custom_target(rust_api_server_build DEPENDS "${RUST_API_SERVER_LIBRARY}")
+    add_library(rust_api_server STATIC IMPORTED GLOBAL)
+    set_target_properties(rust_api_server PROPERTIES IMPORTED_LOCATION "${RUST_API_SERVER_LIBRARY}")
+    add_dependencies(rust_api_server rust_api_server_build)
+endif()
+
+if(BUILD_PY_FFI)
+    add_subdirectory(python)
+endif()

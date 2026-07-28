@@ -15,7 +15,15 @@ endif()
 pybind11_add_module(${PROJECT_NAME}
     bind.cpp
     ../kernels/linear_attn/python_bind.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
+if(BUILD_RUST_API_SERVER)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE LMDEPLOY_ENABLE_RUST_API_SERVER=1)
+  target_link_libraries(${PROJECT_NAME} PRIVATE rust_api_server turbomind xgrammar Threads::Threads ${CMAKE_DL_LIBS})
+  if(NOT WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE m)
+  endif()
+else()
+  target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
+endif()
 
 pybind11_add_module(_xgrammar xgrammar_bind.cpp)
 target_link_libraries(_xgrammar PRIVATE core xgrammar)
