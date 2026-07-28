@@ -488,16 +488,22 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert node.state_checkpoint.published
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
-    def test_match_ssm_releases_detached_stale_checkpoint_candidate(self, ssm_scheduler):
+    def test_match_ssm_releases_detached_partial_checkpoint(self, ssm_scheduler, monkeypatch):
         block_size = ssm_scheduler.seq_meta.block_size
-        token_ids = [1] * block_size + [2] * block_size
-        _, node, _ = self._add_published_ssm_checkpoint(ssm_scheduler, token_ids)
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        _, node, state_idx = self._add_published_ssm_checkpoint(ssm_scheduler, token_ids)
         block_trie = ssm_scheduler.block_trie
         key = block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+        logs = []
+
+        def capture_log(message, *args):
+            logs.append(message % args)
+
+        monkeypatch.setattr('lmdeploy.pytorch.paging.block_trie.trie.logger.debug', capture_log)
 
         node.detach_leaf()
-        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [3])
+        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [4])
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
@@ -506,6 +512,9 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert node.adapter_name not in block_trie._checkpoint_index._steps_by_adapter
         assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
+        rejection = next(message for message in logs
+                         if message.startswith('Reject SSM prefix-cache checkpoint candidate'))
+        assert f'step={len(token_ids)} state_idx={state_idx}' in rejection
 
     def test_match_ssm_keeps_pinned_stale_checkpoint_candidate(self, ssm_scheduler):
         block_size = ssm_scheduler.seq_meta.block_size

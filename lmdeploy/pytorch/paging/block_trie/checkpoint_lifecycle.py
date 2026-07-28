@@ -31,8 +31,6 @@ if TYPE_CHECKING:
 
 logger = get_logger('lmdeploy')
 
-SequenceMatchDataBuilder = Callable[['Node', SchedulerSequence], 'StateCheckpointMatchData']
-
 
 class StateCheckpointLifecycle:
     """Manage node-owned state and optional frozen partial-KV checkpoints.
@@ -41,8 +39,9 @@ class StateCheckpointLifecycle:
     holds a lazily allocated :class:`NodeStateCheckpoint`. This component
     coordinates that record with ``StateManager``, ``LogicalAllocator``, and
     ``StateCheckpointIndex``. Nodes own their monotonic attachment invariant;
-    the injected builder keeps exact-identity policy in ``BlockTrie`` without
-    giving the lifecycle a back-reference to the whole trie.
+    the injected snapshot operation keeps exact-identity policy in
+    ``BlockTrie`` without giving the lifecycle a back-reference to the whole
+    trie.
     """
 
     def __init__(self,
@@ -53,14 +52,14 @@ class StateCheckpointLifecycle:
                  allocator: LogicalAllocator,
                  state_manager: StateManager | None,
                  index: StateCheckpointIndex,
-                 make_sequence_match_data: SequenceMatchDataBuilder):
+                 snapshot_match_data: Callable[[Node, SchedulerSequence], StateCheckpointMatchData]):
         self._prefix_cache_enabled = prefix_cache_enabled
         self._state_checkpoints_enabled = state_checkpoints_enabled
         self._block_size = block_size
         self._allocator = allocator
         self._state_manager = state_manager
         self._index = index
-        self._make_sequence_match_data = make_sequence_match_data
+        self._snapshot_match_data = snapshot_match_data
 
     def reserve_save(self, seq: SchedulerSequence, step: int = None, is_decode: bool = False):
         """Reserve a checkpoint at an exact safe prefill boundary."""
@@ -299,7 +298,7 @@ class StateCheckpointLifecycle:
             checkpoint = node.state_checkpoint
             slot = -1 if checkpoint is None else checkpoint.slot
             logger.debug('Drop stale SSM prefix-cache checkpoint index entry: adapter=%s step=%s node_adapter=%s '
-                         'node_step=%s state_idx=%s reason=%s', key[0], key[1], node.adapter_name, node.prefix_len,
+                         'node_anchor=%s state_idx=%s reason=%s', key[0], key[1], node.adapter_name, node.prefix_len,
                          slot, reason)
         return removed
 
@@ -309,7 +308,7 @@ class StateCheckpointLifecycle:
         if self.is_pinned(node):
             checkpoint = node.state_checkpoint
             logger.debug('Skip pinned stale SSM prefix-cache checkpoint candidate: adapter=%s step=%s '
-                         'state_idx=%s pin_count=%s reason=%s', node.adapter_name, node.prefix_len, checkpoint.slot,
+                         'state_idx=%s pin_count=%s reason=%s', node.adapter_name, checkpoint.step, checkpoint.slot,
                          checkpoint.pin_count, reason)
             return False
 
@@ -449,7 +448,7 @@ class StateCheckpointLifecycle:
                 raise RuntimeError('Cannot republish an SSM checkpoint with missing exact-match metadata.')
             return
 
-        match_data = self._make_sequence_match_data(node, seq)
+        match_data = self._snapshot_match_data(node, seq)
         checkpoint.exact_match_data = match_data
         checkpoint.published = True
         checkpoint.last_access_time = time.perf_counter()

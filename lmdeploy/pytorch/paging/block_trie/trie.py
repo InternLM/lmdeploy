@@ -165,7 +165,7 @@ class BlockTrie:
             allocator=self.allocator,
             state_manager=checkpoint_state_manager,
             index=self._checkpoint_index,
-            make_sequence_match_data=self._make_state_checkpoint_match_data_from_seq,
+            snapshot_match_data=self._snapshot_checkpoint_match_data,
         )
         self._kv_lifecycle = KVBlockLifecycle(self.allocator, self._state_checkpoints)
         self.stats = PrefixCacheStats()
@@ -297,39 +297,48 @@ class BlockTrie:
         for seq in seqs:
             self.cache_routed_experts_for_seq(seq)
 
-    def _make_state_checkpoint_match_data_from_seq(self, node: Node, seq: SchedulerSequence):
+    def _snapshot_checkpoint_match_data(self, node: Node, seq: SchedulerSequence):
         """Snapshot exact match data from a checkpoint producer.
+
+        The lifecycle already proved that ``node`` owns an unpublished
+        reservation. This method proves that the producer still matches that
+        owner before freezing its exact identity.
 
         ``BlockTrie.allocate()`` already made the producer cursor authoritative
         for this prefix. Its recompute-overlap substitutions turn the
         contiguous logical-block copy back into the shared trie path
         without rebuilding thousands of Python ``Node`` objects per save.
         """
-        checkpoint = node.state_checkpoint
-        if checkpoint is None:
-            raise RuntimeError('Cannot publish an SSM checkpoint without a reservation.')
-        step = checkpoint.step
+        step = node.state_checkpoint.step
         anchor_step = checkpoint_anchor_step(step, self.block_size)
         num_full_blocks = anchor_step // self.block_size
+        mismatch = 'Cannot publish an SSM checkpoint from a mismatched sequence cursor'
+        if not self._cursor_belongs_to_trie(node):
+            raise RuntimeError(f'{mismatch}: checkpoint owner does not belong to this trie.')
+        if seq.adapter_name != node.adapter_name:
+            raise RuntimeError(f'{mismatch}: adapter does not match the checkpoint owner.')
+        if node.prefix_len != anchor_step:
+            raise RuntimeError(f'{mismatch}: checkpoint owner is not the expected block anchor.')
+
         token_ids = seq.history_cache[:step].copy()
+        if len(token_ids) != step:
+            raise RuntimeError(f'{mismatch}: token identity is incomplete.')
         block_ids = seq.logical_blocks.get_real_blocks()[:num_full_blocks].copy()
+        if len(block_ids) != num_full_blocks:
+            raise RuntimeError(f'{mismatch}: logical block path is incomplete.')
         seq.prefix_cache.recompute_overlap.apply_trie_blocks(block_ids)
+        if num_full_blocks > 0:
+            owner_start = anchor_step - self.block_size
+            block_extra_identity = seq.get_prefix_cache_extra_identity(owner_start, anchor_step)
+            if block_ids[-1] != node.block_id:
+                raise RuntimeError(f'{mismatch}: last logical block is not owned by the checkpoint node.')
+            if not self._node_matches_block(node, token_ids[owner_start:anchor_step], block_extra_identity):
+                raise RuntimeError(f'{mismatch}: last block identity does not match the checkpoint owner.')
+
         prefix_extra_identity = make_request_multimodal_identity(seq, step)
         tail_start = checkpoint_tail_start(step, self.block_size)
         tail_extra_identity = seq.get_prefix_cache_extra_identity(tail_start, step)
         tail_hash = self._hash_block(token_ids[tail_start:step], tail_extra_identity)
-        if num_full_blocks > 0:
-            owner_start = anchor_step - self.block_size
-            block_extra_identity = seq.get_prefix_cache_extra_identity(owner_start, anchor_step)
-        owner_matches = (self._cursor_belongs_to_trie(node) and seq.adapter_name == node.adapter_name
-                         and node.prefix_len == anchor_step)
-        if owner_matches and num_full_blocks > 0:
-            owner_matches = (block_ids[-1] == node.block_id
-                             and self._node_matches_block(node, token_ids[owner_start:anchor_step],
-                                                          block_extra_identity))
-        has_complete_identity = len(token_ids) == step and len(block_ids) == num_full_blocks
-        if not has_complete_identity or not owner_matches:
-            raise RuntimeError('Cannot publish an SSM checkpoint from a mismatched sequence cursor.')
         return freeze_state_checkpoint_match_data(token_ids, prefix_extra_identity, block_ids, tail_hash)
 
     def _cursor_belongs_to_trie(self, node: Node):
@@ -338,18 +347,18 @@ class BlockTrie:
             return node.block_id < 0 and self._roots.get(node.adapter_name) is node
         return node.is_attached()
 
-    def _handle_state_checkpoint_rejection(self, seq: SchedulerSequence, node: Node, key, match_result):
-        """Clean up a rejected sparse candidate according to its status."""
-        if match_result.status == StateCheckpointVerifyStatus.STALE_INDEX_ENTRY:
-            self.state_checkpoints.discard_stale_index_entry(node, key, match_result.reason)
-        elif match_result.status == StateCheckpointVerifyStatus.STALE_CHECKPOINT:
-            self.state_checkpoints.release_stale_checkpoint(node, match_result.reason)
+    def _reject_state_checkpoint_candidate(self, seq: SchedulerSequence, node: Node, key, verification):
+        """Clean up and log a rejected sparse candidate."""
         checkpoint = node.state_checkpoint
         state_idx = -1 if checkpoint is None else checkpoint.slot
-        step = node.prefix_len if checkpoint is None else checkpoint.step
+        candidate_step = key[1]
+        if verification.status == StateCheckpointVerifyStatus.STALE_INDEX_ENTRY:
+            self.state_checkpoints.discard_stale_index_entry(node, key, verification.reason)
+        elif verification.status == StateCheckpointVerifyStatus.STALE_CHECKPOINT:
+            self.state_checkpoints.release_stale_checkpoint(node, verification.reason)
         logger.debug('Reject SSM prefix-cache checkpoint candidate: session_id=%s seq_id=%s step=%s '
-                     'state_idx=%s status=%s reason=%s', seq.session_id, seq.seq_id, step, state_idx,
-                     match_result.status.name, match_result.reason)
+                     'state_idx=%s status=%s reason=%s', seq.session_id, seq.seq_id, candidate_step, state_idx,
+                     verification.status.name, verification.reason)
 
     def _find_recompute_overlap_end(self, seq: SchedulerSequence, node: Node, step: int, recompute_blocks: int):
         """Return the cached overlap end, or ``-1`` when it is too short."""
@@ -418,9 +427,9 @@ class BlockTrie:
                 continue
             key = self._checkpoint_index.make_request_key(seq, step)
             for node in self._checkpoint_index.candidates(key):
-                match_result = self._checkpoint_index.verify_candidate(seq, node, key)
-                if match_result.status != StateCheckpointVerifyStatus.HIT:
-                    self._handle_state_checkpoint_rejection(seq, node, key, match_result)
+                verification = self._checkpoint_index.verify_candidate(seq, node, key)
+                if verification.status != StateCheckpointVerifyStatus.HIT:
+                    self._reject_state_checkpoint_candidate(seq, node, key, verification)
                     continue
 
                 if recompute_blocks > 0:
@@ -428,7 +437,7 @@ class BlockTrie:
                     if overlap_end_step < 0:
                         continue
 
-                self._apply_state_checkpoint_hit(seq, node, match_result.matched_block_ids, initial_step,
+                self._apply_state_checkpoint_hit(seq, node, verification.matched_block_ids, initial_step,
                                                  overlap_end_step)
                 return
 
