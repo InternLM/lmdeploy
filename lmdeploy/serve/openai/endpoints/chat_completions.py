@@ -637,12 +637,3 @@ def register(router: APIRouter, server_context) -> None:
             response['remote_token_ids'] = remote_token_ids
 
         return response
-
-    @router.post('/v1/chat/interactive',
-                 dependencies=[Depends(validate_json_request)],
-                 include_in_schema=False)
-    async def chat_interactive_v1(request, raw_request: Request = None):
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
-            'and use /v1/chat/completions instead.')
