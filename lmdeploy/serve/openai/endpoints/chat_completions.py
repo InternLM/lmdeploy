@@ -107,92 +107,95 @@ def check_request(request: ChatCompletionRequest, server_context) -> str:
     return ''
 
 
+def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
+                                     token_ids: list[int] | None = None,
+                                     logprobs: list[dict[int, float]]
+                                     | None = None):
+    """Create openai LogProbs for chat.completion.
+
+    Args:
+        tokenizer (PreTrainedTokenizerBase): tokenizer.
+        token_ids (list[int]): output token ids.
+        logprobs (list[dict[int, float]]): the top logprobs for each output
+            position.
+    Returns:
+        ChoiceLogprobs: logprob result.
+    """
+    if token_ids is None or logprobs is None:
+        return None
+
+    content: list[ChatCompletionTokenLogprob] = []
+    for token_id, tops in zip(token_ids, logprobs):
+        item = ChatCompletionTokenLogprob(token='',
+                                          bytes=[],
+                                          logprob=0.0,
+                                          top_logprobs=[])
+        for top_id, prob in tops.items():
+            token = tokenizer.convert_ids_to_tokens(top_id)
+            if isinstance(token, bytes):
+                _bytes = list(token)
+                token = token.decode('utf-8', errors='backslashreplace')
+            else:
+                _bytes = list(token.encode())  # token is str
+            if top_id == token_id:
+                item.token = token
+                item.bytes = _bytes
+                item.logprob = prob
+            else:
+                item.top_logprobs.append(
+                    TopLogprob(token=token, bytes=_bytes, logprob=prob))
+        content.append(item)
+    return ChoiceLogprobs(content=content)
+
+
+def _create_output_token_logprobs(token_ids: list[int] | None = None,
+                                  logprobs: list[dict[int, float]]
+                                  | None = None):
+    """Create raw (logprob, token_id) pairs for output tokens."""
+    if token_ids is None or logprobs is None:
+        return None
+
+    output_token_logprobs = []
+    for tok, tok_logprobs in zip(token_ids, logprobs):
+        output_token_logprobs.append((tok_logprobs[tok], tok))
+    return output_token_logprobs or None
+
+
+# modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
+def logit_bias_logits_processor(
+        logit_bias: dict[int, float] | dict[str, float],
+        tokenizer: PreTrainedTokenizerBase) -> LogitsProcessor:
+    try:
+        # Convert token_id to integer
+        # Clamp the bias between -100 and 100 per OpenAI API spec
+        clamped_logit_bias: dict[int, float] = {
+            int(token_id): min(100.0, max(-100.0, bias))
+            for token_id, bias in logit_bias.items()
+        }
+    except ValueError as exc:
+        raise ValueError(
+            'Found token_id in logit_bias that is not '
+            'an integer or string representing an integer') from exc
+
+    # Check if token_id is within the vocab size
+    for token_id, bias in clamped_logit_bias.items():
+        if token_id < 0 or token_id >= tokenizer.vocab_size:
+            raise ValueError(f'token_id {token_id} in logit_bias contains '
+                             'out-of-vocab token id')
+
+    def _logit_bias_processor(
+        logit_bias,
+        token_ids,
+        logits,
+    ):
+        for token_id, bias in logit_bias.items():
+            logits[token_id] = logits[token_id] + bias
+        return logits
+
+    return partial(_logit_bias_processor, clamped_logit_bias)
+
+
 def register(router: APIRouter, server_context) -> None:
-
-    def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
-                                         token_ids: list[int] | None = None,
-                                         logprobs: list[dict[int, float]]
-                                         | None = None):
-        """Create openai LogProbs for chat.completion.
-
-        Args:
-            tokenizer (PreTrainedTokenizerBase): tokenizer.
-            token_ids (list[int]): output token ids.
-            logprobs (list[dict[int, float]]): the top logprobs for each output
-                position.
-        Returns:
-            ChoiceLogprobs: logprob result.
-        """
-        if token_ids is None or logprobs is None:
-            return None
-
-        content: list[ChatCompletionTokenLogprob] = []
-        for token_id, tops in zip(token_ids, logprobs):
-            item = ChatCompletionTokenLogprob(token='',
-                                              bytes=[],
-                                              logprob=0.0,
-                                              top_logprobs=[])
-            for top_id, prob in tops.items():
-                token = tokenizer.convert_ids_to_tokens(top_id)
-                if isinstance(token, bytes):
-                    _bytes = list(token)
-                    token = token.decode('utf-8', errors='backslashreplace')
-                else:
-                    _bytes = list(token.encode())  # token is str
-                if top_id == token_id:
-                    item.token = token
-                    item.bytes = _bytes
-                    item.logprob = prob
-                else:
-                    item.top_logprobs.append(
-                        TopLogprob(token=token, bytes=_bytes, logprob=prob))
-            content.append(item)
-        return ChoiceLogprobs(content=content)
-
-    def _create_output_token_logprobs(token_ids: list[int] | None = None,
-                                      logprobs: list[dict[int, float]]
-                                      | None = None):
-        """Create raw (logprob, token_id) pairs for output tokens."""
-        if token_ids is None or logprobs is None:
-            return None
-
-        output_token_logprobs = []
-        for tok, tok_logprobs in zip(token_ids, logprobs):
-            output_token_logprobs.append((tok_logprobs[tok], tok))
-        return output_token_logprobs or None
-
-    # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
-    def logit_bias_logits_processor(
-            logit_bias: dict[int, float] | dict[str, float],
-            tokenizer: PreTrainedTokenizerBase) -> LogitsProcessor:
-        try:
-            # Convert token_id to integer
-            # Clamp the bias between -100 and 100 per OpenAI API spec
-            clamped_logit_bias: dict[int, float] = {
-                int(token_id): min(100.0, max(-100.0, bias))
-                for token_id, bias in logit_bias.items()
-            }
-        except ValueError as exc:
-            raise ValueError(
-                'Found token_id in logit_bias that is not '
-                'an integer or string representing an integer') from exc
-
-        # Check if token_id is within the vocab size
-        for token_id, bias in clamped_logit_bias.items():
-            if token_id < 0 or token_id >= tokenizer.vocab_size:
-                raise ValueError(f'token_id {token_id} in logit_bias contains '
-                                 'out-of-vocab token id')
-
-        def _logit_bias_processor(
-            logit_bias,
-            token_ids,
-            logits,
-        ):
-            for token_id, bias in logit_bias.items():
-                logits[token_id] = logits[token_id] + bias
-            return logits
-
-        return partial(_logit_bias_processor, clamped_logit_bias)
 
     @router.post('/v1/chat/completions',
                  dependencies=[Depends(validate_json_request)])
