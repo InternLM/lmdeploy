@@ -44,7 +44,7 @@ struct GmemIteratorSm80 {
     const char* src_data_;
 
     int64_t src_offset_;
-    int dst_offset_;
+    int     dst_offset_;
 
     int offset_c_;
     int offset_s_;
