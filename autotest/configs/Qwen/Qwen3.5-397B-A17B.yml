@@ -5,6 +5,7 @@ h:
   - chat
   - vl
   engine_config:
+    tp: 2
     dp: 4
     ep: 8
     extra:
@@ -38,6 +39,7 @@ h:
   - chat
   - vl
   engine_config:
+    tp: 2
     dp: 4
     ep: 8
     extra:
@@ -68,6 +70,7 @@ h:
   - chat
   - vl
   engine_config:
+    tp: 2
     dp: 4
     ep: 8
     extra:
