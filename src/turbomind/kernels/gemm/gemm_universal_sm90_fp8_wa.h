@@ -83,7 +83,7 @@ struct GemmUniversalSm90_Fp8Wa {
 
     static constexpr int kSchedWarpGroups = 1;
 
-    static constexpr int WARPGORUPS = WG_M * WG_N;
+    static constexpr int WARPGROUPS = WG_M * WG_N;
 
     static constexpr Order kRasterOrder = raster_order;
     static constexpr int   kAlgoFamily  = 2;
@@ -109,9 +109,9 @@ struct GemmUniversalSm90_Fp8Wa {
 
     static constexpr int WARPGROUP_SIZE = 128;
 
-    static constexpr int kMathGroupSize = WARPGROUP_SIZE * WARPGORUPS;
+    static constexpr int kMathGroupSize = WARPGROUP_SIZE * WARPGROUPS;
 
-    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGORUPS + 1);
+    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGROUPS + 1);
 
     using Ta = __nv_fp8_e4m3;
     using Tb = __nv_fp8_e4m3;
@@ -166,9 +166,9 @@ struct GemmUniversalSm90_Fp8Wa {
     static constexpr int kMathRegs     = kIndexedGather ? Tile::kMathRegsIndexed : Tile::kMathRegsTma;
     static_assert(kProducerRegs >= 24 && kProducerRegs % 8 == 0);
     static_assert(kMathRegs >= 24 && kMathRegs % 8 == 0 && kMathRegs <= 256);
-    static_assert(WARPGORUPS == 1 || WARPGORUPS == 2);
-    static_assert(WARPGORUPS != 2 || kProducerRegs + 2 * kMathRegs == 504);
-    static_assert(WARPGORUPS != 1 || kProducerRegs + kMathRegs <= 512);
+    static_assert(WARPGROUPS == 1 || WARPGROUPS == 2);
+    static_assert(WARPGROUPS != 2 || kProducerRegs + 2 * kMathRegs == 504);
+    static_assert(WARPGROUPS != 1 || kProducerRegs + kMathRegs <= 512);
 
     // ! SMEM addr must be SBO aligned for TMA load/store
     struct SharedStorage {
@@ -176,7 +176,7 @@ struct GemmUniversalSm90_Fp8Wa {
         __align__(1024) Array<Tb, Stages * TILE_N * TILE_K> A;
         __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> B;
         // Fused amax reduce: per math WG, [warp][t0][scale_i], scale_i < OP_N/4 ≤ 64
-        __align__(128) float fused_amax_scratch[WARPGORUPS][4 * 4 * 64];
+        __align__(128) float fused_amax_scratch[WARPGROUPS][4 * 4 * 64];
         // f32 gate/up staging for WG_N == 2 fused SiLU (gate/up split across math WGs).
         static constexpr int kSiluStageElems = (kSupportsFusedSilu && WG_N == 2) ? TILE_N * TILE_M : 1;
         __align__(128) float silu_stage[kSiluStageElems];
@@ -278,9 +278,9 @@ struct GemmUniversalSm90_Fp8Wa {
             PRAGMA_UNROLL
             for (int s = 0; s < Stages; ++s) {
                 ProducerBar::init(&producer_bar[s], kProducerBarInit);
-                ConsumerBar::init(&consumer_bar[s], WARPGORUPS * kClusterSize * 4);
+                ConsumerBar::init(&consumer_bar[s], WARPGROUPS * kClusterSize * 4);
             }
-            sched.init_dyanmic(storage.sched, kClusterSize * (WARPGORUPS * 4 + 1));
+            sched.init_dyanmic(storage.sched, kClusterSize * (WARPGROUPS * 4 + 1));
             cutlass::arch::fence_view_async_shared();
             if constexpr (kClusterSize > 1) {
                 cutlass::arch::fence_barrier_init();
@@ -291,7 +291,7 @@ struct GemmUniversalSm90_Fp8Wa {
 
         const int wg_idx = cutlass::canonical_warp_group_idx();
 
-        if (wg_idx == WARPGORUPS) {
+        if (wg_idx == WARPGROUPS) {
             cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
 
             static_assert(TILE_M % kMulticastA == 0);
@@ -324,7 +324,7 @@ struct GemmUniversalSm90_Fp8Wa {
                 typename Scheduler::ProducerState prod_state     = sched.init_producer(storage.sched);
                 int                               lane_predicate = 0;
                 const int                         lane_id        = threadIdx.x % WARP_SIZE;
-                const int                         prod_tid       = threadIdx.x - WARPGORUPS * WARPGROUP_SIZE;
+                const int                         prod_tid       = threadIdx.x - WARPGROUPS * WARPGROUP_SIZE;
 
                 if (warp_in_wg == 0) {
                     lane_predicate = cute::elect_one_sync();

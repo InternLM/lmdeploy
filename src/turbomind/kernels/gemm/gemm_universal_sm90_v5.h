@@ -48,7 +48,7 @@ struct GemmUniversalSm90_v5 {
 
     using Arch = Sm90;
 
-    static constexpr int WARPGORUPS = 4;
+    static constexpr int WARPGROUPS = 4;
 
     static constexpr int TILE_M = 128;
     static constexpr int TILE_N = 96;
@@ -75,7 +75,7 @@ struct GemmUniversalSm90_v5 {
     static constexpr int WARPGROUP_SIZE = 128;
     static constexpr int kMathGroupSize = 256;
 
-    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGORUPS + 1);
+    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGROUPS + 1);
 
     using Ta = __nv_fp8_e4m3;
     using Tb = __nv_fp8_e4m3;
@@ -198,7 +198,7 @@ struct GemmUniversalSm90_v5 {
 
         const int wg_idx = cutlass::canonical_warp_group_idx();
 
-        if (wg_idx == WARPGORUPS) {
+        if (wg_idx == WARPGROUPS) {
             cutlass::arch::warpgroup_reg_dealloc<32>();
 
             static_assert(TILE_M % kMulticastA == 0);
@@ -368,7 +368,7 @@ struct GemmUniversalSm90_v5 {
             auto math_barrier_sync = [&](int phase, int alive = 1) {
                 constexpr int base       = (int)cutlass::arch::ReservedNamedBarriers::FirstUserBarrier;
                 const int     barrier_id = base + math_group_idx ^ phase;
-                constexpr int threads    = WARPGORUPS * WARPGROUP_SIZE;
+                constexpr int threads    = WARPGROUPS * WARPGROUP_SIZE;
                 int           res        = 0;
                 asm volatile("{\n"
                              "  .reg.pred p;\n"

@@ -222,7 +222,7 @@ struct GemmUniversalSm90_v2 {
     static constexpr int MMA_ATOM_N = cute::get<1>(MMA_Shape);
     static constexpr int MMA_ATOM_K = cute::get<2>(MMA_Shape);
 
-    static constexpr int WARPGORUPS = 2;
+    static constexpr int WARPGROUPS = 2;
 
     static constexpr int TILE_M = 128;
     static constexpr int TILE_N = MMA_ATOM_N;
@@ -244,7 +244,7 @@ struct GemmUniversalSm90_v2 {
 
     static constexpr int WARPGROUP_SIZE = 128;
 
-    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGORUPS + 1);
+    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGROUPS + 1);
 
     using Ta = __nv_fp8_e4m3;
     using Tb = __nv_fp8_e4m3;
@@ -274,13 +274,13 @@ struct GemmUniversalSm90_v2 {
             __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> A;
             __align__(1024) Array<Tb, Stages * TILE_N * TILE_K> B;
             __align__(1024) Tu U[Stages][round_up(TILE_M_U * CTA_K_U, 32)];
-            __align__(1024) Tv V[2][WARPGORUPS][cdiv(MAX_K, 128)];
+            __align__(1024) Tv V[2][WARPGROUPS][cdiv(MAX_K, 128)];
         };
         Source source;
         __align__(1024) Array<Tc, TILE_M * TILE_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
-        int pipe_count[WARPGORUPS];
+        int pipe_count[WARPGROUPS];
     };
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
@@ -319,7 +319,7 @@ struct GemmUniversalSm90_v2 {
                 cutlass::arch::fence_barrier_init();
             }
             PRAGMA_UNROLL
-            for (int i = 0; i < WARPGORUPS; ++i) {
+            for (int i = 0; i < WARPGROUPS; ++i) {
                 storage.pipe_count[i] = 0;
             }
         }
@@ -328,13 +328,13 @@ struct GemmUniversalSm90_v2 {
 
         const int warpgroup_id = cutlass::canonical_warp_group_idx();
 
-        if (warpgroup_id == WARPGORUPS) {
+        if (warpgroup_id == WARPGROUPS) {
             cutlass::arch::warpgroup_reg_dealloc<40>();
 
             static_assert(TILE_M % kMulticastA == 0);
             static_assert(TILE_N % kMulticastB == 0);
 
-            if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
+            if (threadIdx.x == WARPGROUPS * WARPGROUP_SIZE) {
 
                 Cluster cluster(cute::block_id_in_cluster().x);
 
@@ -391,7 +391,7 @@ struct GemmUniversalSm90_v2 {
         else {
             cutlass::arch::warpgroup_reg_alloc<232>();
 
-            sched.grid_init(WARPGORUPS);
+            sched.grid_init(WARPGROUPS);
 
             auto& smem_A = storage.source.A;
             auto& smem_B = storage.source.B;
@@ -410,7 +410,7 @@ struct GemmUniversalSm90_v2 {
 
             auto math_barrier_sync = [&](int phase, int alive = 1) {
                 constexpr int base    = (int)cutlass::arch::ReservedNamedBarriers::FirstUserBarrier;
-                constexpr int threads = WARPGORUPS * WARPGROUP_SIZE;
+                constexpr int threads = WARPGROUPS * WARPGROUP_SIZE;
                 int           res;
                 asm volatile("{\n"
                              "  .reg.pred p;\n"
@@ -431,7 +431,7 @@ struct GemmUniversalSm90_v2 {
                 math_barrier_sync(1);
             }
 
-            while (sched.next(WARPGORUPS)) {
+            while (sched.next(WARPGROUPS)) {
                 auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
                 if (!cluster_tile_p) {

@@ -141,7 +141,7 @@ public:
 
         AlgoBits algo{};
         algo.family   = Gemm::kAlgoFamily;
-        algo.math_wgs = Gemm::WARPGORUPS;
+        algo.math_wgs = Gemm::WARPGROUPS;
         desc_.algo    = algo.u32();
 
         desc_.cluster_shape = {Gemm::Cluster::M, Gemm::Cluster::N};

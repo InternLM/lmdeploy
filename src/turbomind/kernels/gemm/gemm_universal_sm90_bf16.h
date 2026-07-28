@@ -328,7 +328,7 @@ struct GemmUniversalSm90_Bf16 {
     using Traits   = GmmaBF16Traits<TILE_N, TILE_M, TILE_K, AtomLayoutMNK>;
     using TiledMma = typename Traits::TiledMma;
 
-    static constexpr int WARPGORUPS = cute::size(AtomLayoutMNK{});  // math WGs (cooperative)
+    static constexpr int WARPGROUPS = cute::size(AtomLayoutMNK{});  // math WGs (cooperative)
 
     static constexpr int kMulticastA = multicast_a;  // act along TILE_M
     static constexpr int kMulticastB = multicast_b;  // weight along TILE_N
@@ -338,8 +338,8 @@ struct GemmUniversalSm90_Bf16 {
     static constexpr int Stages = Tile::Stages;
 
     static constexpr int WARPGROUP_SIZE = 128;
-    static constexpr int kMathGroupSize = WARPGROUP_SIZE * WARPGORUPS;
-    static constexpr int CTA_SIZE       = WARPGROUP_SIZE * (WARPGORUPS + 1);
+    static constexpr int kMathGroupSize = WARPGROUP_SIZE * WARPGROUPS;
+    static constexpr int CTA_SIZE       = WARPGROUP_SIZE * (WARPGROUPS + 1);
 
     static constexpr int K_PIPE_MMAS = 1;
 
@@ -362,9 +362,9 @@ struct GemmUniversalSm90_Bf16 {
     static constexpr int kMathRegs     = kIndexedGather ? Tile::kMathRegsIndexed : Tile::kMathRegsTma;
     static_assert(kProducerRegs >= 24 && kProducerRegs % 8 == 0);
     static_assert(kMathRegs >= 24 && kMathRegs % 8 == 0 && kMathRegs <= 256);
-    static_assert(WARPGORUPS == 1 || WARPGORUPS == 2);
-    static_assert(WARPGORUPS != 2 || kProducerRegs + 2 * kMathRegs <= 504);
-    static_assert(WARPGORUPS != 1 || kProducerRegs + kMathRegs <= 512);
+    static_assert(WARPGROUPS == 1 || WARPGROUPS == 2);
+    static_assert(WARPGROUPS != 2 || kProducerRegs + 2 * kMathRegs <= 504);
+    static_assert(WARPGROUPS != 1 || kProducerRegs + kMathRegs <= 512);
 
     using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
 
@@ -508,7 +508,7 @@ struct GemmUniversalSm90_Bf16 {
         const int wg_idx = cutlass::canonical_warp_group_idx();
 
         if (threadIdx.x == 0) {
-            sched.init_dyanmic(storage.sched, kClusterSize * (WARPGORUPS * 4 + 1));
+            sched.init_dyanmic(storage.sched, kClusterSize * (WARPGROUPS * 4 + 1));
         }
 
         typename MainloopPipeline::Params pp;
@@ -520,7 +520,7 @@ struct GemmUniversalSm90_Bf16 {
         pp.num_producers     = (kStridingA == Striding::kIndexed) ? (1 + WARPGROUP_SIZE) : 1;
         pp.initializing_warp = 0;
 
-        if (wg_idx == WARPGORUPS) {
+        if (wg_idx == WARPGROUPS) {
             const int warp_id_in_wg = (threadIdx.x / WARP_SIZE) % 4;
             if constexpr (kStridingA == Striding::kIndexed) {
                 // All 128 gather threads are Producers (lockstep acquire + noinc).
@@ -545,7 +545,7 @@ struct GemmUniversalSm90_Bf16 {
         }
         (kClusterSize > 1) ? cute::cluster_sync() : __syncthreads();
 
-        if (wg_idx == WARPGORUPS) {
+        if (wg_idx == WARPGROUPS) {
             cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
 
             static_assert(TILE_M % kMulticastA == 0);
@@ -575,7 +575,7 @@ struct GemmUniversalSm90_Bf16 {
                 typename Scheduler::ProducerState prod_state  = sched.init_producer(storage.sched);
                 int                               lane_predicate = 0;
                 const int                         lane_id        = threadIdx.x % WARP_SIZE;
-                const int                         prod_tid       = threadIdx.x - WARPGORUPS * WARPGROUP_SIZE;
+                const int                         prod_tid       = threadIdx.x - WARPGROUPS * WARPGROUP_SIZE;
 
                 if (warp_in_wg == 0) {
                     lane_predicate = cute::elect_one_sync();
