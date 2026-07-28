@@ -4,7 +4,7 @@
 The lifecycle owns state-slot reservation, optional frozen partial KV blocks,
 publication, async-copy pins, and checkpoint-only eviction. It deliberately
 does not own trie topology or normal trie KV blocks. :class:`BlockTrie`
-supplies the exact-identity builder needed while publishing a checkpoint,
+supplies the exact-identity snapshot operation used during publication,
 while ``KVBlockLifecycle`` consults this owner before evicting a
 checkpoint-bearing KV leaf.
 """

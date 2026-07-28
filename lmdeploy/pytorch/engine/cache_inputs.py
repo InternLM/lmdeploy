@@ -11,8 +11,9 @@ StateCacheCopyPlan = tuple[tuple[int, ...], tuple[int, ...]]
 class CacheCheckpointInputs:
     """One-forward cache restore and save plans.
 
-    KV plans are scheduler-block copy pairs with shape ``[2, N]``.  They are
-    transferred to the cache device with the rest of the forward payload.
+    KV plans contain physical GPU block-offset pairs at scheduler-block
+    granularity with shape ``[2, N]``. They are transferred to the cache device
+    with the rest of the forward payload.
     State plans stay as compact host integer sequences because
     ``StateCacheEngine`` schedules those copies from the host.
 

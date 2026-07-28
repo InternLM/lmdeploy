@@ -20,7 +20,7 @@ class NodeStateCheckpoint:
 
     ``step`` is the exact model-forward boundary. ``frozen_block_id`` owns a
     copy of the partial logical block when ``step`` is not block-aligned.
-    ``published`` exposes the reservation to exact matching, while
+    ``published`` exposes the checkpoint to exact matching, while
     ``exact_match_data`` caches the immutable prefix identity and logical KV
     path used after sparse lookup. ``pin_count`` protects async save/restore
     copies, and ``last_access_time`` drives checkpoint LRU eviction.

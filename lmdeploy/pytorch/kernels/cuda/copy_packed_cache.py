@@ -32,7 +32,7 @@ def copy_packed_cache(packed_cache: torch.Tensor,
                       src_block_offsets: torch.Tensor,
                       dst_block_offsets: torch.Tensor,
                       pages_per_block: int) -> None:
-    """Copy aligned packed logical blocks with one Triton launch.
+    """Copy complete packed logical blocks with one Triton launch.
 
     Cache layout, logical/page geometry, and copy-plan semantics are internal backend invariants established before this
     trusted launcher is called.
