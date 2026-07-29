@@ -500,6 +500,10 @@ class AsyncEngine:
 
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
+        if messages is not None:
+            MultimodalProcessor.validate_prompt(messages, name='messages')
+        if input_ids is not None:
+            MultimodalProcessor.validate_prompt(input_ids, name='input_ids')
         if isinstance(session_id, Session):
             session = session_id
         elif isinstance(session_id, int):

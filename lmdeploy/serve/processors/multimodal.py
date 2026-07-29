@@ -280,6 +280,10 @@ class MultimodalProcessor:
         """Format prompts."""
         if not isinstance(prompts, list):
             prompts = [prompts]
+        if not prompts:
+            raise ValueError('prompts cannot be an empty list')
+        for prompt in prompts:
+            MultimodalProcessor.validate_prompt(prompt, name='prompt')
         # str or batch of str
         if all(isinstance(prompt, str) for prompt in prompts):
             return prompts
@@ -293,6 +297,20 @@ class MultimodalProcessor:
                     for prompt in prompts]
         raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
                          'or (prompt, image or [images]) or (image or [images], prompt) pair.')
+
+    @staticmethod
+    def validate_prompt(prompt: Any, *, name: str = 'prompt') -> None:
+        """Reject None / empty / falsy prompt input with a clear ValueError."""
+        if prompt is None:
+            raise ValueError(f'{name} cannot be None')
+        if isinstance(prompt, str) and not prompt:
+            raise ValueError(f'{name} string cannot be empty')
+        if isinstance(prompt, list) and not prompt:
+            raise ValueError(f'{name} list cannot be empty')
+        if isinstance(prompt, tuple) and not prompt:
+            raise ValueError(f'{name} tuple cannot be empty')
+        if isinstance(prompt, dict) and not prompt:
+            raise ValueError(f'{name} dict cannot be empty')
 
     @staticmethod
     def _is_openai_message(message) -> bool:
