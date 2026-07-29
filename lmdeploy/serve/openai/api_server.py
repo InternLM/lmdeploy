@@ -294,24 +294,42 @@ def _create_output_token_logprobs(token_ids: list[int] | None = None,
 class _StreamTokenMetadata:
     """Token metadata buffered across parser steps with no visible delta."""
 
-    token_ids: list[int]
-    logprobs: list[dict[int, float]]
+    token_ids: list[int] | None
+    logprobs: list[dict[int, float]] | None
 
     @classmethod
-    def from_result(cls, token_ids: list[int] | None, logprobs: list[dict[int, float]] | None):
-        return cls(list(token_ids or []), list(logprobs or []))
+    def from_result(
+        cls,
+        token_ids: list[int] | None,
+        logprobs: list[dict[int, float]] | None,
+        *,
+        keep_token_ids: bool,
+        keep_logprobs: bool,
+    ) -> _StreamTokenMetadata:
+        if keep_logprobs and logprobs is not None and len(token_ids or []) != len(logprobs):
+            raise ValueError('Token ids and logprobs must have the same length.')
+        return cls(
+            list(token_ids or []) if keep_token_ids else None,
+            list(logprobs or []) if keep_logprobs else None,
+        )
 
     def extend(self, other: _StreamTokenMetadata) -> None:
-        self.token_ids.extend(other.token_ids)
-        self.logprobs.extend(other.logprobs)
+        if self.token_ids is not None:
+            assert other.token_ids is not None
+            self.token_ids.extend(other.token_ids)
+        if self.logprobs is not None:
+            assert other.logprobs is not None
+            self.logprobs.extend(other.logprobs)
 
     def pop_with(self, current: _StreamTokenMetadata) -> _StreamTokenMetadata:
         merged = _StreamTokenMetadata(
-            token_ids=self.token_ids + current.token_ids,
-            logprobs=self.logprobs + current.logprobs,
+            token_ids=None if self.token_ids is None else self.token_ids + (current.token_ids or []),
+            logprobs=None if self.logprobs is None else self.logprobs + (current.logprobs or []),
         )
-        self.token_ids.clear()
-        self.logprobs.clear()
+        if self.token_ids is not None:
+            self.token_ids.clear()
+        if self.logprobs is not None:
+            self.logprobs.clear()
         return merged
 
     def output_ids(self, enabled: bool | None) -> list[int] | None:
@@ -626,7 +644,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         streaming_tools = False
         final_usage = None
-        pending_token_metadata = _StreamTokenMetadata.from_result(None, None)
+        keep_logprobs = bool(request.logprobs or request.return_logprob)
+        keep_token_ids = bool(request.return_token_ids or keep_logprobs)
+        pending_token_metadata = _StreamTokenMetadata(
+            token_ids=[] if keep_token_ids else None,
+            logprobs=[] if keep_logprobs else None,
+        )
         async for res in result_generator:
             if res.finish_reason and include_usage:
                 final_usage = UsageInfo.build(
@@ -634,16 +657,25 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     completion_tokens=res.generate_token_len,
                     cached_tokens=res.cached_tokens,
                 )
-            current_token_metadata = _StreamTokenMetadata.from_result(res.token_ids, res.logprobs)
+            raw_token_ids = res.token_ids or []
+            current_token_metadata = _StreamTokenMetadata.from_result(
+                res.token_ids,
+                res.logprobs,
+                keep_token_ids=keep_token_ids,
+                keep_logprobs=keep_logprobs,
+            )
             stream_deltas = response_parser.stream_chunk(
                 res.response,
-                current_token_metadata.token_ids
+                raw_token_ids,
             )
             if not stream_deltas:
                 pending_token_metadata.extend(current_token_metadata)
                 if res.finish_reason is None:
                     continue
-                current_token_metadata = _StreamTokenMetadata.from_result(None, None)
+                current_token_metadata = _StreamTokenMetadata(
+                    token_ids=[] if keep_token_ids else None,
+                    logprobs=[] if keep_logprobs else None,
+                )
                 stream_deltas = [(DeltaMessage(role='assistant'), False)]
             should_validate_complete = (
                 res.finish_reason in ('stop', 'length')
@@ -685,7 +717,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                             output_ids=stream_output_ids)
                 if res.cache_block_ids is not None and is_last_delta:
                     response_json['cache_block_ids'] = res.cache_block_ids
-                    response_json['remote_token_ids'] = current_token_metadata.token_ids
+                    response_json['remote_token_ids'] = raw_token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
         if final_usage is not None:
             yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'

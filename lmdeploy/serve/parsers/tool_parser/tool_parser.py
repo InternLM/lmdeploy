@@ -23,10 +23,10 @@ class ToolParser:
     """Base class for model-specific tool parsers."""
 
     def __init__(self):
-        self._tool_payload: str = ''
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
+        self._payload_closed: bool = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
@@ -52,13 +52,13 @@ class ToolParser:
         self._active_tool_index += 1
         self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
-        self._tool_payload = ''
+        self._payload_closed = False
 
     def finish_tool_call(self) -> None:
         """Mark end of a tool-call block."""
         self._active_tool_call_id = ''
         self._name_emitted = False
-        self._tool_payload = ''
+        self._payload_closed = False
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         """Decode incremental tool payload emitted between tool tags."""

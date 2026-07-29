@@ -21,7 +21,11 @@ class JsonToolSnapshot:
 
 
 class JsonToolParser(ToolParser):
-    """Base class for JSON tool-call payload parsers."""
+    """Base class for JSON tool-call payload parsers.
+
+    The model protocol places ``name`` before exactly one argument field,
+    named either ``arguments`` or ``parameters``.
+    """
 
     def __init__(self):
         super().__init__()
@@ -32,7 +36,6 @@ class JsonToolParser(ToolParser):
         self._value_depth: int = 0
         self._string_open_in_container: bool = False
         self._value_escaped: bool = False
-        self._payload_closed: bool = False
 
     @classmethod
     def get_tool_payload_format(cls) -> str:
@@ -54,7 +57,7 @@ class JsonToolParser(ToolParser):
         observed, while string/container state is tracked separately.
         """
         self._payload += added_text
-        snapshot, consumed = self._consume_payload(self._payload, final=final)
+        snapshot, consumed = self._consume_payload(self._payload)
         if consumed > 0:
             self._payload = self._payload[consumed:]
 
@@ -104,7 +107,7 @@ class JsonToolParser(ToolParser):
         name = obj.get('name')
         return isinstance(name, str) and bool(name)
 
-    def _consume_payload(self, payload: str, *, final: bool) -> tuple[JsonToolSnapshot, int]:
+    def _consume_payload(self, payload: str) -> tuple[JsonToolSnapshot, int]:
         pos = 0
         args_delta_parts: list[str] = []
         func_name: str | None = None
