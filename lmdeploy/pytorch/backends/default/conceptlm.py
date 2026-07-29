@@ -196,7 +196,18 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         if hasattr(token_attn_metadata, 'max_q_seqlen'):
             updates['max_q_seqlen'] = 1
         if hasattr(token_attn_metadata, 'max_kv_seqlen'):
-            updates['max_kv_seqlen'] = getattr(token_attn_metadata, 'max_kv_seqlen')
+            max_token_kv_seqlen = getattr(token_attn_metadata, 'max_kv_seqlen')
+            if max_token_kv_seqlen is None:
+                max_concept_kv_seqlen = (
+                    int(concept_kv_seqlens.max().item()) if concept_kv_seqlens.numel() > 0 else 1
+                )
+            else:
+                max_concept_kv_seqlen = self.concept_count_from_seq_len(
+                    int(max_token_kv_seqlen),
+                    self.chunk_size,
+                )
+                max_concept_kv_seqlen = max(max_concept_kv_seqlen, 1)
+            updates['max_kv_seqlen'] = max_concept_kv_seqlen
         if hasattr(token_attn_metadata, 'scheduler_metadata'):
             updates['scheduler_metadata'] = None
         if hasattr(token_attn_metadata, 'tile_scheduler_metadata'):
