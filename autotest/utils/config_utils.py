@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import re
 from collections import OrderedDict
@@ -27,6 +28,41 @@ INTERFACE_KEY = 'interface'
 INTERFACE_SUITES = frozenset({'base', 'logprob', 'experts', 'toolcall', 'reasoning'})
 GENERATE_SUITES = frozenset({'base', 'logprob', 'experts'})
 INTERFACE_SUITE_ORDER = ('base', 'logprob', 'experts', 'toolcall', 'reasoning')
+INTERFACE_BACKENDS_ENV = 'INTERFACE_BACKENDS'
+
+
+def get_interface_backend_list(backends: list[str] | None = None) -> list[str]:
+    """Backends for interface REST collection.
+
+    Priority:
+    1. explicit ``backends`` argument
+    2. env ``INTERFACE_BACKENDS`` (``pytorch``, ``turbomind``, or comma/JSON list)
+    3. ``BACKEND_LIST``
+    """
+    if backends is not None:
+        return list(backends)
+    raw = os.environ.get(INTERFACE_BACKENDS_ENV, '').strip()
+    if not raw:
+        return list(constant.BACKEND_LIST)
+    if raw.startswith('['):
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            value = json.loads(raw.replace("'", '"'))
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise ValueError(f'{INTERFACE_BACKENDS_ENV} must be a string list, got {raw!r}')
+        selected = [str(x).strip() for x in value if str(x).strip()]
+    else:
+        selected = [part.strip() for part in raw.replace(';', ',').split(',') if part.strip()]
+    unknown = [b for b in selected if b not in constant.BACKEND_LIST]
+    if unknown:
+        raise ValueError(
+            f'{INTERFACE_BACKENDS_ENV} unknown backend(s) {unknown}; '
+            f'expected subset of {constant.BACKEND_LIST}',
+        )
+    # Keep stable order from BACKEND_LIST
+    return [b for b in constant.BACKEND_LIST if b in selected]
+
 
 
 def _entry_engine_config(entry: dict[str, Any]) -> dict[str, Any]:
@@ -593,7 +629,7 @@ def get_interface_matrix(
     """
     config = get_config()
     matrix_env = env_key or _model_matrix_env_key(config)
-    backend_filter = list(backends) if backends is not None else list(constant.BACKEND_LIST)
+    backend_filter = get_interface_backend_list(backends)
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -665,9 +701,6 @@ def get_interface_run_config_list(
             continue
         profiles = set(_normalize_profiles(entry.get('model_type', 'chat')))
         if not (profiles & wanted):
-            continue
-        # chat+vl rows are covered by llm (chat); keep mllm for vl-only.
-        if wanted == {'vl'} and 'chat' in profiles:
             continue
         layout = _parallel_layout(_entry_engine_config(entry))
         if not _parallel_dicts_equal(layout, parallel_config):

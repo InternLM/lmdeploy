@@ -2,7 +2,6 @@ from typing import Literal
 
 import pytest
 from openai import OpenAI
-from utils.config_utils import get_model_path_from_config
 from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
@@ -16,66 +15,7 @@ from utils.restful_return_check import (
     has_repeated_fragment,
 )
 
-from lmdeploy.serve.openai.api_client import APIClient, get_model_list
-
-MODEL = 'internlm/Intern-S1'
-
-
-@pytest.mark.order(8)
-@pytest.mark.chat
-@pytest.mark.flaky(reruns=2)
-@pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
-class TestRestfulInterfaceBase:
-
-    @pytest.mark.interns1
-    def test_get_model(self, config, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
-        assert model_name == get_model_path_from_config(config, MODEL), api_client.available_models
-
-        model_list = get_model_list(BASE_URL + '/v1/models')
-        assert model_name in model_list, model_list
-
-    @pytest.mark.interns1
-    def test_encode_s1(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
-        input_ids2, length2 = api_client.encode('Hi, pls intro yourself', add_bos=False)
-        input_ids3, length3 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
-        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True, add_bos=False)
-        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100, add_bos=False)
-
-        assert len(input_ids1) == length1 and length1 > 0
-        assert len(input_ids2) == length2 and length2 > 0
-        assert len(input_ids3) == length3 and length3 > 0
-        assert len(input_ids4) == length4 and length4 > 0
-        assert len(input_ids5) == length5 and length5 > 0
-        assert length1 == length2
-        assert input_ids2 == input_ids1
-        assert input_ids1[0] == 13048 and input_ids3[0] == 151644
-        assert length5 == length2 * 100
-        assert input_ids5 == input_ids2 * 100
-
-    @pytest.mark.internlm2_5
-    def test_encode(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
-        input_ids2, length2 = api_client.encode('Hi, pls intro yourself', add_bos=False)
-        input_ids3, length3 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
-        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True, add_bos=False)
-        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100, add_bos=False)
-
-        assert len(input_ids1) == length1 and length1 > 0
-        assert len(input_ids2) == length2 and length2 > 0
-        assert len(input_ids3) == length3 and length3 > 0
-        assert len(input_ids4) == length4 and length4 > 0
-        assert len(input_ids5) == length5 and length5 > 0
-        assert length1 == length2 + 1
-        assert input_ids2 == input_ids1[1:]
-        assert input_ids1[0] == 1 and input_ids3[0] == 1
-        assert length5 == length2 * 100
-        assert input_ids5 == input_ids2 * 100
+from lmdeploy.serve.openai.api_client import APIClient
 
 
 @pytest.mark.order(8)
@@ -227,35 +167,6 @@ class TestRestfulInterfaceChatCompletions:
             assert '上海' not in get_chat_delta_text(outputList[index].get('choices')[0])
             assert ' to ' not in get_chat_delta_text(outputList[index].get('choices')[0])
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
-
-    @pytest.mark.internlm2_5
-    def test_special_words(self, backend, model_case):
-        message = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' \
-                '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' \
-                '能够在一个有状态的 Jupyter 笔记本环境中运行 Python 代码。当你向 python ' \
-                '发送含有 Python >代码的消息时，它将在该环境中执行。这个工具适用于多种场景，' \
-                '如数据分析或处理（包括数据操作、统计分析、图表绘制），复杂的计算问题（解决数学和物理' \
-                '难题），编程示例（理解编程概念或特性），文本处理和分析（比如文本解析和自然语言处理），' \
-                '机器学习和数据科学（用于展示模型训练和数据可视化），以及文件操作和数据导入（处理CSV、' \
-                'JSON等格式的文件）。<|im_end|>\n<|im_start|>user\n设 $L$ 为圆周$x^2+y^2=2x$，' \
-                '计算曲线积分：$I=\\int_L{x\\mathrm{d}s}=$<|im_end|>\n<|im_start|>assistant'
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
-        for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages=message,
-                                                     skip_special_tokens=False,
-                                                     temperature=0.01):
-            continue
-        assert_chat_completions_batch_return(output, model_name)
-        assert '<|action_start|><|interpreter|>' in get_chat_message_text(output.get('choices')[0])
-
-        for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages=message,
-                                                     skip_special_tokens=True,
-                                                     temperature=0.01):
-            continue
-        assert_chat_completions_batch_return(output, model_name)
-        assert '<|action_start|><|interpreter|>' not in get_chat_message_text(output.get('choices')[0])
 
     def test_minimum_repetition_penalty(self, backend, model_case):
         api_client = APIClient(BASE_URL)

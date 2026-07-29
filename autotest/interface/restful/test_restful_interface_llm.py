@@ -1,14 +1,13 @@
 """Interface REST coverage for LLM (self-start api_server, GPU xdist)."""
 
 import pytest
-from utils.config_utils import get_interface_run_config_list
-from utils.constant import BACKEND_LIST
+from utils.config_utils import get_interface_backend_list, get_interface_run_config_list
 from utils.run_interface_restful import run_interface_restful_test
 
 
 def _iface_configs(tp: int):
     rows = []
-    for backend in BACKEND_LIST:
+    for backend in get_interface_backend_list():
         rows.extend(
             get_interface_run_config_list(backend, {'tp': tp}, model_types=('chat', 'base')),
         )

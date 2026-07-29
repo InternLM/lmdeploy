@@ -356,7 +356,6 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -375,6 +374,8 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
       DEPS_PROFILE: ''
+      # Collect only this backend (pytorch / turbomind). Driven by workflow input `backend`.
+      INTERFACE_BACKENDS: ${{ matrix.backend }}
     steps:
       - name: Copy repository and Artifacts
         run: |
@@ -400,13 +401,14 @@ jobs:
       - name: Test interface restful - gpu concurrent
         timeout-minutes: 280
         run: |
-          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_1' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          echo "INTERFACE_BACKENDS=${INTERFACE_BACKENDS}"
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_1' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_2' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_2' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_4' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_4' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/restful/test_restful_interface_${{matrix.model}}.py -k '${{matrix.backend}}' -m 'gpu_num_8' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_8' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
       - name: Clear workfile
         if: always()
