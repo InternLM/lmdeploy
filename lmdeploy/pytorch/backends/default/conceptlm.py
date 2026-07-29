@@ -263,8 +263,13 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         )
 
     def decode_concept_position_ids(self, position_ids: Tensor) -> Tensor:
-        """Return reference RoPE positions for emitted decode concept rows."""
-        return (position_ids - self.chunk_size + 1).clamp(min=0)
+        """Return compressed-timeline RoPE positions for decode concept rows."""
+        concept_index = torch.div(
+            position_ids + 1,
+            self.chunk_size,
+            rounding_mode='floor',
+        ) - 1
+        return concept_index.clamp(min=0)
 
     def _get_max_concepts_per_request(self, token_attn_metadata: Any, concept_q_seqlens: Tensor) -> int:
         """Return per-request concept attention bound without hidden context
@@ -327,7 +332,16 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         concept_seq = torch.searchsorted(concept_cu_seqlens_long[1:], concept_ids, right=True)
         local_concept_ids = concept_ids - concept_cu_seqlens_long[concept_seq]
         concept_token_start = token_layout.q_start_loc_long[concept_seq] + local_concept_ids * self.chunk_size
-        concept_position_ids = position_ids[concept_token_start]
+        # DCP/Megatron V21 builds HLM rotary embeddings on the compressed
+        # concept timeline, not on the original token timeline.  For ordinary
+        # full-prompt prefill this yields 0, 1, 2, ...; deriving it from token
+        # position ids keeps non-zero-offset chunks on the same absolute
+        # concept index.
+        concept_position_ids = torch.div(
+            position_ids[concept_token_start].to(dtype=torch.long),
+            self.chunk_size,
+            rounding_mode='floor',
+        )
         max_concepts_per_request = self._get_max_concepts_per_request(token_attn_metadata, concept_q_seqlens_long)
 
         return _PrefillConceptLayout(
