@@ -2,6 +2,7 @@
 // https://github.com/QwenLM/FlashQLA/blob/60f81453143e724bcaf3fc7921e71e7328f6ebcd/flash_qla/ops/gated_delta_rule/chunk/hopper/kkt_solve.py
 
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/internal.h"
+#include "src/turbomind/kernels/linear_attn/kernel/sm_90/pdl.h"
 
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/smem.h"
@@ -19,6 +20,7 @@
 #include <cute/swizzle_layout.hpp>
 #include <cute/tensor.hpp>
 #include <cute/underscore.hpp>
+#include <cutlass/arch/grid_dependency_control.h>
 
 #include <cute/algorithm/clear.hpp>
 #include <cute/algorithm/cooperative_gemm.hpp>
@@ -151,6 +153,7 @@ struct Sm90KktSolve {
     static __device__ __forceinline__ void AcquireAndPrefetchTmaDescriptors(const CUtensorMap* desc, int tid)
     {
         if (tid == kKktKDesc || tid == kKktResolventDesc) {
+            cutlass::arch::wait_on_dependent_grids();
             cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(&desc[tid]));
             cute::prefetch_tma_descriptor(&desc[tid]);
         }
@@ -519,11 +522,21 @@ struct Sm90KktSolve {
         uint64_t* k_ready0 = &smem.k_ready0;
         uint64_t* k_ready1 = &smem.k_ready1;
 
-        using MmaElement       = Element;
-        MmaElement* k_tile0    = smem.k_tile;
-        MmaElement* k_tile1    = smem.k_tile + kKTilePlaneElems;
-        float*      beta_stage = smem.beta_stage;
-        const auto* gmem_desc  = tma_desc_workspace + sequence_id * kKktTmaDescCount;
+        using MmaElement            = Element;
+        MmaElement* k_tile0         = smem.k_tile;
+        MmaElement* k_tile1         = smem.k_tile + kKTilePlaneElems;
+        float*      beta_stage      = smem.beta_stage;
+        const int   first_beta_quad = value_head_base / 4;
+        IssueBetaQuadAsync(beta_stage,
+                           beta,
+                           role_tid,
+                           valid,
+                           first_beta_quad,
+                           physical_batch,
+                           local_beta_token0,
+                           beta_stride,
+                           beta_batch_stride);
+        const auto* gmem_desc = tma_desc_workspace + sequence_id * kKktTmaDescCount;
         AcquireAndPrefetchTmaDescriptors(gmem_desc, tx);
         const CUtensorMap* k_desc         = &gmem_desc[kKktKDesc];
         const CUtensorMap* resolvent_desc = &gmem_desc[kKktResolventDesc];
@@ -572,8 +585,7 @@ struct Sm90KktSolve {
                     cute::make_tensor(cute::make_rmem_ptr(gram_fragment),
                                       cute::partition_shape_C(gmma64, cute::Shape<cute::_64, cute::_64>{}));
 
-                constexpr int k_tma_box_rows  = kChunkSize;
-                const int     first_beta_quad = value_head_base / 4;
+                constexpr int k_tma_box_rows = kChunkSize;
                 if (role_tid == 0) {
                     // Transaction bytes match the fixed descriptor box; TMA zero-fills OOB rows.
                     cute::set_barrier_transaction_bytes(*k_ready0, k_tma_box_rows * kKTileTmaDim * sizeof(MmaElement));
@@ -585,15 +597,6 @@ struct Sm90KktSolve {
                     cute::SM90_TMA_LOAD_5D::copy(
                         k_desc, k_ready1, kTmaNoCacheHint, k_tile1, 0, 1, qk_head, token0, batch_id);
                 }
-                IssueBetaQuadAsync(beta_stage,
-                                   beta,
-                                   role_tid,
-                                   valid,
-                                   first_beta_quad,
-                                   physical_batch,
-                                   local_beta_token0,
-                                   beta_stride,
-                                   beta_batch_stride);
                 // Acquire both K halves from TMA completion at phase 0; all expected
                 // bytes are visible to the consumer WG before asynchronous SM90 GMMA.
                 cute::wait_barrier(*k_ready0, 0);
@@ -1008,6 +1011,7 @@ struct Sm90KktSolve {
                     }
                 }
                 if (role_tid == 0) {
+                    cutlass::arch::launch_dependent_grids();
                     // Acquire/drain all remaining output stores. The leader keeps the CTA
                     // alive until the final TMA store has completed.
                     cute::tma_store_wait<0>();
@@ -1081,19 +1085,22 @@ void LaunchKktSolveTyped(const K*            k_ptr,
     const int32_t* offsets_ptr    = q_offsets.data<int32_t>();
     const bool*    finished_ptr   = finished.data<bool>();
     auto*          desc_workspace = reinterpret_cast<CUtensorMap*>(tma_desc_workspace);
-    Sm90KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>
-        <<<grid, Kernel::kKktSolveConsumerWgs * ConsumerThreads, shared_bytes, stream>>>(beta_ptr,
-                                                                                         offsets_ptr,
-                                                                                         finished_ptr,
-                                                                                         desc_workspace,
-                                                                                         problem.token_num,
-                                                                                         problem.sequence_num,
-                                                                                         problem.hq,
-                                                                                         problem.hv,
-                                                                                         problem.beta_stride,
-                                                                                         problem.beta_batch_stride,
-                                                                                         groups_per_k_head);
-    TM_CUDA_CHECK(cudaGetLastError());
+    detail::LaunchPdlKernel(grid,
+                            dim3(Kernel::kKktSolveConsumerWgs * ConsumerThreads),
+                            shared_bytes,
+                            stream,
+                            Sm90KktSolveKernel<K, ConsumerThreads, ConsumerRegisters>,
+                            beta_ptr,
+                            offsets_ptr,
+                            finished_ptr,
+                            desc_workspace,
+                            problem.token_num,
+                            problem.sequence_num,
+                            problem.hq,
+                            problem.hv,
+                            problem.beta_stride,
+                            problem.beta_batch_stride,
+                            groups_per_k_head);
 }
 
 void LaunchSm90KktSolveImpl(const core::Tensor& k,

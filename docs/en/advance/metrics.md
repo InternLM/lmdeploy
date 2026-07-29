@@ -2,6 +2,11 @@
 
 LMDeploy exposes a set of metrics via Prometheus, and provides visualization via Grafana.
 
+For the Turbomind backend, `lmdeploy:gpu_cache_usage_perc` is the number of bytes held by live prefix-cache and
+checkpoint objects divided by the configured cache-region size. Prefix-cache hit metrics count prompt tokens that
+the engine actually skips when a request is first scheduled. Turbomind currently reports scheduler metrics for DP 1;
+per-rank Turbomind metrics with DP greater than 1 are not yet supported.
+
 ## Setup Guide
 
 This section describes how to set up the monitoring stack (Prometheus + Grafana) provided in the `lmdeploy/monitoring` directory.

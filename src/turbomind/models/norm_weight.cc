@@ -7,7 +7,10 @@
 
 namespace turbomind {
 
-NormWeight::NormWeight(const core::NormConfig& cfg): shape_{cfg.dim}, dtype_{cfg.data_type}, norm_eps_{cfg.norm_eps} {}
+NormWeight::NormWeight(const core::NormConfig& cfg):
+    shape_{cfg.dim}, dtype_{cfg.data_type}, norm_eps_{cfg.norm_eps}, zero_centered_{cfg.zero_centered}
+{
+}
 
 void NormWeight::prepare()
 {
