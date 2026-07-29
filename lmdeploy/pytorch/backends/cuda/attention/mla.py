@@ -1,15 +1,136 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import functools
+from collections.abc import Hashable
+from dataclasses import dataclass
 
 import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
+from ..step_metadata import CudaAttentionMetaBuilder
 from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
+
+
+@dataclass
+class FlashMLAAttentionMetadata:
+    """Scheduler metadata owned by one FlashMLA configuration."""
+
+    tile_scheduler_metadata: torch.Tensor = None
+    num_splits: torch.Tensor = None
+
+
+def _build_flash_mla_metadata(kv_seqlens,
+                              num_attention_heads: int,
+                              decoding_query_len: int,
+                              is_fp8_kvcache: bool,
+                              index_topk: int | None) -> FlashMLAAttentionMetadata:
+    """Build scheduler metadata from one selected FlashMLA implementation."""
+    import flash_mla
+
+    num_attention_heads *= decoding_query_len
+    num_heads_q = None if index_topk is None else num_attention_heads
+    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
+        kv_seqlens.to(torch.int32),
+        num_attention_heads,
+        num_heads_k=1,
+        num_heads_q=num_heads_q,
+        is_fp8_kvcache=is_fp8_kvcache,
+        topk=index_topk,
+    )
+    return FlashMLAAttentionMetadata(
+        tile_scheduler_metadata=tile_scheduler_metadata,
+        num_splits=num_splits,
+    )
+
+
+def build_flash_mla_metadata(sequence_metadata, **kwargs) -> FlashMLAAttentionMetadata:
+    """Build scheduler metadata from one selected FlashMLA implementation."""
+    return _build_flash_mla_metadata(sequence_metadata.kv_seqlens, **kwargs)
+
+
+def update_flash_mla_metadata(attn_metadata, **kwargs) -> None:
+    """Populate the legacy single-group FlashMLA metadata fields."""
+    metadata = build_flash_mla_metadata(attn_metadata, **kwargs)
+    if attn_metadata.block_offsets.dtype != torch.int32:
+        attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
+    attn_metadata.tile_scheduler_metadata = metadata.tile_scheduler_metadata
+    attn_metadata.num_splits = metadata.num_splits
+
+
+def build_flash_mla_graph_metadata(step_context, kv_seqlens,
+                                   decoding_query_len: int) -> FlashMLAAttentionMetadata:
+    """Build legacy graph metadata from the model-level FlashMLA
+    configuration."""
+    num_attention_heads, _ = step_context.model_config.get_num_qkv_head_by_tp()
+    model_config = step_context.model_config
+    return _build_flash_mla_metadata(
+        kv_seqlens,
+        num_attention_heads=num_attention_heads,
+        decoding_query_len=decoding_query_len,
+        is_fp8_kvcache=model_config.use_mla_fp8_cache,
+        index_topk=model_config.mla_index_topk,
+    )
+
+
+@dataclass(frozen=True)
+class FlashMLAAttentionMetaBuilder(CudaAttentionMetaBuilder[FlashMLAAttentionMetadata]):
+    """Build metadata requested by one selected FlashMLA configuration."""
+
+    num_attention_heads: int
+
+    @property
+    def key(self) -> Hashable:
+        return (type(self), self.num_attention_heads)
+
+    def build(self, step_context, sequence_metadata) -> FlashMLAAttentionMetadata:
+        if not step_context.is_decoding:
+            return FlashMLAAttentionMetadata()
+        batch_size = sequence_metadata.q_seqlens.size(0)
+        model_config = step_context.model_config
+        return build_flash_mla_metadata(
+            sequence_metadata,
+            num_attention_heads=self.num_attention_heads,
+            decoding_query_len=step_context.input_ids.size(1) // batch_size,
+            is_fp8_kvcache=model_config.use_mla_fp8_cache,
+            index_topk=model_config.mla_index_topk,
+        )
+
+    def apply_legacy_metadata(self, attn_metadata, metadata: FlashMLAAttentionMetadata) -> None:
+        attn_metadata.tile_scheduler_metadata = metadata.tile_scheduler_metadata
+        attn_metadata.num_splits = metadata.num_splits
+
+    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context):
+        model_config = step_context.model_config
+        metadata = _build_flash_mla_metadata(
+            torch.ones(graph_meta.max_batchs, dtype=torch.int32, device=graph_meta.device),
+            num_attention_heads=self.num_attention_heads,
+            decoding_query_len=graph_meta.decode_query_len,
+            is_fp8_kvcache=model_config.use_mla_fp8_cache,
+            index_topk=model_config.mla_index_topk,
+        )
+        return metadata.tile_scheduler_metadata, metadata.num_splits
+
+    def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
+                              buffer) -> FlashMLAAttentionMetadata:
+        model_config = step_context.model_config
+        metadata = _build_flash_mla_metadata(
+            input_buffers['kv_seqlens'],
+            num_attention_heads=self.num_attention_heads,
+            decoding_query_len=graph_meta.decode_query_len,
+            is_fp8_kvcache=model_config.use_mla_fp8_cache,
+            index_topk=model_config.mla_index_topk,
+        )
+        tile_scheduler_metadata, num_splits = buffer
+        tile_scheduler_metadata.copy_(metadata.tile_scheduler_metadata)
+        num_splits.copy_(metadata.num_splits)
+        return FlashMLAAttentionMetadata(
+            tile_scheduler_metadata=tile_scheduler_metadata,
+            num_splits=num_splits,
+        )
 
 
 def _cdiv(a, b):
@@ -141,6 +262,17 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         self.nsa_updater = NSAIndicesUpdater.build()
 
+    def get_step_metadata_provider(self):
+        """Describe metadata required by this selected implementation."""
+        return FlashMLAAttentionMetaBuilder(num_attention_heads=self.num_heads)
+
+    def _get_scheduler_metadata(self, attn_metadata: TritonAttentionMetadata):
+        kernel_metadata = self.get_step_kernel_metadata(attn_metadata)
+        if kernel_metadata is None:
+            return attn_metadata.tile_scheduler_metadata, attn_metadata.num_splits
+        assert isinstance(kernel_metadata, FlashMLAAttentionMetadata)
+        return kernel_metadata.tile_scheduler_metadata, kernel_metadata.num_splits
+
     def _get_flash_mla_sparse_fwd(self):
         if self.flash_mla_sparse_fwd is not None:
             return self.flash_mla_sparse_fwd
@@ -179,14 +311,15 @@ class FlashMLAImpl(TritonAttentionImpl):
             nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
             causal = False
 
+        tile_scheduler_metadata, num_splits = self._get_scheduler_metadata(attn_metadata)
         attn_output, _ = self.flash_mla_with_kvcache(query,
                                                      k_cache=k_cache,
                                                      block_table=block_offsets,
                                                      cache_seqlens=kv_seqlens,
                                                      head_dim_v=self.v_head_size,
                                                      softmax_scale=self.scale,
-                                                     tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
-                                                     num_splits=attn_metadata.num_splits,
+                                                     tile_scheduler_metadata=tile_scheduler_metadata,
+                                                     num_splits=num_splits,
                                                      causal=causal,
                                                      is_fp8_kvcache=is_fp8_kvcache,
                                                      indices=nsa_indices)

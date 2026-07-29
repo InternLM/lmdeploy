@@ -80,6 +80,9 @@ class CUDASingleGraphRunner:
         self.model = model
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
+        step_meta_plan = getattr(self.ctx_mgr, 'backend_step_meta_plan', None)
+        if not getattr(step_meta_plan, 'is_supported', False):
+            step_meta_plan = None
 
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
@@ -99,6 +102,7 @@ class CUDASingleGraphRunner:
             use_mrope=model_config.use_mrope,
             block_size=model_config.block_size,
             decode_query_len=decode_query_len,
+            step_meta_plan=step_meta_plan,
         )
         self.device = device
         self.max_batches = max_batches
