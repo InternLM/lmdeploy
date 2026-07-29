@@ -167,6 +167,7 @@ Notes:
   (covers chat/base/vl via config `interface`; chat+vl rows use the chat path).
   Each case self-starts `api_server` via `worker_id` port/GPU isolation.
 - Backend filter env: `INTERFACE_BACKENDS=pytorch` / `turbomind` / `pytorch,turbomind` (workflow `test_restful` sets it from input `backend` / matrix).
+- Nested protocol suite concurrency: `INTERFACE_SUITE_WORKERS` (default `20`, same as historical `-n 20`); set `0`/`1` to disable.
 
 ## `quantization`
 
