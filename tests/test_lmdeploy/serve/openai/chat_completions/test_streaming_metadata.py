@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lmdeploy.serve.core.chat_runner import _StreamTokenMetadata
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 
 
@@ -80,7 +81,7 @@ class _FakeAsyncEngine:
                     generate_token_len=1,
                     cached_tokens=0,
                     finish_reason=output.get('finish_reason'),
-                    cache_block_ids=None,
+                    cache_block_ids=output.get('cache_block_ids'),
                     routed_experts=None,
                 )
 
@@ -99,6 +100,7 @@ class _FakeRawRequest:
 class _StreamingMetadataParser:
 
     tool_parser_cls = None
+    seen_token_ids = []
 
     def __init__(self, request):
         self.request = request
@@ -106,6 +108,7 @@ class _StreamingMetadataParser:
         self.reasoning_tokens = 0
 
     def stream_chunk(self, delta_text, delta_token_ids, **kwargs):
+        self.seen_token_ids.append(delta_token_ids)
         if delta_text in ('<hidden>', '<empty>'):
             return []
         if delta_text:
@@ -124,6 +127,7 @@ def install_fake_chat_server(chat_endpoint):
     endpoint, context = chat_endpoint
 
     def _install(outputs):
+        _StreamingMetadataParser.seen_token_ids.clear()
         engine = _FakeAsyncEngine(outputs)
         context.async_engine = engine
         context.response_parser_cls = _StreamingMetadataParser
@@ -250,3 +254,61 @@ def test_terminal_empty_parser_result_emits_finish_reason_without_empty_content(
     assert choice['output_ids'] == [101]
     assert choice['output_token_logprobs'] == [[-0.1, 101]]
     assert [item['token'] for item in choice['logprobs']['content']] == ['tok101']
+
+
+def test_unrequested_metadata_is_not_buffered_but_parser_still_receives_token_ids(install_fake_chat_server):
+    chat_stream = install_fake_chat_server([
+        {
+            'response': '<hidden>',
+            'token_ids': [101, 102],
+            'logprobs': [{
+                101: -0.1,
+            }, {
+                102: -0.2,
+            }],
+            'finish_reason': None,
+        },
+        {
+            'response': 'visible',
+            'token_ids': [103],
+            'logprobs': [{
+                103: -0.3,
+            }],
+            'finish_reason': None,
+        },
+    ])
+
+    payloads = chat_stream(logprobs=False, return_logprob=False, return_token_ids=False)
+
+    assert _StreamingMetadataParser.seen_token_ids == [[101, 102], [103]]
+    choice = _choice(payloads[0])
+    assert 'output_ids' not in choice
+    assert 'output_token_logprobs' not in choice
+    assert 'logprobs' not in choice
+
+
+def test_stream_metadata_rejects_misaligned_logprobs():
+    with pytest.raises(ValueError, match='same length'):
+        _StreamTokenMetadata.from_result(
+            [101, 102],
+            [{
+                101: -0.1,
+            }],
+            keep_token_ids=True,
+            keep_logprobs=True,
+        )
+
+
+@pytest.mark.parametrize('response, finish_reason', [('visible', None), ('<empty>', 'stop')])
+def test_cache_remote_token_ids_exclude_buffered_metadata(install_fake_chat_server, response, finish_reason):
+    chat_stream = install_fake_chat_server([
+        {'response': '<hidden>', 'token_ids': [101]},
+        {'response': response, 'token_ids': [102], 'finish_reason': finish_reason, 'cache_block_ids': [7]},
+    ])
+
+    payloads = chat_stream(logprobs=False, return_logprob=False)
+
+    assert len(payloads) == 1
+    assert _choice(payloads[0])['output_ids'] == [101, 102]
+    assert payloads[0]['cache_block_ids'] == [7]
+    assert payloads[0]['remote_token_ids'] == [102]

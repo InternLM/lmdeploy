@@ -299,7 +299,8 @@ def test_deepseek_v4_response_parser_streaming_dsml_tool_call():
 
     assert reasoning == 'need a tool'
     assert tool_deltas[0].function.name == 'search'
-    assert json.loads(tool_deltas[1].function.arguments) == {'query': 'DeepSeek V4'}
+    arguments = ''.join(tool_call.function.arguments or '' for tool_call in tool_deltas)
+    assert json.loads(arguments) == {'query': 'DeepSeek V4'}
 
 
 def test_deepseek_v4_response_parser_reasoning_effort_does_not_enable_thinking():

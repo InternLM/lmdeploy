@@ -30,6 +30,7 @@ class KimiK2ToolParser(ToolParser):
 
     def __init__(self):
         super().__init__()
+        self._tool_payload = ''
         self._section_start_index = 0
         self._stream_scan_pos = 0
         self._stream_emitted_calls = 0
@@ -52,6 +53,7 @@ class KimiK2ToolParser(ToolParser):
         self._reset_stream_state()
 
     def _reset_stream_state(self) -> None:
+        self._tool_payload = ''
         self._stream_scan_pos = 0
         self._stream_emitted_calls = 0
 

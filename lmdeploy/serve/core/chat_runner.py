@@ -29,24 +29,42 @@ def should_validate_complete(
 class _StreamTokenMetadata:
     """Token metadata buffered across parser steps with no visible delta."""
 
-    token_ids: list[int]
-    logprobs: list[dict[int, float]]
+    token_ids: list[int] | None
+    logprobs: list[dict[int, float]] | None
 
     @classmethod
-    def from_result(cls, token_ids: list[int] | None, logprobs: list[dict[int, float]] | None):
-        return cls(list(token_ids or []), list(logprobs or []))
+    def from_result(
+        cls,
+        token_ids: list[int] | None,
+        logprobs: list[dict[int, float]] | None,
+        *,
+        keep_token_ids: bool,
+        keep_logprobs: bool,
+    ) -> _StreamTokenMetadata:
+        if keep_logprobs and logprobs is not None and len(token_ids or []) != len(logprobs):
+            raise ValueError('Token ids and logprobs must have the same length.')
+        return cls(
+            list(token_ids or []) if keep_token_ids else None,
+            list(logprobs or []) if keep_logprobs else None,
+        )
 
     def extend(self, other: _StreamTokenMetadata) -> None:
-        self.token_ids.extend(other.token_ids)
-        self.logprobs.extend(other.logprobs)
+        if self.token_ids is not None:
+            assert other.token_ids is not None
+            self.token_ids.extend(other.token_ids)
+        if self.logprobs is not None:
+            assert other.logprobs is not None
+            self.logprobs.extend(other.logprobs)
 
     def pop_with(self, current: _StreamTokenMetadata) -> _StreamTokenMetadata:
         merged = _StreamTokenMetadata(
-            token_ids=self.token_ids + current.token_ids,
-            logprobs=self.logprobs + current.logprobs,
+            token_ids=None if self.token_ids is None else self.token_ids + (current.token_ids or []),
+            logprobs=None if self.logprobs is None else self.logprobs + (current.logprobs or []),
         )
-        self.token_ids.clear()
-        self.logprobs.clear()
+        if self.token_ids is not None:
+            self.token_ids.clear()
+        if self.logprobs is not None:
+            self.logprobs.clear()
         return merged
 
 
@@ -186,13 +204,23 @@ class ChatRunner:
         """Yield parser-normalized streaming chunks and clean up the
         session."""
         streaming_tools = False
-        pending_token_metadata = _StreamTokenMetadata.from_result(None, None)
+        keep_logprobs = bool(self.request.logprobs or self.request.return_logprob)
+        keep_token_ids = bool(self.request.return_token_ids or keep_logprobs)
+        pending_token_metadata = _StreamTokenMetadata(
+            token_ids=[] if keep_token_ids else None,
+            logprobs=[] if keep_logprobs else None,
+        )
         try:
             async for res in self.result_generator:
                 delta_text = res.response or ''
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
-                current_token_metadata = _StreamTokenMetadata.from_result(res.token_ids, res.logprobs)
                 try:
+                    current_token_metadata = _StreamTokenMetadata.from_result(
+                        res.token_ids,
+                        res.logprobs,
+                        keep_token_ids=keep_token_ids,
+                        keep_logprobs=keep_logprobs,
+                    )
                     stream_deltas = self.response_parser.stream_chunk(
                         delta_text,
                         delta_token_ids,
@@ -202,7 +230,10 @@ class ChatRunner:
                         pending_token_metadata.extend(current_token_metadata)
                         if res.finish_reason is None:
                             continue
-                        current_token_metadata = _StreamTokenMetadata.from_result(None, None)
+                        current_token_metadata = _StreamTokenMetadata(
+                            token_ids=[] if keep_token_ids else None,
+                            logprobs=[] if keep_logprobs else None,
+                        )
                         stream_deltas = [(DeltaMessage(role='assistant'), False)]
 
                     if (
@@ -226,12 +257,12 @@ class ChatRunner:
                         finish_reason = 'tool_calls'
 
                     stream_token_metadata = (pending_token_metadata.pop_with(current_token_metadata)
-                                             if is_last_delta else _StreamTokenMetadata.from_result(None, None))
+                                             if is_last_delta else _StreamTokenMetadata(None, None))
                     yield ChatStreamChunk(
                         delta_message=delta_message,
                         tool_emitted=tool_emitted,
                         finish_reason=finish_reason,
-                        token_ids=stream_token_metadata.token_ids,
+                        token_ids=stream_token_metadata.token_ids or [],
                         logprobs=stream_token_metadata.logprobs,
                         input_token_len=res.input_token_len,
                         generate_token_len=res.generate_token_len,

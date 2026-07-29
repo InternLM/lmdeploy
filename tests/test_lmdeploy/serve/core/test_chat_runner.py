@@ -266,7 +266,7 @@ def test_runner_stream_chunks_preserve_metadata():
     async def _run():
         chat_runner = await ChatRunner.prepare(
             context,
-            _request(return_token_ids=True, return_routed_experts=True),
+            _request(return_token_ids=True, return_routed_experts=True, return_logprob=True),
         )
         return [chunk async for chunk in chat_runner.stream()]
 
