@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 
 from utils.config_utils import get_workerid
-from utils.constant import DEFAULT_PORT
+from utils.constant import (
+    DEFAULT_PORT,
+    RESTFUL_BASE_MODEL_LIST,
+    RESTFUL_MODEL_LIST,
+    TOOL_REASONING_MODEL_LIST,
+)
 from utils.run_restful_chat import start_openai_service, terminate_restful_api
 
 _AUTOTEST_ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +38,30 @@ def _suite_workers() -> int:
     if value < 0:
         raise ValueError(f'{INTERFACE_SUITE_WORKERS_ENV} must be >= 0, got {value}')
     return value
+
+
+def _protocol_model_candidates() -> list[str]:
+    """Model ids used as pytest params in interface protocol suites."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in (*RESTFUL_MODEL_LIST, *RESTFUL_BASE_MODEL_LIST, *TOOL_REASONING_MODEL_LIST):
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _pytest_k_expr(model: str, backend: str) -> str:
+    """Build ``-k`` expression that does not also match longer sibling ids.
+
+    Pytest ``-k`` is substring match, so ``Qwen/...-A3B`` would also select
+    ``Qwen/...-A3B-FP8``. Exclude every known param id that contains ``model``.
+    """
+    parts = [model, backend]
+    for other in _protocol_model_candidates():
+        if other != model and model in other:
+            parts.append(f'not {other}')
+    return ' and '.join(parts)
 
 
 def _scrub_outer_xdist_env(env: dict[str, str]) -> dict[str, str]:
@@ -104,7 +133,7 @@ def run_interface_restful_test(config, run_config, worker_id) -> None:
             pieces.append(py_path)
         env['PYTHONPATH'] = os.pathsep.join(pieces)
 
-        k_expr = f'{model} and {backend}'
+        k_expr = _pytest_k_expr(model, backend)
         failures: list[str] = []
 
         suite_map = [
