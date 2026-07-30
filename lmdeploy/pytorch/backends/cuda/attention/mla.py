@@ -3,6 +3,7 @@
 import functools
 from collections.abc import Hashable
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 
@@ -19,8 +20,11 @@ logger = get_logger('lmdeploy')
 class FlashMLAAttentionMetadata:
     """Scheduler metadata owned by one FlashMLA configuration."""
 
-    tile_scheduler_metadata: torch.Tensor = None
-    num_splits: torch.Tensor = None
+    # FlashMLA <= 0.x returns tensors here. FlashMLA 1.x returns a
+    # FlashMLASchedMeta object that lazily owns those tensors.
+    tile_scheduler_metadata: Any = None
+    num_splits: torch.Tensor | None = None
+    scheduler_depends_on_step: bool = False
 
 
 def _build_flash_mla_metadata(kv_seqlens,
@@ -44,6 +48,9 @@ def _build_flash_mla_metadata(kv_seqlens,
     return FlashMLAAttentionMetadata(
         tile_scheduler_metadata=tile_scheduler_metadata,
         num_splits=num_splits,
+        # The dense scheduler reads kv_seqlens. The current sparse decode call
+        # uses a fixed top-k width and does not pass topk_length.
+        scheduler_depends_on_step=index_topk is None,
     )
 
 
@@ -103,19 +110,27 @@ class FlashMLAAttentionMetaBuilder(CudaAttentionMetaBuilder[FlashMLAAttentionMet
         attn_metadata.tile_scheduler_metadata = metadata.tile_scheduler_metadata
         attn_metadata.num_splits = metadata.num_splits
 
-    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context):
+    def make_cudagraph_buffer(self, graph_meta, input_buffers,
+                              step_context) -> FlashMLAAttentionMetadata:
         model_config = step_context.model_config
-        metadata = _build_flash_mla_metadata(
+        return _build_flash_mla_metadata(
             torch.ones(graph_meta.max_batchs, dtype=torch.int32, device=graph_meta.device),
             num_attention_heads=self.num_attention_heads,
             decoding_query_len=graph_meta.decode_query_len,
             is_fp8_kvcache=model_config.use_mla_fp8_cache,
             index_topk=model_config.mla_index_topk,
         )
-        return metadata.tile_scheduler_metadata, metadata.num_splits
 
     def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
-                              buffer) -> FlashMLAAttentionMetadata:
+                              buffer: FlashMLAAttentionMetadata) -> FlashMLAAttentionMetadata:
+        tile_scheduler_metadata = buffer.tile_scheduler_metadata
+        if not isinstance(tile_scheduler_metadata, torch.Tensor):
+            # FlashMLA 1.x initializes this object during the first kernel
+            # call. The pre-capture lifecycle decides whether the warmup
+            # scheduler is reusable or must be replaced.
+            assert buffer.num_splits is None
+            return buffer
+
         model_config = step_context.model_config
         metadata = _build_flash_mla_metadata(
             input_buffers['kv_seqlens'],
@@ -124,13 +139,25 @@ class FlashMLAAttentionMetaBuilder(CudaAttentionMetaBuilder[FlashMLAAttentionMet
             is_fp8_kvcache=model_config.use_mla_fp8_cache,
             index_topk=model_config.mla_index_topk,
         )
-        tile_scheduler_metadata, num_splits = buffer
         tile_scheduler_metadata.copy_(metadata.tile_scheduler_metadata)
-        num_splits.copy_(metadata.num_splits)
-        return FlashMLAAttentionMetadata(
-            tile_scheduler_metadata=tile_scheduler_metadata,
-            num_splits=num_splits,
-        )
+        assert buffer.num_splits is not None and metadata.num_splits is not None
+        buffer.num_splits.copy_(metadata.num_splits)
+        return buffer
+
+    def prepare_cudagraph_capture(self, graph_meta, input_buffers, step_context,
+                                  buffer: FlashMLAAttentionMetadata) -> None:
+        scheduler = buffer.tile_scheduler_metadata
+        if isinstance(scheduler, torch.Tensor) or not buffer.scheduler_depends_on_step:
+            return
+
+        # FlashMLA 1.x only launches its scheduler kernel when these fields are
+        # empty. Warmup initialized the old object, so capture must use a fresh
+        # one to record metadata generation from the graph's input buffers.
+        import flash_mla
+        scheduler, num_splits = flash_mla.get_mla_metadata()
+        assert num_splits is None
+        buffer.tile_scheduler_metadata = scheduler
+        buffer.num_splits = num_splits
 
 
 def _cdiv(a, b):

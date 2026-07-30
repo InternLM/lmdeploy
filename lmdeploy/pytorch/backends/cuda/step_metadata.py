@@ -93,6 +93,9 @@ class CudaAttentionMetaBuilder(ABC, Generic[MetaT]):
         """Fill one group's runner-owned CUDA graph buffers."""
         raise NotImplementedError
 
+    def prepare_cudagraph_capture(self, graph_meta, input_buffers, step_context, buffer) -> None:
+        """Prepare one runner-owned buffer in place for graph capture."""
+
 
 class CudaStepMetaUpdater(ABC):
     """Update non-attention metadata for one inference step."""
@@ -234,6 +237,14 @@ class CudaStepMetaPlan:
             builder.fill_cudagraph_buffer(graph_meta, input_buffers, step_context, buffer)
             for builder, buffer in zip(self.attention_builders, buffers.attention_buffers, strict=True))
         self._attach_attention_metadata(attn_metadata, metadata)
+
+    def prepare_cudagraph_capture(self, graph_meta, input_buffers, step_context: 'StepContext',
+                                  buffers: CudaStepMetaGraphBuffers, attn_metadata) -> None:
+        """Transition grouped metadata after warmup and before capture."""
+        assert self.is_supported
+        for builder, buffer in zip(self.attention_builders, buffers.attention_buffers, strict=True):
+            builder.prepare_cudagraph_capture(graph_meta, input_buffers, step_context, buffer)
+        self._attach_attention_metadata(attn_metadata, buffers.attention_buffers)
 
 
 _active_implementations: ContextVar[list[Any] | None] = ContextVar(

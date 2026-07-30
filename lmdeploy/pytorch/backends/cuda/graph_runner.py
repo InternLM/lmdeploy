@@ -130,6 +130,18 @@ class CUDASingleGraphRunner:
         warmup_buffers = self.model.make_output_buffers(warmup_output)
 
         if self.USE_GRAPH:
+            step_meta_plan = self.meta.step_meta_plan
+            if step_meta_plan is not None:
+                step_ctx = self.ctx_mgr.current_context()
+                assert self.meta.step_meta_buffers is not None
+                step_meta_plan.prepare_cudagraph_capture(
+                    self.meta,
+                    self.meta.input_buffers,
+                    step_ctx,
+                    self.meta.step_meta_buffers,
+                    padded_kwargs['attn_metadata'],
+                )
+
             self._graph = torch.cuda.CUDAGraph()
             # unsafe kernel call in other thread might invalid the capture
             # so we set thread_safe capture mode here.
