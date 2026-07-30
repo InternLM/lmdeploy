@@ -82,18 +82,18 @@ class DFlash(BaseSpecProposer):
                                                            (0, required_blocks - inputs.block_offsets.size(1)),
                                                            value=0)
 
-        batch_size = int(inputs.seq_length.numel())
+        batch_size = inputs.seq_length.numel()
         extra_inputs = ARSpecExtraInputs(
             next_token_ids=inputs.input_ids.new_zeros(batch_size),
             target_hidden_states=inputs.target_hidden_states,
         )
-        context_inputs, target_hidden, context_lengths, context_position_ids = \
+        context_inputs, target_hidden, context_lengths, query_start_positions = \
             self._prepare_context_materialization(inputs, extra_inputs)
         self._materialize_context(context_inputs, target_hidden, cache_engine)
         if not inputs.is_decoding:
             return None
         return self._build_query_inputs(inputs, context_lengths, extra_inputs.next_token_ids,
-                                        context_position_ids)
+                                        query_start_positions=query_start_positions)
 
     def _draft_model(self):
         """Return the underlying draft nn.Module when graph runner wraps it."""
@@ -119,85 +119,52 @@ class DFlash(BaseSpecProposer):
             context_lengths = context_lengths - extra_inputs.num_rejected_tokens.to(context_lengths)
         return context_lengths
 
-    @staticmethod
-    def _slice_by_lengths(tensor: torch.Tensor,
-                          seq_lengths: torch.Tensor,
-                          keep_lengths: torch.Tensor,
-                          max_seq_length: int,
-                          preserve_features: bool = False):
-        """Slice a flattened per-token tensor by per-request valid lengths."""
-        if preserve_features:
-            if tensor.dim() == 3 and tensor.size(0) == 1:
-                flat_tensor = tensor[0]
-            elif tensor.dim() >= 2:
-                flat_tensor = tensor.flatten(0, -2)
-            else:
-                flat_tensor = tensor.reshape(-1)
-        elif tensor.dim() == 2 and tensor.size(0) == 1:
-            flat_tensor = tensor[0]
-        elif tensor.dim() >= 2:
-            flat_tensor = tensor.flatten(0, -2)
-        else:
-            flat_tensor = tensor.reshape(-1)
-        starts = seq_lengths.cumsum(0) - seq_lengths
-        offsets = torch.arange(max_seq_length, device=seq_lengths.device)
-        valid = offsets[None, :] < keep_lengths[:, None]
-        indices = starts[:, None] + offsets[None, :]
-        indices = indices[valid]
-        return flat_tensor.index_select(0, indices)
+    def _query_start_positions(self, model_inputs: ModelInputs, context_lengths: torch.Tensor):
+        """Resolve DFlash query start positions without ragged compaction.
 
-    def _slice_target_position_ids(self, model_inputs: ModelInputs, context_lengths: torch.Tensor):
-        """Slice explicit target positions when the target path provides
-        them."""
+        Decode verifier inputs are fixed-width ``[batch, max_q_seqlen]``
+        blocks, while prefill inputs are packed by their real per-request
+        lengths.  In both cases the draft context materialization may write
+        rejected tail positions into KV cache, but subsequent draft queries
+        expose only the accepted prefix through ``history_lengths`` and these
+        query positions.  Use fixed-size gather/index-select arithmetic instead
+        of compacting position ids with boolean indexing/nonzero.
+        """
+        query_history = model_inputs.history_lengths + context_lengths
         target_position_ids = model_inputs.target_position_ids
         if target_position_ids is None:
-            return None
+            return query_history
         if target_position_ids.dim() == 2 and target_position_ids.size(0) == 1:
             target_position_ids = target_position_ids[0]
         if target_position_ids.dim() != 1:
-            raise RuntimeError('DFlash supports only 1D target_position_ids for draft context materialization, '
+            raise RuntimeError('DFlash supports only 1D target_position_ids for draft query positioning, '
                                f'got shape={tuple(target_position_ids.shape)}.')
-        return self._slice_by_lengths(target_position_ids,
-                                      model_inputs.seq_length,
-                                      context_lengths,
-                                      max_seq_length=model_inputs.max_q_seqlen)
 
-    def _build_context_inputs(self,
-                              model_inputs: ModelInputs,
-                              context_lengths: torch.Tensor,
-                              context_position_ids: torch.Tensor | None = None):
-        """Build draft-cache materialization inputs for committed context
-        tokens."""
-        context_ids = self._slice_by_lengths(model_inputs.input_ids,
-                                             model_inputs.seq_length,
-                                             context_lengths,
-                                             max_seq_length=model_inputs.max_q_seqlen)
-        target_position_ids = None if context_position_ids is None else context_position_ids.unsqueeze(0)
-        return model_inputs.clone(
-            input_ids=context_ids.unsqueeze(0),
-            seq_length=context_lengths,
-            max_q_seqlen=model_inputs.max_q_seqlen,
-            max_kv_seqlen=model_inputs.max_kv_seqlen,
-            sum_kv_seqlen=model_inputs.sum_kv_seqlen,
-            is_decoding=False,
-            target_hidden_states=None,
-            target_position_ids=target_position_ids,
-            target_inputs_embeds=None,
-        )
+        last_offsets = context_lengths.clamp_min(1) - 1
+        if model_inputs.is_decoding:
+            batch_size = model_inputs.seq_length.numel()
+            query_len = model_inputs.max_q_seqlen
+            target_position_ids = target_position_ids.reshape(batch_size, query_len)
+            last_positions = target_position_ids.gather(1, last_offsets[:, None]).squeeze(1)
+        else:
+            starts = model_inputs.seq_length.cumsum(0) - model_inputs.seq_length
+            last_positions = target_position_ids.index_select(0, starts + last_offsets)
+        return last_positions + 1
 
-    def _build_query_inputs(self, model_inputs: ModelInputs, context_lengths: torch.Tensor,
-                            next_token_ids: torch.Tensor, context_position_ids: torch.Tensor | None = None):
+    def _build_query_inputs(self,
+                            model_inputs: ModelInputs,
+                            context_lengths: torch.Tensor,
+                            next_token_ids: torch.Tensor,
+                            *,
+                            query_start_positions: torch.Tensor | None = None):
         """Build one DFlash query block per request: [next, mask, ...]."""
-        batch_size = int(model_inputs.seq_length.numel())
+        batch_size = model_inputs.seq_length.numel()
         query_len = self.num_speculative_tokens + 1
         query_ids = model_inputs.input_ids.new_full((batch_size, query_len), int(self.specdecode_config.mask_token_id))
         query_ids[:, 0] = next_token_ids
         query_history = model_inputs.history_lengths + context_lengths
-        if context_position_ids is None:
+        if query_start_positions is None:
             query_start_positions = query_history
-        else:
-            starts = context_lengths.cumsum(0) - context_lengths
-            query_start_positions = context_position_ids[starts + context_lengths - 1] + 1
         query_positions = query_start_positions[:, None] + torch.arange(query_len, device=query_history.device)[None, :]
         return model_inputs.clone(
             input_ids=query_ids.reshape(1, -1),
@@ -247,14 +214,35 @@ class DFlash(BaseSpecProposer):
         materialization."""
         target_hidden = self._flatten_target_hidden(extra_inputs)
         context_lengths = self._context_lengths(model_inputs, extra_inputs)
-        context_position_ids = self._slice_target_position_ids(model_inputs, context_lengths)
-        context_inputs = self._build_context_inputs(model_inputs, context_lengths, context_position_ids)
-        target_hidden = self._slice_by_lengths(target_hidden,
-                                               model_inputs.seq_length,
-                                               context_lengths,
-                                               max_seq_length=model_inputs.max_q_seqlen,
-                                               preserve_features=True)
-        return context_inputs, target_hidden, context_lengths, context_position_ids
+        if model_inputs.is_decoding:
+            # The decode verifier always provides a fixed speculative block.
+            # Avoid compacting per-row accepted prefixes with boolean indexing:
+            # that lowers to aten::nonzero and forces cudaStreamSynchronize.
+            # Instead write the full verifier block into the draft KV cache and
+            # expose only accepted prefixes through the next query's
+            # history_lengths/query positions.
+            query_start_positions = self._query_start_positions(model_inputs, context_lengths)
+            context_inputs = model_inputs.clone(
+                is_decoding=False,
+                target_hidden_states=None,
+                target_inputs_embeds=None,
+            )
+            return context_inputs, target_hidden, context_lengths, query_start_positions
+
+        # Prefill inputs are already packed by ``model_inputs.seq_length``.
+        # Avoid ragged accepted-prefix compaction here as well: boolean indexing
+        # lowers through ``aten::nonzero`` and can synchronize the CUDA stream.
+        # It is safe to materialize the full prefill block; if a caller carries
+        # shorter ``context_lengths`` (for example from rejected speculative
+        # tails), subsequent query history/positions expose only the committed
+        # prefix.
+        query_start_positions = self._query_start_positions(model_inputs, context_lengths)
+        context_inputs = model_inputs.clone(
+            is_decoding=False,
+            target_hidden_states=None,
+            target_inputs_embeds=None,
+        )
+        return context_inputs, target_hidden, context_lengths, query_start_positions
 
     def materialize_context(
         self,
@@ -285,10 +273,10 @@ class DFlash(BaseSpecProposer):
         if extra_inputs.next_token_ids is None:
             raise RuntimeError('DFlash requires sampled next_token_ids from the target model.')
 
-        context_inputs, target_hidden, context_lengths, context_position_ids = self._prepare_context_materialization(
+        context_inputs, target_hidden, context_lengths, query_start_positions = self._prepare_context_materialization(
             model_inputs, extra_inputs)
         query_inputs = self._build_query_inputs(model_inputs, context_lengths, extra_inputs.next_token_ids,
-                                                context_position_ids)
+                                                query_start_positions=query_start_positions)
 
         self._materialize_context(context_inputs, target_hidden, cache_engine)
         outputs = self._forward(query_inputs, cache_engine=cache_engine)
@@ -296,11 +284,12 @@ class DFlash(BaseSpecProposer):
         if hidden_states.dim() == 3:
             hidden_states = hidden_states[0]
 
-        batch_size = int(query_inputs.seq_length.numel())
+        batch_size = query_inputs.seq_length.numel()
         query_len = self.num_speculative_tokens + 1
-        mask_indices = torch.arange(batch_size * query_len, device=hidden_states.device).view(batch_size, query_len)
-        mask_indices = mask_indices[:, 1:].reshape(-1)
-        logits = self.get_logits(hidden_states[mask_indices][None])[0]
+        hidden_size = hidden_states.size(-1)
+        mask_hidden_states = hidden_states.reshape(batch_size, query_len, hidden_size)[:, 1:].reshape(
+            1, batch_size * self.num_speculative_tokens, hidden_size)
+        logits = self.get_logits(mask_hidden_states)[0]
         draft_token_ids = logits.argmax(dim=-1).view(batch_size, self.num_speculative_tokens)
         return draft_token_ids
 

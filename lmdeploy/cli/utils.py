@@ -532,6 +532,16 @@ class ArgumentHelper:
                                    'cache, excluding weights ')
 
     @staticmethod
+    def num_gpu_blocks(parser):
+        """Add argument num_gpu_blocks to parser."""
+
+        return parser.add_argument('--num-gpu-blocks',
+                                   type=int,
+                                   default=0,
+                                   help='Explicit number of GPU KV cache blocks for PyTorch engine. '
+                                   'Use 0 to auto-size from cache-max-entry-count.')
+
+    @staticmethod
     def adapters(parser):
         """Add argument adapters to parser."""
 

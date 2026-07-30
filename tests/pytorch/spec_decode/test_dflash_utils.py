@@ -702,7 +702,7 @@ def test_qwen3_dflash_materialization_requires_cpu_max_q_seqlen():
         )
 
 
-def test_dflash_block_proposer_builds_context_and_query_inputs():
+def test_dflash_block_proposer_builds_full_context_and_query_inputs():
     proposer = DFlash(
         SimpleNamespace(
             mask_token_id=99,
@@ -724,23 +724,26 @@ def test_dflash_block_proposer_builds_context_and_query_inputs():
         sum_kv_seqlen=10,
         target_inputs_embeds=torch.randn(1, 5, 4),
     )
-    context_lengths = torch.tensor([2, 2])
-    hidden = torch.arange(20).reshape(5, 4)
+    extra_inputs = SimpleNamespace(
+        num_rejected_tokens=torch.tensor([1, 0]),
+        target_hidden_states=torch.arange(5 * 4, dtype=torch.float32).view(5, 4),
+    )
 
-    sliced_hidden = proposer._slice_by_lengths(hidden,
-                                               model_inputs.seq_length,
-                                               torch.tensor([2, 1]),
-                                               max_seq_length=model_inputs.max_q_seqlen)
-    context_inputs = proposer._build_context_inputs(model_inputs, context_lengths)
-    query_inputs = proposer._build_query_inputs(model_inputs, context_lengths, torch.tensor([7, 8]))
+    context_inputs, target_hidden, context_lengths, query_start_positions = proposer._prepare_context_materialization(
+        model_inputs, extra_inputs)
+    query_inputs = proposer._build_query_inputs(model_inputs, context_lengths, torch.tensor([7, 8]),
+                                                query_start_positions=query_start_positions)
 
-    assert sliced_hidden.tolist() == hidden[[0, 1, 3]].tolist()
-    assert context_inputs.input_ids.tolist() == [[10, 11, 20, 21]]
-    assert context_inputs.seq_length.tolist() == [2, 2]
+    assert not hasattr(DFlash, '_slice_by_lengths')
+    assert context_inputs.input_ids.tolist() == [[10, 11, 12, 20, 21]]
+    assert context_inputs.seq_length.tolist() == [3, 2]
     assert context_inputs.max_q_seqlen == 3
     assert context_inputs.max_kv_seqlen == 7
     assert context_inputs.sum_kv_seqlen == 10
     assert context_inputs.target_inputs_embeds is None
+    assert target_hidden.tolist() == extra_inputs.target_hidden_states.tolist()
+    assert context_lengths.tolist() == [2, 2]
+    assert query_start_positions.tolist() == [2, 7]
     assert query_inputs.input_ids.tolist() == [[7, 99, 99, 99, 8, 99, 99, 99]]
     assert query_inputs.history_lengths.tolist() == [2, 7]
     assert query_inputs.target_position_ids.tolist() == [[2, 3, 4, 5, 7, 8, 9, 10]]
@@ -783,50 +786,20 @@ def test_dflash_block_proposer_metadata_helpers_do_not_call_tensor_item(monkeypa
 
     monkeypatch.setattr(torch.Tensor, 'item', _fail_item)
 
-    context_inputs, target_hidden, context_lengths, context_position_ids = proposer._prepare_context_materialization(
+    context_inputs, target_hidden, context_lengths, query_start_positions = proposer._prepare_context_materialization(
         model_inputs, extra_inputs)
     query_inputs = proposer._build_query_inputs(model_inputs, context_lengths, torch.tensor([7, 8]),
-                                                context_position_ids)
+                                                query_start_positions=query_start_positions)
 
     assert context_inputs.max_q_seqlen == 3
     assert context_inputs.max_kv_seqlen == 7
     assert context_inputs.sum_kv_seqlen == 10
-    assert target_hidden.shape == (4, 4)
+    assert context_inputs.seq_length.tolist() == [3, 2]
+    assert target_hidden.shape == (5, 4)
+    assert query_start_positions.tolist() == [102, 202]
     assert query_inputs.max_q_seqlen == 4
     assert query_inputs.max_kv_seqlen == 11
     assert query_inputs.sum_kv_seqlen == 18
-
-
-def test_dflash_slice_by_lengths_preserves_single_feature_row():
-    proposer = DFlash(
-        SimpleNamespace(
-            mask_token_id=99,
-            target_layer_ids=(1, 5),
-            num_speculative_tokens=3,
-            model_config=None,
-        ),
-        device='cpu',
-    )
-
-    feature = torch.tensor([[1, 2, 3, 4]])
-    token_ids = torch.tensor([[7]])
-
-    sliced_feature = proposer._slice_by_lengths(
-        feature,
-        seq_lengths=torch.tensor([1]),
-        keep_lengths=torch.tensor([1]),
-        max_seq_length=1,
-        preserve_features=True,
-    )
-    sliced_tokens = proposer._slice_by_lengths(
-        token_ids,
-        seq_lengths=torch.tensor([1]),
-        keep_lengths=torch.tensor([1]),
-        max_seq_length=1,
-    )
-
-    assert sliced_feature.tolist() == [[1, 2, 3, 4]]
-    assert sliced_tokens.tolist() == [7]
 
 
 def test_dflash_block_proposer_uses_explicit_target_positions():
@@ -851,18 +824,70 @@ def test_dflash_block_proposer_uses_explicit_target_positions():
         sum_kv_seqlen=10,
         target_position_ids=torch.tensor([[100, 101, 102, 200, 201]]),
     )
-    context_lengths = torch.tensor([2, 1])
-    context_position_ids = proposer._slice_target_position_ids(model_inputs, context_lengths)
-    context_inputs = proposer._build_context_inputs(model_inputs, context_lengths, context_position_ids)
-    query_inputs = proposer._build_query_inputs(model_inputs, context_lengths, torch.tensor([7, 8]),
-                                                context_position_ids)
+    extra_inputs = SimpleNamespace(
+        num_rejected_tokens=torch.tensor([1, 1]),
+        target_hidden_states=torch.arange(5 * 4, dtype=torch.float32).view(5, 4),
+    )
 
-    assert context_position_ids.tolist() == [100, 101, 200]
-    assert context_inputs.target_position_ids.tolist() == [[100, 101, 200]]
+    context_inputs, target_hidden, context_lengths, query_start_positions = proposer._prepare_context_materialization(
+        model_inputs, extra_inputs)
+    query_inputs = proposer._build_query_inputs(model_inputs, context_lengths, torch.tensor([7, 8]),
+                                                query_start_positions=query_start_positions)
+
+    assert context_inputs.input_ids.tolist() == [[10, 11, 12, 20, 21]]
+    assert context_inputs.target_position_ids.tolist() == [[100, 101, 102, 200, 201]]
+    assert target_hidden.tolist() == extra_inputs.target_hidden_states.tolist()
+    assert context_lengths.tolist() == [2, 1]
+    assert query_start_positions.tolist() == [102, 201]
     assert query_inputs.target_position_ids.tolist() == [[102, 103, 104, 105, 201, 202, 203, 204]]
 
 
-def test_dflash_materialize_context_only_slices_committed_hidden(monkeypatch):
+def test_dflash_decode_materialization_uses_full_block_without_ragged_slice(monkeypatch):
+    proposer = DFlash(
+        SimpleNamespace(
+            mask_token_id=99,
+            target_layer_ids=(1, 5),
+            num_speculative_tokens=3,
+            model_config=None,
+        ),
+        device='cpu',
+    )
+    model_inputs = ModelInputs(
+        input_ids=torch.tensor([[10, 11, 12, 13, 20, 21, 22, 23]]),
+        seq_length=torch.tensor([4, 4]),
+        history_lengths=torch.tensor([100, 200]),
+        block_offsets=torch.zeros((2, 4), dtype=torch.int32),
+        is_decoding=True,
+        num_ignored_history=torch.zeros(2, dtype=torch.long),
+        max_q_seqlen=4,
+        max_kv_seqlen=204,
+        sum_kv_seqlen=308,
+        target_position_ids=torch.tensor([[100, 101, 102, 103, 200, 201, 202, 203]]),
+    )
+    extra_inputs = SimpleNamespace(
+        num_rejected_tokens=torch.tensor([2, 0]),
+        target_hidden_states=torch.arange(8 * 4, dtype=torch.float32).view(8, 4),
+    )
+
+    assert not hasattr(DFlash, '_slice_by_lengths')
+
+    context_inputs, target_hidden, context_lengths, query_start_positions = \
+        proposer._prepare_context_materialization(model_inputs, extra_inputs)
+    query_inputs = proposer._build_query_inputs(model_inputs, context_lengths, torch.tensor([7, 8]),
+                                                query_start_positions=query_start_positions)
+
+    assert context_inputs.is_decoding is False
+    assert context_inputs.input_ids.tolist() == model_inputs.input_ids.tolist()
+    assert context_inputs.seq_length.tolist() == [4, 4]
+    assert context_inputs.target_position_ids.tolist() == model_inputs.target_position_ids.tolist()
+    assert target_hidden.tolist() == extra_inputs.target_hidden_states.tolist()
+    assert context_lengths.tolist() == [2, 4]
+    assert query_start_positions.tolist() == [102, 204]
+    assert query_inputs.history_lengths.tolist() == [102, 204]
+    assert query_inputs.target_position_ids.tolist() == [[102, 103, 104, 105, 204, 205, 206, 207]]
+
+
+def test_dflash_prefill_materialize_context_uses_full_block_without_ragged_slice(monkeypatch):
     proposer = DFlash(
         SimpleNamespace(
             cache_config=SimpleNamespace(block_size=8),
@@ -895,12 +920,14 @@ def test_dflash_materialize_context_only_slices_committed_hidden(monkeypatch):
         captured['target_hidden'] = target_hidden
         captured['cache_engine'] = cache_engine
 
+    assert not hasattr(DFlash, '_slice_by_lengths')
+
     monkeypatch.setattr(proposer, '_materialize_context', _materialize_context)
     cache_engine = object()
 
     proposer.materialize_context(model_inputs, extra_inputs, cache_engine)
 
     assert captured['cache_engine'] is cache_engine
-    assert captured['context_inputs'].input_ids.tolist() == [[10, 11, 20, 21]]
-    assert captured['context_inputs'].seq_length.tolist() == [2, 2]
-    assert captured['target_hidden'].tolist() == extra_inputs.target_hidden_states[[0, 1, 3, 4]].tolist()
+    assert captured['context_inputs'].input_ids.tolist() == [[10, 11, 12, 20, 21]]
+    assert captured['context_inputs'].seq_length.tolist() == [3, 2]
+    assert captured['target_hidden'].tolist() == extra_inputs.target_hidden_states.tolist()
