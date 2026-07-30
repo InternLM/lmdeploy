@@ -11,6 +11,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.api_server import (
     VariableInterface,
     _create_token_logprobs,
+    _create_top_logprobs,
     generate,
 )
 from lmdeploy.serve.openai.protocol import GenerateReqInput
@@ -74,6 +75,12 @@ def test_generate_input_logprob_validation():
                          max_tokens=5), context)
     assert 'positive integer' in check_request(
         GenerateReqInput(input_ids=[1, 2], max_tokens=0), context)
+    assert 'top_logprobs_num requires return_logprob=True' in check_request(
+        GenerateReqInput(input_ids=[1, 2], top_logprobs_num=2), context)
+    assert 'negative integer' in check_request(
+        GenerateReqInput(input_ids=[1, 2],
+                         return_logprob=True,
+                         top_logprobs_num=-1), context)
     assert check_request(
         GenerateReqInput(prompt='hi',
                          return_logprob=True,
@@ -121,6 +128,16 @@ def test_generate_logprob_formatting_preserves_requested_empty():
 
     assert _create_token_logprobs(
         [5], [{5: -0.25}]) == [(-0.25, 5)]
+    assert _create_top_logprobs(None, None, 2) is None
+    assert _create_top_logprobs([], [], 2) is None
+    assert _create_top_logprobs([4], [{4: -0.75}], 0) is None
+    assert _create_top_logprobs(
+        [4], [{4: -0.75, 8: -2.0, 9: -3.0}], 3) == [[(-0.75, 4), (-2.0, 8), (-3.0, 9)]]
+    assert _create_top_logprobs(
+        [4], [{4: -0.75, 8: -2.0, 9: -3.0, 10: -4.0}], 3) == [[(-2.0, 8), (-3.0, 9),
+                                                                 (-4.0, 10)]]
+    with pytest.raises(ValueError):
+        _create_top_logprobs([4], [], 2)
 
 
 class _RawRequest:
@@ -131,12 +148,13 @@ class _RawRequest:
 
 class _NonemptyEngine:
 
-    def __init__(self, expect_image=False):
+    def __init__(self, expect_image=False, expected_logprobs=1):
         self.backend_config = PytorchEngineConfig(
             logprobs_mode='raw_logprobs', role=EngineRole.Hybrid)
         self.session_mgr = _SessionManager()
         self.epoch = 1
         self.expect_image = expect_image
+        self.expected_logprobs = expected_logprobs
 
     async def generate(self, **kwargs):
         if self.expect_image:
@@ -153,21 +171,23 @@ class _NonemptyEngine:
             assert kwargs['input_ids'] == [1, 2, 3]
         assert kwargs['gen_config'].max_new_tokens == 0
         assert kwargs['gen_config'].logprob_start_len == 0
+        assert kwargs['gen_config'].logprobs == self.expected_logprobs
         yield SimpleNamespace(
             response='',
             token_ids=[],
             routed_experts=None,
-            logprobs=[{2: -0.25}, {3: -0.5}],
+            logprobs=[{2: -0.25, 8: -2.0}, {3: -0.5, 9: -3.0}],
             finish_reason='length',
             input_token_len=3,
             generate_token_len=0,
         )
 
 
-async def _call_nonempty_route(monkeypatch, stream, image_data=None):
+async def _call_nonempty_route(monkeypatch, stream, image_data=None, top_logprobs_num=None):
     old_engine = VariableInterface.async_engine
     VariableInterface.async_engine = _NonemptyEngine(
-        expect_image=image_data is not None)
+        expect_image=image_data is not None,
+        expected_logprobs=top_logprobs_num or 1)
 
     async def passthrough(generator, result_generators, sessions):
         async for item in generator:
@@ -182,6 +202,7 @@ async def _call_nonempty_route(monkeypatch, stream, image_data=None):
                                    return_logprob=True,
                                    logprob_start_len=0,
                                    max_tokens=0,
+                                   top_logprobs_num=top_logprobs_num,
                                    stream=stream)
         result = await generate(request, raw_request=_RawRequest())
         if stream:
@@ -193,16 +214,18 @@ async def _call_nonempty_route(monkeypatch, stream, image_data=None):
 
 class _DecodeEngine:
 
-    def __init__(self):
+    def __init__(self, expected_logprobs=1):
         self.backend_config = PytorchEngineConfig(
             logprobs_mode='raw_logprobs', role=EngineRole.Hybrid)
         self.session_mgr = _SessionManager()
         self.epoch = 1
+        self.expected_logprobs = expected_logprobs
 
     async def generate(self, **kwargs):
         assert kwargs['input_ids'] == [1, 2]
         assert kwargs['gen_config'].max_new_tokens == 2
         assert kwargs['gen_config'].logprob_start_len == -1
+        assert kwargs['gen_config'].logprobs == self.expected_logprobs
         assert kwargs['gen_config'].return_routed_experts is True
         yield SimpleNamespace(
             response='x',
@@ -236,8 +259,34 @@ def test_generate_keeps_decode_logprobs_and_routed_experts(monkeypatch):
     assert result.text == 'x'
     assert result.output_ids == [7]
     assert result.meta_info.output_token_logprobs == [(-0.125, 7)]
+    assert result.meta_info.output_top_logprobs is None
     assert result.meta_info.input_token_logprobs is None
     assert result.meta_info.routed_experts == [[[1, 2]]]
+
+
+def test_generate_keeps_decode_top_logprobs(monkeypatch):
+    old_engine = VariableInterface.async_engine
+    old_default = VariableInterface.default_gen_config
+    VariableInterface.async_engine = _DecodeEngine(expected_logprobs=2)
+    VariableInterface.default_gen_config = {}
+    monkeypatch.setattr(VariableInterface, 'create_session',
+                        classmethod(lambda cls, session_id: SimpleNamespace()))
+
+    try:
+        request = GenerateReqInput(input_ids=[1, 2],
+                                   max_tokens=2,
+                                   return_logprob=True,
+                                   top_logprobs_num=2,
+                                   return_routed_experts=True)
+        result = asyncio.run(generate(request, raw_request=_RawRequest()))
+    finally:
+        VariableInterface.async_engine = old_engine
+        VariableInterface.default_gen_config = old_default
+
+    assert result.meta_info.output_token_logprobs == [(-0.125, 7)]
+    assert result.meta_info.output_top_logprobs == [[(-0.125, 7), (-2.0, 8)]]
+    assert result.meta_info.input_token_logprobs is None
+    assert result.meta_info.input_top_logprobs is None
 
 
 def test_generate_nonempty_input_logprobs_nonstream(monkeypatch):
@@ -255,6 +304,15 @@ def test_generate_input_logprobs_allow_image_with_input_ids(monkeypatch):
                              image_data='https://example.com/image.png'))
     assert result.meta_info.input_token_logprobs == [(-0.25, 2), (-0.5, 3)]
     assert result.meta_info.output_token_logprobs is None
+
+
+def test_generate_nonempty_input_top_logprobs_nonstream(monkeypatch):
+    result = asyncio.run(
+        _call_nonempty_route(monkeypatch, stream=False, top_logprobs_num=2))
+    assert result.meta_info.input_token_logprobs == [(-0.25, 2), (-0.5, 3)]
+    assert result.meta_info.input_top_logprobs == [[(-0.25, 2), (-2.0, 8)], [(-0.5, 3), (-3.0, 9)]]
+    assert result.meta_info.output_token_logprobs is None
+    assert result.meta_info.output_top_logprobs is None
 
 
 def test_generate_nonempty_input_logprobs_stream(monkeypatch):

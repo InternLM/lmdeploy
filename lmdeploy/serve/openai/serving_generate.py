@@ -15,6 +15,11 @@ def check_request(request: GenerateReqInput, server_context: 'VariableInterface'
     session_manager = server_context.get_session_manager()
     logprobs_mode = getattr(engine_config, 'logprobs_mode', None)
     return_logprob = request.return_logprob
+    top_logprobs_num = request.top_logprobs_num or 0
+    if top_logprobs_num < 0:
+        return f'The top_logprobs_num {request.top_logprobs_num!r} cannot be a negative integer.'
+    if top_logprobs_num > 0 and return_logprob is not True:
+        return 'top_logprobs_num requires return_logprob=True.'
     if hasattr(engine_config, 'logprobs_mode') and logprobs_mode is None and return_logprob:
         return f'return_logprob({return_logprob}) requested but not enabled logprobs_mode in engine configuration.'
 
