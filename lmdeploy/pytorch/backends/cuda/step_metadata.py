@@ -11,6 +11,7 @@ import torch
 if TYPE_CHECKING:
     from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 
+GraphBufferT = TypeVar('GraphBufferT')
 MetaT = TypeVar('MetaT')
 
 
@@ -64,8 +65,8 @@ class CudaSequenceMetadata:
         )
 
 
-class CudaAttentionMetaBuilder(ABC, Generic[MetaT]):
-    """Build eager and graph metadata for one CUDA attention group."""
+class CudaAttentionMetaBuilder(ABC, Generic[GraphBufferT, MetaT]):
+    """Build typed metadata from one operator-owned graph buffer type."""
 
     @property
     @abstractmethod
@@ -84,17 +85,17 @@ class CudaAttentionMetaBuilder(ABC, Generic[MetaT]):
         raise NotImplementedError
 
     @abstractmethod
-    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context):
-        """Allocate runner-owned buffers for one CUDA graph."""
+    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context) -> GraphBufferT:
+        """Allocate runner-owned graph state of the builder's buffer type."""
         raise NotImplementedError
 
     @abstractmethod
-    def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context, buffer):
-        """Fill one group's runner-owned CUDA graph buffers."""
+    def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context, buffer: GraphBufferT) -> MetaT:
+        """Fill graph state and return its operator-facing metadata view."""
         raise NotImplementedError
 
-    def prepare_cudagraph_capture(self, graph_meta, input_buffers, step_context, buffer) -> None:
-        """Prepare one runner-owned buffer in place for graph capture."""
+    def prepare_cudagraph_capture(self, graph_meta, input_buffers, step_context, buffer: GraphBufferT) -> None:
+        """Prepare runner-owned graph state in place for graph capture."""
 
 
 class CudaStepMetaUpdater(ABC):
@@ -119,14 +120,16 @@ class CudaStepMetaUpdater(ABC):
 class CudaStepMetaGraphBuffers:
     """Runner-owned graph buffers paired with one resolved metadata plan."""
 
-    attention_buffers: tuple[Any, ...]
+    # One heterogeneous GraphBufferT value per attention builder. Only its
+    # owning builder interprets the value.
+    attention_buffers: tuple[object, ...]
 
 
 @dataclass(frozen=True)
 class CudaStepMetaPlan:
     """Model-owned CUDA metadata plan resolved from instantiated operators."""
 
-    attention_builders: tuple[CudaAttentionMetaBuilder, ...]
+    attention_builders: tuple[CudaAttentionMetaBuilder[Any, Any], ...]
     step_updaters: tuple[CudaStepMetaUpdater, ...]
     fallback_reason: str | None = None
 
@@ -138,7 +141,7 @@ class CudaStepMetaPlan:
     @classmethod
     def from_implementations(cls, implementations: Iterable[Any]) -> 'CudaStepMetaPlan':
         """Resolve builders registered while constructing one CUDA model."""
-        attention_owners: list[tuple[Any, CudaAttentionMetaBuilder]] = []
+        attention_owners: list[tuple[Any, CudaAttentionMetaBuilder[Any, Any]]] = []
         step_updaters: list[CudaStepMetaUpdater] = []
         updater_keys: set[Hashable] = set()
         output_keys: dict[str, Hashable] = {}
@@ -185,7 +188,7 @@ class CudaStepMetaPlan:
         if not attention_owners:
             return cls(tuple(), tuple(), fallback_reason='no implementation-selected attention metadata contract')
 
-        attention_builders: list[CudaAttentionMetaBuilder] = []
+        attention_builders: list[CudaAttentionMetaBuilder[Any, Any]] = []
         attention_groups: dict[Hashable, int] = {}
         bindings: list[tuple[Any, int]] = []
         for impl, builder in attention_owners:
@@ -244,7 +247,13 @@ class CudaStepMetaPlan:
         assert self.is_supported
         for builder, buffer in zip(self.attention_builders, buffers.attention_buffers, strict=True):
             builder.prepare_cudagraph_capture(graph_meta, input_buffers, step_context, buffer)
-        self._attach_attention_metadata(attn_metadata, buffers.attention_buffers)
+
+        # Graph allocations and operator metadata are not necessarily the
+        # same type. For example, FA3 allocates a scheduler tensor but exposes
+        # an FA3AttentionMetadata view from fill_cudagraph_buffers. Builders
+        # transition allocations in place, then legacy fields are refreshed
+        # from those already-attached typed views.
+        self._attach_attention_metadata(attn_metadata, attn_metadata.kernel_metadata)
 
 
 _active_implementations: ContextVar[list[Any] | None] = ContextVar(

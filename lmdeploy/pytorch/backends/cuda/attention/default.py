@@ -90,7 +90,7 @@ def _cdiv(a, b):
 
 
 @dataclass(frozen=True)
-class TritonAttentionMetaBuilder(CudaAttentionMetaBuilder[None]):
+class TritonAttentionMetaBuilder(CudaAttentionMetaBuilder[None, None]):
     """Describe the default attention implementation's common-only metadata."""
 
     @property
@@ -103,11 +103,11 @@ class TritonAttentionMetaBuilder(CudaAttentionMetaBuilder[None]):
     def apply_legacy_metadata(self, attn_metadata, metadata: None) -> None:
         pass
 
-    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context):
+    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context) -> None:
         return None
 
     def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
-                              buffer) -> None:
+                              buffer: None) -> None:
         return None
 
 

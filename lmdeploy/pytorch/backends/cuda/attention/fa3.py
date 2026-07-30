@@ -155,7 +155,7 @@ def build_fa3_graph_metadata(step_context,
 
 
 @dataclass(frozen=True)
-class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[FA3AttentionMetadata]):
+class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[torch.Tensor | None, FA3AttentionMetadata]):
     """Build metadata requested by one selected FA3 configuration."""
 
     num_heads: int
@@ -196,7 +196,7 @@ class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[FA3AttentionMetadata]):
         if metadata.max_kv_seqlen is not None:
             attn_metadata.max_kv_seqlen = metadata.max_kv_seqlen
 
-    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context):
+    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context) -> torch.Tensor | None:
         if graph_meta.decode_query_len <= 1:
             return None
         metadata = _build_fa3_metadata(
@@ -216,7 +216,7 @@ class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[FA3AttentionMetadata]):
         return metadata.scheduler_metadata
 
     def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
-                              buffer) -> FA3AttentionMetadata:
+                              buffer: torch.Tensor | None) -> FA3AttentionMetadata:
         if buffer is None:
             return FA3AttentionMetadata()
         metadata = _build_fa3_metadata(

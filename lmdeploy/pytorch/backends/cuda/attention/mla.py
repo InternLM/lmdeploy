@@ -84,7 +84,8 @@ def build_flash_mla_graph_metadata(step_context, kv_seqlens,
 
 
 @dataclass(frozen=True)
-class FlashMLAAttentionMetaBuilder(CudaAttentionMetaBuilder[FlashMLAAttentionMetadata]):
+class FlashMLAAttentionMetaBuilder(
+        CudaAttentionMetaBuilder[FlashMLAAttentionMetadata, FlashMLAAttentionMetadata]):
     """Build metadata requested by one selected FlashMLA configuration."""
 
     num_attention_heads: int
