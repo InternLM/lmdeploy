@@ -12,7 +12,7 @@ from .fused_moe import _get_sorted_idx, _get_sorted_idx_blocks, _make_intermedia
 
 
 @triton.jit
-def fused_moe_blocked_f8_kernel(
+def fused_moe_blocked_fp8_kernel(
     A,
     A_scale,
     B,
@@ -205,7 +205,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
     BLOCK_SIZE_K = group_bk
     GROUP_SIZE_M = 1
     grid = (triton.cdiv(M_NP2, block_m) * triton.cdiv(N, block_n), E)
-    fused_moe_blocked_f8_kernel[grid](
+    fused_moe_blocked_fp8_kernel[grid](
         A,
         A_scale,
         B,
@@ -249,7 +249,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
 
 
 @triton.jit
-def fused_moe_blocked_f8_compact_kernel(
+def fused_moe_blocked_fp8_compact_kernel(
     A,
     A_scale,
     B,
@@ -418,7 +418,7 @@ def fused_moe_blocked_fp8_compact_kernel_launcher(
     max_blocks = block_expert_ids.numel()
 
     grid = (max_blocks, triton.cdiv(N, block_n))
-    fused_moe_blocked_f8_compact_kernel[grid](
+    fused_moe_blocked_fp8_compact_kernel[grid](
         A,
         A_scale,
         B,
