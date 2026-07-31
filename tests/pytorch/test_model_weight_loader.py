@@ -5,8 +5,32 @@ from pathlib import Path
 
 import pytest
 import torch
+from safetensors.torch import save_file
 
 from lmdeploy.pytorch.weight_loader.model_weight_loader import ModelWeightLoader
+
+
+def test_model_weight_loader_filters_safetensors_by_allowed_names(tmp_path: Path):
+    weight_path = tmp_path / 'model.safetensors'
+    expected = torch.tensor([80.0])
+    save_file(
+        {
+            'model.layers.0.weight': torch.tensor([0.0]),
+            'model.layers.80.weight': expected,
+        },
+        str(weight_path),
+    )
+
+    loader = ModelWeightLoader(str(tmp_path))
+    weights = dict(
+        loader._get_weights_iterator(
+            str(weight_path),
+            allowed_names={'model.layers.80.weight'},
+        )
+    )
+
+    assert set(weights) == {'model.layers.80.weight'}
+    torch.testing.assert_close(weights['model.layers.80.weight'], expected)
 
 
 def test_model_weight_loader_selects_required_shards(tmp_path: Path, monkeypatch):
