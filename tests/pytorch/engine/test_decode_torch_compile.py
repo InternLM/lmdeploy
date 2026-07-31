@@ -9,7 +9,7 @@ def test_decode_torch_compile_returns_raw_model_when_disabled(monkeypatch):
     model = object()
     monkeypatch.setattr(graph_runner, 'enable_decode_torch_compile', False)
     monkeypatch.setattr(graph_runner.torch, 'compile', lambda *args, **kwargs: None)
-    monkeypatch.setattr(graph_runner, '_register_decode_compile_trace_rules', lambda: None)
+    monkeypatch.setattr(graph_runner, '_configure_decode_torch_compile', lambda: None)
 
     assert graph_runner._build_decode_model_forward(model) is model
 
@@ -117,7 +117,7 @@ def test_decode_torch_compile_uses_non_fullgraph_mode(monkeypatch):
     model = object()
     compiled_model = object()
     compile_call = {}
-    trace_rules_registered = []
+    compiler_configured = []
 
     def compile(model_arg, **kwargs):
         compile_call.update(model=model_arg, **kwargs)
@@ -125,11 +125,11 @@ def test_decode_torch_compile_uses_non_fullgraph_mode(monkeypatch):
 
     monkeypatch.setattr(graph_runner, 'enable_decode_torch_compile', True)
     monkeypatch.setattr(graph_runner.torch, 'compile', compile)
-    monkeypatch.setattr(graph_runner, '_register_decode_compile_trace_rules',
-                        lambda: trace_rules_registered.append(True))
+    monkeypatch.setattr(graph_runner, '_configure_decode_torch_compile',
+                        lambda: compiler_configured.append(True))
 
     assert graph_runner._build_decode_model_forward(model) is compiled_model
-    assert trace_rules_registered == [True]
+    assert compiler_configured == [True]
     assert compile_call == {
         'model': model,
         'fullgraph': False,
@@ -142,23 +142,29 @@ def test_decode_torch_compile_uses_non_fullgraph_mode(monkeypatch):
     }
 
 
-def test_decode_torch_compile_registers_package_trace_rules_once(monkeypatch):
-    from torch._dynamo import trace_rules
+def test_decode_torch_compile_configures_dynamo_once(monkeypatch):
+    from torch._dynamo import config, trace_rules
 
     from lmdeploy.pytorch.backends.cuda import graph_runner
 
     registered_modules = []
-    register = graph_runner._register_decode_compile_trace_rules
-    register.cache_clear()
+    configure = graph_runner._configure_decode_torch_compile
+    configure.cache_clear()
+    monkeypatch.setattr(config, 'accumulated_cache_size_limit', 256)
+    if hasattr(config, 'cache_size_limit'):
+        monkeypatch.setattr(config, 'cache_size_limit', 8)
     monkeypatch.setattr(trace_rules, 'add', registered_modules.append)
 
-    register()
-    register()
+    configure()
+    configure()
 
+    assert config.accumulated_cache_size_limit == 1024
+    if hasattr(config, 'cache_size_limit'):
+        assert config.cache_size_limit == 1024
     assert registered_modules == [
         'lmdeploy.pytorch.kernels',
         'lmdeploy.pytorch.third_party.flash_attn_interface',
         'flash_attn_interface',
         'triton',
     ]
-    register.cache_clear()
+    configure.cache_clear()

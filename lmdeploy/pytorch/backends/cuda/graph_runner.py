@@ -67,9 +67,16 @@ def _false(*args, **kwargs):
 
 
 @functools.lru_cache
-def _register_decode_compile_trace_rules():
-    """Keep custom kernel launchers outside Dynamo tracing."""
-    from torch._dynamo import trace_rules
+def _configure_decode_torch_compile():
+    """Configure the Dynamo policy used by decode compilation."""
+    from torch._dynamo import config, trace_rules
+
+    # Decode capture intentionally specializes fixed batch buckets. Keep those
+    # specializations compiled instead of falling back to eager at the default
+    # recompile limit. These names alias the recompile limits in PyTorch 2.10.
+    config.accumulated_cache_size_limit = 1024
+    if hasattr(config, 'cache_size_limit'):
+        config.cache_size_limit = 1024
 
     # Dynamo otherwise enters user Triton launchers and may fail on mutable
     # autotune state or infer incorrect fake shapes. The outer CUDA graph still
@@ -86,7 +93,7 @@ def _build_decode_model_forward(model: torch.nn.Module) -> Callable[..., Any]:
         return model
 
     logger.info('Enabling torch.compile for decode CUDA graph capture.')
-    _register_decode_compile_trace_rules()
+    _configure_decode_torch_compile()
     return torch.compile(
         model,
         fullgraph=False,
