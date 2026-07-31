@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from types import SimpleNamespace
+
 import torch
 
 from lmdeploy.messages import QuantPolicy
@@ -101,3 +103,33 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     assert captured['flash_k_size'] == _guarded_flatten_size(q_seqlens)
     assert captured['flash_max_seqlen_k'] == metadata.max_kv_seqlen
     assert captured['flash_softcap'] == 0.0
+
+
+def test_fa3_speculative_decode_translates_disabled_softcap():
+    impl = FA3Impl.__new__(FA3Impl)
+    impl.scale = 1.0
+    impl.causal = True
+    impl.sliding_window = None
+    impl.logit_softcapping = -1.0
+
+    captured = {}
+
+    def fake_flash_attn_with_kvcache(query, k_cache, v_cache, **kwargs):
+        captured['softcap'] = kwargs['softcap']
+        return torch.empty_like(query)
+
+    impl.flash_attn_with_kvcache_v3 = fake_flash_attn_with_kvcache
+    metadata = SimpleNamespace(
+        quant_policy=QuantPolicy.NONE,
+        block_offsets=torch.tensor([[0], [1]], dtype=torch.int32),
+        kv_seqlens=torch.tensor([5, 7], dtype=torch.int32),
+        scheduler_metadata=None,
+    )
+    query = torch.empty((4, 2, 8), dtype=torch.float16)
+    k_cache = torch.empty((2, _BLOCK_SIZE, 2, 8), dtype=torch.float16)
+    v_cache = torch.empty_like(k_cache)
+
+    output = impl._decoding_speculative(query, k_cache, v_cache, metadata, max_q_seqlen=2)
+
+    assert output.shape == (2, 2, 2, 8)
+    assert captured['softcap'] == 0.0
