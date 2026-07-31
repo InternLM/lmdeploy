@@ -415,6 +415,24 @@ def test_hy3_mtp_parameter_shapes_for_tp1_tp4_tp8(monkeypatch):
         assert moe.shared_mlp.down_proj.weight.shape == (128, 16 // tp)
 
 
+def test_hy3_mtp_builds_draft_config():
+    config = _make_config()
+    config.architectures = ['HYV3ForCausalLM']
+    config.auto_map = {'AutoModel': 'custom.model.HYV3ForCausalLM'}
+
+    model_config = Hy3ModelConfigBuilder.build(
+        config,
+        is_draft_model=True,
+        spec_method='hy3_mtp',
+    )
+
+    assert model_config.llm_config is config
+    assert config.architectures == ['HYV3MTP']
+    assert not hasattr(config, 'auto_map')
+    assert model_config.num_layers == 1
+    assert model_config.model_paradigm == 'ar_spec'
+
+
 def test_hy3_mtp_requires_checkpoint_layer():
     config = SimpleNamespace(model_type='hy_v3', num_hidden_layers=80, num_nextn_predict_layers=0)
     with pytest.raises(ValueError, match='at least one checkpoint MTP layer'):
