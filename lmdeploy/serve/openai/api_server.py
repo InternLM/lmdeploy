@@ -960,7 +960,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
 
-    await asyncio.gather(*[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
+    # Same as `generate` below: each `_inner_call` returns its error response from inside the
+    # `async with`, and `gather` collects those into a list. Without this check a disconnect on
+    # one entry leaves `final_res` unset for it and the response is built from the rest.
+    inner_results = await asyncio.gather(
+        *[_inner_call(i, generators[i], sessions[i]) for i in range(len(generators))])
+    for inner_result in inner_results:
+        if inner_result is not None:
+            return inner_result
 
     response = CompletionResponse(
         id=request_id,
@@ -1081,7 +1088,12 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                      completion_tokens=res.generate_token_len)
         response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
-    await _inner_call()
+    # `_inner_call` returns the error response from inside the `async with`, so the disconnect
+    # branch never reaches the `response` assignment below it. Take its return value instead of
+    # discarding it, or the caller gets 200 with a null body.
+    error_response = await _inner_call()
+    if error_response is not None:
+        return error_response
     return response
 
 
