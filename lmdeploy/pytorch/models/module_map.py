@@ -196,10 +196,14 @@ MODULE_MAP.update({
     'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
 })
 
-# meta moe
+# meta moe / interns2 mobius
 MODULE_MAP.update({
     'MetaMoeForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.meta_moe.MetaMoeForConditionalGeneration',
+    'InternS2MobiusForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_mobius.InternS2MobiusForConditionalGeneration',
+    'InternS2MobiusForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_mobius.InternS2MobiusForConditionalGeneration',
 })
 
 # qwen3 omni moe thinker
