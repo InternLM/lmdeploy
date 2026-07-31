@@ -306,6 +306,10 @@ class HYV3MTP(nn.Module, CudaGraphMixin):
                 continue
 
             suffix = name.removeprefix(layer_prefix)
+            # The draft model shares the target embedding table and LM head.
+            if suffix.startswith(('embed_tokens.', 'shared_head.')):
+                return None
+
             outer_modules = ('enorm.', 'hnorm.', 'eh_proj.', 'final_layernorm.')
             if not suffix.startswith(outer_modules):
                 name = f'{layer_prefix}mtp_block.{suffix}'

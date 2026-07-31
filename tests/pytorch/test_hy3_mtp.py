@@ -96,6 +96,17 @@ def test_hy3_mtp_loads_bf16_checkpoint_weights(monkeypatch):
     torch.testing.assert_close(layer.final_layernorm.weight, final_norm)
 
 
+def test_hy3_mtp_skips_layer_local_shared_weights(monkeypatch):
+    _patch_backend(monkeypatch)
+    model = build_model_from_hf_config(_make_config(), dtype=torch.float32, device=torch.device('cpu'))
+    model.load_weights(
+        [
+            ('model.layers.2.embed_tokens.weight', torch.empty(1)),
+            ('model.layers.2.shared_head.weight', torch.empty(1)),
+        ]
+    )
+
+
 def test_hy3_mtp_wrapper_matches_vllm_reference_forward_formula(monkeypatch):
     _patch_backend(monkeypatch)
     torch.manual_seed(7)
