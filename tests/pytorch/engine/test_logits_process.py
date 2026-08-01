@@ -11,6 +11,35 @@ from transformers.generation.logits_process import (
 # yapf: enable
 
 
+def test_sampling_inputs_record_stream_records_only_tensor_fields():
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+
+    recorded = []
+
+    class _CudaTensor(torch.Tensor):
+
+        @staticmethod
+        def __new__(cls):
+            return torch.Tensor._make_subclass(cls, torch.empty(1), False)
+
+        @property
+        def is_cuda(self):
+            return True
+
+        def record_stream(self, stream):
+            recorded.append((id(self), stream))
+
+    stream = object()
+    temperature = _CudaTensor()
+    nested_session_tensor = _CudaTensor()
+    inputs = SamplingInputs(temperature=temperature,
+                            session_ctx=[{'persistent': nested_session_tensor}])
+
+    inputs.record_stream(stream)
+
+    assert recorded == [(id(temperature), stream)]
+
+
 def test_process_temperature():
     from lmdeploy.pytorch.engine.logits_process import _process_temperature_
 
