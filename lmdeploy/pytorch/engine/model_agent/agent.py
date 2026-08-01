@@ -2,6 +2,7 @@
 import asyncio
 import time
 from collections import deque
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
@@ -47,6 +48,7 @@ from .scoring import compute_input_ce_loss
 logger = get_logger('lmdeploy')
 
 _H2D_TRANSFER_KEY = '_h2d_transfer'
+_H2D_INPUT_KEYS = ('inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
 
 
 @dataclass
@@ -235,6 +237,23 @@ def _try_to_cuda(val, non_blocking: bool = False):
         return val.to_device('cuda', non_blocking=non_blocking)
     else:
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
+
+
+def _record_forward_input_stream(forward_inputs: Mapping[str, Any], stream: torch.cuda.Stream) -> None:
+    """Register the forward stream with each H2D payload owner."""
+    for key in _H2D_INPUT_KEYS:
+        value = forward_inputs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, torch.Tensor):
+            if value.is_cuda:
+                value.record_stream(stream)
+            continue
+
+        record_stream = getattr(value, 'record_stream', None)
+        if not callable(record_stream):
+            raise TypeError(f'H2D input {key!r} must be a tensor or implement record_stream().')
+        record_stream(stream)
 
 
 SwapMap = dict[int, int]
@@ -967,6 +986,7 @@ class BaseModelAgent:
                 if h2d_transfer is not None:
                     self._keep_h2d_transfer(h2d_transfer)
                     self.stream.wait_event(h2d_transfer.event)
+                    _record_forward_input_stream(forward_inputs, self.stream)
 
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
@@ -999,18 +1019,20 @@ class BaseModelAgent:
         falling back to dummy inputs.
         """
         non_blocking = True
-        keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}
             forward_inputs_cuda.update(forward_inputs)
-            h2d_refs = {k: forward_inputs_cuda[k] for k in keys if forward_inputs_cuda.get(k) is not None}
+            h2d_refs = {
+                key: forward_inputs_cuda[key]
+                for key in _H2D_INPUT_KEYS if forward_inputs_cuda.get(key) is not None
+            }
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
-                for k in keys:
-                    if k not in forward_inputs_cuda:
+                for key in _H2D_INPUT_KEYS:
+                    if key not in forward_inputs_cuda:
                         continue
-                    forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
+                    forward_inputs_cuda[key] = _try_to_cuda(forward_inputs_cuda[key], non_blocking=non_blocking)
                 h2d_event = torch.cuda.Event()
                 h2d_event.record()
                 forward_inputs_cuda[_H2D_TRANSFER_KEY] = _H2DTransfer(h2d_event, h2d_refs)

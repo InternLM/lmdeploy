@@ -285,6 +285,13 @@ class SamplingInputs:
 
         return SamplingInputs(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
+
     def get_delta(self) -> SamplingInputsDelta:
         """Get delta."""
         delta = SamplingInputsDelta()

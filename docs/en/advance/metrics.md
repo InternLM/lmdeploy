@@ -22,7 +22,7 @@ This section describes how to set up the monitoring stack (Prometheus + Grafana)
 1. **Start your LMDeploy server with metrics enabled**
 
 ```
-lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct --enable-metrics
+lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct
 ```
 
 Replace the model path according to your needs.
@@ -78,8 +78,7 @@ lmdeploy serve api_server \
     --dp 2 \
     --proxy-url http://0.0.0.0:8000 \
     --nnodes 1 \
-    --node-rank 0 \
-    --enable-metrics
+    --node-rank 0
 ```
 
 You should be able to see multiple API servers added to the proxy server list. Details can be found in `lmdeploy/serve/proxy/proxy_config.json`.
