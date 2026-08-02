@@ -300,17 +300,17 @@ class MultimodalProcessor:
 
     @staticmethod
     def validate_prompt(prompt: Any, *, name: str = 'prompt') -> None:
-        """Reject None / empty / falsy prompt input with a clear ValueError."""
+        """Reject None and empty-sized prompt input with a clear ValueError.
+
+        An empty string or any zero-length sized object (list, tuple, dict, bytes, set, numpy/torch tensors) is rejected
+        by name. Non-sized scalars such as 0 or False are not caught here and fall through to the Unsupported-prompts
+        branch downstream. Only scalar and top-level batch forms are validated; an empty prompt nested inside a (prompt,
+        image) pair or an OpenAI message content field is not recursed into.
+        """
         if prompt is None:
             raise ValueError(f'{name} cannot be None')
-        if isinstance(prompt, str) and not prompt:
-            raise ValueError(f'{name} string cannot be empty')
-        if isinstance(prompt, list) and not prompt:
-            raise ValueError(f'{name} list cannot be empty')
-        if isinstance(prompt, tuple) and not prompt:
-            raise ValueError(f'{name} tuple cannot be empty')
-        if isinstance(prompt, dict) and not prompt:
-            raise ValueError(f'{name} dict cannot be empty')
+        if hasattr(prompt, '__len__') and len(prompt) == 0:
+            raise ValueError(f'{name} {type(prompt).__name__} cannot be empty')
 
     @staticmethod
     def _is_openai_message(message) -> bool:
