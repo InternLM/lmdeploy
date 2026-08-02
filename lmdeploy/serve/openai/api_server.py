@@ -1088,12 +1088,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                      completion_tokens=res.generate_token_len)
         response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
-    # `_inner_call` returns the error response from inside the `async with`, so the disconnect
-    # branch never reaches the `response` assignment below it. Take its return value instead of
-    # discarding it, or the caller gets 200 with a null body.
-    error_response = await _inner_call()
-    if error_response is not None:
-        return error_response
+    await _inner_call()
     return response
 
 
