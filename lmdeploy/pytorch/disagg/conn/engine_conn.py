@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import zmq
 import zmq.asyncio
+from pydantic import ValidationError
 
 from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.conn.protocol import (
@@ -71,20 +72,30 @@ class EngineP2PConnection:
         return {'success': True}
 
     async def zmq_send(self, remote_engine_id: str, remote_session_id: int):
-        await self.p2p_sender[remote_engine_id].send_pyobj(
-            DistServeCacheFreeRequest(remote_engine_id=remote_engine_id, remote_session_id=remote_session_id))
+        req = DistServeCacheFreeRequest(remote_engine_id=remote_engine_id, remote_session_id=remote_session_id)
+        # Use JSON rather than pickle on the wire: recv_pyobj()/send_pyobj() call
+        # pickle.loads() on peer-supplied bytes, which is remote code execution.
+        await self.p2p_sender[remote_engine_id].send_json(req.model_dump())
 
     async def handle_zmq_recv(self, remote_engine_id: str):
+        receiver = self.p2p_receiver[remote_engine_id]
         while True:
-            req: DistServeCacheFreeRequest = await self.p2p_receiver[remote_engine_id].recv_pyobj()
-            if isinstance(req, DistServeCacheFreeRequest):
-                session_id = req.remote_session_id
-                if session_id in self.engine.scheduler.sessions:
-                    self.engine.end_session(session_id=session_id)
-                else:
-                    logger.error(f'invalid free, {remote_engine_id}, {session_id}')
+            # recv_json() decodes with json.loads (no code execution); model_validate
+            # then enforces the DistServeCacheFreeRequest schema before the payload is
+            # used, replacing the old recv_pyobj() -> pickle.loads() RCE path. Malformed
+            # or off-schema payloads are logged and skipped so a single bad message
+            # cannot tear down the receive loop.
+            try:
+                raw = await receiver.recv_json()
+                req = DistServeCacheFreeRequest.model_validate(raw)
+            except (ValueError, ValidationError) as e:
+                logger.error(f'invalid zmq request from {remote_engine_id}: {e}')
+                continue
+            session_id = req.remote_session_id
+            if session_id in self.engine.scheduler.sessions:
+                self.engine.end_session(session_id=session_id)
             else:
-                raise ValueError(f'Unsupported zmq request {type(req)}')
+                logger.error(f'invalid free, {remote_engine_id}, {session_id}')
 
     async def zmq_disconnect(self, remote_engine_id: str):
         self.p2p_receiver[remote_engine_id].close()
