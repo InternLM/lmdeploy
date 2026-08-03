@@ -243,10 +243,6 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = (batch_size, is_decoding, enable_microbatch, query_len)
         if 'skip_topk' in kwargs:
             graph_key += (kwargs['skip_topk'], )
-        if 'use_dense_index' in kwargs:
-            # Dense/sparse index selection is irrelevant when an MTP draft
-            # iteration reuses the target model's indices.
-            graph_key += (kwargs['use_dense_index'] and not kwargs.get('skip_topk', False), )
         return graph_key
 
     def _prepare_inputs(self, **kwargs):

@@ -145,24 +145,6 @@ class TestDSIndex:
         from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
         fp8_index(q, q_s, k_cache, k_s_cache, cu_seqlen_q, k_seqlens, block_offset)
 
-    def test_dense_index(self):
-        from lmdeploy.pytorch.kernels.cuda.ds_index import dense_index
-
-        q_seqlens = torch.tensor([3, 2], dtype=torch.int32, device='cuda')
-        k_seqlens = torch.tensor([5, 2], dtype=torch.int32, device='cuda')
-        output = dense_index(q_seqlens, k_seqlens, max_q_seqlen=3, topk=8)
-        expected = torch.tensor(
-            [[0, 1, 2, -1, -1, -1, -1, -1],
-             [0, 1, 2, 3, -1, -1, -1, -1],
-             [0, 1, 2, 3, 4, -1, -1, -1],
-             [0, -1, -1, -1, -1, -1, -1, -1],
-             [0, 1, -1, -1, -1, -1, -1, -1],
-             [-1, -1, -1, -1, -1, -1, -1, -1]],
-            dtype=torch.int32,
-            device='cuda',
-        )
-        torch.testing.assert_close(output, expected)
-
     def test_fp8_index_trim_causal_tail_with_raw_lengths(self, num_heads, head_dim, block_size, device):
         """Trimmed V4-style causal scoring must preserve every visible
         score."""

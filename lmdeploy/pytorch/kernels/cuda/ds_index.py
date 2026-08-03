@@ -6,65 +6,6 @@ import triton.language as tl
 from .utils import get_device_props
 
 
-@triton.jit
-def _dense_index_kernel(
-    q_seqlens,
-    k_seqlens,
-    out,
-    stride_out_m: tl.constexpr,
-    stride_out_k: tl.constexpr,
-    max_q_seqlen: tl.constexpr,
-    topk: tl.constexpr,
-    fill: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-):
-    """Build the exact top-k result when every valid K position is selected."""
-    row = tl.program_id(0)
-    block = tl.program_id(1)
-    batch = row // max_q_seqlen
-    query = row % max_q_seqlen
-    q_seqlen = tl.load(q_seqlens + batch)
-    k_seqlen = tl.load(k_seqlens + batch)
-    causal_k_seqlen = k_seqlen - q_seqlen + query + 1
-
-    offs = block * BLOCK_K + tl.arange(0, BLOCK_K)
-    valid = (query < q_seqlen) & (offs < causal_k_seqlen)
-    values = tl.where(valid, offs, fill)
-    tl.store(out + row * stride_out_m + offs * stride_out_k,
-             values,
-             mask=offs < topk)
-
-
-def dense_index(q_seqlens: torch.Tensor,
-                k_seqlens: torch.Tensor,
-                max_q_seqlen: int,
-                topk: int,
-                fill: int = -1) -> torch.Tensor:
-    """Return identity top-k rows for a decoding packet.
-
-    This is valid when every request's causal KV length is no greater than
-    ``topk``: selecting the largest ``topk`` scores must then select every
-    visible position, independent of the scores.
-    """
-    assert q_seqlens.is_cuda and k_seqlens.is_cuda
-    assert q_seqlens.numel() == k_seqlens.numel()
-    num_rows = q_seqlens.numel() * max_q_seqlen
-    out = torch.empty((num_rows, topk),
-                      dtype=torch.int32,
-                      device=q_seqlens.device)
-    block_k = min(triton.next_power_of_2(topk), 256)
-    grid = (num_rows, triton.cdiv(topk, block_k))
-    _dense_index_kernel[grid](q_seqlens,
-                              k_seqlens,
-                              out,
-                              *out.stride(),
-                              max_q_seqlen=max_q_seqlen,
-                              topk=topk,
-                              fill=fill,
-                              BLOCK_K=block_k)
-    return out
-
-
 @triton.jit(do_not_specialize=['max_q_seqlen', 'num_split'])
 def _fp8_index_kernel(
     q_ptr,

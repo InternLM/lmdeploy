@@ -363,10 +363,6 @@ link_directories(
 
 add_subdirectory(src)
 
-# if(BUILD_TEST)
-#     add_subdirectory(tests/csrc)
-# endif()
-
 # install python api
 if (BUILD_PY_FFI)
   if (CALL_FROM_SETUP_PY)

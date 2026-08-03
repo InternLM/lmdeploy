@@ -829,8 +829,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         request.prompt = [request.prompt]
         sessions.append(VariableInterface.create_session(request.session_id))
     elif isinstance(request.prompt, list):
-        for i in range(len(request.prompt)):
-            sessions.append(VariableInterface.create_session(i + 1))
+        for _ in request.prompt:
+            sessions.append(VariableInterface.create_session())
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 

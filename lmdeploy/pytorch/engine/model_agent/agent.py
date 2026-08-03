@@ -2,6 +2,7 @@
 import asyncio
 import time
 from collections import deque
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
@@ -22,6 +23,7 @@ from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -46,6 +48,7 @@ from .scoring import compute_input_ce_loss
 logger = get_logger('lmdeploy')
 
 _H2D_TRANSFER_KEY = '_h2d_transfer'
+_H2D_INPUT_KEYS = ('inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
 
 
 @dataclass
@@ -236,6 +239,23 @@ def _try_to_cuda(val, non_blocking: bool = False):
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
 
 
+def _record_forward_input_stream(forward_inputs: Mapping[str, Any], stream: torch.cuda.Stream) -> None:
+    """Register the forward stream with each H2D payload owner."""
+    for key in _H2D_INPUT_KEYS:
+        value = forward_inputs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, torch.Tensor):
+            if value.is_cuda:
+                value.record_stream(stream)
+            continue
+
+        record_stream = getattr(value, 'record_stream', None)
+        if not callable(record_stream):
+            raise TypeError(f'H2D input {key!r} must be a tensor or implement record_stream().')
+        record_stream(stream)
+
+
 SwapMap = dict[int, int]
 
 
@@ -267,6 +287,9 @@ class BaseModelAgent:
 
         self.model_config = model_config
         self.cache_config = cache_config
+        memdecode_config = misc_config.memdecode_config
+        if memdecode_config is not None and specdecode_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         # use raw tokenizer
         if dist_ctx.dist_config.world_size > 1:
             monkey_patch_hf_modules_cache()
@@ -347,6 +370,13 @@ class BaseModelAgent:
                                            misc_config=misc_config,
                                            device=device,
                                            guided_decoding_manager=self.guided_decoding_manager)
+        self.memdecode_agent = build_memdecode_agent(
+            memdecode_config,
+            backend_config,
+            dist_ctx,
+            device=device,
+            base_model_config=model_config,
+        )
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
@@ -381,6 +411,8 @@ class BaseModelAgent:
         """Set all cache config."""
         self.cache_config = cache_config
         self.spec_agent.set_cache_config(spec_cache_config)
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig | None = None):
         """Set model config."""
@@ -478,10 +510,24 @@ class BaseModelAgent:
         return_logits: bool,
     ):
         """Model forward."""
+        if self.memdecode_agent is not None and return_logits:
+            raise RuntimeError('MemDecode does not support returned prompt logits yet.')
+
         ret = await self.async_forward(inputs)
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
+
+        if self.memdecode_agent is not None:
+            base_hidden_states = ret['hidden_states']
+            base_logits = self.get_logits(base_hidden_states)
+
+            return await self.memdecode_agent.fuse_with_base(
+                inputs=inputs,
+                base_output=ret,
+                base_logits=base_logits,
+                postprocess_output=self._postprocess_forward_output,
+            )
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
@@ -826,6 +872,8 @@ class BaseModelAgent:
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        if self.memdecode_agent is not None:
+            cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
@@ -938,6 +986,7 @@ class BaseModelAgent:
                 if h2d_transfer is not None:
                     self._keep_h2d_transfer(h2d_transfer)
                     self.stream.wait_event(h2d_transfer.event)
+                    _record_forward_input_stream(forward_inputs, self.stream)
 
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
@@ -970,18 +1019,20 @@ class BaseModelAgent:
         falling back to dummy inputs.
         """
         non_blocking = True
-        keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}
             forward_inputs_cuda.update(forward_inputs)
-            h2d_refs = {k: forward_inputs_cuda[k] for k in keys if forward_inputs_cuda.get(k) is not None}
+            h2d_refs = {
+                key: forward_inputs_cuda[key]
+                for key in _H2D_INPUT_KEYS if forward_inputs_cuda.get(key) is not None
+            }
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
-                for k in keys:
-                    if k not in forward_inputs_cuda:
+                for key in _H2D_INPUT_KEYS:
+                    if key not in forward_inputs_cuda:
                         continue
-                    forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
+                    forward_inputs_cuda[key] = _try_to_cuda(forward_inputs_cuda[key], non_blocking=non_blocking)
                 h2d_event = torch.cuda.Event()
                 h2d_event.record()
                 forward_inputs_cuda[_H2D_TRANSFER_KEY] = _H2DTransfer(h2d_event, h2d_refs)
@@ -1143,6 +1194,8 @@ class BaseModelAgent:
             self.spec_agent.build_model(self.misc_config.empty_init,
                                         self.patched_model,
                                         build_model_ctx=self.build_model_ctx)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -1154,6 +1207,8 @@ class BaseModelAgent:
                                                             backend_config=self.backend_config,
                                                             device=self.device)
             self.spec_agent.build_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_graph_runner()
 
     def build_cache_engine(self):
         """Build cache engine."""
@@ -1171,6 +1226,9 @@ class BaseModelAgent:
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.set_cache_config(self.cache_config)
+                self.memdecode_agent.build_cache_engine(self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
@@ -1212,6 +1270,8 @@ class BaseModelAgent:
                 self.patched_model.reset()
 
             self.spec_agent.reset_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
@@ -1425,6 +1485,8 @@ class BaseModelAgent:
     @torch.inference_mode()
     async def sleep(self, level: int = 1):
         """Sleep."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
@@ -1452,6 +1514,8 @@ class BaseModelAgent:
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         if tags is None:
             tags = ['weights', 'kv_cache']
 
@@ -1483,6 +1547,8 @@ class BaseModelAgent:
     def release(self):
         """release."""
         self.reset_graph_runner()
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None

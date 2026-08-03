@@ -46,12 +46,12 @@ public:
 
     bool Match(const Operation& operation, const PlanningContext& context) const override
     {
-        return context.arch > 0 && context.arch < 900 && detail::MatchesGdrSpec(spec(), operation, context);
+        return detail::MatchesGdrSpec(spec(), operation, context);
     }
 
-    bool Plan(const Operation&, const PlanningContext& context, delta_rule::Plan* plan) const override
+    bool Plan(const Operation& operation, const PlanningContext& context, delta_rule::Plan* plan) const override
     {
-        return detail::PlanPreSm90Operation(spec(), context, plan);
+        return detail::PlanPreSm90Operation(spec(), operation, context, plan);
     }
 
     void Run(const Arguments& args, const delta_rule::Plan& plan, cudaStream_t stream) const override

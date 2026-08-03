@@ -98,27 +98,3 @@ class IndexerTopKFP8(nn.Module):
                                              head_gate_scale=head_gate_scale,
                                              rope_interleaved=rope_interleaved,
                                              meta=meta)
-
-    def forward_k_only(self,
-                       k: Tensor,
-                       norm_weight: Tensor,
-                       norm_bias: Tensor,
-                       cos: Tensor,
-                       sin: Tensor,
-                       k_cache: Tensor,
-                       k_s_cache: Tensor,
-                       norm_eps: float,
-                       rope_interleaved: bool,
-                       attn_metadata: AttentionMetadata = None):
-        """Cache K and return identity indices without scoring Q."""
-        meta = self._build_meta(k, attn_metadata)
-        return self.index_impl.forward_k_only(k,
-                                              norm_weight,
-                                              norm_bias,
-                                              cos,
-                                              sin,
-                                              k_cache,
-                                              k_s_cache,
-                                              norm_eps=norm_eps,
-                                              rope_interleaved=rope_interleaved,
-                                              meta=meta)

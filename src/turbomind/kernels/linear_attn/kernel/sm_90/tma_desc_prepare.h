@@ -3,6 +3,8 @@
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/common.h"
 #include "src/turbomind/kernels/linear_attn/kernel/sm_90/internal.h"
 
+#include <cutlass/arch/grid_dependency_control.h>
+
 #include <stdexcept>
 #include <string>
 
@@ -316,8 +318,8 @@ CUtensorMap MakeContextParallelStateTmaDesc(StateT* ptr, int total_segments, int
 template<class T>
 CUtensorMap MakeCorrectInitialStatesSegmentMatrixTmaDesc(T* ptr, int total_segments, int hv)
 {
-    constexpr int kRowsPerTma = 64;
-    static_assert(kHeadDim % kRowsPerTma == 0);
+    constexpr int kColumnsPerTma = 64;
+    static_assert(kHeadDim % kColumnsPerTma == 0);
 
     const uint64_t global_dim[4] = {
         static_cast<uint64_t>(kHeadDim),
@@ -331,7 +333,7 @@ CUtensorMap MakeCorrectInitialStatesSegmentMatrixTmaDesc(T* ptr, int total_segme
         static_cast<uint64_t>(hv) * kHeadDim * kHeadDim * sizeof(T),
     };
     const uint32_t box_dim[4] = {
-        static_cast<uint32_t>(kRowsPerTma),
+        static_cast<uint32_t>(kColumnsPerTma),
         static_cast<uint32_t>(kHeadDim),
         1u,
         1u,
@@ -1267,6 +1269,9 @@ __global__ __launch_bounds__(
                          output_gate_stride,
                          output_gate_batch_stride,
                          smem);
+        if (threadIdx.x == 0) {
+            cutlass::arch::launch_dependent_grids();
+        }
     }
 #endif
 }

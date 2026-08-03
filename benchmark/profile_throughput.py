@@ -347,6 +347,7 @@ def parse_args():
 def main():
     args = parse_args()
     random.seed(args.seed)
+    np.random.seed(args.seed)
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(
             max_batch_size=args.concurrency // args.dp,

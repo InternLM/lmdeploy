@@ -31,13 +31,6 @@ class BaseNSAIndexFP8(ABC):
         """Forward with fused DSA indexer preparation."""
         raise NotImplementedError('Not implemented.')
 
-    def forward_k_only(self, k: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor, sin: Tensor,
-                       k_cache: Tensor, k_s_cache: Tensor, norm_eps: float, rope_interleaved: bool,
-                       meta: NSAIndexMeta) -> Tensor:
-        """Cache K and return the dense identity index."""
-        raise NotImplementedError('Not implemented.')
-
-
 class BaseNSAIndexFP8Builder:
 
     @staticmethod
