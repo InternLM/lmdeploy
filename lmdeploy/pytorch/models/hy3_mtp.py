@@ -239,8 +239,8 @@ class HYV3MTP(nn.Module, CudaGraphMixin):
     def get_checkpoint_weight_prefixes(self) -> tuple[str, ...]:
         """Return the checkpoint prefixes needed by this draft model.
 
-        Hy3 MTP is stored alongside the 80-layer target model. Restricting the
-        loader here avoids reading every target-model safetensors shard again.
+        Hy3 MTP is stored alongside the 80-layer target model. Restricting the loader here avoids reading every target-
+        model safetensors shard again.
         """
         start = self.config.num_hidden_layers
         end = start + self.config.num_nextn_predict_layers

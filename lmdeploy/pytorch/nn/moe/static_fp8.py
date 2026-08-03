@@ -133,8 +133,7 @@ class LinearWeightsStaticF8(LinearWeights):
     ):
         """Load a per-expert static activation scale.
 
-        Gate and up projections are packed together and therefore must use
-        the same activation scale within each expert.
+        Gate and up projections are packed together and therefore must use the same activation scale within each expert.
         """
         if loaded_weight.numel() != 1:
             raise ValueError(

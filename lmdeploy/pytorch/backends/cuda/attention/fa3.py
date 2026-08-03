@@ -82,9 +82,8 @@ class FA3Impl(TritonAttentionImpl):
     def _get_fa3_softcap(self) -> float:
         """Translate LMDeploy's disabled-softcap sentinel for FA3.
 
-        Triton attention uses a negative value to represent disabled logit
-        softcapping, while FA3 expects exactly zero when kernels without
-        softcapping support are used.
+        Triton attention uses a negative value to represent disabled logit softcapping, while FA3 expects exactly zero
+        when kernels without softcapping support are used.
         """
         return 0.0 if self.logit_softcapping <= 0.0 else self.logit_softcapping
 
