@@ -82,6 +82,7 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
     import torch
 
     from lmdeploy.pytorch.backends.cuda import graph_runner as cuda_graph_runner
+    from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
 
     context = SimpleNamespace(
         global_is_decoding=lambda: True,
@@ -89,6 +90,7 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
     )
     runner = cuda_graph_runner.CUDAGraphRunner.__new__(cuda_graph_runner.CUDAGraphRunner)
     runner.ctx_mgr = SimpleNamespace(current_context=lambda: context)
+    runner.model = CudaGraphMixin()
     runner.get_meta = lambda: SimpleNamespace(padding_batch_size=None)
     runner._get_capture_tokens = lambda batch_size: batch_size
 
@@ -140,9 +142,11 @@ def test_cuda_graph_key_separates_dsa_seed_and_reuse(monkeypatch):
     import torch
 
     from lmdeploy.pytorch.backends.cuda import graph_runner as cuda_graph_runner
+    from lmdeploy.pytorch.models.glm_moe_dsa_mtp import GlmMoeDsaMTPModel
 
     runner = cuda_graph_runner.CUDAGraphRunner.__new__(cuda_graph_runner.CUDAGraphRunner)
     runner.ctx_mgr = SimpleNamespace(current_context=lambda: SimpleNamespace(global_is_decoding=lambda: True))
+    runner.model = GlmMoeDsaMTPModel.__new__(GlmMoeDsaMTPModel)
     runner.get_meta = lambda: SimpleNamespace(padding_batch_size=None)
     runner._get_capture_tokens = lambda batch_size: batch_size
     monkeypatch.setattr(cuda_graph_runner, 'get_step_ctx_manager',

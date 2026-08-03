@@ -232,6 +232,10 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
             spec_step_idx=spec_step_idx,
         )
 
+    def get_cudagraph_extra_key(self, skip_topk: bool = False, **kwargs) -> tuple:
+        """Separate graphs that compute and reuse DSA top-k indices."""
+        return (skip_topk, )
+
     def prepare_inputs_for_generation(
         self,
         past_key_values: list[list[torch.Tensor]],

@@ -88,6 +88,10 @@ class CudaGraphMeta:
 class CudaGraphMixin:
     """Mixin class to support cudagraph."""
 
+    def get_cudagraph_extra_key(self, **kwargs) -> tuple:
+        """Get model-specific CUDA graph keys."""
+        return ()
+
     def support_cuda_graph(
         self,
         input_ids: torch.Tensor,
