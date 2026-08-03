@@ -110,13 +110,19 @@ class CudaGraphMixin:
             output_buffers = output
         return output_buffers
 
-    def update_meta_flashattn(self, batch_size: int, max_seqlen_q: int, block_size: int, max_seqlen_k: int,
-                              cache_seqlens: torch.Tensor):
-        """Update meta flashattn."""
+    def build_fa3_scheduler_metadata(self,
+                                     batch_size: int,
+                                     max_seqlen_q: int,
+                                     block_size: int,
+                                     max_seqlen_k: int,
+                                     cache_seqlens: torch.Tensor,
+                                     *,
+                                     sliding_window: Any,
+                                     causal: bool):
+        """Build FA3 metadata for an explicit attention pattern."""
         ctx_mgr = get_step_ctx_manager()
         step_ctx = ctx_mgr.current_context()
         model_config = step_ctx.model_config
-        sliding_window = model_config.sliding_window
         num_attention_heads, num_key_value_heads = model_config.get_num_qkv_head_by_tp()
         headdim = model_config.head_dim
         torch_dtype = model_config.dtype
@@ -138,6 +144,7 @@ class CudaGraphMixin:
             cache_seqlens=cache_seqlens,
             qkv_dtype=torch_dtype,
             page_size=block_size,
+            causal=causal,
             window_size=window_size,
         )
         return scheduler_metadata
@@ -193,11 +200,15 @@ class CudaGraphMixin:
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
             max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
-            input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
-                                                                             graph_meta.decode_query_len,
-                                                                             block_size=graph_meta.block_size,
-                                                                             max_seqlen_k=max_seqlen_k,
-                                                                             cache_seqlens=input_buffers['kv_seqlens'])
+            model_config = get_step_ctx_manager().current_context().model_config
+            input_buffers['scheduler_metadata'] = self.build_fa3_scheduler_metadata(
+                graph_meta.max_batchs,
+                graph_meta.decode_query_len,
+                block_size=graph_meta.block_size,
+                max_seqlen_k=max_seqlen_k,
+                cache_seqlens=input_buffers['kv_seqlens'],
+                sliding_window=model_config.sliding_window,
+                causal=True)
 
         # mrope
         if graph_meta.use_mrope:
@@ -285,12 +296,15 @@ class CudaGraphMixin:
             # graph_meta.num_blocks * graph_meta.block_size to match the buffer shape
             # allocated in make_buffers_cudagraph, not the runtime attn_metadata value.
             max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
-            scheduler_metadata = self.update_meta_flashattn(
+            model_config = get_step_ctx_manager().current_context().model_config
+            scheduler_metadata = self.build_fa3_scheduler_metadata(
                 new_batch_size,
                 decode_query_len,
                 block_size=graph_meta.block_size,
                 max_seqlen_k=max_seqlen_k,
                 cache_seqlens=input_buffers['kv_seqlens'],
+                sliding_window=model_config.sliding_window,
+                causal=True,
             )
             num_meta = scheduler_metadata.size(0)
             input_buffers['scheduler_metadata'][:num_meta] = scheduler_metadata

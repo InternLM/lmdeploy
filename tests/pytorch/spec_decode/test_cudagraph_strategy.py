@@ -20,20 +20,35 @@ def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
-def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture():
+def test_cudagraph_fa3_metadata_uses_explicit_swa_policy_for_single_token_capture(monkeypatch):
     from types import SimpleNamespace
 
     import torch
 
+    from lmdeploy.pytorch.models.utils import cudagraph as cudagraph_mod
     from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+
+    step_context = SimpleNamespace(model_config=SimpleNamespace(sliding_window=4096))
+    monkeypatch.setattr(cudagraph_mod, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(current_context=lambda: step_context))
 
     class DummyCudaGraphModel(CudaGraphMixin):
 
         def __init__(self):
             self.max_seqlen_q_calls = []
 
-        def update_meta_flashattn(self, batch_size, max_seqlen_q, block_size, max_seqlen_k, cache_seqlens):
+        def build_fa3_scheduler_metadata(self,
+                                         batch_size,
+                                         max_seqlen_q,
+                                         block_size,
+                                         max_seqlen_k,
+                                         cache_seqlens,
+                                         *,
+                                         sliding_window,
+                                         causal):
             self.max_seqlen_q_calls.append(max_seqlen_q)
+            assert sliding_window == 4096
+            assert causal is True
             return torch.zeros(4, dtype=torch.int32)
 
     model = DummyCudaGraphModel()

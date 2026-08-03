@@ -127,6 +127,7 @@ class SubCliServe:
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
+        ArgumentHelper.num_gpu_blocks(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
@@ -242,6 +243,7 @@ class SubCliServe:
                 ep=args.ep,
                 max_batch_size=max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
+                num_gpu_blocks=args.num_gpu_blocks,
                 block_size=args.cache_block_seq_len,
                 kernel_block_size=args.kernel_block_size,
                 session_len=args.session_len,

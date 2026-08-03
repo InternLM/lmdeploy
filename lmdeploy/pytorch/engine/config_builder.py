@@ -216,6 +216,14 @@ class ConfigBuilder:
             # TODO support tp > 1, ep > 1 for other methods
             if speculative_config.method == 'qwen3_5_mtp':
                 draft_dist_config = dist_config
+            elif speculative_config.method == 'dflash':
+                from lmdeploy.pytorch.spec_decode.dflash_utils import (
+                    validate_dflash_dist_config,
+                    validate_dflash_runtime_config,
+                )
+                validate_dflash_dist_config(dist_config)
+                validate_dflash_runtime_config(cache_config=cache_config, backend_config=engine_config)
+                draft_dist_config = copy.deepcopy(dist_config)
             else:
                 draft_dist_config = DistConfig()
             return draft_dist_config
