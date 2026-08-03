@@ -8,8 +8,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 import torch
 
+from lmdeploy.utils import get_logger
+
 if TYPE_CHECKING:
     from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+
+logger = get_logger('lmdeploy')
 
 GraphBufferT = TypeVar('GraphBufferT')
 MetaT = TypeVar('MetaT')
@@ -263,14 +267,18 @@ _active_implementations: ContextVar[list[Any] | None] = ContextVar(
 def register_step_metadata_impl(impl: Any) -> None:
     """Register an implementation only inside the active CUDA build scope."""
     implementations = _active_implementations.get()
-    if implementations is not None:
-        implementations.append(impl)
+    if implementations is None:
+        logger.debug('Ignore CUDA step-metadata implementation %s constructed outside a model-build scope.',
+                     type(impl).__qualname__)
+        return
+    implementations.append(impl)
 
 
 @contextmanager
 def collect_step_metadata(ctx_mgr: 'StepContextManager'):
     """Collect one model's CUDA implementations and attach its resolved
     plan."""
+    ctx_mgr.backend_step_meta_plan = None
     implementations: list[Any] = []
     token = _active_implementations.set(implementations)
     try:
