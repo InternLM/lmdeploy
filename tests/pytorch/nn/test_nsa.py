@@ -26,3 +26,15 @@ def test_indexer_meta_preserves_decoding_query_width(monkeypatch, query_width):
     meta = nsa.IndexerTopKFP8._build_meta(q, attn_metadata)
 
     assert meta.max_q_seqlen == query_width
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA backend')
+def test_sparse_index_topk_is_resolved_at_init(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
+
+    selector = object()
+    monkeypatch.setattr(cuda_nsa, '_get_sparse_index_topk', lambda topk: selector)
+
+    index_impl = cuda_nsa.TritonNSAIndexFP8(topk=512, softmax_scale=1.0, block_size=128, fill=-1)
+
+    assert index_impl._sparse_index_topk is selector

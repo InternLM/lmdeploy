@@ -54,6 +54,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         self.fill = fill
         # TODO: configable scale fmt
         self.scale_fmt = 'ue8m0'
+        self._sparse_index_topk = _get_sparse_index_topk(topk)
 
     def _forward_index(self, q: Tensor, q_s: Tensor, k_cache: Tensor, k_s_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         cu_seqlen_q = meta.cu_seqlen_q
@@ -76,16 +77,15 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         # Multi-token queries need one causal KV length per score row.
         if scores.size(0) != k_seqlens.size(0):
             k_seqlens = _get_causal_k_seqlens(cu_seqlen_q, q_seqlens, k_seqlens, scores.size(0))
-        sparse_index_topk = _get_sparse_index_topk(self.topk)
-        if sparse_index_topk is not None:
+        if self._sparse_index_topk is not None:
             topk_seqlens = k_seqlens.to(torch.int32)
-            return sparse_index_topk(scores,
-                                     q_seqlens,
-                                     topk_seqlens,
-                                     self.topk,
-                                     fill=self.fill,
-                                     descending=True,
-                                     sorted=False)
+            return self._sparse_index_topk(scores,
+                                           q_seqlens,
+                                           topk_seqlens,
+                                           self.topk,
+                                           fill=self.fill,
+                                           descending=True,
+                                           sorted=False)
         return bitonic_topk(scores, q_seqlens, k_seqlens, self.topk, fill=self.fill, descending=True)
 
     def forward(self, q: Tensor, k: Tensor, weights: Tensor, k_cache: Tensor, k_s_cache: Tensor,
