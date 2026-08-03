@@ -179,6 +179,12 @@ with set_envs():
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
 
+    # Hy3
+    hy3_shared_expert_overlap = env_to_bool(
+        'LMDEPLOY_HY3_SHARED_EXPERT_OVERLAP',
+        False,
+    )
+
     # memory trim
     multimodal_session_trim_count = env_to_int('LMDEPLOY_MULTIMODAL_SESSION_TRIM_COUNT', 128)
 

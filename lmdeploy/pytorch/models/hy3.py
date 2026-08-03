@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import (
     StepContext,
@@ -29,6 +30,26 @@ from .utils.model import (
     DeployModelMixinV1,
     build_embedding,
 )
+
+_HY3_SHARED_EXPERT_STREAMS: dict[int, torch.cuda.Stream] = {}
+
+
+def _get_hy3_shared_expert_stream(
+    device: torch.device,
+) -> torch.cuda.Stream:
+    """Get the process-local shared-expert stream for a CUDA device."""
+    device_idx = device.index
+    if device_idx is None:
+        device_idx = torch.cuda.current_device()
+
+    stream = _HY3_SHARED_EXPERT_STREAMS.get(device_idx)
+    if stream is None:
+        stream = torch.cuda.Stream(
+            device=device_idx,
+            priority=0,
+        )
+        _HY3_SHARED_EXPERT_STREAMS[device_idx] = stream
+    return stream
 
 
 class Hy3Attention(Qwen3MoeAttention):
@@ -160,6 +181,66 @@ class Hy3MoE(nn.Module):
 
         world_size, _ = get_tp_world_rank()
         self._all_reduce = world_size > 1
+        self._enable_shared_expert_overlap = (
+            _envs.hy3_shared_expert_overlap
+        )
+        self._shared_expert_ready_event = None
+
+    def _combine_expert_outputs(
+        self,
+        routed_output: torch.Tensor,
+        shared_output: torch.Tensor,
+        output_dtype: torch.dtype,
+    ):
+        """Combine routed and shared experts in the original order."""
+        if self.enable_moe_fp32_combine:
+            return (
+                routed_output.float()
+                + shared_output.float()
+            ).to(output_dtype)
+        return routed_output + shared_output
+
+    def _forward_experts_overlap(
+        self,
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+    ):
+        """Overlap the independent shared and routed expert branches."""
+        main_stream = torch.cuda.current_stream(
+            hidden_states.device,
+        )
+        shared_stream = _get_hy3_shared_expert_stream(
+            hidden_states.device,
+        )
+
+        ready_event = self._shared_expert_ready_event
+        if ready_event is None:
+            ready_event = torch.cuda.Event(
+                enable_timing=False,
+            )
+            self._shared_expert_ready_event = ready_event
+        ready_event.record(main_stream)
+
+        # Enqueue the routed branch first because it is the longer branch.
+        routed_output = self.experts(
+            hidden_states,
+            topk_weights,
+            topk_ids,
+        )
+
+        shared_stream.wait_event(ready_event)
+        hidden_states.record_stream(shared_stream)
+        with torch.cuda.stream(shared_stream):
+            shared_output = self.shared_mlp(hidden_states)
+
+        main_stream.wait_stream(shared_stream)
+        shared_output.record_stream(main_stream)
+        return self._combine_expert_outputs(
+            routed_output,
+            shared_output,
+            hidden_states.dtype,
+        )
 
     def forward(
         self,
@@ -176,21 +257,32 @@ class Hy3MoE(nn.Module):
             self.expert_bias,
         )
 
-        routed_output = self.experts(
-            hidden_states,
-            topk_weights,
-            topk_ids,
-        )
-
-        shared_output = self.shared_mlp(hidden_states)
-
-        if self.enable_moe_fp32_combine:
-            output = (
-                routed_output.float()
-                + shared_output.float()
-            ).to(hidden_states.dtype)
+        if (
+            self._enable_shared_expert_overlap
+            and hidden_states.is_cuda
+        ):
+            output = self._forward_experts_overlap(
+                hidden_states,
+                topk_weights,
+                topk_ids,
+            )
         else:
-            output = routed_output + shared_output
+            # Keep the original serial path unchanged when the feature is
+            # disabled.
+            routed_output = self.experts(
+                hidden_states,
+                topk_weights,
+                topk_ids,
+            )
+            shared_output = self.shared_mlp(hidden_states)
+
+            if self.enable_moe_fp32_combine:
+                output = (
+                    routed_output.float()
+                    + shared_output.float()
+                ).to(hidden_states.dtype)
+            else:
+                output = routed_output + shared_output
 
         output = output.reshape(original_shape)
 
