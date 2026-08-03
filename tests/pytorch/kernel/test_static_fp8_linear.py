@@ -17,6 +17,11 @@ from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
     per_tensor_quant_fp8,
 )
 
+_REQUIRES_FP8_GPU = pytest.mark.skipif(
+    torch.cuda.get_device_capability() < (8, 9),
+    reason='Static FP8 optimization tests require SM89 or SM90+',
+)
+
 
 def _make_case(
     *,
@@ -173,6 +178,7 @@ def test_static_fp8_linear_feature_gates_are_default_off(
         (True, True),
     ],
 )
+@_REQUIRES_FP8_GPU
 @torch.inference_mode()
 def test_static_fp8_scaled_mm_matches_triton(
     monkeypatch,
@@ -213,6 +219,7 @@ def test_static_fp8_scaled_mm_matches_triton(
     [1, 2, 3, 8, 16, 29, 32, 128],
 )
 @pytest.mark.parametrize('in_features', [384, 2048, 4096])
+@_REQUIRES_FP8_GPU
 @torch.inference_mode()
 def test_static_fp8_compiled_quant_is_exact(
     num_tokens,
@@ -247,6 +254,7 @@ def test_static_fp8_compiled_quant_is_exact(
 
 
 @pytest.mark.parametrize('num_tokens', [1, 3, 32])
+@_REQUIRES_FP8_GPU
 @torch.inference_mode()
 def test_static_fp8_compiled_quant_dispatch_matches_uncompiled(
     monkeypatch,
@@ -281,6 +289,7 @@ def test_static_fp8_compiled_quant_dispatch_matches_uncompiled(
     assert torch.equal(actual, expected)
 
 
+@_REQUIRES_FP8_GPU
 @torch.inference_mode()
 def test_static_fp8_compiled_quant_respects_token_allowlist(
     monkeypatch,
@@ -316,6 +325,7 @@ def test_static_fp8_compiled_quant_respects_token_allowlist(
 
 
 @pytest.mark.parametrize('num_tokens', [1, 32])
+@_REQUIRES_FP8_GPU
 @torch.inference_mode()
 def test_static_fp8_scaled_mm_compiled_quant_cuda_graph(
     monkeypatch,
