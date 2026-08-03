@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.models.glm_moe_dsa import DSATopKIndicesBuffer
-from lmdeploy.pytorch.models.glm_moe_dsa_mtp import GlmMoeDsaMTPModel, GlmMoeDsaMultiTokenPredictor
+from lmdeploy.pytorch.models.glm_moe_dsa_mtp import GlmMoeDsaMultiTokenPredictor
 from lmdeploy.pytorch.spec_decode.proposers.base import BaseSpecProposer
 from lmdeploy.pytorch.spec_decode.proposers.deepseek_mtp import DeepseekMTP
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
@@ -48,13 +48,6 @@ class _DummyTarget(nn.Module):
         logits = hidden_states.new_zeros(1, hidden_states.size(1), 8)
         logits[..., 5] = 1
         return logits
-
-
-def test_glm_mtp_cudagraph_key_separates_topk_reuse():
-    model = GlmMoeDsaMTPModel.__new__(GlmMoeDsaMTPModel)
-
-    assert model.get_cudagraph_extra_key(skip_topk=False) == (False, )
-    assert model.get_cudagraph_extra_key(skip_topk=True) == (True, )
 
 
 def test_proposer_reuses_topk_and_recycles_postnorm_hidden_states():

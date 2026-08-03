@@ -74,7 +74,7 @@ def test_prepare_dsa_indexer_q_matches_unfused_quantization(rope_interleaved, he
 @pytest.mark.parametrize('rope_interleaved', [True, False])
 @pytest.mark.parametrize('q_seqlens,kv_seqlens', [([1, 1], [3, 2]), ([3, 2], [5, 3])])
 def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqlens, rope_interleaved):
-    from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k, prepare_dsa_indexer_k_cache
+    from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k_cache
     from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 
     torch.manual_seed(1)
@@ -93,13 +93,8 @@ def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqle
     cache_fused = torch.zeros_like(cache_ref)
     scale_fused = torch.zeros_like(scale_ref)
 
-    k_prepared = prepare_dsa_indexer_k(k,
-                                       norm_weight,
-                                       norm_bias,
-                                       cos,
-                                       sin,
-                                       eps=1e-6,
-                                       rope_interleaved=rope_interleaved)
+    k_prepared = F.layer_norm(k.float(), (128, ), norm_weight, norm_bias, 1e-6).to(torch.bfloat16)
+    k_prepared = _apply_rope_first(k_prepared, cos, sin, rope_interleaved).to(torch.bfloat16)
     fill_kv_cache_blocked_fp8(k_prepared[:, None],
                               None,
                               cache_ref[..., None, :],
@@ -128,7 +123,3 @@ def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqle
 
     assert torch.equal(cache_fused, cache_ref)
     assert torch.equal(scale_fused, scale_ref)
-
-    k_torch = F.layer_norm(k.float(), (128, ), norm_weight, norm_bias, 1e-6).to(torch.bfloat16)
-    k_torch = _apply_rope_first(k_torch, cos, sin, rope_interleaved).to(torch.bfloat16)
-    torch.testing.assert_close(k_prepared.float(), k_torch.float(), rtol=0, atol=0.0625)

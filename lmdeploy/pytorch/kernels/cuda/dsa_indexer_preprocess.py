@@ -102,60 +102,6 @@ def _prepare_dsa_indexer_q_kernel(
     tl.store(QScaleOut + token_id * stride_st + head_id * stride_sh, scale * weight * score_scale)
 
 
-@triton.jit
-def _prepare_dsa_indexer_k_kernel(
-    K,
-    NormWeight,
-    NormBias,
-    Cos,
-    Sin,
-    KOut,
-    eps: tl.constexpr,
-    stride_kt: tl.constexpr,
-    stride_kd: tl.constexpr,
-    stride_cs: tl.constexpr,
-    stride_cd: tl.constexpr,
-    stride_ot: tl.constexpr,
-    stride_od: tl.constexpr,
-    head_dim: tl.constexpr,
-    rope_dim: tl.constexpr,
-    rope_interleaved: tl.constexpr,
-    BLOCK_D: tl.constexpr,
-):
-    token_id = tl.program_id(0)
-    feat_off = tl.arange(0, BLOCK_D)
-    feat_mask = feat_off < head_dim
-    k_ptr = K + token_id * stride_kt
-
-    x = tl.load(k_ptr + feat_off * stride_kd, mask=feat_mask, other=0.0).to(tl.float32)
-    mean = tl.sum(x, axis=0) / head_dim
-    centered = x - mean
-    inv_std = tl.rsqrt(tl.sum(centered * centered, axis=0) / head_dim + eps)
-    weight = tl.load(NormWeight + feat_off, mask=feat_mask, other=0.0).to(tl.float32)
-    bias = tl.load(NormBias + feat_off, mask=feat_mask, other=0.0).to(tl.float32)
-    x = (centered * inv_std * weight + bias).to(tl.bfloat16)
-
-    # Recreate the normalized RoPE partner from raw K with the same row
-    # statistics instead of materializing the complete LayerNorm output.
-    if rope_interleaved:
-        pair_off = feat_off ^ 1
-        freq_off = feat_off // 2
-    else:
-        half_rope_dim = rope_dim // 2
-        pair_off = tl.where(feat_off < half_rope_dim, feat_off + half_rope_dim, feat_off - half_rope_dim)
-        freq_off = feat_off
-    x_pair_raw = tl.load(k_ptr + pair_off * stride_kd, mask=feat_mask, other=0.0).to(tl.float32)
-    pair_weight = tl.load(NormWeight + pair_off, mask=feat_mask, other=0.0).to(tl.float32)
-    pair_bias = tl.load(NormBias + pair_off, mask=feat_mask, other=0.0).to(tl.float32)
-    x_pair = ((x_pair_raw - mean) * inv_std * pair_weight + pair_bias).to(tl.bfloat16)
-
-    freq_mask = feat_off < rope_dim
-    cos = tl.load(Cos + token_id * stride_cs + freq_off * stride_cd, mask=freq_mask, other=1.0)
-    sin = tl.load(Sin + token_id * stride_cs + freq_off * stride_cd, mask=freq_mask, other=0.0)
-    x = _apply_rope_first(x, x_pair, cos, sin, feat_off, rope_dim, rope_interleaved)
-    tl.store(KOut + token_id * stride_ot + feat_off * stride_od, x.to(tl.bfloat16), mask=feat_mask)
-
-
 @triton.jit(do_not_specialize=['stride_boff'])
 def _prepare_dsa_indexer_k_cache_kernel(
     K,
@@ -292,42 +238,6 @@ def prepare_dsa_indexer_q(
                                         num_warps=4,
                                         num_stages=1)
     return q_out, q_scale
-
-
-def prepare_dsa_indexer_k(
-    k: Tensor,
-    norm_weight: Tensor,
-    norm_bias: Tensor,
-    cos: Tensor,
-    sin: Tensor,
-    eps: float,
-    rope_interleaved: bool,
-) -> Tensor:
-    """Reference fused LayerNorm and RoPE K preparation."""
-    assert k.dtype == torch.bfloat16 and k.dim() == 2 and k.size(-1) == 128
-    assert norm_weight.shape == norm_bias.shape == (128, )
-    assert cos.shape == sin.shape == (k.size(0), 64)
-    k_out = torch.empty_like(k)
-    _prepare_dsa_indexer_k_kernel[(k.size(0), )](k,
-                                                 norm_weight,
-                                                 norm_bias,
-                                                 cos,
-                                                 sin,
-                                                 k_out,
-                                                 eps=eps,
-                                                 stride_kt=k.stride(0),
-                                                 stride_kd=k.stride(1),
-                                                 stride_cs=cos.stride(0),
-                                                 stride_cd=cos.stride(1),
-                                                 stride_ot=k_out.stride(0),
-                                                 stride_od=k_out.stride(1),
-                                                 head_dim=128,
-                                                 rope_dim=64,
-                                                 rope_interleaved=rope_interleaved,
-                                                 BLOCK_D=128,
-                                                 num_warps=4,
-                                                 num_stages=1)
-    return k_out
 
 
 def prepare_dsa_indexer_k_cache(

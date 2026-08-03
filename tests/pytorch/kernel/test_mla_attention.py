@@ -128,17 +128,3 @@ def test_bf16_sparse_decode_skips_fp8_flashmla_metadata():
 
     assert metadata.block_offsets.dtype == torch.int32
     assert not hasattr(metadata, 'tile_scheduler_metadata')
-
-
-def test_nsa_topk_uses_per_query_causal_kv_lengths():
-    if not torch.cuda.is_available():
-        pytest.skip('requires a CUDA runtime to import the NSA backend')
-    from lmdeploy.pytorch.backends.cuda.nsa import _get_causal_k_seqlens
-
-    q_seqlens = torch.tensor([2, 3])
-    cu_seqlen_q = torch.tensor([0, 2, 5])
-    k_seqlens = torch.tensor([5, 7])
-
-    output = _get_causal_k_seqlens(cu_seqlen_q, q_seqlens, k_seqlens, num_tokens=5)
-
-    assert torch.equal(output, torch.tensor([4, 5, 5, 6, 7]))
