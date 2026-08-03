@@ -156,7 +156,7 @@ def _prepare_dsa_indexer_k_kernel(
     tl.store(KOut + token_id * stride_ot + feat_off * stride_od, x.to(tl.bfloat16), mask=feat_mask)
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['stride_boff'])
 def _prepare_dsa_indexer_k_cache_kernel(
     K,
     NormWeight,
@@ -180,7 +180,7 @@ def _prepare_dsa_indexer_k_cache_kernel(
     stride_kcd: tl.constexpr,
     stride_ksb: tl.constexpr,
     stride_kss: tl.constexpr,
-    stride_boff: tl.constexpr,
+    stride_boff,
     block_size: tl.constexpr,
     head_dim: tl.constexpr,
     rope_dim: tl.constexpr,
