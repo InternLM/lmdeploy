@@ -18,7 +18,7 @@ struct SM70_MMA_884 {
 
     static constexpr int kThreadCount = 32;
 
-    static constexpr auto kOpClass = OpClass::kMMA_s884;
+    static constexpr auto kOpClass = OpClass::kMMA_h884;
 
     using FragA = Array<half, K>;
     using FragB = Array<half, K>;

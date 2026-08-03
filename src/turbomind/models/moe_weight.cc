@@ -56,24 +56,16 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     auto stream = core::Context::stream().handle();
 
-    if (d.weight_format.dtype == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
-        auto make_blocked_ptr = [&](const auto& ptrs) {
-            return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
-        };
-        d.weight         = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
-        d.scales         = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
-        d.k_desc.offsets = d.q_desc.offsets = (int*)1;
+    auto make_strided_ptr = [&](const auto& ptrs) {
+        return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+    };
+    d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
+    if (e0.scales) {
+        d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
     }
-    else {
-        auto make_strided_ptr = [&](const auto& ptrs) {
-            return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
-        };
-        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
-        if (e0.scales) {
-            d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
-        }
-        d.k_desc.ld = d.q_desc.ld = 0;
-    }
+    // MatrixLayout.ld == 0 identifies the StridedPtr expert table.
+    d.k_desc.ld = d.q_desc.ld = 0;
+    d.k_desc.offsets = d.q_desc.offsets = nullptr;
 }
 
 FfnWeight* MoeWeight::expert(int i) const

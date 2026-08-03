@@ -1,5 +1,6 @@
 
 #include <array>
+#include <cstdlib>
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/gemm/arch.h"
@@ -82,6 +83,24 @@ constexpr auto operator|(constant<a>, constant<b>)
     return constant<a | b>{};
 }
 
+int WeightPackEnv()
+{
+    static const int v = [] {
+        const char* p = std::getenv("TM_GEMM_WEIGHT_PACK");
+        if (!p) {
+            return -1;
+        }
+        if (p[0] == '0' && p[1] == '\0') {
+            return 0;
+        }
+        if (p[0] == '1' && p[1] == '\0') {
+            return 1;
+        }
+        return -1;
+    }();
+    return v;
+}
+
 std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
                                                     DataType weight_type,  //
                                                     DataType input_type,
@@ -103,12 +122,22 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
     constexpr Sm75     sm75{};
     constexpr Sm70     sm70{};
 
+    const int pack_env = WeightPackEnv();
+    if (pack_env == 0) {
+        return {};
+    }
+
     if (weight_type == kHalf || weight_type == kBfloat16) {
         constexpr Cvt<uint16_t, uint16_t> W;
         if (grouped) {
-            // SM10.x only: CublasGroupedKernel (cublasGemmGroupedBatchedEx) expects standard (K,N)
-            if (sm >= 100 && sm < 120)
-                return {};
+            if (pack_env != 1) {
+                // SM10.x: CublasGroupedKernel expects standard (K,N)
+                if (sm >= 100 && sm < 120)
+                    return {};
+                // SM90: plain B for native GMMA (LinearWeight prepare stores physical (N,K))
+                if (sm >= 90 && sm < 100)
+                    return {};
+            }
             // clang-format off
             if (sm >= 80) return {W(sm8_, kRow, s16816h | B | _1), {}};
             if (sm == 75) return {W(sm75, kRow, s16816h | B | _1), {}};
@@ -205,39 +234,6 @@ void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream
     }
     TM_CUDA_CHECK(cudaGetLastError());
     return ptr;
-}
-
-namespace {
-
-template<int N>
-__global__ void fill_blocked_ptrs(Array<void*, N> src, void** dst, int n)
-{
-    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx < n) {
-        dst[idx] = src[idx];
-    }
-}
-
-}  // namespace
-
-void* MakeBlockedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
-{
-    constexpr int   N = 64;
-    Array<void*, N> src{};
-    static_assert(sizeof(src) <= 4096);  // max parameter size for cuda11
-    void** dst{};
-    cudaMallocAsync(&dst, sizeof(void*) * ptrs.size(), stream);
-    for (int i = 0; i < (int)ptrs.size(); i += N) {
-        const int n = std::min<int>(ptrs.size() - i, N);
-        for (int j = 0; j < n; ++j) {
-            auto& [p, s] = ptrs[i + j];
-            src[j]       = p;
-        }
-        fill_blocked_ptrs<<<1, N, 0, stream>>>(src, dst, n);
-        dst += n;
-    }
-    TM_CUDA_CHECK(cudaGetLastError());
-    return dst - ptrs.size();
 }
 
 }  // namespace turbomind::gemm

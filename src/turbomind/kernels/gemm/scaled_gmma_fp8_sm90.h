@@ -12,7 +12,9 @@
 
 namespace turbomind::gemm {
 
-template<int TILE_M, int TILE_N, int TILE_K, int BATCH_M, int BATCH_N, int PIPE_M, int PIPE_N>
+// MAX_OP_N caps the WGMMA atom N (largest divisor of TILE_N that is ≤ MAX_OP_N).
+// Smaller atoms shrink FragC vs AccumC peak RF (e.g. 192 tile: 64×3 peak≈128 vs 192×1 peak≈192).
+template<int TILE_M, int TILE_N, int TILE_K, int BATCH_M, int BATCH_N, int PIPE_M, int PIPE_N, int MAX_OP_N = 256>
 struct ScaledGmmaFP8_TN {
 
     static constexpr auto select_gmma_operation()
@@ -27,25 +29,25 @@ struct ScaledGmmaFP8_TN {
 
         using namespace cute::SM90::GMMA;
 
-        if constexpr (N % 256 == 0) {
+        if constexpr (N % 256 == 0 && 256 <= MAX_OP_N) {
             return type_c<MMA_64x256x32_F32E4M3E4M3_SS_TN<>>;
         }
-        else if constexpr (N % 224 == 0) {
+        else if constexpr (N % 224 == 0 && 224 <= MAX_OP_N) {
             return type_c<MMA_64x224x32_F32E4M3E4M3_SS_TN<>>;
         }
-        else if constexpr (N % 192 == 0) {
+        else if constexpr (N % 192 == 0 && 192 <= MAX_OP_N) {
             return type_c<MMA_64x192x32_F32E4M3E4M3_SS_TN<>>;
         }
-        else if constexpr (N % 160 == 0) {
+        else if constexpr (N % 160 == 0 && 160 <= MAX_OP_N) {
             return type_c<MMA_64x160x32_F32E4M3E4M3_SS_TN<>>;
         }
-        else if constexpr (N % 128 == 0) {
+        else if constexpr (N % 128 == 0 && 128 <= MAX_OP_N) {
             return type_c<MMA_64x128x32_F32E4M3E4M3_SS_TN<>>;
         }
-        else if constexpr (N % 96 == 0) {
+        else if constexpr (N % 96 == 0 && 96 <= MAX_OP_N) {
             return type_c<MMA_64x96x32_F32E4M3E4M3_SS_TN<>>;
         }
-        else if constexpr (N % 64 == 0) {
+        else if constexpr (N % 64 == 0 && 64 <= MAX_OP_N) {
             return type_c<MMA_64x64x32_F32E4M3E4M3_SS_TN<>>;
         }
         else {
@@ -96,18 +98,19 @@ struct ScaledGmmaFP8_TN {
             scales[1][1] = frag_U[m][1] * frag_V[1];
             PRAGMA_UNROLL
             for (int n = 0; n < BATCH_N; ++n) {
+                // Step by 8 (GMMA C reg group), not OUTER_N: OP_N may not be a
+                // multiple of OUTER_N (e.g. OP_N=96, OUTER_N=64), and atom
+                // offset_V may not be OUTER_N-aligned (second 96-atom at 96),
+                // so a coarse c0+=OUTER_N chunk can OOB FragC and straddle a
+                // V-scale boundary at N%128.
                 PRAGMA_UNROLL
-                for (int c0 = 0; c0 < OP_N; c0 += OUTER_N) {
-                    int  i = (offset_V + c0) / OUTER_N;
-                    bool p = pred_V[i];
-                    PRAGMA_UNROLL
-                    for (int c1 = 0; c1 < OUTER_N; c1 += 8) {
-                        int c = c0 + c1;
-                        accum_C[m][n][c / 2 + 0] += (p ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 0];
-                        accum_C[m][n][c / 2 + 1] += (p ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 1];
-                        accum_C[m][n][c / 2 + 2] += (p ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 2];
-                        accum_C[m][n][c / 2 + 3] += (p ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 3];
-                    }
+                for (int c = 0; c < OP_N; c += 8) {
+                    const int  i = (offset_V + c) / OUTER_N;
+                    const bool p = pred_V[i];
+                    accum_C[m][n][c / 2 + 0] += (p ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 0];
+                    accum_C[m][n][c / 2 + 1] += (p ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 1];
+                    accum_C[m][n][c / 2 + 2] += (p ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 2];
+                    accum_C[m][n][c / 2 + 3] += (p ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 3];
                 }
             }
         }
