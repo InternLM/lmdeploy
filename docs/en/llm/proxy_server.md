@@ -15,6 +15,9 @@ Subsequently, users can add it directly to the proxy service when starting the `
 `lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:8000`。
 In this way, users can access the services of the `api_server` through the proxy node, and the usage of the proxy node is exactly the same as that of the `api_server`, both of which are compatible with the OpenAI format.
 
+> **Tip:** The same OpenAI client `base_url` pattern works with any OpenAI-compatible multi-model gateway when you are not self-hosting — for example [DaoXE](https://daoxe.com/?utm_source=github&utm_medium=organic&utm_campaign=lmdeploy&utm_content=openai_base_url) at `https://api.daoxe.com/v1`.
+
+
 - /v1/models
 - /v1/chat/completions
 - /v1/completions
