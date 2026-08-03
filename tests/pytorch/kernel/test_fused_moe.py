@@ -112,7 +112,8 @@ def test_compact_blocked_fp8_down_policy_is_prefill_and_cta_gated(num_tokens, nu
                                                              out_features=out_features) is expected
 
 def test_compact_moe_dispatch_prefers_many_local_experts(monkeypatch):
-    """Large local expert counts should select compact routed-block scheduling."""
+    """Large local expert counts should select compact routed-block
+    scheduling."""
     import importlib
 
     fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
@@ -127,7 +128,8 @@ def test_compact_moe_dispatch_prefers_many_local_experts(monkeypatch):
 
 
 def test_compact_moe_dispatch_keeps_dense_route_fallback(monkeypatch):
-    """Keep the existing compact path for dense routing on smaller expert counts."""
+    """Keep the existing compact path for dense routing on smaller expert
+    counts."""
     import importlib
 
     fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
@@ -144,46 +146,44 @@ def test_compact_moe_dispatch_keeps_dense_route_fallback(monkeypatch):
     assert fused_moe_module._should_use_compact_moe(hidden_states, w1, w2, dense_topk_ids, num_experts=64)
 
 
-def test_compact_blocked_fp8_dispatch_prefers_many_local_experts(monkeypatch):
-    """Large local expert counts should select compact scheduling for blocked FP8 MoE."""
+def test_compact_blocked_fp8_down_dispatch_prefers_wasteful_large_experts(monkeypatch):
+    """Large local expert counts should select compact down scheduling when
+    enough CTAs are saved."""
     import importlib
 
     blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe')
     monkeypatch.setattr(blocked_fp8_module, '_supports_compact_blocked_fp8_moe', lambda *args: True)
 
-    input_quant = torch.empty(1, 4, dtype=torch.float8_e4m3fn)
-    input_scale = torch.empty(1, 1)
+    input_quant = torch.empty(512, 4, dtype=torch.float8_e4m3fn)
+    input_scale = torch.empty(512, 1)
     w1 = torch.empty(1024, 8, 4, dtype=torch.float8_e4m3fn)
     w1_scale = torch.empty(1024, 1, 1)
-    w2 = torch.empty(1024, 4, 4, dtype=torch.float8_e4m3fn)
-    w2_scale = torch.empty(1024, 1, 1)
-    topk_ids = torch.zeros(1, 1, dtype=torch.long)
+    w2 = torch.empty(1024, 4096, 4, dtype=torch.float8_e4m3fn)
+    w2_scale = torch.empty(1024, 32, 1)
+    topk_ids = torch.zeros(512, 4, dtype=torch.long)
 
-    assert blocked_fp8_module._should_use_compact_blocked_fp8_moe(
+    assert blocked_fp8_module._should_use_compact_blocked_fp8_moe_down(
         input_quant, input_scale, w1, w1_scale, w2, w2_scale, topk_ids, num_experts=1024)
 
 
-def test_compact_blocked_fp8_dispatch_keeps_dense_route_fallback(monkeypatch):
-    """Keep the dense-route compact fallback for blocked FP8 MoE."""
+def test_compact_blocked_fp8_down_dispatch_rejects_small_local_experts(monkeypatch):
+    """Blocked-FP8 compact down scheduling is disabled for small local expert
+    counts."""
     import importlib
 
     blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe')
     monkeypatch.setattr(blocked_fp8_module, '_supports_compact_blocked_fp8_moe', lambda *args: True)
 
-    input_quant = torch.empty(1, 4, dtype=torch.float8_e4m3fn)
-    input_scale = torch.empty(1, 1)
+    input_quant = torch.empty(2048, 4, dtype=torch.float8_e4m3fn)
+    input_scale = torch.empty(2048, 1)
     w1 = torch.empty(64, 8, 4, dtype=torch.float8_e4m3fn)
     w1_scale = torch.empty(64, 1, 1)
-    w2 = torch.empty(64, 4, 4, dtype=torch.float8_e4m3fn)
-    w2_scale = torch.empty(64, 1, 1)
+    w2 = torch.empty(64, 4096, 4, dtype=torch.float8_e4m3fn)
+    w2_scale = torch.empty(64, 32, 1)
+    topk_ids = torch.zeros(2048, 1, dtype=torch.long)
 
-    sparse_topk_ids = torch.zeros(128, 1, dtype=torch.long)
-    dense_topk_ids = torch.zeros(2048, 1, dtype=torch.long)
-
-    assert not blocked_fp8_module._should_use_compact_blocked_fp8_moe(
-        input_quant, input_scale, w1, w1_scale, w2, w2_scale, sparse_topk_ids, num_experts=64)
-    assert blocked_fp8_module._should_use_compact_blocked_fp8_moe(
-        input_quant, input_scale, w1, w1_scale, w2, w2_scale, dense_topk_ids, num_experts=64)
+    assert not blocked_fp8_module._should_use_compact_blocked_fp8_moe_down(
+        input_quant, input_scale, w1, w1_scale, w2, w2_scale, topk_ids, num_experts=64)
 
 
 def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
@@ -510,7 +510,7 @@ class TestFusedMoeBlockedFP8Compact:
         w1_fp8, w1_scale = quant_w1
         w2_fp8, w2_scale = quant_w2
 
-        monkeypatch.setattr(moe_mod, '_should_use_compact_blocked_fp8_moe', lambda *args: False)
+        monkeypatch.setattr(moe_mod, '_should_use_compact_blocked_fp8_moe_down', lambda *args: False)
         regular = moe_mod.fused_moe_blocked_fp8(state_fp8,
                                                 state_scale,
                                                 w1_fp8,
@@ -522,7 +522,7 @@ class TestFusedMoeBlockedFP8Compact:
                                                 topk=topk_idx.size(1),
                                                 out_dtype=torch.bfloat16)
 
-        monkeypatch.setattr(moe_mod, '_should_use_compact_blocked_fp8_moe', lambda *args: True)
+        monkeypatch.setattr(moe_mod, '_should_use_compact_blocked_fp8_moe_down', lambda *args: True)
         compact = moe_mod.fused_moe_blocked_fp8(state_fp8,
                                                 state_scale,
                                                 w1_fp8,
