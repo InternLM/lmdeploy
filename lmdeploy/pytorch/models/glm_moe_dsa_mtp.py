@@ -12,9 +12,9 @@ from lmdeploy.pytorch.nn.linear import build_colwise_linear
 from lmdeploy.pytorch.nn.nsa import update_nsa_indexer_kv_seqlens
 
 from .deepseek_mtp import DeepseekMTPModel, build_deepseek_rotary_embedding
-from .deepseek_v32 import (
-    DeepseekV32DecoderLayer,
+from .glm_moe_dsa import (
     DSATopKIndicesBuffer,
+    GlmMoeDsaDecoderLayer,
     _load_fused_indexer_weight,
 )
 
@@ -69,10 +69,10 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
         self.shared_head = GlmMoeDsaSharedHead(config,
                                                dtype=dtype,
                                                device=device)
-        self.mtp_block = DeepseekV32DecoderLayer(config,
-                                                 layer_idx=layer_idx,
-                                                 dtype=dtype,
-                                                 device=device)
+        self.mtp_block = GlmMoeDsaDecoderLayer(config,
+                                               layer_idx=layer_idx,
+                                               dtype=dtype,
+                                               device=device)
         self.rotary_emb = build_deepseek_rotary_embedding(config)
 
     def forward(

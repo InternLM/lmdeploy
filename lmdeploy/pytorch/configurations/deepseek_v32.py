@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.pytorch import envs as _envs
-
 from .deepseek_v2 import DeepseekV2ModelConfigBuilder
 
 
@@ -12,11 +10,10 @@ def _check_env_v32(device: str = 'cuda'):
         return
 
     # check cuda
-    if _envs.disable_dsa_indexer_fusion:
-        try:
-            import fast_hadamard_transform  # noqa: F401
-        except ImportError:
-            raise ImportError('Deepseek V3.2 requires <fast_hadamard_transform>.')
+    try:
+        import fast_hadamard_transform  # noqa: F401
+    except ImportError:
+        raise ImportError('Deepseek V3.2 requires <fast_hadamard_transform>.')
 
     try:
         import flash_mla  # noqa: F401
@@ -43,7 +40,7 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
         index_k_shape = ([hf_config.index_head_dim], torch.float8_e4m3fn)
         index_k_scale_shape = ([1], torch.float32)
         config.cache_shapes = [index_k_shape, index_k_scale_shape]
-        config.mla_kv_cache_dtype = 'bfloat16'
+        config.mla_kv_cache_dtype = 'fp8_ds_mla'
         config.mla_index_topk = hf_config.index_topk
         config.check_env_func = _check_env_v32
         return config

@@ -5,7 +5,7 @@ import pytest
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.models.deepseek_v32 import DSATopKIndicesBuffer
+from lmdeploy.pytorch.models.glm_moe_dsa import DSATopKIndicesBuffer
 from lmdeploy.pytorch.models.glm_moe_dsa_mtp import GlmMoeDsaMTPModel, GlmMoeDsaMultiTokenPredictor
 from lmdeploy.pytorch.spec_decode.proposers.base import BaseSpecProposer
 from lmdeploy.pytorch.spec_decode.proposers.deepseek_mtp import DeepseekMTP
