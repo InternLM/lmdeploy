@@ -103,6 +103,8 @@ response = client.chat.completions.create(
 print(response)
 ```
 
+> **Note:** The same `OpenAI(base_url=...)` client pattern also works with OpenAI-compatible multi-model gateways when you are not self-hosting LMDeploy — for example [DaoXE](https://daoxe.com) at `https://api.daoxe.com/v1`.
+
 ### Integrate with lmdeploy `APIClient`
 
 Below are some examples demonstrating how to visit the service through `APIClient`
