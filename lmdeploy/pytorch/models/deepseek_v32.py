@@ -19,7 +19,7 @@ from lmdeploy.pytorch.nn import (
 )
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_rowwise_linear
-from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8
+from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, update_nsa_indexer_kv_seqlens
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 
 from .deepseek_v2 import (
@@ -714,6 +714,8 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         """Model forward."""
         step_ctx = get_step_ctx_manager().current_context()
         num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
+        if getattr(self.config, 'use_mla', True):
+            update_nsa_indexer_kv_seqlens(num_tokens, attn_metadata)
         all_routed_experts = None
         if self.enable_return_routed_experts:
             # Dense layers do not produce routed expert IDs. Keep their slots at an out-of-range sentinel;

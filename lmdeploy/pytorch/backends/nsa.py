@@ -12,6 +12,7 @@ class NSAIndexMeta:
     q_seqlens: Tensor
     k_seqlens: Tensor
     block_offset: Tensor
+    indexer_kv_seqlens: Tensor = None
     max_q_seqlen: int = None
     max_kv_seqlen: int = None
 

@@ -1,10 +1,28 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
 from torch import Tensor, nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
 from lmdeploy.pytorch.backends.nsa import NSAIndexMeta
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+
+
+def update_nsa_indexer_kv_seqlens(num_tokens: int, attn_metadata: AttentionMetadata) -> None:
+    """Prepare per-query causal KV lengths once for all indexer layers."""
+    q_seqlens = attn_metadata.q_seqlens
+    kv_seqlens = attn_metadata.kv_seqlens
+    if num_tokens == kv_seqlens.size(0):
+        indexer_kv_seqlens = kv_seqlens
+    else:
+        cu_seqlens_q = attn_metadata.cu_seqlens_q
+        q_start = torch.repeat_interleave(cu_seqlens_q[:-1], q_seqlens, output_size=num_tokens)
+        history_lengths = torch.repeat_interleave(kv_seqlens - q_seqlens, q_seqlens, output_size=num_tokens)
+        query_offsets = torch.arange(num_tokens, device=q_seqlens.device, dtype=q_start.dtype) - q_start
+        indexer_kv_seqlens = history_lengths + query_offsets + 1
+    if indexer_kv_seqlens.dtype != torch.int32:
+        indexer_kv_seqlens = indexer_kv_seqlens.to(torch.int32)
+    attn_metadata.indexer_kv_seqlens = indexer_kv_seqlens
 
 
 class IndexerTopKFP8(nn.Module):
@@ -52,6 +70,7 @@ class IndexerTopKFP8(nn.Module):
                             q_seqlens=attn_metadata.q_seqlens,
                             k_seqlens=attn_metadata.kv_seqlens,
                             block_offset=attn_metadata.block_offsets,
+                            indexer_kv_seqlens=attn_metadata.indexer_kv_seqlens,
                             max_q_seqlen=max_q_seqlen,
                             max_kv_seqlen=max_kv_seqlen)
 

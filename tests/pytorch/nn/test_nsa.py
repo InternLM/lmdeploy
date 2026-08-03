@@ -20,12 +20,29 @@ def test_indexer_meta_preserves_decoding_query_width(monkeypatch, query_width):
         cu_seqlens_q=torch.arange(batch_size + 1) * query_width,
         q_seqlens=torch.full((batch_size, ), query_width),
         kv_seqlens=torch.full((batch_size, ), query_width),
+        indexer_kv_seqlens=None,
         block_offsets=torch.zeros(batch_size, 1, dtype=torch.int32))
     q = torch.empty(batch_size * query_width, 1, 128)
 
+    nsa.update_nsa_indexer_kv_seqlens(q.size(0), attn_metadata)
     meta = nsa.IndexerTopKFP8._build_meta(q, attn_metadata)
 
     assert meta.max_q_seqlen == query_width
+    assert meta.indexer_kv_seqlens is attn_metadata.indexer_kv_seqlens
+
+
+def test_update_nsa_indexer_kv_seqlens_builds_causal_rows():
+    attn_metadata = SimpleNamespace(
+        cu_seqlens_q=torch.tensor([0, 2, 5], dtype=torch.int32),
+        q_seqlens=torch.tensor([2, 3]),
+        kv_seqlens=torch.tensor([5, 8]),
+        indexer_kv_seqlens=None,
+    )
+
+    nsa.update_nsa_indexer_kv_seqlens(5, attn_metadata)
+
+    expected = torch.tensor([4, 5, 6, 7, 8], dtype=torch.int32)
+    assert torch.equal(attn_metadata.indexer_kv_seqlens, expected)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA backend')

@@ -9,6 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
+from lmdeploy.pytorch.nn.nsa import update_nsa_indexer_kv_seqlens
 
 from .deepseek_mtp import DeepseekMTPModel, build_deepseek_rotary_embedding
 from .deepseek_v32 import (
@@ -220,6 +221,8 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
         skip_topk: bool = False,
         spec_step_idx: int = 0,
     ) -> torch.Tensor:
+        if not skip_topk:
+            update_nsa_indexer_kv_seqlens(input_ids.size(1), attn_metadata)
         return self.model(
             input_ids,
             position_ids,
