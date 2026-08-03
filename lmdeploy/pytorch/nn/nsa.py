@@ -1,28 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
 from torch import Tensor, nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
-from lmdeploy.pytorch.backends.nsa import NSAIndexMeta
+from lmdeploy.pytorch.consts import DSA_INDEX_CACHE_NAME
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 
-def update_nsa_indexer_kv_seqlens(num_tokens: int, attn_metadata: AttentionMetadata) -> None:
-    """Prepare per-query causal KV lengths once for all indexer layers."""
-    q_seqlens = attn_metadata.q_seqlens
-    kv_seqlens = attn_metadata.kv_seqlens
-    if num_tokens == kv_seqlens.size(0):
-        indexer_kv_seqlens = kv_seqlens
-    else:
-        cu_seqlens_q = attn_metadata.cu_seqlens_q
-        q_start = torch.repeat_interleave(cu_seqlens_q[:-1], q_seqlens, output_size=num_tokens)
-        history_lengths = torch.repeat_interleave(kv_seqlens - q_seqlens, q_seqlens, output_size=num_tokens)
-        query_offsets = torch.arange(num_tokens, device=q_seqlens.device, dtype=q_start.dtype) - q_start
-        indexer_kv_seqlens = history_lengths + query_offsets + 1
-    if indexer_kv_seqlens.dtype != torch.int32:
-        indexer_kv_seqlens = indexer_kv_seqlens.to(torch.int32)
-    attn_metadata.indexer_kv_seqlens = indexer_kv_seqlens
+def get_dsa_index_cache(layer_idx: int) -> Tensor:
+    """Return the packed index cache owned by one DSA layer."""
+    context = get_step_ctx_manager().current_context()
+    return context.block_caches.layer(DSA_INDEX_CACHE_NAME, layer_idx)
 
 
 class IndexerTopKFP8(nn.Module):
@@ -33,59 +21,21 @@ class IndexerTopKFP8(nn.Module):
         index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
         self.index_impl = index_builder.build(topk, softmax_scale, block_size, fill)
 
-    @staticmethod
-    def _get_max_q_seqlen(q: Tensor,
-                          attn_metadata: AttentionMetadata) -> int:
-        """Get the query width used by the index and cache-fill kernels.
-
-        Speculative target verification remains a decoding step, but its
-        flattened Q contains ``num_spec_tokens + 1`` rows per request. The
-        kernels need that real width to process every verification row.
-        """
-        batch_size = attn_metadata.kv_seqlens.size(0)
-        # fp8_index also identifies one row per request as decode layout, so
-        # keep its metadata consistent when the phase flag has not changed yet.
-        is_decoding = attn_metadata.is_decoding or q.size(0) == batch_size
-        # Prefer a width prepared by the attention backend; otherwise derive it
-        # from the flattened query rows.
-        max_q_seqlen = attn_metadata.max_q_seqlen
-        if max_q_seqlen is None:
-            max_q_seqlen = q.size(0)
-            if is_decoding:
-                max_q_seqlen //= batch_size
-        return max_q_seqlen
-
-    @staticmethod
-    def _build_meta(q: Tensor, attn_metadata: AttentionMetadata) -> NSAIndexMeta:
-        step_ctx = get_step_ctx_manager().current_context()
-        cache_config = step_ctx.cache_config
-        max_tokens = cache_config.block_size * cache_config.num_gpu_blocks
-        is_decoding = attn_metadata.is_decoding
-        if q.size(0) == attn_metadata.kv_seqlens.size(0):
-            is_decoding = True
-        max_q_seqlen = IndexerTopKFP8._get_max_q_seqlen(q, attn_metadata)
-        # Decode uses the full cache capacity to keep CUDA graph shapes stable.
-        max_kv_seqlen = max_tokens if is_decoding else attn_metadata.kv_flatten_size
-        return NSAIndexMeta(cu_seqlen_q=attn_metadata.cu_seqlens_q,
-                            q_seqlens=attn_metadata.q_seqlens,
-                            k_seqlens=attn_metadata.kv_seqlens,
-                            block_offset=attn_metadata.block_offsets,
-                            indexer_kv_seqlens=attn_metadata.indexer_kv_seqlens,
-                            max_q_seqlen=max_q_seqlen,
-                            max_kv_seqlen=max_kv_seqlen)
-
     def forward(
         self,
         q: Tensor,
         k: Tensor,
         weights: Tensor,
-        k_cache: Tensor,
-        k_s_cache: Tensor,
+        index_cache: Tensor,
         attn_metadata: AttentionMetadata = None,
     ):
         """forward."""
-        meta = self._build_meta(q, attn_metadata)
-        ret = self.index_impl.forward(q, k, weights, k_cache, k_s_cache, meta=meta)
+        meta = self.index_impl.get_step_metadata(attn_metadata)
+        ret = self.index_impl.forward(q,
+                                      k,
+                                      weights,
+                                      index_cache,
+                                      meta=meta)
         return ret
 
     def forward_fused(self,
@@ -96,14 +46,13 @@ class IndexerTopKFP8(nn.Module):
                       norm_bias: Tensor,
                       cos: Tensor,
                       sin: Tensor,
-                      k_cache: Tensor,
-                      k_s_cache: Tensor,
+                      index_cache: Tensor,
                       norm_eps: float,
                       head_gate_scale: float,
                       rope_interleaved: bool,
                       attn_metadata: AttentionMetadata = None):
         """Forward with fused DSA indexer preparation."""
-        meta = self._build_meta(q, attn_metadata)
+        meta = self.index_impl.get_step_metadata(attn_metadata)
         return self.index_impl.forward_fused(q,
                                              k,
                                              weights,
@@ -111,8 +60,7 @@ class IndexerTopKFP8(nn.Module):
                                              norm_bias,
                                              cos,
                                              sin,
-                                             k_cache,
-                                             k_s_cache,
+                                             index_cache,
                                              norm_eps=norm_eps,
                                              head_gate_scale=head_gate_scale,
                                              rope_interleaved=rope_interleaved,

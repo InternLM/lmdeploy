@@ -18,7 +18,7 @@ from lmdeploy.pytorch.nn import (
 )
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_rowwise_linear
-from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, update_nsa_indexer_kv_seqlens
+from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_index_cache
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 
 from .deepseek_v2 import (
@@ -66,6 +66,8 @@ class Indexer(nn.Module):
             raise ImportError('Please install fast_hadamard_transform package.')
         quant_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
+        # MTP layer ids follow the backbone; their cache rows start from zero.
+        self.cache_layer_idx = layer_idx % config.num_hidden_layers
         # self.dim: int = 2048
         self.dim: int = config.hidden_size
         self.n_heads: int = config.index_n_heads
@@ -103,8 +105,8 @@ class Indexer(nn.Module):
                 x: torch.Tensor,
                 qr: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                index_cache: tuple[torch.Tensor, torch.Tensor],
                 attn_metadata: Any = None):
+        index_cache = get_dsa_index_cache(self.cache_layer_idx)
         q = self.wq_b(qr)
         q = q.unflatten(-1, (-1, self.head_dim))
         q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
@@ -130,7 +132,7 @@ class Indexer(nn.Module):
 
         weights = self.weights_proj(x) * self.n_heads**-0.5
 
-        return self.indexer_topk(q[0], k[:, 0], weights[0], index_cache[0], index_cache[1], attn_metadata=attn_metadata)
+        return self.indexer_topk(q[0], k[:, 0], weights[0], index_cache, attn_metadata=attn_metadata)
 
 
 class DeepseekV32Attention(DeepseekV2Attention):
@@ -313,7 +315,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         query_states[..., nope_size:] = q_pe
         key_states[..., nope_size:] = k_pe
 
-        topk_indices = self.indexer(hidden_states, qr, rotary_pos_emb, past_key_value[-2:], attn_metadata=attn_metadata)
+        topk_indices = self.indexer(hidden_states, qr, rotary_pos_emb, attn_metadata=attn_metadata)
 
         attn_output = self.attn_fwd(
             query_states,
@@ -425,22 +427,3 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
-
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        past_key_values: list[list[torch.Tensor]],
-        attn_metadata: Any = None,
-        inputs_embeds: torch.Tensor = None,
-        **kwargs,
-    ):
-        """Model forward."""
-        num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
-        update_nsa_indexer_kv_seqlens(num_tokens, attn_metadata)
-        return super().forward(input_ids=input_ids,
-                               position_ids=position_ids,
-                               past_key_values=past_key_values,
-                               attn_metadata=attn_metadata,
-                               inputs_embeds=inputs_embeds,
-                               **kwargs)
