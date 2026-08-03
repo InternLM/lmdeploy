@@ -344,12 +344,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         quantization_config = None
 
         # build attention layer
-        if getattr(config, 'use_mla', True):
-            self.self_attn = self.attention_cls(config, layer_idx, dtype=dtype, device=device)
-        else:
-            # deepseek-vl2-tiny uses MHA LlamaAttention structure
-            from lmdeploy.pytorch.models.llama import LlamaAttention
-            self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
+        self.self_attn = self.attention_cls(config, layer_idx, dtype=dtype, device=device)
 
         # mlp
         self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
@@ -399,8 +394,7 @@ class DeepseekV32Model(DeepseekV2Model):
                             device=device)
 
         emb_type = RopeType.LinearScaling
-        rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
-                                                                                     config.num_attention_heads)
+        rope_dim = config.qk_rope_head_dim
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = get_rope_theta(config)
 
@@ -443,8 +437,7 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
     ):
         """Model forward."""
         num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
-        if getattr(self.config, 'use_mla', True):
-            update_nsa_indexer_kv_seqlens(num_tokens, attn_metadata)
+        update_nsa_indexer_kv_seqlens(num_tokens, attn_metadata)
         return super().forward(input_ids=input_ids,
                                position_ids=position_ids,
                                past_key_values=past_key_values,
