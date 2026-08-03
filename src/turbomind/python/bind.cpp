@@ -484,8 +484,6 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("total_seqs", &ft::ScheduleMetrics::total_seqs)
         .def_readonly("active_seqs", &ft::ScheduleMetrics::active_seqs)
         .def_readonly("waiting_seqs", &ft::ScheduleMetrics::waiting_seqs)
-        .def_readonly("total_blocks", &ft::ScheduleMetrics::total_blocks)
-        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks)
         .def_readonly("cache_usage", &ft::ScheduleMetrics::cache_usage)
         .def_readonly("prefix_cache_hit_rate", &ft::ScheduleMetrics::prefix_cache_hit_rate)
         .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
