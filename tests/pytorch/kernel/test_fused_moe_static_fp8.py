@@ -4,10 +4,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+import lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe as w8a8_module
 from lmdeploy.pytorch.kernels.cuda.fused_moe import (
     moe_reduce,
 )
 from lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe import (
+    _per_tensor_quant_fp8_e4m3fn_inductor,
+    _scalar_static_fp8_quant,
     fused_moe_static_fp8,
 )
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
@@ -65,9 +68,20 @@ def _quantize_expert_weights(
 )
 @pytest.mark.parametrize('num_tokens', [1, 6])
 @pytest.mark.parametrize('scale_mode', ['scalar', 'gate_up', 'down', 'both'])
+@pytest.mark.parametrize('use_compiled_quant', [False, True])
 @torch.inference_mode()
-def test_fused_moe_static_fp8(num_tokens, scale_mode):
+def test_fused_moe_static_fp8(
+    monkeypatch,
+    num_tokens,
+    scale_mode,
+    use_compiled_quant,
+):
     """Compare scalar and per-expert scale modes with per-route Linear."""
+    monkeypatch.setattr(
+        w8a8_module,
+        '_USE_COMPILED_STATIC_FP8_QUANT',
+        use_compiled_quant,
+    )
     torch.manual_seed(2026)
     torch.cuda.manual_seed_all(2026)
 
@@ -381,3 +395,147 @@ def test_fused_moe_static_fp8_per_expert_scales_with_expert_offset():
         num_experts=num_global_experts,
     )
     torch.testing.assert_close(observed, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+    reason='require device with cc>=9.0',
+)
+@pytest.mark.parametrize('num_tokens', [1, 32, 256])
+@pytest.mark.parametrize('hidden_dim', [384, 4096])
+@torch.inference_mode()
+def test_moe_compiled_static_fp8_quant_is_exact(
+    num_tokens,
+    hidden_dim,
+):
+    generator = torch.Generator(device='cuda')
+    generator.manual_seed(
+        20260730 + num_tokens + hidden_dim,
+    )
+    x = torch.randn(
+        (num_tokens, hidden_dim),
+        dtype=torch.bfloat16,
+        device='cuda',
+        generator=generator,
+    )
+    scale = torch.tensor(
+        [0.0125],
+        dtype=torch.float32,
+        device='cuda',
+    )
+
+    expected = per_tensor_quant_fp8(
+        x,
+        scale,
+        quant_dtype=torch.float8_e4m3fn,
+    )
+    actual = _per_tensor_quant_fp8_e4m3fn_inductor(
+        x,
+        scale,
+    )
+    assert torch.equal(actual, expected)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+    reason='require device with cc>=9.0',
+)
+@torch.inference_mode()
+def test_moe_compiled_quant_keeps_other_fp8_dtype_fallback(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        w8a8_module,
+        '_USE_COMPILED_STATIC_FP8_QUANT',
+        True,
+    )
+    x = torch.randn(
+        (32, 384),
+        dtype=torch.bfloat16,
+        device='cuda',
+    )
+    scale = torch.tensor(
+        [0.0125],
+        dtype=torch.float32,
+        device='cuda',
+    )
+    expected = per_tensor_quant_fp8(
+        x,
+        scale,
+        quant_dtype=torch.float8_e5m2,
+    )
+
+    def _unexpected_compiled_call(*args, **kwargs):
+        raise AssertionError(
+            'compiled E4M3 quant must not handle E5M2',
+        )
+
+    monkeypatch.setattr(
+        w8a8_module,
+        '_per_tensor_quant_fp8_e4m3fn_inductor',
+        _unexpected_compiled_call,
+    )
+    actual = _scalar_static_fp8_quant(
+        x,
+        scale,
+        torch.float8_e5m2,
+    )
+    assert torch.equal(actual, expected)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+    reason='require device with cc>=9.0',
+)
+@pytest.mark.parametrize(
+    ('num_tokens', 'hidden_dim'),
+    [
+        (1, 4096),
+        (256, 384),
+    ],
+)
+@torch.inference_mode()
+def test_moe_compiled_static_fp8_quant_cuda_graph(
+    num_tokens,
+    hidden_dim,
+):
+    static_x = torch.randn(
+        (num_tokens, hidden_dim),
+        dtype=torch.bfloat16,
+        device='cuda',
+    )
+    scale = torch.tensor(
+        [0.0125],
+        dtype=torch.float32,
+        device='cuda',
+    )
+
+    # Compile before capture.
+    _per_tensor_quant_fp8_e4m3fn_inductor(
+        static_x,
+        scale,
+    )
+    torch.cuda.synchronize()
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        graph_output = (
+            _per_tensor_quant_fp8_e4m3fn_inductor(
+                static_x,
+                scale,
+            )
+        )
+
+    for replay_id in range(1, 4):
+        replay_x = torch.randn_like(static_x)
+        replay_x.mul_(replay_id / 4)
+        static_x.copy_(replay_x)
+        graph.replay()
+        torch.cuda.synchronize()
+
+        expected = per_tensor_quant_fp8(
+            replay_x,
+            scale,
+            quant_dtype=torch.float8_e4m3fn,
+        )
+        assert torch.equal(graph_output, expected)

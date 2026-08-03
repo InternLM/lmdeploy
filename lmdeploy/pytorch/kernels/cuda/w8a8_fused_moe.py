@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+import os
+
 import torch
 import triton
 import triton.language as tl
@@ -10,6 +12,57 @@ from .w8a8_triton_kernels import (
     per_tensor_quant_fp8,
     per_token_quant_int8,
 )
+
+_USE_COMPILED_STATIC_FP8_QUANT = (
+    os.getenv(
+        'LMDEPLOY_MOE_STATIC_FP8_USE_COMPILED_QUANT',
+        '0',
+    )
+    == '1'
+)
+
+
+@torch.compile(
+    backend='inductor',
+    fullgraph=True,
+    dynamic=True,
+    mode='default',
+)
+def _per_tensor_quant_fp8_e4m3fn_inductor(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+):
+    """Fuse scalar static E4M3 activation quantization."""
+    dtype_info = torch.finfo(torch.float8_e4m3fn)
+    return torch.clamp(
+        x.float() / scale.float(),
+        min=dtype_info.min,
+        max=dtype_info.max,
+    ).to(torch.float8_e4m3fn)
+
+
+def _scalar_static_fp8_quant(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+    quant_dtype: torch.dtype,
+):
+    """Select the experimental compiled scalar quant path."""
+    if (
+        _USE_COMPILED_STATIC_FP8_QUANT
+        and quant_dtype == torch.float8_e4m3fn
+    ):
+        original_shape = x.shape
+        x = x.reshape(-1, x.shape[-1])
+        return _per_tensor_quant_fp8_e4m3fn_inductor(
+            x,
+            scale,
+        ).reshape(original_shape)
+
+    return per_tensor_quant_fp8(
+        x,
+        scale,
+        quant_dtype=quant_dtype,
+    )
 
 
 def get_cuda_autotune_config():
@@ -395,10 +448,10 @@ def fused_moe_static_fp8(
         )
     else:
         # Scalar fast path: quantize once per original token.
-        input_quant = per_tensor_quant_fp8(
+        input_quant = _scalar_static_fp8_quant(
             input,
             gate_up_input_scale,
-            quant_dtype=quant_dtype,
+            quant_dtype,
         )
         gate_up_scale_vector = (
             gate_up_input_scale.float()
@@ -479,10 +532,10 @@ def fused_moe_static_fp8(
             max=dtype_info.max,
         ).to(quant_dtype).contiguous()
     else:
-        gate_cache_quant = per_tensor_quant_fp8(
+        gate_cache_quant = _scalar_static_fp8_quant(
             gate_cache,
             down_input_scale,
-            quant_dtype=quant_dtype,
+            quant_dtype,
         )
         down_scale_vector = (
             down_input_scale.float()
