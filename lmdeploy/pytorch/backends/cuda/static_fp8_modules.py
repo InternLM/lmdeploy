@@ -1,16 +1,37 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 
 import torch
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
     matmul_kernel_static_quant,
+    per_tensor_quant_fp8,
 )
 
 from ..static_fp8_modules import (
     LinearStaticF8Builder,
     LinearStaticF8Impl,
 )
+
+
+@torch.compile(
+    backend='inductor',
+    fullgraph=True,
+    dynamic=True,
+    mode='default',
+)
+def _per_tensor_quant_fp8_e4m3fn_inductor(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+):
+    """Fuse static E4M3 quantization for fixed token counts."""
+    dtype_info = torch.finfo(torch.float8_e4m3fn)
+    return torch.clamp(
+        x.float() / scale.float(),
+        min=dtype_info.min,
+        max=dtype_info.max,
+    ).to(torch.float8_e4m3fn)
 
 
 class TritonLinearStaticF8Impl(LinearStaticF8Impl):
@@ -25,6 +46,24 @@ class TritonLinearStaticF8Impl(LinearStaticF8Impl):
         self.in_features = in_features
         self.out_features = out_features
         self.out_dtype = out_dtype
+        self.use_scaled_mm = (
+            os.getenv('LMDEPLOY_STATIC_FP8_USE_SCALED_MM', '0') == '1'
+        )
+        self.use_compiled_quant = (
+            os.getenv(
+                'LMDEPLOY_STATIC_FP8_USE_COMPILED_QUANT',
+                '0',
+            ) == '1'
+        )
+        compiled_quant_token_counts = os.getenv(
+            'LMDEPLOY_STATIC_FP8_COMPILED_QUANT_TOKEN_COUNTS',
+            '1',
+        )
+        self.compiled_quant_token_counts = {
+            int(token_count)
+            for token_count in compiled_quant_token_counts.split(',')
+            if token_count
+        }
 
     def forward(
         self,
@@ -41,14 +80,75 @@ class TritonLinearStaticF8Impl(LinearStaticF8Impl):
         """Run static FP8 linear."""
         output_dtype = self.out_dtype or x.dtype
 
-        output = matmul_kernel_static_quant(
-            x,
-            weight,
-            input_scale,
-            weight_scale,
-            bias=bias,
-            output_dtype=output_dtype,
-        )
+        if self.use_scaled_mm:
+            num_tokens = x.numel() // x.shape[-1]
+            use_compiled_quant = (
+                self.use_compiled_quant
+                and num_tokens in self.compiled_quant_token_counts
+                and weight.dtype == torch.float8_e4m3fn
+            )
+            if use_compiled_quant:
+                input_quant = (
+                    _per_tensor_quant_fp8_e4m3fn_inductor(
+                        x,
+                        input_scale,
+                    )
+                )
+            else:
+                input_quant = per_tensor_quant_fp8(
+                    x,
+                    input_scale,
+                    quant_dtype=weight.dtype,
+                )
+
+            in_features = input_quant.shape[-1]
+            out_features = weight.shape[0]
+
+            input_quant_2d = input_quant.reshape(
+                num_tokens,
+                in_features,
+            )
+            if input_scale.numel() == 1 and weight_scale.numel() == 1:
+                input_scale_mm = input_scale.float()
+                weight_scale_mm = weight_scale.float()
+            else:
+                input_scale_mm = (
+                    input_scale.float()
+                    .reshape(1, 1)
+                    .expand(num_tokens, 1)
+                    .contiguous()
+                )
+                assert weight_scale.numel() == out_features
+                weight_scale_mm = (
+                    weight_scale.float()
+                    .reshape(1, out_features)
+                    .contiguous()
+                )
+
+            output = torch._scaled_mm(
+                input_quant_2d,
+                weight.t(),
+                input_scale_mm,
+                weight_scale_mm,
+                out_dtype=output_dtype,
+                use_fast_accum=True,
+            )
+            output = output.reshape(
+                *x.shape[:-1],
+                out_features,
+            )
+
+            if bias is not None:
+                output = output + bias
+        else:
+            output = matmul_kernel_static_quant(
+                x,
+                weight,
+                input_scale,
+                weight_scale,
+                bias=bias,
+                output_dtype=output_dtype,
+            )
 
         if all_reduce:
             if scatter_size is not None:
