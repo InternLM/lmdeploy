@@ -7,96 +7,79 @@ import triton.language as tl
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=1, num_stages=1),
-        triton.Config({}, num_warps=1, num_stages=2),
-        triton.Config({}, num_warps=1, num_stages=3),
-        triton.Config({}, num_warps=1, num_stages=4),
         triton.Config({}, num_warps=2, num_stages=1),
-        triton.Config({}, num_warps=2, num_stages=2),
-        triton.Config({}, num_warps=2, num_stages=3),
-        triton.Config({}, num_warps=2, num_stages=4),
         triton.Config({}, num_warps=4, num_stages=1),
-        triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=4, num_stages=3),
-        triton.Config({}, num_warps=4, num_stages=4),
         triton.Config({}, num_warps=8, num_stages=1),
-        triton.Config({}, num_warps=8, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=3),
-        triton.Config({}, num_warps=8, num_stages=4),
     ],
-    key=['num_experts', 'n_group'],
+    key=['num_experts', 'n_group', 'top_k'],
 )
 @triton.jit
-def _noaux_routing_kernel(
+def _fused_noaux_tc_kernel(
     logits_ptr,
     bias_ptr,
-    scores_ptr,
-    tmp_scores_ptr,
+    topk_weight_ptr,
+    topk_idx_ptr,
     batch_size,
     num_experts: tl.constexpr,
     n_group: tl.constexpr,
     group_size: tl.constexpr,
     topk_group: tl.constexpr,
-    # The following arguments are not used inside the kernel but kept for signature compatibility
+    top_k: tl.constexpr,
     renormalize: tl.constexpr,
     routed_scaling_factor,
     logits_stride_0,
     logits_stride_1,
     bias_stride_0,
-    scores_stride_0,
-    scores_stride_1,
-    tmp_scores_stride_0,
-    tmp_scores_stride_1,
     BLOCK_SIZE: tl.constexpr,
+    TOPK_BLOCK_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(0)
     if pid >= batch_size:
         return
     idx = tl.arange(0, BLOCK_SIZE)
-    mask = idx < num_experts  # always true if BLOCK_SIZE == num_experts, but kept for safety
-    # 1. Load logits and bias
+    mask = idx < num_experts
     logits = tl.load(logits_ptr + pid * logits_stride_0 + idx * logits_stride_1, mask=mask, other=0.0)
     bias = tl.load(bias_ptr + idx * bias_stride_0, mask=mask, other=0.0)
-    # 2. Compute scores (sigmoid) and bias‑adjusted scores
-    scores = tl.sigmoid(logits)  # original scores
-    scores_fc = scores + bias  # bias‑adjusted scores
-    # 3. Compute group scores: sum of top‑2 scores_fc per group
-    # Reshape to (n_group, group_size) – requires BLOCK_SIZE == num_experts
-    scores_fc_2d = tl.reshape(scores_fc, (n_group, group_size))
-    # Max and argmax per group
-    max_val = tl.max(scores_fc_2d, axis=1)
-    max_idx = tl.argmax(scores_fc_2d, axis=1)  # index within group (0..group_size-1)
-    # Second max per group: mask out the max element
-    col_range = tl.arange(0, group_size)
-    mask_max = col_range[None, :] == max_idx[:, None]
-    scores_fc_masked = tl.where(mask_max, -float('inf'), scores_fc_2d)
-    second_max = tl.max(scores_fc_masked, axis=1)
-    group_scores = max_val + second_max
-    # 4. Select top‑k groups and build selected_mask
-    selected_mask = tl.zeros((BLOCK_SIZE, ), dtype=tl.int1)
-    group_scores_copy = group_scores
-    for _ in range(topk_group):
-        max_idx_g = tl.argmax(group_scores_copy, axis=0)  # group index
-        # mark experts in this group
-        group_start = max_idx_g * group_size
-        group_end = group_start + group_size
-        group_mask = (idx >= group_start) & (idx < group_end) & mask
-        selected_mask = selected_mask | group_mask
-        # remove this group
-        g_idx = tl.arange(0, n_group)
-        g_mask = g_idx == max_idx_g
-        group_scores_copy = tl.where(g_mask, -float('inf'), group_scores_copy)
-    # 5. Build masked scores (tmp_scores) – experts in selected groups keep scores_fc, others 0
-    tmp_scores = tl.where(selected_mask, scores_fc, 0.0)
-    # 6. Store outputs
-    off_scores = pid * scores_stride_0 + idx * scores_stride_1
-    tl.store(scores_ptr + off_scores, scores, mask=mask)
-    off_tmp = pid * tmp_scores_stride_0 + idx * tmp_scores_stride_1
-    tl.store(tmp_scores_ptr + off_tmp, tmp_scores, mask=mask)
+    scores = tl.sigmoid(logits)
+    scores_for_choice = scores + bias
 
+    if n_group == 1:
+        candidates = tl.where(mask, scores_for_choice, -float('inf'))
+    else:
+        grouped_scores = tl.reshape(scores_for_choice, (n_group, group_size))
+        group_max = tl.max(grouped_scores, axis=1)
+        group_argmax = tl.argmax(grouped_scores, axis=1)
+        group_idx = tl.arange(0, group_size)
+        grouped_scores = tl.where(group_idx[None, :] == group_argmax[:, None], -float('inf'), grouped_scores)
+        group_scores = group_max + tl.max(grouped_scores, axis=1)
 
-# ---------------------------------------------------------------------------
-# Wrappers and Benchmarking Logic (Kept exactly as requested)
-# ---------------------------------------------------------------------------
+        selected_groups = tl.zeros((BLOCK_SIZE, ), dtype=tl.int1)
+        for _ in range(topk_group):
+            selected_group = tl.argmax(group_scores, axis=0)
+            group_start = selected_group * group_size
+            selected_groups |= (idx >= group_start) & (idx < group_start + group_size) & mask
+            group_ids = tl.arange(0, n_group)
+            group_scores = tl.where(group_ids == selected_group, -float('inf'), group_scores)
+        # Keep the existing zero-masking behavior for routing compatibility.
+        candidates = tl.where(selected_groups, scores_for_choice, 0.0)
+
+    output_idx = tl.arange(0, TOPK_BLOCK_SIZE)
+    topk_weights = tl.zeros((TOPK_BLOCK_SIZE, ), dtype=tl.float32)
+    topk_indices = tl.zeros((TOPK_BLOCK_SIZE, ), dtype=tl.int32)
+    for rank in range(top_k):
+        expert_idx = tl.argmax(candidates, axis=0)
+        weight = tl.sum(tl.where(idx == expert_idx, scores, 0.0), axis=0)
+        topk_weights += tl.where(output_idx == rank, weight, 0.0)
+        topk_indices += tl.where(output_idx == rank, expert_idx, 0)
+        candidates = tl.where(idx == expert_idx, -float('inf'), candidates)
+
+    if renormalize:
+        topk_weights /= tl.sum(topk_weights, axis=0) + 1e-20
+    topk_weights *= routed_scaling_factor
+    output_offsets = pid * top_k + output_idx
+    output_mask = output_idx < top_k
+    tl.store(topk_weight_ptr + output_offsets, topk_weights, mask=output_mask)
+    tl.store(topk_idx_ptr + output_offsets, topk_indices, mask=output_mask)
 
 
 def fused_noaux_tc_routing(
@@ -112,45 +95,30 @@ def fused_noaux_tc_routing(
     batch_size = logits.shape[0]
     group_size = num_experts // n_group
     assert num_experts % n_group == 0, 'num_experts must be divisible by n_group'
-    # Convert to float32 and ensure contiguous
     logits = logits.float().contiguous()
     bias = bias.float().contiguous()
-    # Output tensors from the kernel
-    scores = torch.empty(batch_size, num_experts, device=logits.device, dtype=torch.float32)
-    tmp_scores = torch.empty(batch_size, num_experts, device=logits.device, dtype=torch.float32)
-    # Block size: exactly num_experts (must be multiple of 32 for good performance)
-    BLOCK_SIZE = num_experts
-    # Ensure BLOCK_SIZE is at least 32 and a multiple of 32? Not strictly required but good.
-    # If not multiple of 32, we could round up, but then reshape would break. So we assume it is.
-    # For safety, we assert:
-    assert BLOCK_SIZE % 32 == 0, 'num_experts must be a multiple of 32 for optimal performance'
-    # Kernel launch
+    topk_weight = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.float32)
+    topk_idx = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.int64)
+    block_size = num_experts
+    assert block_size % 32 == 0, 'num_experts must be a multiple of 32 for optimal performance'
     grid = (batch_size, )
-    _noaux_routing_kernel[grid](
+    _fused_noaux_tc_kernel[grid](
         logits,
         bias,
-        scores,
-        tmp_scores,
+        topk_weight,
+        topk_idx,
         batch_size,
         num_experts=num_experts,
         n_group=n_group,
         group_size=group_size,
         topk_group=topk_group,
-        renormalize=int(renormalize),  # not used inside kernel
+        top_k=top_k,
+        renormalize=renormalize,
         routed_scaling_factor=routed_scaling_factor,
         logits_stride_0=logits.stride(0),
         logits_stride_1=logits.stride(1),
         bias_stride_0=bias.stride(0),
-        scores_stride_0=scores.stride(0),
-        scores_stride_1=scores.stride(1),
-        tmp_scores_stride_0=tmp_scores.stride(0),
-        tmp_scores_stride_1=tmp_scores.stride(1),
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE=block_size,
+        TOPK_BLOCK_SIZE=triton.next_power_of_2(top_k),
     )
-    # Final expert selection using PyTorch's topk (guarantees exact match)
-    _, topk_idx = torch.topk(tmp_scores, k=top_k, dim=-1, sorted=False)
-    topk_weight = scores.gather(1, topk_idx)
-    if renormalize:
-        topk_weight = topk_weight / (topk_weight.sum(dim=-1, keepdim=True) + 1e-20)
-    topk_weight = topk_weight * routed_scaling_factor
     return topk_weight, topk_idx
