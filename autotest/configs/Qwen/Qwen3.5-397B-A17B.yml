@@ -79,6 +79,9 @@ h:
       prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
   backends:
+  - name: turbomind
+    communicators:
+    - nccl
   - name: pytorch
     communicators:
     - nccl
@@ -114,6 +117,7 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
+  - prefix_cache
   gen_config:
     temperature: 1.0
     top-k: 20
