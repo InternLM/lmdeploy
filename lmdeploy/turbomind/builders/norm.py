@@ -5,10 +5,11 @@ import torch
 from ._base import Builder
 
 
-def make_norm_config(*, dim, norm_eps):
+def make_norm_config(*, dim, norm_eps, zero_centered=False):
     cfg = _tm.NormConfig()
     cfg.dim = dim
     cfg.norm_eps = norm_eps
+    cfg.zero_centered = zero_centered
     return cfg
 
 

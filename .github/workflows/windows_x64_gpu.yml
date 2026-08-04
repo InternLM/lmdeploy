@@ -8,7 +8,6 @@ on:
       - 'cmake/**'
       - 'examples/**'
       - '3rdparty/**'
-      - 'tests/csrc/**'
   pull_request:
     paths:
       - '.github/workflows/windows_x64_gpu.yml'
@@ -17,7 +16,6 @@ on:
       - 'cmake/**'
       - 'examples/**'
       - '3rdparty/**'
-      - 'tests/csrc/**'
 concurrency:
   group: windows-x64-gpu-${{ github.ref }}
   cancel-in-progress: true

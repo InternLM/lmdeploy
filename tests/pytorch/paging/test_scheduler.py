@@ -56,6 +56,8 @@ class TestScheduler:
 
     def test_schedule_base(self, scheduler, block_size, num_gpu_blocks):
         block_manager = scheduler.block_manager
+        assert scheduler.schedule_metrics.cache_usage == 0.0
+
         session_id = 0
         session = scheduler.add_session(session_id)
         assert session_id in scheduler.sessions
@@ -76,8 +78,15 @@ class TestScheduler:
         assert len(block_tables) == 1
         assert len(block_tables[0]) == num_blocks
         assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - num_blocks
+        assert scheduler.schedule_metrics.cache_usage == num_blocks / num_gpu_blocks
 
         assert scheduler.has_unfinished()
+
+    def test_schedule_metrics_without_gpu_blocks(self, cache_config, scheduler_config, seq_meta):
+        cache_config.num_gpu_blocks = 0
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+        assert scheduler.schedule_metrics.cache_usage == 0.0
 
     def test_update(self, scheduler, block_size, num_gpu_blocks):
         block_manager = scheduler.block_manager

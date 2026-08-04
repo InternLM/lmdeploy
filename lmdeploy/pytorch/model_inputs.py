@@ -101,6 +101,29 @@ class VisionModelInputs:
 
         return VisionModelInputs(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of vision tensor fields."""
+        for f in fields(self):
+            key = f.name
+            value = getattr(self, key)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif key == 'input_embedding_ranges':
+                for tensor in value or ():
+                    if tensor.is_cuda:
+                        tensor.record_stream(stream)
+            elif key == 'input_embeddings':
+                for tensors in value or ():
+                    for tensor in tensors:
+                        if tensor.is_cuda:
+                            tensor.record_stream(stream)
+            elif key == 'input_multimodals':
+                for multimodals in value or ():
+                    for items in multimodals.values():
+                        for item in items:
+                            item.record_stream(stream)
+
     def get_inputs(self, history_lengths: torch.Tensor, seq_lengths: torch.Tensor):
         """Get vision embedding inputs."""
         input_embeddings = None
@@ -171,6 +194,13 @@ class ModelInputsDelta:
             out_dict[k] = v
 
         return ModelInputsDelta(**out_dict)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
 
     def log_info(self):
         """Get log info."""
@@ -263,6 +293,16 @@ class ModelInputs:
             out_dict[k] = v
 
         return ModelInputs(**out_dict)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of model tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif isinstance(value, VisionModelInputs):
+                value.record_stream(stream)
 
     def build_dp_meta(self, num_tokens: list[int]):
         """Build dp meta."""

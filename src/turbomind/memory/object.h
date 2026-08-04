@@ -66,6 +66,8 @@ public:
     // ABA-safe stale check: handle.a && handle->key == saved_key.
     [[nodiscard]] bool IsValid(object_alloc_t handle, uint64_t saved_key) const;
 
+    // O(1) counters for scheduler metrics. Stats() additionally scans page/slab state for diagnostics.
+    MemoryUsage Usage() const;
     MemoryStats Stats() const;
 
 private:

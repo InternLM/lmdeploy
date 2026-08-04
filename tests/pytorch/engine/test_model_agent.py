@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -490,6 +490,178 @@ def test_spec_agent_reset_runtime_state_discards_chunk_carry():
     agent.reset_runtime_state()
 
     assert agent._prev_chunk_last == {}
+
+
+def test_record_forward_input_stream_uses_payload_protocol():
+    from lmdeploy.pytorch.engine.model_agent.agent import _record_forward_input_stream
+
+    recorded = []
+
+    class _CudaTensor(torch.Tensor):
+
+        @staticmethod
+        def __new__(cls):
+            return torch.Tensor._make_subclass(cls, torch.empty(1), False)
+
+        @property
+        def is_cuda(self):
+            return True
+
+        def record_stream(self, stream):
+            recorded.append(('tensor', id(self), stream))
+
+    class _Payload:
+
+        def record_stream(self, stream):
+            recorded.append(('payload', id(self), stream))
+
+    stream = object()
+    tensor = _CudaTensor()
+    nested_tensor = _CudaTensor()
+    payload = _Payload()
+    forward_inputs = {
+        'inputs': payload,
+        'delta': tensor,
+        'unowned_container': {'tensor': nested_tensor},
+    }
+
+    _record_forward_input_stream(forward_inputs, stream)
+
+    assert recorded == [
+        ('payload', id(payload), stream),
+        ('tensor', id(tensor), stream),
+    ]
+
+
+def test_record_forward_input_stream_requires_payload_protocol():
+    from lmdeploy.pytorch.engine.model_agent.agent import _record_forward_input_stream
+
+    with pytest.raises(TypeError, match=r"H2D input 'sampling_inputs'.*record_stream"):
+        _record_forward_input_stream({'sampling_inputs': object()}, object())
+
+
+def test_strategy_inputs_record_stream_tensor_fields():
+    from lmdeploy.pytorch.engine.model_agent.agent import _record_forward_input_stream
+    from lmdeploy.pytorch.strategies.ar.model_agent import ARStoppingCriteria
+    from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
+
+    recorded = []
+
+    class _CudaTensor(torch.Tensor):
+
+        @staticmethod
+        def __new__(cls):
+            return torch.Tensor._make_subclass(cls, torch.empty(1), False)
+
+        @property
+        def is_cuda(self):
+            return True
+
+        def record_stream(self, stream):
+            recorded.append((id(self), stream))
+
+    stream = object()
+    extra_tensor = _CudaTensor()
+    stopping_tensor = _CudaTensor()
+    extra_inputs = ARSpecExtraInputs(target_logits=extra_tensor)
+    stopping_criteria = ARStoppingCriteria(num_appendable_ids=stopping_tensor)
+
+    _record_forward_input_stream(
+        {
+            'extra_inputs': extra_inputs,
+            'stopping_criteria': stopping_criteria,
+        }, stream)
+
+    assert recorded == [
+        (id(stopping_tensor), stream),
+        (id(extra_tensor), stream),
+    ]
+
+
+def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch, event_loop):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    transfer = SimpleNamespace(event=object())
+    forward_done = asyncio.Event()
+
+    class _Stream:
+
+        def wait_event(self, event):
+            assert event is transfer.event
+            events.append('wait')
+
+    class _InputMaker:
+
+        def __init__(self):
+            self.sent = False
+
+        async def get(self):
+            if not self.sent:
+                self.sent = True
+                return {
+                    agent_module._H2D_TRANSFER_KEY: transfer,
+                    'inputs': 'device-inputs',
+                }
+            await asyncio.Future()
+
+        def step(self):
+            events.append('step')
+
+    model_agent = _make_agent_with_queues()
+    model_agent.stream = _Stream()
+    model_agent.all_context = nullcontext
+    model_agent._keep_h2d_transfer = lambda item: events.append('keep')
+
+    async def _async_step(**forward_inputs):
+        assert forward_inputs == {'inputs': 'device-inputs'}
+        events.append('forward')
+        forward_done.set()
+
+    model_agent._async_step = _async_step
+    monkeypatch.setattr(agent_module, 'build_inputs_maker', lambda agent: _InputMaker())
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda stream: nullcontext())
+    monkeypatch.setattr(agent_module, '_record_forward_input_stream',
+                        lambda inputs, stream: events.append('record'))
+
+    task = event_loop.create_task(model_agent._async_loop_background())
+    event_loop.run_until_complete(asyncio.wait_for(forward_done.wait(), timeout=1))
+    task.cancel()
+    event_loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+
+    assert events == ['keep', 'wait', 'record', 'forward', 'step']
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA allocator')
+def test_record_forward_input_stream_defers_origin_stream_reuse():
+    from lmdeploy.pytorch.engine.model_agent.agent import _record_forward_input_stream
+
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    h2d_stream = torch.cuda.Stream()
+    forward_stream = torch.cuda.Stream()
+    h2d_event = torch.cuda.Event()
+    numel = 1024 * 1024
+
+    with torch.cuda.stream(h2d_stream):
+        tensor = torch.full((numel, ), 7, dtype=torch.uint8, device='cuda')
+        h2d_event.record()
+    original_ptr = tensor.data_ptr()
+
+    forward_stream.wait_event(h2d_event)
+    _record_forward_input_stream({'delta': tensor}, forward_stream)
+    with torch.cuda.stream(forward_stream):
+        torch.cuda._sleep(10_000_000)
+        observed = tensor.clone()
+
+    del tensor
+    with torch.cuda.stream(h2d_stream):
+        replacement = torch.zeros((numel, ), dtype=torch.uint8, device='cuda')
+
+    assert replacement.data_ptr() != original_ptr
+    forward_stream.synchronize()
+    h2d_stream.synchronize()
+    assert torch.all(observed == 7)
 
 
 class TestDrainQueues:
