@@ -1003,9 +1003,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     prompt = request.prompt
     input_ids = request.input_ids
     input_logprobs_requested = request.logprob_start_len >= 0
-    input_logprob_token_ids = (input_ids[request.logprob_start_len + 1:]
-                               if input_logprobs_requested
-                               and input_ids is not None else None)
 
     session = VariableInterface.create_session(request.session_id)
 
@@ -1071,6 +1068,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
             output_ids = res.token_ids
             routed_experts = res.routed_experts
             if input_logprobs_requested:
+                input_logprob_token_ids = res.logprob_token_ids
                 logprobs = None
                 input_logprobs = _create_token_logprobs(input_logprob_token_ids, res.logprobs)
                 top_logprobs = None
@@ -1108,6 +1106,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         input_logprobs = []
         input_token_logprobs = None
         input_top_logprobs = None
+        input_logprob_token_ids = None
         async with aclosing(_with_request_cleanup(result_generator, [result_generator], [session])) as generator:
             async for res in generator:
                 if await raw_request.is_disconnected():
@@ -1117,6 +1116,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                 text += res.response or ''
                 output_ids.extend(res.token_ids or [])
                 if input_logprobs_requested:
+                    input_logprob_token_ids = res.logprob_token_ids
                     if res.logprobs:
                         input_logprobs = res.logprobs
                 elif res.logprobs:

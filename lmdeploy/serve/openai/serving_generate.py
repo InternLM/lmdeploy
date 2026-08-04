@@ -47,9 +47,6 @@ def check_request(request: GenerateReqInput, server_context: 'VariableInterface'
             return 'logprob_start_len requires raw_logits or raw_logprobs mode.'
         if request.max_tokens != 0:
             return 'logprob_start_len requires max_tokens=0.'
-        if request.input_ids is not None and request.logprob_start_len + 1 >= len(request.input_ids):
-            return (f'logprob_start_len({request.logprob_start_len}) exceeds '
-                    f'the last scorable source position for input_ids length({len(request.input_ids)}).')
     elif request.max_tokens is not None and request.max_tokens == 0:
         return f'The max_tokens {request.max_tokens!r} must be a positive integer.'
     if session_manager.has(request.session_id):

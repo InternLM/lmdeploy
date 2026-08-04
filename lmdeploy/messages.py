@@ -75,9 +75,9 @@ class GenerationConfig:
             this to False. This is setup to True in slow tokenizers.
         logprobs: Number of log probabilities to return per output token.
         logprob_start_len: Source-token boundary in the current
-            model-processed input. Rows are returned for tokens after this
-            boundary. ``-1`` disables input logprobs while preserving
-            generated-token logprobs.
+            model-processed input after multimodal expansion. Rows are returned
+            for tokens after this boundary. ``-1`` disables input logprobs
+            while preserving generated-token logprobs.
         response_format: Generate responses according to given formatting.
             Examples:
 

@@ -352,3 +352,18 @@ def test_async_engine_reinterprets_terminal_logprobs_as_input_rows(carrier):
     assert results[0].generate_token_len == 0
     assert results[0].finish_reason == 'length'
     assert results[0].logprobs == carrier
+    assert results[0].logprob_token_ids == ([] if carrier == [] else [2, 3])
+
+
+def test_async_engine_validates_input_logprob_start_after_preprocess():
+    results, queued_metrics, manager = asyncio.run(
+        _run_input_logprob_outputs([], logprob_start_len=3))
+
+    assert queued_metrics == []
+    assert manager.sessions == {}
+    assert len(results) == 1
+    assert results[0].token_ids == []
+    assert results[0].input_token_len == 3
+    assert results[0].generate_token_len == 0
+    assert results[0].finish_reason == 'error'
+    assert 'processed input_ids length(3)' in results[0].response

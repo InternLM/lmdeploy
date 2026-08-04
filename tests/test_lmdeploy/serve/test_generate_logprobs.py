@@ -54,16 +54,16 @@ def test_generate_input_logprob_validation():
 
     assert 'return_logprob=True' in check_request(
         GenerateReqInput(input_ids=[1, 2], logprob_start_len=0), context)
-    assert 'last scorable source position' in check_request(
+    assert check_request(
         GenerateReqInput(input_ids=[1, 2],
                          return_logprob=True,
                          logprob_start_len=3,
-                         max_tokens=0), context)
-    assert 'last scorable source position' in check_request(
+                         max_tokens=0), context) == ''
+    assert check_request(
         GenerateReqInput(input_ids=[1, 2],
                          return_logprob=True,
                          logprob_start_len=1,
-                         max_tokens=0), context)
+                         max_tokens=0), context) == ''
     assert 'max_tokens=0' in check_request(
         GenerateReqInput(input_ids=[1, 2],
                          return_logprob=True,
@@ -148,13 +148,19 @@ class _RawRequest:
 
 class _NonemptyEngine:
 
-    def __init__(self, expect_image=False, expected_logprobs=1):
+    def __init__(self,
+                 expect_image=False,
+                 expected_logprobs=1,
+                 logprob_token_ids=None,
+                 logprobs=None):
         self.backend_config = PytorchEngineConfig(
             logprobs_mode='raw_logprobs', role=EngineRole.Hybrid)
         self.session_mgr = _SessionManager()
         self.epoch = 1
         self.expect_image = expect_image
         self.expected_logprobs = expected_logprobs
+        self.logprob_token_ids = logprob_token_ids or [2, 3]
+        self.logprobs = logprobs or [{2: -0.25, 8: -2.0}, {3: -0.5, 9: -3.0}]
 
     async def generate(self, **kwargs):
         if self.expect_image:
@@ -176,18 +182,26 @@ class _NonemptyEngine:
             response='',
             token_ids=[],
             routed_experts=None,
-            logprobs=[{2: -0.25, 8: -2.0}, {3: -0.5, 9: -3.0}],
+            logprob_token_ids=self.logprob_token_ids,
+            logprobs=self.logprobs,
             finish_reason='length',
-            input_token_len=3,
+            input_token_len=len(self.logprob_token_ids) + 1,
             generate_token_len=0,
         )
 
 
-async def _call_nonempty_route(monkeypatch, stream, image_data=None, top_logprobs_num=None):
+async def _call_nonempty_route(monkeypatch,
+                               stream,
+                               image_data=None,
+                               top_logprobs_num=None,
+                               logprob_token_ids=None,
+                               logprobs=None):
     old_engine = VariableInterface.async_engine
     VariableInterface.async_engine = _NonemptyEngine(
         expect_image=image_data is not None,
-        expected_logprobs=top_logprobs_num or 1)
+        expected_logprobs=top_logprobs_num or 1,
+        logprob_token_ids=logprob_token_ids,
+        logprobs=logprobs)
 
     async def passthrough(generator, result_generators, sessions):
         async for item in generator:
@@ -303,6 +317,28 @@ def test_generate_input_logprobs_allow_image_with_input_ids(monkeypatch):
                              stream=False,
                              image_data='https://example.com/image.png'))
     assert result.meta_info.input_token_logprobs == [(-0.25, 2), (-0.5, 3)]
+    assert result.meta_info.output_token_logprobs is None
+
+
+def test_generate_input_logprobs_use_processed_input_ids(monkeypatch):
+    result = asyncio.run(
+        _call_nonempty_route(monkeypatch,
+                             stream=False,
+                             image_data='https://example.com/image.png',
+                             logprob_token_ids=[8, 9, 2, 3],
+                             logprobs=[{
+                                 8: -0.1
+                             }, {
+                                 9: -0.2
+                             }, {
+                                 2: -0.3
+                             }, {
+                                 3: -0.4
+                             }]))
+    assert result.meta_info.prompt_tokens == 5
+    assert result.meta_info.input_token_logprobs == [
+        (-0.1, 8), (-0.2, 9), (-0.3, 2), (-0.4, 3)
+    ]
     assert result.meta_info.output_token_logprobs is None
 
 
