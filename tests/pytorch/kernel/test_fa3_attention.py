@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import sys
 from types import SimpleNamespace
 
 import torch
@@ -51,12 +52,24 @@ def _num_cache_blocks(block_offsets):
     return int(block_offsets.max().item()) + 1
 
 
-def test_fa3_softcap_translation_preserves_enabled_values():
-    impl = FA3Impl.__new__(FA3Impl)
+def test_fa3_normalizes_softcap_during_initialization(monkeypatch):
+    fake_interface = SimpleNamespace(
+        flash_attn_varlen_func=lambda *args, **kwargs: None,
+        flash_attn_with_kvcache=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        'lmdeploy.pytorch.third_party.flash_attn_interface',
+        fake_interface,
+    )
 
     for configured, expected in ((-1.0, 0.0), (0.0, 0.0), (30.0, 30.0)):
-        impl.logit_softcapping = configured
-        assert impl._get_fa3_softcap() == expected
+        impl = FA3Impl(
+            num_heads=2,
+            head_size=8,
+            logit_softcapping=configured,
+        )
+        assert impl.logit_softcapping == expected
 
 
 def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
@@ -65,9 +78,8 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     impl.scale = 1.0
     impl.causal = True
     impl.sliding_window = None
-    # TritonAttentionImpl uses -1 as the disabled-softcap sentinel. FA3 needs
-    # exactly 0 when built without softcapping kernels.
-    impl.logit_softcapping = -1.0
+    # Match the state of an initialized FA3Impl.
+    impl.logit_softcapping = 0.0
 
     q_seqlens = _make_prefill_seqlens()
     block_offsets = _make_recycled_block_offsets(device='cpu')
@@ -105,12 +117,13 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     assert captured['flash_softcap'] == 0.0
 
 
-def test_fa3_speculative_decode_translates_disabled_softcap():
+def test_fa3_speculative_decode_uses_normalized_disabled_softcap():
     impl = FA3Impl.__new__(FA3Impl)
     impl.scale = 1.0
     impl.causal = True
     impl.sliding_window = None
-    impl.logit_softcapping = -1.0
+    # Match the state of an initialized FA3Impl.
+    impl.logit_softcapping = 0.0
 
     captured = {}
 

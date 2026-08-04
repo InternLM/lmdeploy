@@ -48,6 +48,9 @@ class FA3Impl(TritonAttentionImpl):
             causal=causal,
             **kwargs,
         )
+        if self.logit_softcapping <= 0.0:
+            self.logit_softcapping = 0.0
+
         from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func, flash_attn_with_kvcache
         self.flash_attn_varlen_func_v3 = flash_attn_varlen_func
         self.flash_attn_with_kvcache_v3 = flash_attn_with_kvcache
@@ -78,14 +81,6 @@ class FA3Impl(TritonAttentionImpl):
         if isinstance(sliding_window, int):
             return (sliding_window, sliding_window)
         return sliding_window
-
-    def _get_fa3_softcap(self) -> float:
-        """Translate LMDeploy's disabled-softcap sentinel for FA3.
-
-        Triton attention uses a negative value to represent disabled logit softcapping, while FA3 expects exactly zero
-        when kernels without softcapping support are used.
-        """
-        return 0.0 if self.logit_softcapping <= 0.0 else self.logit_softcapping
 
     def _decoding_speculative(
         self,
@@ -141,7 +136,7 @@ class FA3Impl(TritonAttentionImpl):
             softmax_scale=self.scale,
             causal=self.causal,
             window_size=sliding_window,
-            softcap=self._get_fa3_softcap(),
+            softcap=self.logit_softcapping,
         )
         return attn_output
 
@@ -307,7 +302,7 @@ class FA3Impl(TritonAttentionImpl):
             softmax_scale=self.scale,
             causal=self.causal,
             window_size=sliding_window,
-            softcap=self._get_fa3_softcap(),
+            softcap=self.logit_softcapping,
         )
 
         # Inverse-rotate output back to original domain
