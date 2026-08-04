@@ -183,7 +183,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
             replicate = tuple(False for _ in all_out_features)
         self.block_size = 128
         self.split_section = all_out_features
-        self.scale_split_section = [section // self.block_size for section in self.split_section]
+        self.scale_split_section = [div_up(section, self.block_size) for section in self.split_section]
         all_out_features = self._update_all_out_features(all_out_features, replicate)
         self.all_out_features = all_out_features
         self.replicate = replicate
@@ -239,8 +239,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         shard_idx = self.out_names_map[shard_id]
         if loaded_weight.dim() == 2 and loaded_weight.dtype != self.fp8_dtype:
             loaded_weight = loaded_weight.to(torch.float32)
-            all_out_features = [feats // self.block_size for feats in self.all_out_features]
-            param_w = param.data.split(all_out_features, 0)[shard_idx]
+            param_w = param.data.split(self.scale_split_section, 0)[shard_idx]
         else:
             param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         if not self.replicate[shard_idx]:

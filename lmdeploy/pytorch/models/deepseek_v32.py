@@ -17,9 +17,15 @@ from lmdeploy.pytorch.nn import (
     build_rotary_params,
 )
 from lmdeploy.pytorch.nn.eplb import EPLBManager
-from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_o_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_index_cache
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_v2 import (
     DeepseekV2Attention,
@@ -38,6 +44,35 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     from fast_hadamard_transform import hadamard_transform
     hidden_size = x.size(-1)
     return hadamard_transform(x, scale=hidden_size**-0.5)
+
+
+def _load_fused_qkv_a_weight(name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             config: Any) -> bool:
+    """Load separate Q/KV-A checkpoint tensors into their fused projection."""
+    shard_id = None
+    if '.self_attn.q_a_proj.' in name:
+        shard_id = 0
+        fused_name = name.replace('.q_a_proj.', '.fused_qkv_a_proj.')
+    elif '.self_attn.kv_a_proj_with_mqa.' in name:
+        shard_id = 1
+        fused_name = name.replace('.kv_a_proj_with_mqa.', '.fused_qkv_a_proj.')
+    else:
+        return False
+
+    param = params_dict.get(fused_name)
+    if param is None:
+        return False
+
+    if shard_id == 1 and not name.endswith('.weight_scale_inv'):
+        kv_dim = config.kv_lora_rank + config.qk_rope_head_dim
+        loaded_weight = loaded_weight.to(param.device).unflatten(0, (-1, kv_dim))
+        rope_weight = loaded_weight[:, config.kv_lora_rank:]
+        rope_weight = rope_weight.unflatten(1, (-1, 2)).transpose(1, 2).flatten(1, 2)
+        loaded_weight[:, config.kv_lora_rank:] = rope_weight
+        loaded_weight = loaded_weight.flatten(0, 1)
+
+    load_weight(param, loaded_weight, shard_id=shard_id)
+    return True
 
 
 class LayerNorm(nn.Module):
@@ -165,14 +200,15 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 dp_disable_tp=True,
             )
         else:
-            self.q_a_proj = build_colwise_linear(
+            self.fused_qkv_a_proj = build_merged_colwise_linear(
                 self.hidden_size,
-                config.q_lora_rank,
+                [config.q_lora_rank, config.kv_lora_rank + config.qk_rope_head_dim],
                 bias=config.attention_bias,
                 dtype=dtype,
                 device=device,
                 is_tp=False,
                 quant_config=quantization_config,
+                out_names=[0, 1],
             )
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
@@ -190,15 +226,16 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 dp_disable_tp=True,
             )
 
-        self.kv_a_proj_with_mqa = build_colwise_linear(
-            self.hidden_size,
-            config.kv_lora_rank + config.qk_rope_head_dim,
-            bias=config.attention_bias,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-            quant_config=quantization_config,
-        )
+        if self.q_lora_rank is None:
+            self.kv_a_proj_with_mqa = build_colwise_linear(
+                self.hidden_size,
+                config.kv_lora_rank + config.qk_rope_head_dim,
+                bias=config.attention_bias,
+                dtype=dtype,
+                device=device,
+                is_tp=False,
+                quant_config=quantization_config,
+            )
         self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
                                       1e-6,
                                       quant_config=quantization_config,
@@ -246,17 +283,17 @@ class DeepseekV32Attention(DeepseekV2Attention):
     def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype, device: torch.device):
         return Indexer(config, layer_idx, dtype=dtype, device=device)
 
-    def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
+    def _q_proj(self, q_a_states, num_heads: int, nope_size: int, pe_size: int):
         """Q proj."""
-        q_len = hidden_states.size(1)
+        q_len = q_a_states.size(1)
 
-        query_states = hidden_states.new_empty(q_len, num_heads, nope_size + pe_size)
+        query_states = q_a_states.new_empty(q_len, num_heads, nope_size + pe_size)
 
         if self.q_lora_rank is None:
-            qr = hidden_states
-            q = self.q_proj(hidden_states)
+            qr = q_a_states
+            q = self.q_proj(q_a_states)
         else:
-            qr = self.q_a_layernorm(self.q_a_proj(hidden_states))
+            qr = self.q_a_layernorm(q_a_states)
             q = self.q_b_proj(qr)
         q = q.view(q_len, num_heads, self.q_head_dim)
         # q_pe: (q_len, num_heads, qk_rope_head_dim)
@@ -266,10 +303,8 @@ class DeepseekV32Attention(DeepseekV2Attention):
         self.kc(q_nope, q_nope_out)
         return query_states, q_pe, qr
 
-    def _kv_proj(self, hidden_states, nope_size: int):
+    def _kv_proj(self, key_states, nope_size: int):
         """Kv proj."""
-        # (q_len, 1, nope_size + pe_size)
-        key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
         # (q_len, 1, pe_size)
         k_pe = key_states[..., nope_size:]
         # kv_a_layernorm
@@ -282,8 +317,16 @@ class DeepseekV32Attention(DeepseekV2Attention):
         """Qkv proj."""
         nope_size = self.kv_lora_rank
         pe_size = self.qk_rope_head_dim
-        query_states, q_pe, qr = self._q_proj(hidden_states, num_heads, nope_size, pe_size)
-        key_states, value_states, k_pe = self._kv_proj(hidden_states, nope_size)
+        if self.q_lora_rank is None:
+            q_a_states = hidden_states
+            key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
+        else:
+            q_a_states, key_states = self.fused_qkv_a_proj(hidden_states).split(
+                [self.q_lora_rank, nope_size + pe_size], dim=-1)
+            key_states = key_states[0, :, None]
+
+        query_states, q_pe, qr = self._q_proj(q_a_states, num_heads, nope_size, pe_size)
+        key_states, value_states, k_pe = self._kv_proj(key_states, nope_size)
 
         return query_states, key_states, value_states, q_pe, k_pe, qr
 
@@ -427,3 +470,9 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
+
+    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               update_pe_mapping: list):
+        if _load_fused_qkv_a_weight(name, loaded_weight, params_dict, self.config):
+            return
+        return super()._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)

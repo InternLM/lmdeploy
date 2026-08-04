@@ -11,6 +11,7 @@ from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
 
 from .deepseek_mtp import DeepseekMTPModel, build_deepseek_rotary_embedding
+from .deepseek_v32 import _load_fused_qkv_a_weight
 from .glm_moe_dsa import (
     DSATopKIndicesBuffer,
     GlmMoeDsaDecoderLayer,
@@ -256,6 +257,9 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor,
                                params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):
+        if _load_fused_qkv_a_weight(name, loaded_weight, params_dict,
+                                    self.config):
+            return
         if _load_fused_indexer_weight(name, loaded_weight, params_dict,
                                       self._load_buffers):
             return
