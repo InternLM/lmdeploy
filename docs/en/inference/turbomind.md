@@ -63,6 +63,35 @@ Apart of the features described above, there are still many minor differences th
 
 ## FAQ
 
+### What does TurbomindEngineConfig speed up?
+
+`TurbomindEngineConfig` selects and configures the TurboMind backend. The
+speedup comes from TurboMind itself rather than from a single config option:
+
+- persistent batching keeps requests in a continuously running batch and
+  reuses freed batch slots for new requests;
+- the KV cache manager stores KV blocks in a reusable memory pool, supports
+  prefix/cache hits, and avoids repeated context decoding when history KV is
+  available;
+- FasterTransformer/CUTLASS kernels, paged attention, tensor parallelism, and
+  KV-cache quantization reduce compute or memory bandwidth bottlenecks.
+
+Speculative decoding is configured separately through `SpeculativeConfig`.
+The current speculative decoding guide uses the PyTorch backend, so switch to
+`PytorchEngineConfig` for those examples instead of expecting
+`TurbomindEngineConfig` to enable it.
+
+TurboMind can serve supported full-precision and quantized text models. For
+quantized checkpoints, see the AWQ/GPTQ and llm-compressor guides. Multimodal
+models are also supported when listed in the supported-model matrix, but
+quantized multimodal support depends on the specific model and quantization
+format rather than on `TurbomindEngineConfig` alone.
+
+- [Speculative decoding](../advance/spec_decoding.md)
+- [AWQ/GPTQ quantized models](../quantization/w4a16.md)
+- [llm-compressor quantized models](../quantization/llm_compressor.md)
+- [Supported models](../supported_models/supported_models.md)
+
 ### Supporting Huggingface models
 
 For historical reasons, TurboMind's weight layout is based on [the original LLaMa implementation](https://github.com/facebookresearch/llama) (differ only by a transpose). The implementation in huggingface transformers uses a [different layout](https://github.com/huggingface/transformers/blob/45025d92f815675e483f32812caa28cce3a960e7/src/transformers/models/llama/convert_llama_weights_to_hf.py#L123C76-L123C76) for `W_q` and `W_k` which is handled in [deploy.py](https://github.com/InternLM/lmdeploy/blob/ff4648a1d09e5aec74cf70efef35bfaeeac552e0/lmdeploy/serve/turbomind/deploy.py#L398).

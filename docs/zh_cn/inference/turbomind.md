@@ -63,6 +63,32 @@ TurboMind 的 Python API 支持流式结果返回和张量并行模式。
 
 ## FAQ
 
+### TurbomindEngineConfig 加速了什么？
+
+`TurbomindEngineConfig` 用于选择并配置 TurboMind 后端。加速主要来自
+TurboMind 后端本身，而不是某一个单独的配置项：
+
+- persistent batch 会把请求放入持续运行的 batch，并在请求结束后复用
+  batch slot；
+- KV cache 管理器以 block 形式管理可复用的 KV 缓存，命中历史 KV 时可避免
+  重复 context decoding；
+- FasterTransformer/CUTLASS kernel、paged attention、张量并行以及 KV cache
+  量化可以降低计算或显存带宽瓶颈。
+
+推测解码通过 `SpeculativeConfig` 单独配置。当前推测解码文档使用的是
+PyTorch 后端，因此相关示例应切换到 `PytorchEngineConfig`，而不是期望
+`TurbomindEngineConfig` 直接开启推测解码。
+
+TurboMind 可以服务受支持的全精度和量化文本模型。量化 checkpoint 的使用
+方式请参考 AWQ/GPTQ 和 llm-compressor 文档。多模态模型在受支持模型列表中
+列出时也可以使用 TurboMind；但量化多模态模型是否可用取决于具体模型和量化
+格式，而不是只由 `TurbomindEngineConfig` 决定。
+
+- [推测解码](../advance/spec_decoding.md)
+- [AWQ/GPTQ 量化模型](../quantization/w4a16.md)
+- [llm-compressor 量化模型](../quantization/llm_compressor.md)
+- [支持的模型](../supported_models/supported_models.md)
+
 ### 对 Huggingface 模型的支持
 
 因为历史因素， TurboMind 的权重设计是基于 [LLaMa 的官方实现](https://github.com/facebookresearch/llama) 完成的，两者只相差一个转置操作。但是 Huggingface 版本的实现却是[另一种形式](https://github.com/huggingface/transformers/blob/45025d92f815675e483f32812caa28cce3a960e7/src/transformers/models/llama/convert_llama_weights_to_hf.py#L123C76-L123C76)，两种权重实现方式在 `W_q` 和 `W_k` 上的区别我们在 [deploy.py](https://github.com/InternLM/lmdeploy/blob/ff4648a1d09e5aec74cf70efef35bfaeeac552e0/lmdeploy/serve/turbomind/deploy.py#L398) 进行了适配处理，用户可前往查看。
