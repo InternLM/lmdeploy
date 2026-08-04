@@ -37,6 +37,7 @@ def _get_meta_flashattn(
         causal=True,
         window_size=(-1, -1),
         num_splits=0,
+        has_softcap=False,
 ):
     """Build FlashAttention scheduler metadata."""
     from flash_attn_interface import get_scheduler_metadata
@@ -56,6 +57,7 @@ def _get_meta_flashattn(
         page_size=page_size,
         causal=causal,
         window_size=window_size,
+        has_softcap=has_softcap,
         num_splits=num_splits,
     )
 
@@ -80,7 +82,8 @@ def _build_fa3_metadata(batch_size: int,
                         v_head_size: int | None = None,
                         block_size: int | None = None,
                         max_seqlen_q: int | None = None,
-                        max_seqlen_k: int | None = None) -> FA3AttentionMetadata:
+                        max_seqlen_k: int | None = None,
+                        has_softcap: bool = False) -> FA3AttentionMetadata:
     """Build scheduler metadata from one selected FA3 implementation."""
     if block_size is None:
         block_size = step_context.model_config.block_size
@@ -105,6 +108,7 @@ def _build_fa3_metadata(batch_size: int,
         page_size=block_size,
         causal=causal,
         window_size=_normalize_sliding_window(sliding_window),
+        has_softcap=has_softcap,
     )
     return FA3AttentionMetadata(
         scheduler_metadata=scheduler_metadata,
@@ -164,11 +168,12 @@ class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[torch.Tensor | None, FA3A
     v_head_size: int
     sliding_window: tuple[int, int]
     causal: bool
+    has_softcap: bool
 
     @property
     def key(self) -> Hashable:
         return (type(self), self.num_heads, self.num_kv_heads, self.head_size, self.v_head_size, self.sliding_window,
-                self.causal)
+                self.causal, self.has_softcap)
 
     @staticmethod
     def _needs_scheduler(step_context, sequence_metadata) -> bool:
@@ -189,6 +194,7 @@ class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[torch.Tensor | None, FA3A
             v_head_size=self.v_head_size,
             sliding_window=self.sliding_window,
             causal=self.causal,
+            has_softcap=self.has_softcap,
         )
 
     def apply_legacy_metadata(self, attn_metadata, metadata: FA3AttentionMetadata) -> None:
@@ -210,6 +216,7 @@ class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[torch.Tensor | None, FA3A
             v_head_size=self.v_head_size,
             sliding_window=self.sliding_window,
             causal=self.causal,
+            has_softcap=self.has_softcap,
             max_seqlen_q=graph_meta.decode_query_len,
             max_seqlen_k=graph_meta.num_blocks * graph_meta.block_size,
         )
@@ -230,6 +237,7 @@ class FA3AttentionMetaBuilder(CudaAttentionMetaBuilder[torch.Tensor | None, FA3A
             v_head_size=self.v_head_size,
             sliding_window=self.sliding_window,
             causal=self.causal,
+            has_softcap=self.has_softcap,
             max_seqlen_q=graph_meta.decode_query_len,
             max_seqlen_k=graph_meta.num_blocks * graph_meta.block_size,
         )
@@ -294,6 +302,7 @@ class FA3Impl(TritonAttentionImpl):
             v_head_size=self.v_head_size,
             sliding_window=self.sliding_window,
             causal=self.causal,
+            has_softcap=self.logit_softcapping > 0,
         )
 
     def _get_scheduler_metadata(self, attn_metadata: TritonAttentionMetadata):
