@@ -38,10 +38,16 @@ FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels
 pip wheel -v --no-build-isolation --no-deps -w /wheels \
     "git+https://github.com/Dao-AILab/fast-hadamard-transform.git@${FAST_HADAMARD_TRANSFORM_VERSION}"
 
-# flash_attn_3 (prebuilt wheels; CUDA + torch must match this image)
-TORCH_VER=$(python3 -c "import torch; print(''.join(torch.__version__.split('+')[0].split('.')))")
-FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch${TORCH_VER}"
-pip download --no-deps -d /wheels "flash_attn_3" --find-links "${FA3_WHEELS_URL}"
+# flash_attn_3 (official, LibTorch ABI-stable wheels for torch >= 2.9).
+# Select the FA3 channel matching the PyTorch binary. CUDA 13 FA3 wheels are
+# published in the cu130 channel.
+FA3_CUDA_VERSION="${PYTORCH_CUDA_VERSION:-${CUDA_VERSION_SHORT}}"
+if [[ "${FA3_CUDA_VERSION}" == cu13* ]]; then
+    FA3_CUDA_VERSION=cu130
+fi
+pip download --no-deps --only-binary=:all: -d /wheels \
+    "flash-attn-3==3.0.0" \
+    --index-url "https://download.pytorch.org/whl/${FA3_CUDA_VERSION}"
 
 # GDRCopy debs
 apt-get update -y \

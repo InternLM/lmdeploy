@@ -957,8 +957,6 @@ void Engine::Impl::UpdateScheduleMetrics(bool advance_scheduler)
     m->total_seqs   = total_seqs;
     m->active_seqs  = active_seqs;
     m->waiting_seqs = total_seqs - active_seqs;
-    m->total_blocks = static_cast<int64_t>(memory.live_allocations);
-    m->free_blocks  = 0;
     m->cache_usage  = memory.region_bytes ? static_cast<double>(memory.live_bytes) / memory.region_bytes : 0.;
     m->prefix_cache_hit_rate =
         prefix_query_tokens_ ? static_cast<double>(prefix_hit_tokens_) / prefix_query_tokens_ : 0.;
