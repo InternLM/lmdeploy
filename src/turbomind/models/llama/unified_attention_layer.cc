@@ -131,7 +131,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
     quant_policy_{engine.quant_policy},
     rope_{weights.at(0)->rope},
     engine_param_{engine},
-    cp_fn_ctx_{context.comm.d_comm, context.comm.d_cp_group},
+    cp_fn_ctx_{context.comm.d_comm, context.comm.d_cp_group, engine.attn_cp_size},
     is_warm_up_{*context.is_warm_up},
     context_{context},
     init_{init},
@@ -635,7 +635,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const cudaStream_t stream = core::Context::stream().handle();
 
     cudaStream_t pf_stream = stream;
-    cudaStream_t dc_stream = pf_stream;
+    cudaStream_t dc_stream = stream;
 
     if (d.decode.n && d.prefill.n) {
         pf_stream = aux_stream_;
