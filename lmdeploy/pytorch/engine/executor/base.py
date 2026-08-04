@@ -271,6 +271,19 @@ class ExecutorBase:
                 f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
             )
 
+    def _validate_block_size(self):
+        """Validate final cache block sizes before building cache kernels."""
+        block_size = self.cache_config.block_size
+        kernel_block_size = self.cache_config.kernel_block_size
+        if block_size < 16 or (block_size & (block_size - 1)) != 0:
+            raise ValueError(f'block_size must be >= 16 and a power of 2, but got {block_size}')
+        if kernel_block_size < 16 or (kernel_block_size & (kernel_block_size - 1)) != 0:
+            raise ValueError(f'kernel_block_size must be >= 16 and a power of 2, but got {kernel_block_size}')
+        if block_size < kernel_block_size or block_size % kernel_block_size != 0:
+            raise ValueError(
+                f'block_size must be >= kernel_block_size and an integer multiple of kernel_block_size, but got '
+                f'block_size {block_size} and kernel_block_size {kernel_block_size}')
+
     def _get_state_cache_mem(self, states_shapes=None, cache_config=None, model_config=None):
         """Get state cache mem usage."""
         cache_config = cache_config or self.cache_config
@@ -429,6 +442,7 @@ class ExecutorBase:
     def update_configs(self) -> None:
         """Update cache config."""
         self._adjust_block_size()
+        self._validate_block_size()
         self._maybe_disable_unsupported_prefix_caching()
         self._sync_spec_cache_block_size()
         self._validate_memdecode_configs()

@@ -131,6 +131,19 @@ def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rul
     assert executor.cache_config.window_size == -1
 
 
+def test_update_configs_rejects_non_power_of_two_block_size():
+    executor = object.__new__(ExecutorBase)
+    executor.cache_config = CacheConfig(max_batches=1,
+                                        block_size=48,
+                                        kernel_block_size=16,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0)
+    executor.model_config = SimpleNamespace(k_head_dim=128, use_flash_mla=False, update_cache_config_func=None)
+
+    with pytest.raises(ValueError, match='block_size must be >= 16 and a power of 2'):
+        executor.update_configs()
+
+
 def test_executor_disables_prefix_cache_with_generic_sliding_window():
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
