@@ -25,6 +25,8 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     expert_num        = cfg.expert_num;
     ep_size           = cfg.ep_size;
     ep_rank           = cfg.ep_rank;
+    meta_group        = cfg.meta_group;
+    is_meta_donor     = cfg.is_meta_donor;
 }
 
 // Adapted from LinkExperts for LinearWeight
@@ -76,11 +78,13 @@ FfnWeight* MoeWeight::expert(int i) const
     return static_cast<FfnWeight*>(experts->child(std::to_string(local_expert_offset() + i)));
 }
 
-void MoeWeight::prepare()
+void MoeWeight::prepare_routed_linears()
 {
-    // First prepare all children (experts, gate, etc.)
     Module::prepare();
+}
 
+void MoeWeight::link_block()
+{
     const int local_expert_num = num_local_experts();
 
     // Create batched block view for fused MoE path
@@ -143,6 +147,12 @@ void MoeWeight::prepare()
     // is_fused_silu() now reflects whether the GEMM epilogue applies
     // SiLU.
     block_->is_fused_silu = e0->is_fused_silu;
+}
+
+void MoeWeight::prepare()
+{
+    prepare_routed_linears();
+    link_block();
 }
 
 TM_MODULE_REGISTER(MoeWeight, core::MoeConfig);

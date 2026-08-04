@@ -4,6 +4,7 @@
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
+#include "src/turbomind/models/meta_moe.h"
 
 namespace turbomind {
 
@@ -14,10 +15,15 @@ ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg):
 
 void ModelWeight::prepare()
 {
-    for_each_child([](const char* /*name*/, Module* child) {
-        if (child)
-            child->prepare();
-    });
+    if (ModelHasMetaMoe(*this)) {
+        PrepareMetaMoe(*this);
+    }
+    else {
+        for_each_child([](const char* /*name*/, Module* child) {
+            if (child)
+                child->prepare();
+        });
+    }
 
     auto* l0 = layer(0);
     TM_CHECK(l0);

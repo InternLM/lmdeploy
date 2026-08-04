@@ -28,7 +28,9 @@ struct MoeConfig: ModuleConfig {
     X(double, routed_scale)                                                                                            \
     X(int, ep_size, 1)                                                                                                 \
     X(int, ep_rank, 0)                                                                                                 \
-    X(DataType, data_type)
+    X(DataType, data_type)                                                                                             \
+    X(int, meta_group, -1)                                                                                             \
+    X(bool, is_meta_donor, false)
 
     MOE_FIELDS(TM_MEMBER)
     TM_FOR_EACH(MoeConfig, MOE_FIELDS)
@@ -52,6 +54,8 @@ public:
     MoeWeight(const core::MoeConfig& cfg);
 
     void prepare() override;
+    void prepare_routed_linears();
+    void link_block();
     int  num_experts() const
     {
         return expert_num;
@@ -94,6 +98,8 @@ public:
     int         router_n_groups{};
     int         ep_size{1};
     int         ep_rank{0};
+    int         meta_group{-1};
+    bool        is_meta_donor{false};
 
 private:
     ActivationType act_type_{};

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <iostream>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -12,7 +11,6 @@
 #include <cub/block/block_scan.cuh>
 #include <cub/warp/warp_scan.cuh>
 
-#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -24,123 +22,20 @@
 
 namespace turbomind {
 
-template<int top_k, int block_dim>
-__global__ void MoeGateKernel_V2(float*       scales,  // [e,n]
-                                 int8_t*      masks,   // [E,n], padded
-                                 int*         accum,   // [E,tiles]
-                                 const float* logits,  // [E,n]
-                                 int          log_tile,
-                                 int          tiles,
-                                 int          tokens,
-                                 int          tokens_padded,
-                                 int          experts)
-{
-    constexpr int max_tiles = kMoeGateMaxTiles;
-
-    // Brute-force per thread top-k using a flat thread mapping
-    const int ti = threadIdx.x + blockIdx.x * blockDim.x;
-
-    // Clear masks
-    for (int e = 0; e < experts; ++e) {
-        if (ti < tokens_padded) {
-            masks[e * tokens_padded + ti] = -1;
-        }
-    }
-
-    __shared__ int shared_accum[32][max_tiles];
-
-    for (int i = threadIdx.x; i < experts * max_tiles; i += block_dim) {
-        int e = i / max_tiles;
-        int t = i % max_tiles;
-        if (e < experts && t < tiles) {
-            shared_accum[e][t] = 0;
-        }
-    }
-
-    __syncthreads();
-
-    if (ti < tokens) {
-
-        static_assert(top_k <= 32);
-        int mask = -1;
-
-        float max_logit = 0.f;
-
-        // Find top-k
-        PRAGMA_UNROLL
-        for (int k = 0; k < top_k; ++k) {
-            int   max_bit = 0;
-            float max_val = -std::numeric_limits<float>::infinity();
-            int   bit     = 1;
-            for (int e = 0; e < experts; ++e) {
-                const auto val = logits[ti * experts + e];
-                // const auto val = logits[e * tokens + ti];
-                if ((mask & bit) && val > max_val) {
-                    max_bit = bit;
-                    max_val = val;
-                }
-                bit *= 2;
-            }
-            mask -= max_bit;
-            if (k == 0) {
-                max_logit = max_val;
-            }
-        }
-
-        mask = ~mask;
-
-        Array<float, top_k> top_val;
-        PRAGMA_UNROLL
-        for (int i = 0; i < top_k; ++i) {
-            const int lowbit = (mask & -mask);
-            const int e      = 31 - __clz(lowbit);
-
-            // printf("e = %d, ti = %d, idx = %d\n", e, ti, i);
-
-            masks[e * tokens_padded + ti] = i;
-            atomicAdd(&shared_accum[e][ti >> log_tile], 1);
-            top_val[i] = logits[ti * experts + e];
-            // top_val[i] = logits[e * tokens + ti];
-
-            mask -= lowbit;
-        }
-
-        float prob_sum = 0.f;
-        PRAGMA_UNROLL
-        for (int i = 0; i < top_k; ++i) {
-            top_val[i] = expf(top_val[i] - max_logit);
-            prob_sum += top_val[i];
-        }
-
-        PRAGMA_UNROLL
-        for (int i = 0; i < top_k; ++i) {
-            scales[i * tokens + ti] = fdividef(top_val[i], prob_sum);
-        }
-    }
-
-    __syncthreads();
-
-    for (int i = threadIdx.x; i < experts * max_tiles; i += block_dim) {
-        int e = i / max_tiles;
-        int t = i % max_tiles;
-        if (e < experts && t < tiles) {
-            atomicAdd(accum + e * tiles + t, shared_accum[e][t]);
-        }
-    }
-}
-
+// Classic scan: each (tile,expert) CTA reduces accum[0 .. ei*tiles+tile_id).
+// Cheap when E*tiles is small; quadratic cost dominates at E=2560.
 template<int block_dim, class Mask>
-__global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
-                                 int*       f2E,      // [e*n]
-                                 int*       en2f,     // [e,n]
-                                 int*       offsets,  // [E+1]
-                                 Mask*      masks,    // [E,n], padded
-                                 const int* accum,    // [E,tiles]
-                                 int        log_tile,
-                                 int        tiles,
-                                 int        tokens,
-                                 int        tokens_padded,
-                                 int        experts)
+__global__ void MoeScanKernel_v2_classic(int*       f2n,
+                                         int*       f2E,
+                                         int*       en2f,
+                                         int*       offsets,
+                                         Mask*      masks,
+                                         const int* accum,
+                                         int        log_tile,
+                                         int        tiles,
+                                         int        tokens,
+                                         int        tokens_padded,
+                                         int        experts)
 {
     using BlockReduce = cub::BlockReduce<int, block_dim>;
     using BlockScan   = cub::BlockScan<int, block_dim>;
@@ -151,8 +46,7 @@ __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
     } temp_storage;
 
     constexpr int vec_size = kMoeGateVecSize;
-
-    using Vec = Array<Mask, vec_size>;
+    using Vec              = Array<Mask, vec_size>;
 
     const int tile_id = blockIdx.x;
     const int ei      = blockIdx.y;
@@ -160,49 +54,152 @@ __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
     const int  global_tile_id = ei * tiles + tile_id;
     const bool is_valid       = global_tile_id <= experts * tiles;
 
-#if 0
-    int vacc[4]{};
-    {
-        int idx = threadIdx.x;
-        PRAGMA_UNROLL
-        for (int i = 0; i < 4; ++i) {
-            if (idx < global_tile_id) {
-                vacc[i] = accum[idx];
-            }
-            idx += block_dim;
-        }
-    }
-
-    int offset = BlockReduce{temp_storage.reduce}.Sum(vacc);
-#else
-
     int vacc = 0;
     for (int i = threadIdx.x; i < global_tile_id; i += block_dim) {
         if (is_valid && i < global_tile_id) {
             vacc += accum[i];
         }
     }
-
     int offset = BlockReduce{temp_storage.reduce}.Sum(vacc);
 
-#endif
-
     __shared__ int shared_offset;
-
     if (threadIdx.x == 0) {
         shared_offset = offset;
         if (tile_id == 0) {
             offsets[ei] = offset;
         }
     }
-
     if (ei == experts) {
         return;
     }
+    __syncthreads();
+    offset = shared_offset;
 
+    const int token_vecs      = tokens_padded / vec_size;
+    const int tile_size       = 1 << log_tile;
+    const int tile_vec_size   = tile_size / vec_size;
+    const int tile_vec_beg    = tile_id * tile_vec_size;
+    const int tile_vec_end    = std::min(tile_vec_beg + tile_vec_size, token_vecs);
+    const int tile_vec_padded = tile_vec_beg + round_up(tile_vec_size, block_dim);
+
+    auto mask_ptr = (Vec*)masks + ei * token_vecs;
+    for (int vi = tile_vec_beg + threadIdx.x; vi < tile_vec_padded; vi += block_dim) {
+        const bool pred = vi < tile_vec_end;
+        Vec        data;
+        fill(data, Mask{-1});
+        if (pred) {
+            Ldg(data, mask_ptr[vi].data());
+        }
+        int prefix[vec_size];
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            prefix[i] = int(data[i] >= 0);
+        }
+        int block_sum = 0;
+        BlockScan{temp_storage.scan}.ExclusiveSum(prefix, prefix, block_sum);
+        __syncthreads();
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            if (pred && data[i] >= 0) {
+                const int flat_id           = prefix[i] + offset;
+                const int ti                = vi * vec_size + i;
+                f2n[flat_id]                = ti;
+                f2E[flat_id]                = ei;
+                en2f[data[i] * tokens + ti] = flat_id;
+            }
+        }
+        offset += block_sum;
+    }
+}
+
+// Hierarchical prefix phase 1: multi-CTA over expert slabs.
+// Each CTA owns `block_dim` experts (1 expert / thread). In-place exclusive
+// scan of accum[e, 0..tiles) and write expert totals into offsets[e].
+template<int block_dim>
+__global__ void MoeScanPrefixPhase1Kernel(int* accum,    // [E,tiles] counts -> excl tile prefixes
+                                          int* offsets,  // [E+1]; [0..E) = expert totals after phase1
+                                          int  tiles,
+                                          int  experts)
+{
+    const int ei = static_cast<int>(blockIdx.x) * block_dim + static_cast<int>(threadIdx.x);
+    if (ei >= experts) {
+        return;
+    }
+
+    int* row = accum + ei * tiles;
+    int  sum = 0;
+    // tiles <= kMoeGateMaxTiles (16).
+    for (int t = 0; t < tiles; ++t) {
+        const int v = row[t];
+        row[t]      = sum;
+        sum += v;
+    }
+    offsets[ei] = sum;
+}
+
+// Hierarchical prefix phase 2: one CTA exclusive-scans expert totals.
+template<int block_dim>
+__global__ void MoeScanPrefixPhase2Kernel(int* offsets,  // [E+1]; [0..E) totals in, excl out
+                                          int  experts)
+{
+    static_assert(block_dim % 32 == 0, "BLOCK_SCAN_WARP_SCANS requires warp-multiple block_dim");
+    using BlockScan = cub::BlockScan<int, block_dim, cub::BLOCK_SCAN_WARP_SCANS>;
+    __shared__ typename BlockScan::TempStorage temp_storage;
+    __shared__ int                             shared_running;
+
+    if (threadIdx.x == 0) {
+        shared_running = 0;
+    }
     __syncthreads();
 
-    offset = shared_offset;
+    for (int base = 0; base < experts; base += block_dim) {
+        const int i = base + threadIdx.x;
+        int       v = (i < experts) ? offsets[i] : 0;
+        int       prefix{};
+        int       block_sum{};
+        BlockScan{temp_storage}.ExclusiveSum(v, prefix, block_sum);
+        __syncthreads();
+        if (i < experts) {
+            offsets[i] = prefix + shared_running;
+        }
+        if (threadIdx.x == 0) {
+            shared_running += block_sum;
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        offsets[experts] = shared_running;
+    }
+}
+
+// Large-E scan: O(1) offset from precomputed expert/tile exclusive prefixes.
+template<int block_dim, class Mask>
+__global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
+                                 int*       f2E,      // [e*n]
+                                 int*       en2f,     // [e,n]
+                                 int*       offsets,  // [E+1] exclusive expert offsets
+                                 Mask*      masks,    // [E,n], padded
+                                 const int* accum,    // [E,tiles] exclusive tile prefixes
+                                 int        log_tile,
+                                 int        tiles,
+                                 int        tokens,
+                                 int        tokens_padded,
+                                 int        experts)
+{
+    static_assert(block_dim % 32 == 0, "BLOCK_SCAN_WARP_SCANS requires warp-multiple block_dim");
+    using BlockScan = cub::BlockScan<int, block_dim, cub::BLOCK_SCAN_WARP_SCANS>;
+
+    __shared__ typename BlockScan::TempStorage temp_storage;
+
+    constexpr int vec_size = kMoeGateVecSize;
+
+    using Vec = Array<Mask, vec_size>;
+
+    const int tile_id = blockIdx.x;
+    const int ei      = blockIdx.y;
+
+    // offsets[ei] = sum of all prior experts; accum[ei*tiles+tile_id] = excl prefix within expert.
+    int offset = offsets[ei] + accum[ei * tiles + tile_id];
 
     const int token_vecs = tokens_padded / vec_size;
 
@@ -212,10 +209,6 @@ __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
     const int tile_vec_beg    = tile_id * tile_vec_size;
     const int tile_vec_end    = std::min(tile_vec_beg + tile_vec_size, token_vecs);
     const int tile_vec_padded = tile_vec_beg + round_up(tile_vec_size, block_dim);
-
-    // if (threadIdx.x == 0) {
-    //     printf("%d %d %d\n", tile_vec_beg, tile_vec_end, tile_vec_padded);
-    // }
 
     auto mask_ptr = (Vec*)masks + ei * token_vecs;
 
@@ -237,7 +230,7 @@ __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
 
         int block_sum = 0;
 
-        BlockScan{temp_storage.scan}.ExclusiveSum(prefix, prefix, block_sum);
+        BlockScan{temp_storage}.ExclusiveSum(prefix, prefix, block_sum);
         __syncthreads();
 
         PRAGMA_UNROLL
@@ -256,11 +249,105 @@ __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
     }
 }
 
-template<int max_expert_num,
-         int max_top_k,
-         int items_per_thread,
-         int block_dim,
-         int access_size,
+static void launchMoeScan_V2(int*         f2n,
+                             int*         f2E,
+                             int*         en2f,
+                             int*         offsets,
+                             int8_t*      masks,
+                             int*         accum,
+                             int          log_tile,
+                             int          tiles,
+                             int          tokens,
+                             int          tokens_padded,
+                             int          experts,
+                             int          base_log_tile,
+                             cudaStream_t st)
+{
+    constexpr int threads = (1 << 9) / kMoeGateVecSize;
+    TM_CHECK_EQ(base_log_tile, 9);
+
+    // Size split: classic reduce when E*tiles is modest (one launch; hierarchical
+    // prefix overhead can lose at small tile counts). Hierarchical when the
+    // classic O((E*tiles)^2) reduce dominates (large-E and enough tiles).
+    const bool use_hierarchical = (experts > 512) && (tiles >= 4);
+    if (!use_hierarchical) {
+        const dim3 blocks(tiles, experts + 1);
+        MoeScanKernel_v2_classic<threads><<<blocks, threads, 0, st>>>(
+            f2n, f2E, en2f, offsets, masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
+        return;
+    }
+
+    // Multi-CTA prefix: phase1 parallelizes expert-row excl scans; phase2 scans totals.
+    constexpr int prefix_threads = 256;
+    const int     phase1_blocks  = (experts + prefix_threads - 1) / prefix_threads;
+    MoeScanPrefixPhase1Kernel<prefix_threads><<<phase1_blocks, prefix_threads, 0, st>>>(accum, offsets, tiles, experts);
+    MoeScanPrefixPhase2Kernel<prefix_threads><<<1, prefix_threads, 0, st>>>(offsets, experts);
+
+    const dim3 blocks(tiles, experts);
+    MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(
+        f2n, f2E, en2f, offsets, masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
+}
+
+template<int NBits>
+struct MoeGateBitset {
+    static constexpr int kWords = (NBits + 31) / 32;
+    uint32_t             words[kWords];
+
+    __device__ void fill_ones()
+    {
+        PRAGMA_UNROLL
+        for (int w = 0; w < kWords; ++w) {
+            words[w] = 0xffffffffu;
+        }
+        // Clear unused high bits in the last word so invert/test stay well-defined.
+        constexpr int rem = NBits % 32;
+        if constexpr (rem != 0) {
+            words[kWords - 1] = (1u << rem) - 1u;
+        }
+    }
+
+    __device__ bool test(int i) const
+    {
+        return (words[i >> 5] >> (i & 31)) & 1u;
+    }
+
+    __device__ void clear(int i)
+    {
+        words[i >> 5] &= ~(1u << (i & 31));
+    }
+
+    __device__ void invert_active()
+    {
+        // After top-k clears, remaining 1-bits are unselected; invert to selected.
+        PRAGMA_UNROLL
+        for (int w = 0; w < kWords; ++w) {
+            words[w] = ~words[w];
+        }
+        constexpr int rem = NBits % 32;
+        if constexpr (rem != 0) {
+            words[kWords - 1] &= (1u << rem) - 1u;
+        }
+    }
+};
+
+template<int max_expert_num, int max_top_k, int tokens_per_cta>
+struct MoeGateV8SharedStorage {
+    // A CTA's tokens_per_cta consecutive tokens span at most 2 log_tile buckets
+    // (tile_size >= 512, tokens_per_cta <= 32). Dense [kMoeGateMaxTiles][E] was
+    // ~164KB at E=2560 (1 CTA/SM); 2 rows is ~20KB and restores smem-batched
+    // histogram flush (avoids global-atomic contention on small-E).
+    static constexpr int local_tiles = 2;
+    int                  shared_accum[local_tiles][max_expert_num + 1];
+    float                shared_scales[max_top_k][tokens_per_cta];
+    int                  shared_exp_id[max_top_k][tokens_per_cta];
+};
+
+template<int  max_expert_num,
+         int  max_top_k,
+         int  items_per_thread,
+         int  block_dim,
+         int  access_size,
+         bool fuse_mask_clear,
          class Mask>
 __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
                                  Mask*        masks,   // [E,n], padded
@@ -276,16 +363,18 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
                                  bool         norm_topk,
                                  float        routed_scale)
 {
-    constexpr int max_tiles         = kMoeGateMaxTiles;
     constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
     constexpr int tokens_per_cta    = block_dim / threads_per_token;
 
-    // We use bits in a uint32_t to represent selected experts
-    static_assert(items_per_thread <= 32);
+    using SharedStorage = MoeGateV8SharedStorage<max_expert_num, max_top_k, tokens_per_cta>;
+
+    __shared__ SharedStorage smem;
+
     // We use warp-level primitives for reduction
     static_assert(threads_per_token <= 32);
-
     static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+    static_assert(items_per_thread % access_size == 0);
+    static_assert(max_expert_num == threads_per_token * items_per_thread);
 
     const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -296,47 +385,15 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
     const int warp_ti = threadIdx.x % WARP_SIZE / threads_per_token;
 
-    // const int warp_offset  = thread_idx / WARP_SIZE * WARP_SIZE / threads_per_token;
-    // const int block_offset = thread_idx / block_dim * block_dim / threads_per_token;
-
     float data[items_per_thread];
-    int   idxs[items_per_thread];
 
-#if 0
     PRAGMA_UNROLL
     for (int i = 0; i < items_per_thread; ++i) {
         data[i] = -std::numeric_limits<float>::infinity();
-        idxs[i] = threads_per_token * (i / access_size * access_size) + i % access_size + ei * access_size;
     }
     if (ti < token_num) {
         PRAGMA_UNROLL
         for (int i = 0; i < items_per_thread; i += access_size) {
-            const int e = threads_per_token * i + ei * access_size;
-            if (e < expert_num) {
-                Ldg((Array<float, access_size>&)data[i], &logits[ti * expert_num + e]);
-            }
-        }
-    }
-
-    __shared__ union {
-        struct {
-            // +1 padding greatly reduced (-80%) bank conflicts
-            int   shared_accum[max_tiles][max_expert_num + 1];
-            float shared_scales[max_top_k][tokens_per_cta];
-            int   shared_exp_id[max_top_k][tokens_per_cta];
-        };
-    } smem;
-#elif 1
-    PRAGMA_UNROLL
-    for (int i = 0; i < items_per_thread; ++i) {
-        data[i] = -std::numeric_limits<float>::infinity();
-        // idxs[i] = threads_per_token * (i / access_size * access_size) + i % access_size + ei * access_size;
-        idxs[i] = ei * items_per_thread + i;
-    }
-    if (ti < token_num) {
-        PRAGMA_UNROLL
-        for (int i = 0; i < items_per_thread; i += access_size) {
-            // const int e = threads_per_token * i + ei * access_size;
             const int e = ei * items_per_thread + i;
             if (e < expert_num) {
                 Ldg((Array<float, access_size>&)data[i], &logits[ti * expert_num + e]);
@@ -344,124 +401,31 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
         }
     }
 
-    __shared__ union {
-        struct {
-            // +1 padding greatly reduced (-80%) bank conflicts
-            int   shared_accum[max_tiles][max_expert_num + 1];
-            float shared_scales[max_top_k][tokens_per_cta];
-            int   shared_exp_id[max_top_k][tokens_per_cta];
-        };
-    } smem;
-#else
-
-    const int warp_id = threadIdx.x / WARP_SIZE;
-    const int lane_id = threadIdx.x % WARP_SIZE;
-
-    constexpr int vecs_per_thread = items_per_thread / access_size;
-
-    using Vec            = Array<float, access_size>;
-    constexpr int banks  = 128 / sizeof(Vec);
-    constexpr int chunks = 4;  // block_dim / WARP_SIZE;
-
-    __shared__ union {
-        Vec shared_data[chunks][vecs_per_thread * WARP_SIZE / banks][banks + 1];
-        struct {
-            // +1 padding greatly reduced (-80%) bank conflicts
-            int   shared_accum[max_tiles][max_expert_num + 1];
-            float shared_scales[max_top_k][tokens_per_cta];
-            int   shared_exp_id[max_top_k][tokens_per_cta];
-        };
-    } smem;
-
-    __align__(16) Vec vecs[vecs_per_thread];
-
-    {
-        const int warp_end = min(warp_offset + WARP_SIZE / threads_per_token, token_num) * expert_num;
-        int       p        = warp_offset * expert_num + access_size * lane_id;
-        PRAGMA_UNROLL
-        for (int i = 0; i < vecs_per_thread; ++i) {
-            fill(vecs[i], -std::numeric_limits<float>::infinity());
-            // const int p = warp_offset * expert_num + access_size * (lane_id + i * WARP_SIZE);
-            if (p < warp_end) {
-                Ldg(vecs[i], &logits[p]);
-            }
-            p += access_size * WARP_SIZE;
-        }
-    }
-
-    PRAGMA_UNROLL
-    for (int c = 0; c < block_dim / WARP_SIZE; c += chunks) {
-        PRAGMA_UNROLL
-        for (int i = 0; i < vecs_per_thread; ++i) {
-            int p = i * WARP_SIZE + lane_id;
-            if (c <= warp_id && warp_id < c + chunks) {
-                Store(smem.shared_data[warp_id - c][p / banks][p % banks].data(), vecs[i]);
-            }
-        }
-
-        __syncwarp();
-
-        PRAGMA_UNROLL
-        for (int i = 0; i < vecs_per_thread; ++i) {
-            int p = lane_id * vecs_per_thread + i;
-            if (c <= warp_id && warp_id < c + chunks) {
-                Load(vecs[i], smem.shared_data[warp_id - c][p / banks][p % banks].data());
-            }
-        }
-
-        __syncthreads();
-    }
-
-    PRAGMA_UNROLL
-    for (int i = 0; i < items_per_thread; ++i) {
-        idxs[i] = ei * items_per_thread + i;
-    }
-    PRAGMA_UNROLL
-    for (int i = 0; i < vecs_per_thread; ++i) {
-        (Array<float, access_size>&)data[i * access_size] = vecs[i];
-    }
-
-#endif
-
-    // constexpr float kLog2e = 1.4426950408889634074;
-    // if (k == 0) {
-    //     PRAGMA_UNROLL
-    //     for (int i = 0; i < items_per_thread; ++i) {
-    //         data[i] *= kLog2e;
-    //     }
-    // }
-
-    unsigned mask = (unsigned)-1;
-    float    max_logit;
-
-    int count{};
+    MoeGateBitset<items_per_thread> mask;
+    mask.fill_ones();
+    float max_logit{};
+    int   count{};
 
     const int warp_ti_offset = warp_ti * threads_per_token;
 
     auto run = [&](int k) {
-        unsigned bit     = 1;
-        unsigned max_bit = 0;
-        float    max_val = -std::numeric_limits<float>::infinity();
-        // local maximum
+        int   max_i   = -1;
+        float max_val = -std::numeric_limits<float>::infinity();
         PRAGMA_UNROLL
         for (int i = 0; i < items_per_thread; ++i) {
-            if ((mask & bit) && data[i] > max_val) {
-                max_bit = bit;
+            if (mask.test(i) && data[i] > max_val) {
+                max_i   = i;
                 max_val = data[i];
             }
-            // weird thing that nvcc tends to use funnel shift for `bit <<= 1`
-            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
         }
 
         int   g_max_ei  = ei;
         float g_max_val = max_val;
         if constexpr (threads_per_token > 1) {
-            // global maximum
             PRAGMA_UNROLL
             for (int m = threads_per_token / 2; m >= 1; m /= 2) {
                 g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
             }
-            // tie breaking
             const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
             g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
         }
@@ -469,35 +433,26 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
             max_logit = g_max_val;
         }
         if (ei == g_max_ei) {
-            mask -= max_bit;
+            if (max_i >= 0) {
+                mask.clear(max_i);
+            }
             ++count;
         }
     };
 
     run(0);
-
     for (int k = 1; k < top_k; ++k) {
         run(k);
     }
 
-    mask = ~mask;
-
-    int used[items_per_thread];
-    {
-        unsigned bit = 1;
-        PRAGMA_UNROLL
-        for (int i = 0; i < items_per_thread; ++i) {
-            used[i] = (mask & bit) > 0;
-            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
-        }
-    }
+    mask.invert_active();
 
     float sum_prob{};
 
     if (softmax) {
         PRAGMA_UNROLL
         for (int i = 0; i < items_per_thread; ++i) {
-            if (!norm_topk || used[i]) {
+            if (!norm_topk || mask.test(i)) {
                 data[i] = expf(data[i] - max_logit);
                 sum_prob += data[i];
             }
@@ -520,18 +475,35 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
     PRAGMA_UNROLL
     for (int i = 0; i < items_per_thread; ++i) {
-        if (used[i]) {
-            smem.shared_exp_id[idx][bti] = idxs[i];
+        if (mask.test(i)) {
+            smem.shared_exp_id[idx][bti] = ei * items_per_thread + i;
             smem.shared_scales[idx][bti] = data[i] * sum_prob;
             ++idx;
         }
     }
 
+    constexpr int local_tiles = SharedStorage::local_tiles;
+    const int     ti_base     = blockIdx.x * tokens_per_cta;
+    const int     tile0       = ti_base >> log_tile;
+
+    // Optional in-kernel mask clear (host skips memset when fuse_mask_clear).
+    // Cheap for mid/small E; for E=2560 the E*tok/CTA stores regress large-T.
+    if constexpr (fuse_mask_clear) {
+        for (int i = threadIdx.x; i < expert_num * tokens_per_cta; i += block_dim) {
+            const int e  = i / tokens_per_cta;
+            const int t  = i % tokens_per_cta;
+            const int ti = ti_base + t;
+            if (ti < token_num_padded) {
+                masks[e * token_num_padded + ti] = Mask{-1};
+            }
+        }
+    }
+
     PRAGMA_UNROLL
-    for (int i = 0; i < max_tiles * max_expert_num; i += block_dim) {
-        int e = (i + threadIdx.x) % max_expert_num;
-        int t = (i + threadIdx.x) / max_expert_num;
-        if (t < max_tiles) {
+    for (int i = 0; i < local_tiles * max_expert_num; i += block_dim) {
+        const int e = (i + threadIdx.x) % max_expert_num;
+        const int t = (i + threadIdx.x) / max_expert_num;
+        if (t < local_tiles) {
             smem.shared_accum[t][e] = 0;
         }
     }
@@ -542,7 +514,7 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
     const int bti2 = threadIdx.x % tokens_per_cta;
     const int ei2  = threadIdx.x / tokens_per_cta;
-    const int ti2  = blockIdx.x * tokens_per_cta + bti2;
+    const int ti2  = ti_base + bti2;
 
     PRAGMA_UNROLL
     for (int i = 0; i < k_per_thread; ++i) {
@@ -553,17 +525,23 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
             masks[expert_id * token_num_padded + ti2] = idx;
             scales[idx * token_num + ti2]             = scale * routed_scale;
-            atomicAdd(&smem.shared_accum[ti2 >> log_tile][expert_id], 1);
+            atomicAdd(&smem.shared_accum[(ti2 >> log_tile) - tile0][expert_id], 1);
         }
     }
 
     __syncthreads();
 
-    for (int i = 0; i < max_expert_num * max_tiles; i += block_dim) {
-        int t = (threadIdx.x + i) % max_tiles;
-        int e = (threadIdx.x + i) / max_tiles;
-        if (e < expert_num && t < tiles) {
-            atomicAdd(accum + e * tiles + t, smem.shared_accum[t][e]);
+    const int tile1         = (ti_base + tokens_per_cta - 1) >> log_tile;
+    const int n_local_tiles = tile1 - tile0 + 1;
+
+    for (int i = 0; i < max_expert_num * local_tiles; i += block_dim) {
+        const int t = (threadIdx.x + i) % local_tiles;
+        const int e = (threadIdx.x + i) / local_tiles;
+        if (e < expert_num && t < n_local_tiles) {
+            const int v = smem.shared_accum[t][e];
+            if (v) {
+                atomicAdd(accum + e * tiles + (tile0 + t), v);
+            }
         }
     }
 }
@@ -598,31 +576,40 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
     }
     const int tiles = ceil_div(tokens_padded, 1 << log_tile);
 
-    // std::cout << log_tile << " " << tiles << "\n";
+    auto invoke = [&](auto max_expert_num, auto top_k, auto items_per_thread, auto vec_size, auto fuse_mask_clear) {
+        constexpr int thrs_per_tok   = max_expert_num.value / items_per_thread.value;
+        constexpr int threads        = 256;
+        constexpr int tokens_per_cta = threads / thrs_per_tok;
+        // Fuse mask clear for E<=512 (launch tax). Keep host memset for E=2560
+        // where E*tok/CTA stores regress large-token cases.
+        constexpr bool kFuseMaskClear = fuse_mask_clear.value != 0;
+        const int      blocks         = ceil_div(kFuseMaskClear ? tokens_padded : tokens, tokens_per_cta);
 
-    auto invoke = [&](auto max_expert_num, auto top_k, auto items_per_thread, auto vec_size) {
-        constexpr int thrs_per_tok = max_expert_num.value / items_per_thread.value;
-        constexpr int threads      = 256;
-        const int     blocks       = ceil_div(tokens, threads / thrs_per_tok);
+        auto* kernel = MoeGateKernel_v8<max_expert_num.value,
+                                        top_k.value,
+                                        items_per_thread.value,
+                                        threads,
+                                        vec_size.value,
+                                        kFuseMaskClear,
+                                        int8_t>;
 
-        cudaMemsetAsync(masks, -1, sizeof(int8_t) * experts * tokens_padded, st);
+        if constexpr (!kFuseMaskClear) {
+            cudaMemsetAsync(masks, -1, sizeof(int8_t) * experts * tokens_padded, st);
+        }
 
-        MoeGateKernel_v8<max_expert_num.value, top_k.value, items_per_thread.value, threads, vec_size.value>
-            <<<blocks, threads, 0, st>>>(  //
-                scales,
-                (int8_t*)masks,
-                accum,
-                logits,
-                log_tile,
-                tiles,
-                tokens,
-                tokens_padded,
-                experts,
-                experts_per_token,
-                softmax,
-                norm_topk,
-                routed_scale);
-
+        kernel<<<blocks, threads, 0, st>>>(scales,
+                                           (int8_t*)masks,
+                                           accum,
+                                           logits,
+                                           log_tile,
+                                           tiles,
+                                           tokens,
+                                           tokens_padded,
+                                           experts,
+                                           experts_per_token,
+                                           softmax,
+                                           norm_topk,
+                                           routed_scale);
         return true;
     };
 
@@ -632,35 +619,47 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
     }
 
     auto dispatch = [&] {
+        // fuse_mask_clear=_Int<1> for E<=512; _Int<0> keeps host memset for E=2560.
         if (experts <= 8) {
             if (experts_per_token <= 2) {
-                return invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
+                return invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>, _Int<1>);
             }
             else {
-                return invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>);
+                return invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>, _Int<1>);
             }
         }
         else if (experts <= 64) {
             if (experts_per_token <= 4) {
-                return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>);
+                return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>, _Int<1>);
             }
             else if (experts_per_token <= 8) {
-                return invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>);
+                return invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>, _Int<1>);
             }
         }
         else if (experts <= 128) {
             if (experts_per_token <= 8) {
-                return invoke(_Int<128>, _Int<8>, _Int<16>, _Int<4>);
+                return invoke(_Int<128>, _Int<8>, _Int<16>, _Int<4>, _Int<1>);
             }
         }
         else if (experts <= 160) {
             if (experts_per_token <= 8) {
-                return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
+                return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>, _Int<1>);
+            }
+        }
+        else if (experts <= 256) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<256>, _Int<8>, _Int<16>, _Int<4>, _Int<1>);
             }
         }
         else if (experts <= 512) {
             if (experts_per_token <= 10) {
-                return invoke(_Int<512>, _Int<10>, _Int<16>, _Int<4>);
+                return invoke(_Int<512>, _Int<10>, _Int<16>, _Int<4>, _Int<1>);
+            }
+        }
+        else if (experts <= 2560) {
+            if (experts_per_token <= 8) {
+                // ~20KB smem (2-row hist); static smem fits H200 default carveout.
+                return invoke(_Int<2560>, _Int<8>, _Int<80>, _Int<4>, _Int<0>);
             }
         }
         return false;
@@ -671,22 +670,19 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
     TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
                       << ", softmax=" << softmax << ", norm_topk=" << norm_topk;
 
-    {
-        constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;
-        const dim3    blocks(tiles, local_expert_num + 1);
-
-        MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(f2n,  //
-                                                              f2E,
-                                                              en2f,
-                                                              offsets,
-                                                              (int8_t*)masks + local_expert_offset * tokens_padded,
-                                                              accum + local_expert_offset * tiles,
-                                                              log_tile,
-                                                              tiles,
-                                                              tokens,
-                                                              tokens_padded,
-                                                              local_expert_num);
-    }
+    launchMoeScan_V2(f2n,
+                     f2E,
+                     en2f,
+                     offsets,
+                     (int8_t*)masks + local_expert_offset * tokens_padded,
+                     accum + local_expert_offset * tiles,
+                     log_tile,
+                     tiles,
+                     tokens,
+                     tokens_padded,
+                     local_expert_num,
+                     base_log_tile,
+                     st);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -877,20 +873,19 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                                                           tiles,
                                                           use_sigmoid);
 
-    constexpr int scan_threads = (1 << base_log_tile) / kMoeGateVecSize;
-    const dim3    scan_blocks(tiles, local_expert_num + 1);
-    MoeScanKernel_v2<scan_threads>
-        <<<scan_blocks, scan_threads, 0, st>>>(f2n,
-                                               f2E,
-                                               en2f,
-                                               offsets,
-                                               (int8_t*)masks + local_expert_offset * tokens_padded,
-                                               accum + local_expert_offset * tiles,
-                                               log_tile,
-                                               tiles,
-                                               tokens,
-                                               tokens_padded,
-                                               local_expert_num);
+    launchMoeScan_V2(f2n,
+                     f2E,
+                     en2f,
+                     offsets,
+                     (int8_t*)masks + local_expert_offset * tokens_padded,
+                     accum + local_expert_offset * tiles,
+                     log_tile,
+                     tiles,
+                     tokens,
+                     tokens_padded,
+                     local_expert_num,
+                     base_log_tile,
+                     st);
 
     TM_CUDA_CHECK(cudaGetLastError());
 }
@@ -956,35 +951,6 @@ void invokeMoeDispatch(Ref<Tensor>   out_,
     }
 }
 
-template<int alignment, int block_dim, class T>
-__global__ void MoeDispatchScales(
-    T* dst, int* dst_offsets, const T* src, const int* f2n, const int* offsets, int dim, int expert_num, int stride)
-{
-    int bi = blockIdx.x;
-
-    __shared__ int shared_g;
-
-    for (int g = threadIdx.x; g < expert_num; ++g) {
-        if (offsets[g] <= bi && bi < offsets[g + 1]) {
-            shared_g = g;
-        }
-    }
-
-    __syncthreads();
-
-    int g = shared_g;
-
-    const int base = (offsets[g - 1] + alignment * (g - 1)) / alignment * alignment;
-    const int ti   = base + bi - offsets[g];
-
-    bi = f2n[bi];
-
-    // ! strided access
-    for (int di = threadIdx.x; di < dim; di += block_dim) {
-        dst[di * stride + ti] = src[di * stride + bi];
-    }
-}
-
 template<class T>
 __global__ void MoeDispatchScalesNonaligned(
     T* dst, const T* src, int dst_stride, int src_stride, const int* f2n, const int* num_valid_tokens, int dim)
@@ -1034,8 +1000,6 @@ void invokeMoeDispatchScales(Ref<Tensor>   out_,
     }
     const int threads = round_up<int>(dim, WARP_SIZE);
     const int blocks  = size;
-
-    // std::cout << src << " " << out << "\n";
 
     MoeDispatchScalesNonaligned<<<blocks, threads, 0, st>>>((T*)out.raw_data(),  //
                                                             (const T*)src.raw_data(),
@@ -1138,8 +1102,6 @@ void invokeMoeReduce(T*           dst,
                      float        dst_scale,
                      cudaStream_t st)
 {
-    // std::cout << __PRETTY_FUNCTION__ << std::endl;
-
     const auto invoke = [&](auto e) {
         constexpr int threads     = 256;
         constexpr int vec_size    = 16 / sizeof(T);
