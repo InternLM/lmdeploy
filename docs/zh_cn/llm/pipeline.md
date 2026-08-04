@@ -144,6 +144,30 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
 hidden_states = [x.last_hidden_state for x in response]
 ```
 
+### 获取 prompt 和生成 token 最后一层的 hidden_states
+
+设置 `output_last_hidden_state='all'` 可以同时返回 prefill 阶段的 prompt
+token 和生成 token 的最后一层 hidden states。
+
+```python
+from lmdeploy import pipeline, GenerationConfig
+
+pipe = pipeline('internlm/internlm2_5-7b-chat')
+
+gen_config=GenerationConfig(output_last_hidden_state='all',
+                            max_new_tokens=10)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
+                gen_config=gen_config)
+hidden_states = [x.last_hidden_state for x in response]
+```
+
+```{note}
+`output_last_hidden_state` 由 TurboMind 引擎支持。如果只需要生成 token
+的 hidden states，使用 `'generation'`；如果还需要 prompt/prefill 的 hidden
+states，使用 `'all'`。`output_last_hidden_state='all'` 不能和 prefix caching
+同时开启。
+```
+
 ### 计算 ppl
 
 ```python

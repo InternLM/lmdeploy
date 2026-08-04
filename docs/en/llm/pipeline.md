@@ -144,6 +144,30 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
 hidden_states = [x.last_hidden_state for x in response]
 ```
 
+### Get last layer's hidden states for prompt and generated tokens
+
+Set `output_last_hidden_state='all'` to return the last layer's hidden
+states for both the prefill prompt tokens and generated tokens.
+
+```python
+from lmdeploy import pipeline, GenerationConfig
+
+pipe = pipeline('internlm/internlm2_5-7b-chat')
+
+gen_config=GenerationConfig(output_last_hidden_state='all',
+                            max_new_tokens=10)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
+                gen_config=gen_config)
+hidden_states = [x.last_hidden_state for x in response]
+```
+
+```{note}
+`output_last_hidden_state` is supported by the TurboMind engine. Use
+`'generation'` when you only need generated-token hidden states, and use
+`'all'` when you also need the prompt/prefill hidden states. Prefix caching
+cannot be enabled together with `output_last_hidden_state='all'`.
+```
+
 ### Calculate ppl
 
 ```python
