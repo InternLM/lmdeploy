@@ -511,6 +511,8 @@ def _compact_blocked_fp8_moe_both_config(num_routes: int, num_experts: int, gate
         block_m, block_n = 64, 128
     elif avg_routes > 8:
         block_m, block_n = 32, 128
+    elif avg_routes == 3:
+        block_m, block_n = 16, 128
     else:
         block_m, block_n = 16, 64
     return dict(block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
@@ -601,7 +603,7 @@ def _should_use_compact_blocked_fp8_moe_both_by_shape(num_tokens: int, num_route
                                                       local_experts: int):
     """Use compact scheduling in the measured full-expert density window."""
     avg_routes = triton.cdiv(num_routes, num_experts)
-    return num_tokens >= 128 and num_experts == 256 and local_experts == num_experts and 4 <= avg_routes <= 48
+    return num_tokens >= 80 and num_experts == 256 and local_experts == num_experts and 3 <= avg_routes <= 48
 
 
 def _should_use_compact_blocked_fp8_moe_down(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
