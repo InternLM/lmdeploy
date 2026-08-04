@@ -66,7 +66,11 @@ __global__ void reduce(T*         out,
         }
         Store(&ML[i][0], temp_ML);
 
-        frag_M = (mask && warp_m == warp_id) ? ML[i][0] : frag_M;
+        // `frag_M` must be the local max of *this* CP rank. With CP > WarpCnt a warp
+        // iterates over multiple ranks (`cp_i = warp_id + i * WarpCnt`), so selecting by
+        // warp alone would overwrite it with a later rank's max.
+        const bool is_local_cp = !First || cp_i == cp_rank;
+        frag_M = (mask && is_local_cp) ? ML[i][0] : frag_M;
     }
 
     float block_M = -std::numeric_limits<float>::infinity();
