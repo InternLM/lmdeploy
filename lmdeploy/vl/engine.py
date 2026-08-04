@@ -10,6 +10,7 @@ import torch
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl.model.builder import load_vl_model
+from lmdeploy.vl.model.preprocess_utils import attach_multimodal_content_hashes
 
 
 def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
@@ -119,6 +120,7 @@ class ImageEncoder:
                 self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
+        attach_multimodal_content_hashes(outputs)
         return outputs
 
     async def async_infer(self, messages: list[dict]) -> list[dict]:
