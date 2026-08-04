@@ -6,7 +6,8 @@ Aligned with opencompass ``examples/eval_release_gate_longcontext.py``:
   - 20 samples per dataset (80 gens total)
 """
 
-import os
+# Underscore alias: plain ``import os`` breaks ``Config.dump()`` after lazy build.
+import os as _os
 
 from mmengine.config import read_base
 from opencompass.models import OpenAISDK
@@ -20,7 +21,7 @@ from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 #######################################################################
 
 NUM_SAMPLES = 20
-TOKENIZER_MODEL = os.environ.get('TOKENIZER_MODEL', '')
+TOKENIZER_MODEL = _os.environ.get('TOKENIZER_MODEL', '')
 MAX_SEQ_LENS = [1024 * 32, 1024 * 512]
 ABBR_SUFFIXS = ['32k', '512k']
 KEEP_ABBR = {
@@ -124,8 +125,8 @@ for item in datasets:
         del item['infer_cfg']['inferencer']['max_out_len']
 
 # NumWorkerPartitioner dataset-size cache; CHAT_TYPE separates chat / longtext suites.
-_dataset_size_root = os.environ.get('REPORT_DIR', '.').rstrip('/')
-_dataset_type = os.environ.get('CHAT_TYPE', 'longtext-512k').rstrip('/')
+_dataset_size_root = _os.environ.get('REPORT_DIR', '.').rstrip('/')
+_dataset_type = _os.environ.get('CHAT_TYPE', 'longtext-512k').rstrip('/')
 dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
 
 infer = dict(

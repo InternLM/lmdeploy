@@ -1,6 +1,7 @@
 # flake8: noqa
 
-import os
+# Underscore alias: plain ``import os`` breaks ``Config.dump()`` after lazy build.
+import os as _os
 
 from mmengine.config import read_base
 from opencompass.models import OpenAISDK
@@ -170,8 +171,8 @@ for item in datasets:
         del item['infer_cfg']['inferencer']['max_out_len']
 
 # NumWorkerPartitioner dataset-size cache; CHAT_TYPE separates chat / longtext suites.
-_dataset_size_root = os.environ.get('REPORT_DIR', '.').rstrip('/')
-_dataset_type = os.environ.get('CHAT_TYPE', 'longtext-256k').rstrip('/')
+_dataset_size_root = _os.environ.get('REPORT_DIR', '.').rstrip('/')
+_dataset_type = _os.environ.get('CHAT_TYPE', 'longtext-256k').rstrip('/')
 dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
 
 infer = dict(

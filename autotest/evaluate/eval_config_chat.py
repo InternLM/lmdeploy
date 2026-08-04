@@ -8,8 +8,10 @@ Aligned with opencompass ``examples/eval_release_gate.py``:
   sanitized MBPP (code exec)
 """
 
-import copy
-import os
+# Underscore aliases: plain ``import copy/os`` become real modules after lazy
+# build and break ``Config.dump()`` (invalid ``copy=<module ...>`` syntax).
+import copy as _copy
+import os as _os
 
 from mmengine.config import read_base
 from opencompass.models import OpenAISDK
@@ -60,27 +62,27 @@ mmlu_pro_datasets = [
     ds for ds in mmlu_pro_datasets if ds['abbr'] in MMLU_PRO_KEEP
 ]
 
-aime2025_datasets = [copy.deepcopy(ds) for ds in aime2025_datasets]
-for ds in aime2025_datasets:
-    ds['n'] = AIME_N
-    ds['abbr'] = f'aime2025_repeat_{AIME_N}'
+aime2025_datasets = [_copy.deepcopy(ds) for ds in aime2025_datasets]
+for i in range(len(aime2025_datasets)):
+    aime2025_datasets[i]['n'] = AIME_N
+    aime2025_datasets[i]['abbr'] = f'aime2025_repeat_{AIME_N}'
 
-gpqa_datasets = [copy.deepcopy(ds) for ds in gpqa_datasets]
-for ds in gpqa_datasets:
-    split = ds['abbr'].split('_repeat_')[0]
-    ds['n'] = GPQA_N
-    ds['abbr'] = f'{split}_repeat_{GPQA_N}'
+gpqa_datasets = [_copy.deepcopy(ds) for ds in gpqa_datasets]
+for i in range(len(gpqa_datasets)):
+    _split = gpqa_datasets[i]['abbr'].split('_repeat_')[0]
+    gpqa_datasets[i]['n'] = GPQA_N
+    gpqa_datasets[i]['abbr'] = f'{_split}_repeat_{GPQA_N}'
 
-LCBCodeGeneration_dataset = copy.deepcopy(LCBCodeGeneration_dataset)
+LCBCodeGeneration_dataset = _copy.deepcopy(LCBCodeGeneration_dataset)
 LCBCodeGeneration_dataset['n'] = LCB_N
 LCBCodeGeneration_dataset['abbr'] = f'lcb_code_generation_repeat_{LCB_N}'
 
-math_datasets = [copy.deepcopy(ds) for ds in math_datasets]
-for ds in math_datasets:
-    ds['n'] = 1
+math_datasets = [_copy.deepcopy(ds) for ds in math_datasets]
+for i in range(len(math_datasets)):
+    math_datasets[i]['n'] = 1
 
 sanitized_mbpp_datasets = [
-    copy.deepcopy(ds) for ds in sanitized_mbpp_datasets
+    _copy.deepcopy(ds) for ds in sanitized_mbpp_datasets
 ]
 
 #######################################################################
@@ -213,8 +215,8 @@ for item in datasets:
         del item['infer_cfg']['inferencer']['max_out_len']
 
 # NumWorkerPartitioner dataset-size cache; CHAT_TYPE separates chat / longtext suites.
-_dataset_size_root = os.environ.get('REPORT_DIR', '.').rstrip('/')
-_dataset_type = os.environ.get('CHAT_TYPE', 'default').rstrip('/')
+_dataset_size_root = _os.environ.get('REPORT_DIR', '.').rstrip('/')
+_dataset_type = _os.environ.get('CHAT_TYPE', 'default').rstrip('/')
 dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
 
 infer = dict(
