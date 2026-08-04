@@ -13,6 +13,14 @@ from .utils import (
 )
 
 
+def _validate_lora_backend(adapters, backend):
+    """Validate LoRA adapters against the selected backend."""
+    if adapters and backend != 'pytorch':
+        raise ValueError(
+            'LoRA adapters are only supported by the PyTorch backend. '
+            'Please set --backend pytorch when using --adapters.')
+
+
 class SubCliServe:
     """Serve LLMs and interact on terminal."""
     _help = 'Serve LLMs with openai API'
@@ -231,6 +239,7 @@ class SubCliServe:
         if backend != 'pytorch':
             # set auto backend mode
             backend = autoget_backend(args.model_path, trust_remote_code=args.trust_remote_code)
+        _validate_lora_backend(args.adapters, backend)
 
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
