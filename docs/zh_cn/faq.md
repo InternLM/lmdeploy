@@ -88,6 +88,20 @@ lmdeploy chat internlm/internlm2_5-7b-chat --cache-max-entry-count 0.2
 lmdeploy serve api_server internlm/internlm2_5-7b-chat --cache-max-entry-count 0.2
 ```
 
+### Ray 输出 `/tmp/ray/... is over 95% full` 和 `Object creation will fail if spilling is required`
+
+这是 Ray 的告警。LMDeploy 在多卡或分布式 PyTorch 执行时可能会使用 Ray。Ray 默认会把日志和临时 session 数据放在 `/tmp/ray` 下；当 Ray object store 空间不足并触发 object spilling 时，也会把对象溢写到本地文件系统。
+
+如果服务本身正常，而且没有发生 object spilling，可以暂时忽略该告警。如果告警频繁出现或磁盘确实接近写满，请先停止相关 LMDeploy/Ray 进程，再清理已经失效的 Ray session 目录。不要在 LMDeploy 仍在运行时删除当前活跃的 Ray session。
+
+对于长期运行的服务，可以把 Ray 的 object spilling 目录放到空间充足的磁盘上：
+
+```shell
+ray start --head --object-spilling-directory=/path/to/spill/dir
+```
+
+更多细节请参考 Ray 的 [object spilling](https://docs.ray.io/en/latest/ray-core/objects/object-spilling.html) 文档。
+
 ## 服务
 
 ### Api 服务器获取超时
