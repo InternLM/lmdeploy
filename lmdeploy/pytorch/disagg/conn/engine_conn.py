@@ -73,8 +73,8 @@ class EngineP2PConnection:
 
     async def zmq_send(self, remote_engine_id: str, remote_session_id: int):
         req = DistServeCacheFreeRequest(remote_engine_id=remote_engine_id, remote_session_id=remote_session_id)
-        # Use JSON rather than pickle on the wire: recv_pyobj()/send_pyobj() call
-        # pickle.loads() on peer-supplied bytes, which is remote code execution.
+        # Use JSON rather than pickle on the wire: recv_pyobj() uses pickle.loads() on
+        # peer-supplied bytes (RCE risk), and send_pyobj() produces that pickle format.
         await self.p2p_sender[remote_engine_id].send_json(req.model_dump())
 
     async def handle_zmq_recv(self, remote_engine_id: str):
