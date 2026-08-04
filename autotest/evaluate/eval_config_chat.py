@@ -22,6 +22,7 @@ from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 #                     Gate parameters                                 #
 #######################################################################
 
+# Original (pre-gate) repeats: AIME=32, GPQA=4, LCB=6
 AIME_N = 4
 GPQA_N = 2
 LCB_N = 4
@@ -48,7 +49,7 @@ with read_base():
         math_datasets
     from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import \
         mmlu_pro_datasets
-    from opencompass.configs.datasets.mbpp.sanitized_mbpp_mdblock_0shot_nocot_rawprompt_gen_30c1e5 import \
+    from opencompass.configs.datasets.mbpp.sanitized_mbpp_mdblock_gen_a447ff import \
         sanitized_mbpp_datasets
 
 #######################################################################
