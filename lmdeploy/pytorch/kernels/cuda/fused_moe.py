@@ -625,7 +625,8 @@ def _supports_compact_moe(hidden_states: torch.Tensor,
                           w1: torch.Tensor,
                           w2: torch.Tensor,
                           topk_ids: torch.Tensor,
-                          num_experts: int):
+                          num_experts: int,
+                          expert_offset: int = 0):
     """Return whether this MoE call can use compact routed-block kernels."""
     if not hidden_states.is_cuda:
         return False
@@ -637,7 +638,13 @@ def _supports_compact_moe(hidden_states: torch.Tensor,
         return False
     if topk_ids.size(1) > num_experts:
         return False
-    if w1.size(0) != num_experts:
+    if w1.size(0) != w2.size(0):
+        return False
+    if expert_offset < 0:
+        return False
+    if w1.size(0) > num_experts:
+        return False
+    if expert_offset + w1.size(0) > num_experts:
         return False
     if torch.cuda.get_device_capability(hidden_states.device)[0] < 9:
         return False
@@ -648,9 +655,10 @@ def _should_use_compact_moe(hidden_states: torch.Tensor,
                             w1: torch.Tensor,
                             w2: torch.Tensor,
                             topk_ids: torch.Tensor,
-                            num_experts: int):
+                            num_experts: int,
+                            expert_offset: int = 0):
     """Return whether both MoE projections should use compact scheduling."""
-    if not _supports_compact_moe(hidden_states, w1, w2, topk_ids, num_experts):
+    if not _supports_compact_moe(hidden_states, w1, w2, topk_ids, num_experts, expert_offset):
         return False
 
     local_experts = w1.size(0)
@@ -765,7 +773,7 @@ def fused_moe(hidden_states: torch.Tensor,
     full_exp = num_experts == E
 
     topk_weights = _renormalize(topk_weights, renormalize)
-    use_compact = _should_use_compact_moe(hidden_states, w1, w2, topk_ids, num_experts)
+    use_compact = _should_use_compact_moe(hidden_states, w1, w2, topk_ids, num_experts, expert_offset)
     if use_compact:
         compact_cfg = _compact_moe_config(M, num_experts, w2.shape[2])
         sorted_idx, _, exp_end, block_end, block_expert_ids, block_offsets = _get_sorted_idx_blocks(

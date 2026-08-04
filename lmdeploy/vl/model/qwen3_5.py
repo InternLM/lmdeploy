@@ -13,6 +13,7 @@ logger = get_logger('lmdeploy')
 
 _INTERN_S2_ARCHS = [
     'InternS2MobiusForConditionalGeneration',
+    'InternS2MobiusForCausalLM',
     'InternS2PreviewForConditionalGeneration',
     'InternS2PreviewForCausalLM',
 ]
