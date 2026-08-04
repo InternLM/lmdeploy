@@ -76,8 +76,7 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         from dlinfer.vendor import vendor_name
 
         if vendor_name == 'ascend':
-            from dlinfer.vendor.ascend.moe import (build_chunked_moe_storage_layout,
-                                                   chunked_moe_storage_expert_id)
+            from dlinfer.vendor.ascend.moe import build_chunked_moe_storage_layout, chunked_moe_storage_expert_id
             storage_num_experts, self.chunked_moe_layout = build_chunked_moe_storage_layout(num_experts)
             if self.chunked_moe_layout is not None:
 
