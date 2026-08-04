@@ -236,16 +236,6 @@ class HYV3MTP(nn.Module, CudaGraphMixin):
         """Share token embeddings with the target model."""
         self.model.set_input_embeddings(embed_tokens)
 
-    def get_checkpoint_weight_prefixes(self) -> tuple[str, ...]:
-        """Return the checkpoint prefixes needed by this draft model.
-
-        Hy3 MTP is stored alongside the 80-layer target model. Restricting the loader here avoids reading every target-
-        model safetensors shard again.
-        """
-        start = self.config.num_hidden_layers
-        end = start + self.config.num_nextn_predict_layers
-        return tuple(f'model.layers.{layer_idx}.' for layer_idx in range(start, end))
-
     def prepare_inputs_for_generation(
         self,
         past_key_values: list[list[torch.Tensor]],

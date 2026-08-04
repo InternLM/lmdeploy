@@ -88,12 +88,10 @@ def _get_weight_path(model_path: str, weight_type: str):
     return weight_path, weight_name
 
 
-def _get_safetensors_weights_iterator(file: str, prefix: str, allowed_names: set[str] | None = None):
+def _get_safetensors_weights_iterator(file: str, prefix: str):
     """Get safeternsors weights iterator."""
     with safe_open(file, framework='pt') as f:
         for name in f.keys():
-            if allowed_names is not None and name not in allowed_names:
-                continue
             param = f.get_tensor(name)
             if prefix is not None:
                 name = f'{prefix}{name}'
@@ -138,10 +136,10 @@ class ModelWeightLoader:
             path, _ = _get_weight_path(model_path, weight_type)
             return (path, )
 
-    def _get_weights_iterator(self, path: str, allowed_names: set[str] | None = None):
+    def _get_weights_iterator(self, path: str):
         """Get weights iterator."""
         if self._weight_type == 'safetensors':
-            weights_iterator = _get_safetensors_weights_iterator(path, self._prefix, allowed_names=allowed_names)
+            weights_iterator = _get_safetensors_weights_iterator(path, self._prefix)
         else:
             weights_iterator = _get_pt_weights_iterator(path, self._prefix)
         return weights_iterator
@@ -169,18 +167,6 @@ class ModelWeightLoader:
         """Load model weights implementation."""
         assert hasattr(model, 'load_weights')
         paths = self._shard_paths
-        allowed_names = None
-        checkpoint_prefixes = getattr(model, 'get_checkpoint_weight_prefixes', lambda: None)()
-        if checkpoint_prefixes and self._is_sharded:
-            weight_map = _get_weight_map(self.model_path, self._weight_type)
-            allowed_names = {
-                name for name in weight_map if any(name.startswith(prefix) for prefix in checkpoint_prefixes)
-            }
-            if not allowed_names:
-                raise RuntimeError(f'No checkpoint tensors match the requested prefixes: {checkpoint_prefixes}')
-            paths = tuple(f'{self.model_path}/{path}'
-                          for path in set(weight_map[name] for name in allowed_names))
-            logger.info('Loading %d selected checkpoint tensors from %d shards.', len(allowed_names), len(paths))
         _, rank = get_world_rank()
         disable_tqdm = rank != 0
 
@@ -194,7 +180,7 @@ class ModelWeightLoader:
         if _envs.random_load_weight:
             np.random.shuffle(paths)
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
-            weights_iterator = self._get_weights_iterator(path, allowed_names=allowed_names)
+            weights_iterator = self._get_weights_iterator(path)
             weights_iterator = self._rename_weights_iterator(weights_iterator, model)
             if len(dummy_prefix) > 0:
                 weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
