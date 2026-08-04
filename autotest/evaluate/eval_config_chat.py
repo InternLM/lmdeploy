@@ -1,5 +1,7 @@
 # flake8: noqa
 
+import os
+
 from mmengine.config import read_base
 from opencompass.models import OpenAISDK
 from opencompass.partitioners import NaivePartitioner, NumWorkerPartitioner
@@ -129,8 +131,17 @@ for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
 
+# NumWorkerPartitioner dataset-size cache; CHAT_TYPE separates chat / longtext suites.
+_dataset_size_root = os.environ.get('REPORT_DIR', '.').rstrip('/')
+_dataset_type = os.environ.get('CHAT_TYPE', 'default').rstrip('/')
+dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
+
 infer = dict(
-    partitioner=dict(type=NumWorkerPartitioner, num_worker=1),
+    partitioner=dict(
+        type=NumWorkerPartitioner,
+        num_worker=1,
+        dataset_size_path=dataset_size_path,
+    ),
     runner=dict(
         type=LocalRunner,
         max_num_workers=64,

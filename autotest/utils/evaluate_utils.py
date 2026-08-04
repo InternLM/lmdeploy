@@ -70,6 +70,17 @@ def _should_skip_num_workers_override(eval_config_name: str, case_name: str) -> 
     return False
 
 
+def _dataset_size_cache_path(eval_path: str, eval_config_name: str) -> str:
+    """Cache path for ``NumWorkerPartitioner`` dataset sizes.
+
+    Mirrors opencompass ``dataset_size_{CHAT_TYPE}.json`` under ``REPORT_DIR``,
+    but prefers the evaluation report dir so cache survives cwd changes.
+    """
+    root = (eval_path or os.environ.get('REPORT_DIR') or '.').rstrip('/')
+    dataset_type = (eval_config_name or os.environ.get('CHAT_TYPE') or 'default').rstrip('/')
+    return f'{root}/dataset_size_{dataset_type}.json'
+
+
 def write_to_summary(case_name, result, msg, metrics, result_dir):
     status = '✅ PASS' if result else f'❌ FAIL {msg}'
 
@@ -271,6 +282,11 @@ def eval_test(model_path,
                     cfg.NUM_WORKERS = extra_config.get('max-num-workers', 8)
                     cfg.infer['partitioner']['num_worker'] = extra_config.get(
                         'max-num-workers', 8)
+
+                # Persist dataset-size cache under eval_path (opencompass NumWorkerPartitioner).
+                cfg.infer['partitioner']['dataset_size_path'] = _dataset_size_cache_path(
+                    eval_path, eval_config_name)
+                print(f'dataset_size_path={cfg.infer["partitioner"]["dataset_size_path"]}')
 
                 cfg.dump(temp_config_path)
                 print(f'Modified config saved to: {temp_config_path}')
