@@ -94,10 +94,11 @@ def _should_skip_num_workers_override(eval_config_name: str, case_name: str) -> 
 def _dataset_size_cache_path(eval_path: str, eval_config_name: str) -> str:
     """Cache path for ``NumWorkerPartitioner`` dataset sizes.
 
-    Mirrors opencompass ``dataset_size_{CHAT_TYPE}.json`` under ``REPORT_DIR``,
-    but prefers the evaluation report dir so cache survives cwd changes.
+    Uses the parent of ``eval_path`` / ``REPORT_DIR`` so suites under the same
+    evaluation report root share one ``dataset_size_*.json``.
     """
-    root = (eval_path or os.environ.get('REPORT_DIR') or '.').rstrip('/')
+    report_dir = (eval_path or os.environ.get('REPORT_DIR') or '.').rstrip('/') or '.'
+    root = os.path.dirname(report_dir) or '.'
     dataset_type = (eval_config_name or os.environ.get('CHAT_TYPE') or 'default').rstrip('/')
     return f'{root}/dataset_size_{dataset_type}.json'
 

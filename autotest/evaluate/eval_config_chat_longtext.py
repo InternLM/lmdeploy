@@ -170,8 +170,9 @@ for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
 
-# NumWorkerPartitioner dataset-size cache; CHAT_TYPE separates chat / longtext suites.
-_dataset_size_root = _os.environ.get('REPORT_DIR', '.').rstrip('/')
+# Cache under REPORT_DIR's parent so chat / longtext / local_run share one file.
+_dataset_size_root = _os.path.dirname(
+    _os.environ.get('REPORT_DIR', '.').rstrip('/') or '.')
 _dataset_type = _os.environ.get('CHAT_TYPE', 'longtext-256k').rstrip('/')
 dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
 
