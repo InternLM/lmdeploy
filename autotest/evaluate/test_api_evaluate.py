@@ -236,7 +236,12 @@ def test_turbomind_infer_cp2tp8(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate'))
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'turbomind',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
 def test_turbomind_infer_tp2dp4ep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -420,7 +425,12 @@ def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_con
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate'))
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
 def test_pytorch_restful_distributed_tp2dp4ep8(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
                                 run_config=run_config,
@@ -560,7 +570,12 @@ def test_pytorch_eval_distributed_dpep8(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate'))
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
 def test_pytorch_eval_distributed_tp2dp4ep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -655,7 +670,12 @@ def test_turbomind_eval_cp2tp8(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate'))
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'turbomind',
+         {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
 def test_turbomind_eval_tp2dp4ep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
