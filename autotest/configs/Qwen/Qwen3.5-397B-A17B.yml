@@ -21,6 +21,14 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - toolcall
+      - reasoning
+      extra:
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
   quantization:
     pytorch:
     - fp8

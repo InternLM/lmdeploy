@@ -42,6 +42,13 @@ h:
   test_coverage:
   - func
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     pytorch:
     - kvint8

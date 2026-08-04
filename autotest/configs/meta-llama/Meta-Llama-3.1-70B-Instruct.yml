@@ -34,6 +34,17 @@ h:
   - benchmark
   - func
   - prefix_cache
+  interface:
+    pytorch:
+      suites:
+      - toolcall
+      extra:
+        tool-call-parser: llama3
+    turbomind:
+      suites:
+      - toolcall
+      extra:
+        tool-call-parser: llama3
   quantization:
     turbomind:
     - kvint4

@@ -41,6 +41,13 @@ h:
     - nccl
   test_coverage:
   - func
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     pytorch:
     - kvint8

@@ -32,6 +32,19 @@ h:
   test_coverage:
   - func
   - quantization
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - awq

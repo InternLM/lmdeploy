@@ -62,6 +62,21 @@ h:
   - func
   - longtext_benchmark
   - prefix_cache
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - experts
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: null
+    turbomind:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8

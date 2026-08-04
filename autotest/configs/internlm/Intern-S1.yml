@@ -48,6 +48,19 @@ h:
   - func
   - mllm_evaluate
   - prefix_cache
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8

@@ -41,6 +41,13 @@ h:
   test_coverage:
   - func
   - quantization
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
   quantization:
     turbomind:
     - awq

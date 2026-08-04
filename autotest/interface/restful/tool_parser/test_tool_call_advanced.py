@@ -689,9 +689,14 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
 
 
 @_apply_marks
+@pytest.mark.experts
 class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
     """Streaming tool calls with return_token_ids and routed_experts
-    validation."""
+    validation.
+
+    Marked ``experts`` so proxy interface runs can exclude these (large
+    output_ids / routed_experts payloads).
+    """
 
     def test_streaming_return_token_ids(self, backend, model_case):
         """return_token_ids=True must yield one output_ids entry per completion
@@ -783,6 +788,7 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
         assert len(messages) == 1 + num_turns * 3, (
             f'Expected system + {num_turns}×(user+assistant+tool) messages')
 
+    @pytest.mark.experts
     def test_multi_turn_streaming_with_token_ids_and_experts(self, backend, model_case):
         """Multi-turn loop with per-turn output_ids and routed_experts
         checks."""

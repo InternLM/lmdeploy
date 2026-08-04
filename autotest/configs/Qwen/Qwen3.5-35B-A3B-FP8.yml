@@ -20,6 +20,29 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - experts
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: null
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
   gen_config:
     temperature: 1.0
     top-k: 20

@@ -15,6 +15,17 @@ h:
   test_coverage:
   - evaluate
   - func
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: qwen3
+        reasoning-parser: intern-s1
   gen_config:
     temperature: 0.8
     top-p: 0.95
@@ -32,6 +43,17 @@ h:
   test_coverage:
   - evaluate
   - func
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: qwen3
+        reasoning-parser: intern-s1
   gen_config:
     temperature: 0.8
     top-p: 0.95

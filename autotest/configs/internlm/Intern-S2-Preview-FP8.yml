@@ -10,12 +10,36 @@ h:
   - name: turbomind
     communicators:
     - nccl
+  - name: pytorch
+    communicators:
+    - nccl
   test_coverage:
   - benchmark
   - evaluate
   - func
   - longtext_benchmark
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: interns2-preview
+        reasoning-parser: default
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: interns2-preview
+        reasoning-parser: default
   gen_config:
     temperature: 1.0
     top-k: 20
