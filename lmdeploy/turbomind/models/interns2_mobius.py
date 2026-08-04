@@ -87,7 +87,7 @@ def build_meta_moe_layer(text_model, pfx, layer_id: int):
     cfg.meta_group = g
     cfg.is_meta_donor = is_donor
 
-    m = MoeBuilder(cfg, text_model._ctx)
+    m = MoeBuilder(cfg, text_model._ctx, ep=text_model._ep)
     if is_donor:
         # Prefix ...meta_experts_gate.{g} ; resolver reads .weight
         m.add_gate('gate', text_model._linear(
@@ -96,7 +96,7 @@ def build_meta_moe_layer(text_model, pfx, layer_id: int):
         # gate_up_proj / down_proj + mapping → *.weight
         experts_pfx = text_model._lm_pfx + f'meta_experts.{g}'
         experts = ModuleListBuilder(ModuleListConfig(), text_model._ctx)
-        for e in range(text_model._n_experts):
+        for e in m.range(text_model._n_experts):
             experts[e] = text_model._moe_expert_ffn(
                 experts_pfx, e, text_model.cfg.moe_intermediate_size)
         m.experts = experts.build()

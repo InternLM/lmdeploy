@@ -46,8 +46,14 @@ void alias_routed_moe(MoeWeight& dst, const MoeWeight& donor)
     dst.create_child("gate", linear_cfg_from(*donor.gate));
     alias_linear(*dst.gate, *donor.gate);
 
+    // Experts are EP-sharded; iterate the local slice and keep global
+    // expert indices as child names (see MoeWeight::expert()).
+    TM_CHECK_EQ(dst.ep_size, donor.ep_size);
+    TM_CHECK_EQ(dst.ep_rank, donor.ep_rank);
+    const int local_num = donor.num_local_experts();
+    const int offset    = donor.local_expert_offset();
     dst.create_child("experts", core::ModuleListConfig{});
-    for (int e = 0; e < donor.expert_num; ++e) {
+    for (int e = 0; e < local_num; ++e) {
         auto*           src = TM_CHECK_NOTNULL(donor.expert(e));
         core::FfnConfig fc;
         fc.hidden_dim     = src->hidden_dim;
@@ -58,7 +64,7 @@ void alias_routed_moe(MoeWeight& dst, const MoeWeight& donor)
         fc.data_type      = src->w2 ? src->w2->data_type : (src->w1w3 ? src->w1w3->data_type : DataType{});
         fc.fuse_silu      = src->is_fused_silu;
         fc.act_type       = static_cast<int>(src->act_type);
-        auto* ffn         = static_cast<FfnWeight*>(dst.experts->create_child(std::to_string(e), fc));
+        auto* ffn         = static_cast<FfnWeight*>(dst.experts->create_child(std::to_string(offset + e), fc));
         auto  alias_child = [&](const char* name, LinearWeight* s) {
             if (!s) {
                 return;
