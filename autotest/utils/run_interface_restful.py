@@ -8,7 +8,8 @@ import sys
 import time
 from pathlib import Path
 
-from utils.config_utils import get_workerid
+import allure
+from utils.config_utils import get_case_str_by_config, get_workerid
 from utils.constant import (
     DEFAULT_PORT,
     PROXY_PORT,
@@ -84,8 +85,16 @@ def _pytest_cmd(
     m_expr: str | None,
     env: dict[str, str],
     n_workers: int,
+    log_path: str,
 ) -> int:
-    """Run a nested pytest against one interface suite file."""
+    """Run a nested pytest against one interface suite file.
+
+    The nested run can cover hundreds of parametrized cases; letting it
+    inherit the outer process's stdout means pytest's own fd-level capture
+    buffers all of it against the single outer test item, which then gets
+    dumped/attached wholesale on failure. Redirect to a log file and attach
+    that instead.
+    """
     cmd = [
         sys.executable,
         '-m',
@@ -103,8 +112,11 @@ def _pytest_cmd(
     # Concurrent HTTP load against the worker-local api_server (fills GPU).
     if n_workers > 1:
         cmd.extend(['-n', str(n_workers), '--dist=load'])
-    print('interface suite cmd:', ' '.join(cmd), flush=True)
-    completed = subprocess.run(cmd, env=env, cwd=str(_REPO_ROOT))
+    with open(log_path, 'w') as log_file:
+        log_file.write(f"interface suite cmd: {' '.join(cmd)}\n")
+        log_file.flush()
+        completed = subprocess.run(cmd, env=env, cwd=str(_REPO_ROOT), stdout=log_file, stderr=subprocess.STDOUT)
+    allure.attach.file(log_path, name=os.path.basename(log_path), attachment_type=allure.attachment_type.TEXT)
     return int(completed.returncode)
 
 
@@ -123,12 +135,14 @@ def _run_interface_suites(
     toolcall tests marked ``experts`` (return_token_ids / routed_experts /
     encode+input_ids paths).
     """
-    del config  # reserved for future path overrides
     model = run_config['model']
     backend = run_config['backend']
     case_info = list(run_config.get('case_info') or [])
     generate_marker = run_config.get('generate_marker') or f'not not_{backend}'
     n_workers = _suite_workers()
+    log_dir = config.get('log_path') or str(_AUTOTEST_ROOT)
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    case_str = get_case_str_by_config(run_config)
 
     if via_proxy and 'generate' in case_info:
         case_info = [c for c in case_info if c != 'generate']
@@ -187,12 +201,14 @@ def _run_interface_suites(
     for case_name, rel_path, marker in suite_map:
         if case_name not in case_info:
             continue
+        log_path = os.path.join(log_dir, f'log_interface_{case_name}_{case_str}_{port}_{timestamp}.log')
         rc = _pytest_cmd(
             rel_path,
             k_expr=k_expr,
             m_expr=marker,
             env=env,
             n_workers=n_workers,
+            log_path=log_path,
         )
         if rc != 0:
             failures.append(f'{case_name} (exit={rc})')
