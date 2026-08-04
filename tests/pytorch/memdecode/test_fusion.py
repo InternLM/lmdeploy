@@ -439,3 +439,23 @@ def test_router_checkpoint_without_state_dict_fails(tmp_path):
             base_hidden_size=2,
             memory_hidden_size=3,
         )
+
+
+def test_router_checkpoint_torch_load_uses_weights_only(monkeypatch, tmp_path):
+    import lmdeploy.pytorch.memdecode.fusion as fusion_module
+
+    router_path = tmp_path / 'router.pt'
+    router_path.write_bytes(b'not-used')
+    loads = []
+
+    def fake_load(path, **kwargs):
+        loads.append((path, kwargs))
+        if len(loads) == 1:
+            return {'config': {'hidden_dim': 4}}
+        return {'state_dict': {'weight': torch.tensor([1.0])}}
+
+    monkeypatch.setattr(fusion_module.torch, 'load', fake_load)
+
+    assert MemDecodeFusion._router_config_from_checkpoint(router_path) == {'hidden_dim': 4}
+    assert MemDecodeFusion._load_router_state_dict(router_path) == {'weight': torch.tensor([1.0])}
+    assert [kwargs.get('weights_only') for _, kwargs in loads] == [True, True]
