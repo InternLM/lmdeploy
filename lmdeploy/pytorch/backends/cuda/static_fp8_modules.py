@@ -97,22 +97,16 @@ class TritonLinearStaticF8Impl(LinearStaticF8Impl):
                 num_tokens,
                 in_features,
             )
-            if input_scale.numel() == 1 and weight_scale.numel() == 1:
-                input_scale_mm = input_scale.float()
-                weight_scale_mm = weight_scale.float()
-            else:
-                input_scale_mm = (
-                    input_scale.float()
-                    .reshape(1, 1)
-                    .expand(num_tokens, 1)
-                    .contiguous()
-                )
-                assert weight_scale.numel() == out_features
-                weight_scale_mm = (
-                    weight_scale.float()
-                    .reshape(1, out_features)
-                    .contiguous()
-                )
+            input_scale_mm = (
+                input_scale.reshape(1, 1)
+                .expand(num_tokens, 1)
+                .contiguous()
+            )
+            assert weight_scale.numel() == out_features
+            weight_scale_mm = (
+                weight_scale.reshape(1, out_features)
+                .contiguous()
+            )
 
             output = torch._scaled_mm(
                 input_quant_2d,

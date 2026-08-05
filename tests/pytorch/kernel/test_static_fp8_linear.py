@@ -29,7 +29,6 @@ def _make_case(
     num_tokens,
     in_features,
     out_features,
-    vector_weight_scale,
     with_bias,
 ):
     generator = torch.Generator(device='cuda')
@@ -65,26 +64,16 @@ def _make_case(
         x.float().abs().amax() / fp8_max
     ).clamp_min(1e-8).reshape(1)
 
-    if vector_weight_scale:
-        weight_scale = (
-            weight_float.float().abs().amax(dim=1)
-            / fp8_max
-        ).clamp_min(1e-8)
-        weight = torch.clamp(
-            weight_float.float()
-            / weight_scale[:, None],
-            min=-fp8_max,
-            max=fp8_max,
-        ).to(quant_dtype)
-    else:
-        weight_scale = (
-            weight_float.float().abs().amax() / fp8_max
-        ).clamp_min(1e-8).reshape(1)
-        weight = torch.clamp(
-            weight_float.float() / weight_scale,
-            min=-fp8_max,
-            max=fp8_max,
-        ).to(quant_dtype)
+    weight_scale = (
+        weight_float.float().abs().amax(dim=1)
+        / fp8_max
+    ).clamp_min(1e-8)
+    weight = torch.clamp(
+        weight_float.float()
+        / weight_scale[:, None],
+        min=-fp8_max,
+        max=fp8_max,
+    ).to(quant_dtype)
 
     bias = None
     if with_bias:
@@ -157,20 +146,12 @@ def test_static_fp8_linear_feature_gates_are_default_off(
         (32, 384, 4096),
     ],
 )
-@pytest.mark.parametrize(
-    ('vector_weight_scale', 'with_bias'),
-    [
-        (False, False),
-        (True, False),
-        (True, True),
-    ],
-)
+@pytest.mark.parametrize('with_bias', [False, True])
 @_REQUIRES_FP8_GPU
 @torch.inference_mode()
 def test_static_fp8_scaled_mm_matches_triton(
     monkeypatch,
     shape,
-    vector_weight_scale,
     with_bias,
 ):
     num_tokens, in_features, out_features = shape
@@ -178,7 +159,6 @@ def test_static_fp8_scaled_mm_matches_triton(
         num_tokens=num_tokens,
         in_features=in_features,
         out_features=out_features,
-        vector_weight_scale=vector_weight_scale,
         with_bias=with_bias,
     )
     reference = _make_impl(
@@ -253,7 +233,6 @@ def test_static_fp8_compiled_quant_dispatch_matches_uncompiled(
         num_tokens=num_tokens,
         in_features=in_features,
         out_features=out_features,
-        vector_weight_scale=True,
         with_bias=True,
     )
     uncompiled = _make_impl(
@@ -287,7 +266,6 @@ def test_static_fp8_compiled_quant_respects_token_allowlist(
         num_tokens=3,
         in_features=in_features,
         out_features=out_features,
-        vector_weight_scale=True,
         with_bias=False,
     )
     uncompiled = _make_impl(
@@ -330,7 +308,6 @@ def test_static_fp8_scaled_mm_compiled_quant_cuda_graph(
         num_tokens=num_tokens,
         in_features=in_features,
         out_features=out_features,
-        vector_weight_scale=True,
         with_bias=True,
     )
     reference = _make_impl(
