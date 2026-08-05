@@ -59,6 +59,12 @@ export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
 
 It's probably due to a low-version cuda toolkit. LMDeploy runtime requires a minimum CUDA version of 11.2
 
+### `ptxas fatal: Value 'sm_120' is not defined for option 'gpu-name'`
+
+This usually means that the Triton/CUDA toolchain in the current Python environment does not recognize the GPU compute capability, for example RTX 50 series / Blackwell (`sm_120`). LMDeploy runs a small Triton vector-add kernel during environment checks before starting the PyTorch engine, so an incompatible Triton or CUDA package can fail before model loading starts.
+
+Please install a PyTorch, Triton, and CUDA runtime combination that supports your GPU architecture, then run `lmdeploy check_env` again. If the error still comes from Triton's code generation, report it to the Triton project or use an LMDeploy image/package built with a compatible Triton stack.
+
 ## Inference
 
 ### RuntimeError: \[TM\]\[ERROR\] CUDA runtime error: out of memory /workspace/lmdeploy/src/turbomind/utils/allocator.h
