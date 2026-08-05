@@ -1,16 +1,21 @@
 import pytest
 import torch
-from triton.compiler.errors import CompileTimeAssertionFailure
 
 GROUP_SIZE = 128
 FP8_DTYPE = torch.float8_e4m3fn
 
 
-def _has_hopper() -> bool:
-    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 9
+def _has_gluon() -> bool:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        return False
+    try:
+        from lmdeploy.pytorch.backends.cuda.blockedf8_modules import _has_gluon as has_gluon
+    except (AttributeError, ImportError):
+        return False
+    return has_gluon()
 
 
-pytestmark = pytest.mark.skipif(not _has_hopper(), reason='Gluon WGMMA kernel requires Hopper')
+pytestmark = pytest.mark.skipif(not _has_gluon(), reason='Gluon WGMMA kernel requires supported Triton on Hopper')
 
 
 def _quantize_a(a: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -177,6 +182,8 @@ def test_fp8_gemm_nt_transposed_tiny_m(m, k):
 
 def test_fp8_gemm_nt_rejects_invalid_dtype_and_layout():
     """Reject invalid contracts during specialization or descriptor setup."""
+    from triton.compiler.errors import CompileTimeAssertionFailure
+
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import fp8_gemm_nt
 
     a, b = _make_inputs(m=64, n=128, k=256)
