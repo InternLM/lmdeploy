@@ -251,4 +251,5 @@ def test_deepseek_v32_response_parser_streaming_dsml_function_calls():
 
     assert reasoning == 'need data'
     assert tool_deltas[0].function.name == 'search'
-    assert json.loads(tool_deltas[1].function.arguments) == {'query': 'DeepSeek V3.2'}
+    arguments = ''.join(tool_call.function.arguments or '' for tool_call in tool_deltas)
+    assert json.loads(arguments) == {'query': 'DeepSeek V3.2'}

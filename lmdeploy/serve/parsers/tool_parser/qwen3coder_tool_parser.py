@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
 
 from lmdeploy.serve.openai.protocol import (
     FunctionCall,
@@ -11,32 +10,17 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlToolParser
+from .xml_tool_parser import XmlParseResult, XmlToolParser
 
 
 @ToolParserManager.register_module(['qwen3coder'])
 class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
-    func_prefix = '<function='
-    func_suffix = '</function>'
-    param_prefix = '<parameter='
-    param_suffix = '</parameter>'
     _complete_payload_pattern = re.compile(
         r'^\s*<function=[^\s>\n]+>\s*(?:<parameter=[^\s>\n]+>.*?</parameter>\s*)*</function>\s*$',
         re.DOTALL,
     )
-
-    def _reset_incremental_state(self) -> None:
-        self._func_name: str | None = None
-        self._args: dict[str, Any] = {}
-        self._func_closed = False
-        self._open_param_name: str | None = None
-        # Offset in accumulated payload where the in-flight parameter value begins
-        # (first char after ``>`` in ``<parameter=name>``); -1 when none is open.
-        self._value_start = -1
-        # Resume parameter scanning after the last completed ``</parameter>``.
-        self._scan_pos = 0
 
     # Qwen3Coder closes tool argument JSON only when the model emits the
     # explicit function end marker (</function>). We intentionally avoid
@@ -57,137 +41,87 @@ class Qwen3CoderToolParser(XmlToolParser):
     def get_tool_payload_format(cls) -> str:
         return 'xml'
 
-    def _extract_incremental_state(self,
-                                   payload: str,
-                                   final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
-        """Update streaming parse state from accumulated inner tool payload.
+    def _consume_function(self, payload: str, pos: int, final: bool) -> XmlParseResult:
+        start = payload.find('<function=', pos)
+        if start < 0:
+            return XmlParseResult(None)
 
-        ``payload`` is the text inside ``<tool_call>...</tool_call>`` (outer tags
-        are stripped by :class:`BaseResponseParser` before tool mode). This
-        method mutates incremental parse state across chunks and returns the current
-        snapshot for :meth:`XmlToolParser.decode_tool_incremental`.
+        name_start = start + len('<function=')
+        name_end = payload.find('>', name_start)
+        if name_end < 0:
+            return XmlParseResult(None)
 
-        Returns:
-            ``(func_name, args_dict, is_func_closed)`` where:
+        return XmlParseResult(
+            name_end + 1,
+            next_phase='arg_start',
+            func_name=payload[name_start:name_end].strip(),
+        )
 
-            - ``func_name``: callee parsed from ``<function=...>``, or ``None``
-            - ``args_dict``: parameters whose ``</parameter>`` has been seen
-            - ``is_func_closed``: whether ``</function>`` is present; used to
-              emit the closing ``}`` of streamed OpenAI arguments JSON
-        """
-        content = payload.strip()
-        if not content:
-            return self._func_name, dict(self._args), self._func_closed
+    def _consume_arg_start(self, payload: str, pos: int) -> XmlParseResult:
+        param_start = payload.find('<parameter=', pos)
+        func_end = payload.find('</function>', pos)
 
-        if self._func_name is None:
-            func_start = content.find(self.func_prefix)
-            if func_start != -1:
-                name_start = func_start + len(self.func_prefix)
-                name_end = content.find('>', name_start)
-                if name_end != -1:
-                    self._func_name = content[name_start:name_end].strip()
+        if func_end >= 0 and (param_start < 0 or func_end < param_start):
+            return XmlParseResult(
+                func_end + len('</function>'),
+                next_phase='done',
+                payload_closed=True,
+            )
 
-        self._parse_params_incremental(content)
-        self._func_closed = self.func_suffix in content
-        return self._func_name, dict(self._args), self._func_closed
+        if param_start < 0:
+            return XmlParseResult(None)
 
-    def _complete_open_param_if_ready(self, content: str) -> bool:
-        """Finalize the in-flight parameter once ``</parameter>`` is available.
+        return XmlParseResult(param_start + len('<parameter='), next_phase='arg_name')
 
-        Uses ``_value_start`` so we can locate the closing tag without re-parsing
-        the ``<parameter=name>`` header on every non-fast-path chunk.
-        """
-        if self._value_start < 0 or not self._open_param_name:
-            return False
-        val_end = content.find(self.param_suffix, self._value_start)
-        if val_end == -1:
-            self._in_progress_value = True
-            return False
-        param_val_str = content[self._value_start:val_end].strip()
-        self._args[self._open_param_name] = self._parse_param_value(param_val_str)
-        self._open_param_name = None
-        self._value_start = -1
-        self._in_progress_value = False
-        self._scan_pos = val_end + len(self.param_suffix)
-        return True
+    def _consume_arg_name(self, payload: str, pos: int) -> XmlParseResult:
+        name_end = payload.find('>', pos)
+        if name_end < 0:
+            return XmlParseResult(None)
 
-    def _parse_params_incremental(self, content: str) -> None:
-        """Scan ``<parameter=name>value</parameter>`` blocks and update
-        ``_args``.
+        return XmlParseResult(
+            name_end + 1,
+            next_phase='arg_value',
+            arg_name=payload[pos:name_end].strip(),
+        )
 
-        Incomplete parameter headers or values are left open in ``_open_param_name``
-        / ``_value_start`` until the closing tag arrives in a later stream chunk.
+    def _consume_arg_value(self, payload: str, pos: int) -> XmlParseResult:
+        value_end = payload.find('</parameter>', pos)
 
-        ``_scan_pos`` only advances past completed ``</parameter>`` tags; while a
-        value is streaming, it stays before the open tag. The block below is an
-        optimization (not required for correctness): skip the while-loop header
-        re-scan and try to close the current value directly. If ``</parameter>``
-        is still missing, return early because the while loop would reach the
-        same open-tag state anyway.
-        """
-        if self._value_start >= 0:
-            if not self._complete_open_param_if_ready(content):
-                return
+        if value_end >= 0:
+            return XmlParseResult(
+                value_end + len('</parameter>'),
+                next_phase='arg_start',
+                arg_delta=payload[pos:value_end],
+                arg_closed=True,
+            )
 
-        while True:
-            param_start = content.find(self.param_prefix, self._scan_pos)
-            if param_start == -1:
-                self._in_progress_value = False
-                return
+        # Open value: keep any partial "</parameter>" suffix buffered instead
+        # of emitting it as argument text.
+        raw_end = self._trim_partial_close_tag_suffix(payload, pos, '</parameter>')
+        if raw_end == pos:
+            return XmlParseResult(None)
 
-            name_start = param_start + len(self.param_prefix)
-            name_end = content.find('>', name_start)
-            if name_end == -1:
-                self._in_progress_value = True
-                return
-
-            param_name = content[name_start:name_end].strip()
-
-            val_start = name_end + 1
-            val_end = content.find(self.param_suffix, val_start)
-            if val_end == -1:
-                self._open_param_name = param_name
-                self._value_start = val_start
-                self._in_progress_value = True
-                return
-
-            next_pos = val_end + len(self.param_suffix)
-            if param_name in self._args:
-                self._scan_pos = next_pos
-                continue
-
-            param_val_str = content[val_start:val_end].strip()
-            self._args[param_name] = self._parse_param_value(param_val_str)
-            self._scan_pos = next_pos
-            self._in_progress_value = False
-
-    @staticmethod
-    def _parse_param_value(param_val_str: str) -> Any:
-        try:
-            parsed_val = json.loads(param_val_str)
-            return parsed_val if isinstance(parsed_val, str) else param_val_str
-        except json.JSONDecodeError:
-            return param_val_str
+        return XmlParseResult(raw_end, arg_delta=payload[pos:raw_end], should_stop=True)
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
         func_name, raw_args_dict, _ = self._extract_params(payload)
         if not func_name:
             return None
-        args_dict = self._get_coerced_args(func_name, raw_args_dict, use_cache=False)
+        args_dict = self._get_coerced_args(func_name, raw_args_dict)
         args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
         return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
 
     def _validate_tool_payload(self, payload: str) -> bool:
         return bool(self._complete_payload_pattern.fullmatch(payload))
 
-    def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
+    def _extract_params(self, content: str) -> tuple[str | None, dict[str, str], bool]:
         """Extract function name, parameter map, and close status from XML."""
         content = content.strip()
 
         func_name = None
-        func_start = content.find(self.func_prefix)
+        func_start = content.find('<function=')
         if func_start != -1:
-            name_start = func_start + len(self.func_prefix)
+            name_start = func_start + len('<function=')
             name_end = content.find('>', name_start)
             if name_end != -1:
                 func_name = content[name_start:name_end].strip()
@@ -195,11 +129,11 @@ class Qwen3CoderToolParser(XmlToolParser):
         args_dict = {}
         search_idx = 0
         while True:
-            param_start = content.find(self.param_prefix, search_idx)
+            param_start = content.find('<parameter=', search_idx)
             if param_start == -1:
                 break
 
-            name_start = param_start + len(self.param_prefix)
+            name_start = param_start + len('<parameter=')
             name_end = content.find('>', name_start)
             if name_end == -1:
                 break
@@ -207,13 +141,12 @@ class Qwen3CoderToolParser(XmlToolParser):
             param_name = content[name_start:name_end].strip()
 
             val_start = name_end + 1
-            val_end = content.find(self.param_suffix, val_start)
+            val_end = content.find('</parameter>', val_start)
             if val_end == -1:
                 break
 
-            param_val_str = content[val_start:val_end].strip()
-            args_dict[param_name] = self._parse_param_value(param_val_str)
-            search_idx = val_end + len(self.param_suffix)
+            args_dict[param_name] = content[val_start:val_end].strip()
+            search_idx = val_end + len('</parameter>')
 
-        is_func_closed = self.func_suffix in content
+        is_func_closed = '</function>' in content
         return func_name, args_dict, is_func_closed
