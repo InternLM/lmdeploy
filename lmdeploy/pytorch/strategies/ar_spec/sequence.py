@@ -46,8 +46,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         end = max(0, self.num_valid_ids - 1)
         if 0 < end <= len(self.all_routed_experts):
             return self.all_routed_experts.get_real()[:end]
-        else:
-            return None
+        return None
 
     @property
     def generated_ids(self) -> np.ndarray:

@@ -525,7 +525,7 @@ class AsyncEngine:
             else:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
-        if messages:
+        if messages is not None:
             try:
                 prompt = messages
                 self.request_logger.log_prompt(session, prompt=prompt)

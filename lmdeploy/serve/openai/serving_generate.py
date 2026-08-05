@@ -23,6 +23,10 @@ def check_request(request: GenerateReqInput, server_context: 'VariableInterface'
     if hasattr(engine_config, 'logprobs_mode') and logprobs_mode is None and return_logprob:
         return f'return_logprob({return_logprob}) requested but not enabled logprobs_mode in engine configuration.'
 
+    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
+        return ('routed experts requested but not configured in engine configuration. '
+                'May start api_server with --enable-return-routed-experts flag.')
+
     if (request.prompt is not None) ^ (request.input_ids is None):
         return 'You must specify exactly one of prompt or input_ids'
 

@@ -230,7 +230,9 @@ class _DecodeEngine:
 
     def __init__(self, expected_logprobs=1):
         self.backend_config = PytorchEngineConfig(
-            logprobs_mode='raw_logprobs', role=EngineRole.Hybrid)
+            logprobs_mode='raw_logprobs',
+            role=EngineRole.Hybrid,
+            enable_return_routed_experts=True)
         self.session_mgr = _SessionManager()
         self.epoch = 1
         self.expected_logprobs = expected_logprobs

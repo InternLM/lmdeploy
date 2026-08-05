@@ -1059,7 +1059,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                      routed_experts=routed_experts,
                                      completion_tokens=res.generate_token_len)
 
-        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta, routed_experts=routed_experts)
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
         return response.model_dump_json()
 
     async def generate_stream_generator():
