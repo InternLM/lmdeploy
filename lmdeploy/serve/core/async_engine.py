@@ -54,6 +54,8 @@ class GenOut:
     cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
     cached_tokens: int = 0
+    # Token ids aligned 1:1 with input-scoring logprobs rows.
+    logprob_token_ids: list[int] | None = None
 
     def to_response(self, index: int = 0) -> Response:
         """Convert GenOut to Response object.
@@ -564,8 +566,21 @@ class AsyncEngine:
 
         gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
         input_len = len(input_ids)
-
-        if gen_config.max_new_tokens == 0:
+        input_logprobs_requested = gen_config.logprob_start_len >= 0
+        if input_logprobs_requested and gen_config.logprob_start_len >= input_len:
+            errmsg = (f'logprob_start_len({gen_config.logprob_start_len}) exceeds '
+                      f'the last source position for processed input_ids length({input_len}).')
+            metrics_processor.increase_failed_requests('error')
+            remove_session_once()
+            yield GenOut(response=errmsg,
+                         input_token_len=input_len,
+                         generate_token_len=0,
+                         finish_reason='error',
+                         token_ids=[])
+            return
+        logprob_token_ids = (input_ids[gen_config.logprob_start_len + 1:]
+                             if input_logprobs_requested else None)
+        if gen_config.max_new_tokens == 0 and not input_logprobs_requested:
             logger.info(f'run out of tokens. session={session_id}.')
             metrics_processor.increase_failed_requests('error')
             remove_session_once()
@@ -638,7 +653,6 @@ class AsyncEngine:
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
-
                 # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
 
@@ -678,6 +692,7 @@ class AsyncEngine:
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 logprob_token_ids=logprob_token_ids,
                                  routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
                                  cached_tokens=cached_tokens)
@@ -697,7 +712,8 @@ class AsyncEngine:
                         finish_reason = 'abort'
                         metrics_processor.increase_failed_requests('abort')
                     else:
-                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        finish_reason = ('stop' if outputs.token_ids
+                                         and outputs.token_ids[-1] in stop_ids else 'length')
                         metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
@@ -705,7 +721,9 @@ class AsyncEngine:
                         # avoid returning the last response twice
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None
-                    if gen_config.include_stop_str_in_output and finish_reason == 'stop':
+                    if input_logprobs_requested:
+                        logprobs = outputs.logprobs
+                    elif gen_config.include_stop_str_in_output and finish_reason == 'stop':
                         # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
                         token_ids = outputs.token_ids[-1:]
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
@@ -728,6 +746,7 @@ class AsyncEngine:
                                  gen_len,
                                  finish_reason,
                                  token_ids=token_ids,
+                                 logprob_token_ids=logprob_token_ids,
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,

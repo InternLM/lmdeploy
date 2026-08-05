@@ -119,6 +119,47 @@ class TestBlockTire:
         assert scheduler.block_trie.commit_state_checkpoint_for_seq(seq)
         return seq, seq.prefix_cache.last_shared_node, state_idx
 
+    def test_logprob_prefix_match_is_capped_at_scoring_start(self, scheduler, block_mgr, block_trie):
+        block_size = scheduler.block_trie.block_size
+        token_ids = list(range(block_size * 3 + 1))
+
+        cached = scheduler.add_session(100).add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        param = SamplingParam(num_logprobs=0, logprob_start_len=block_size + 3)
+        scored = scheduler.add_session(101).add_sequence(token_ids, sampling_param=param)
+        assert scored.get_prefix_cache_max_candidate_step() == block_size + 3
+        assert scored.get_prefix_cache_max_match_step() == block_size
+        block_trie.match(scored)
+        assert scored.num_history_ids == block_size
+        assert scored.prefix_cache.private_recompute_start_step == block_size
+        assert scored.prefix_cache.private_recompute_end_step == block_size * 3
+
+        block_mgr.allocate(scored)
+        private_blocks = scored.logical_blocks.get_real_blocks()[1:3].copy()
+        assert not np.array_equal(private_blocks, cached_blocks[1:3])
+        block_trie.allocate(scored)
+        assert np.array_equal(scored.logical_blocks.get_real_blocks()[1:3], private_blocks)
+
+    def test_logprob_start_minus_one_preserves_prefix_match_limit(self, scheduler, block_mgr, block_trie):
+        block_size = scheduler.block_trie.block_size
+        token_ids = list(range(block_size * 3 + 1))
+
+        cached = scheduler.add_session(102).add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+
+        default_seq = scheduler.add_session(103).add_sequence(token_ids)
+        enabled_generated_only = scheduler.add_session(104).add_sequence(
+            token_ids, sampling_param=SamplingParam(num_logprobs=0, logprob_start_len=-1))
+        assert default_seq.get_prefix_cache_max_match_step() == enabled_generated_only.get_prefix_cache_max_match_step()
+
+        block_trie.match(default_seq)
+        block_trie.match(enabled_generated_only)
+        assert default_seq.num_history_ids == enabled_generated_only.num_history_ids == block_size * 3
+
     def test_allocate(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator
         sess = scheduler.add_session(0)
@@ -387,6 +428,118 @@ class TestBlockTire:
         assert np.array_equal(seq.logical_blocks.get_real_blocks()[2:4], private_blocks)
         assert seq.prefix_cache.private_recompute_start_step == -1
         assert seq.prefix_cache.last_shared_node.num_matched == block_size * 4
+
+    def test_logprob_ssm_private_recompute_extends_through_raw_hit(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_mgr = ssm_scheduler.block_manager
+        sess = ssm_scheduler.add_session(1)
+        block_size = sess.seq_meta.block_size
+
+        checkpoint_tokens = [1] * block_size
+        checkpoint_seq = sess.add_sequence(checkpoint_tokens)
+        block_mgr.allocate(checkpoint_seq)
+        block_trie.allocate(checkpoint_seq)
+        state_idx = block_trie.reserve_state_checkpoint_for_seq(checkpoint_seq)
+        assert state_idx >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(checkpoint_seq)
+
+        token_ids = checkpoint_tokens + [2] * block_size + [3] * block_size + [4] * block_size + [5]
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        param = SamplingParam(num_logprobs=0, logprob_start_len=block_size * 2 + 3)
+        seq = sess.add_sequence(token_ids, sampling_param=param)
+        seq.prefix_cache.match_recompute_blocks = 1
+        block_trie.match(seq)
+
+        assert seq.num_history_ids == block_size
+        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.private_recompute_start_step == block_size
+        assert seq.prefix_cache.private_recompute_end_step == block_size * 4
+
+        block_mgr.allocate(seq)
+        private_blocks = seq.logical_blocks.get_real_blocks()[1:4].copy()
+        assert not np.array_equal(private_blocks, cached_blocks[1:4])
+        block_trie.allocate(seq)
+        assert np.array_equal(seq.logical_blocks.get_real_blocks()[1:4], private_blocks)
+
+    def test_logprob_ssm_private_recompute_without_mtp_overlap(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_mgr = ssm_scheduler.block_manager
+        sess = ssm_scheduler.add_session(2)
+        block_size = sess.seq_meta.block_size
+
+        checkpoint_tokens = [1] * block_size
+        checkpoint_seq = sess.add_sequence(checkpoint_tokens)
+        block_mgr.allocate(checkpoint_seq)
+        block_trie.allocate(checkpoint_seq)
+        state_idx = block_trie.reserve_state_checkpoint_for_seq(checkpoint_seq)
+        assert state_idx >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(checkpoint_seq)
+
+        token_ids = checkpoint_tokens + [2] * block_size + [3] * block_size + [4] * block_size + [5]
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        param = SamplingParam(num_logprobs=0, logprob_start_len=block_size * 2 + 3)
+        seq = sess.add_sequence(token_ids, sampling_param=param)
+        assert seq.prefix_cache.match_recompute_blocks == 0
+        block_trie.match(seq)
+
+        assert seq.num_history_ids == block_size
+        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.private_recompute_start_step == block_size
+        assert seq.prefix_cache.private_recompute_end_step == block_size * 4
+
+        block_mgr.allocate(seq)
+        private_blocks = seq.logical_blocks.get_real_blocks()[1:4].copy()
+        assert not np.array_equal(private_blocks, cached_blocks[1:4])
+        block_trie.allocate(seq)
+        assert np.array_equal(seq.logical_blocks.get_real_blocks()[1:4], private_blocks)
+
+    @pytest.mark.parametrize('use_scoring_cap', [False, True])
+    def test_ssm_checkpoint_miss_keeps_raw_match_private(self, ssm_scheduler, use_scoring_cap):
+        block_trie = ssm_scheduler.block_trie
+        block_mgr = ssm_scheduler.block_manager
+        sess = ssm_scheduler.add_session(3 + int(use_scoring_cap))
+        block_size = sess.seq_meta.block_size
+        token_ids = ([1] * block_size + [2] * block_size + [3] * block_size
+                     + [4] * block_size + [5])
+
+        checkpoint_seq = sess.add_sequence(token_ids[:-1])
+        block_mgr.allocate(checkpoint_seq)
+        block_trie.allocate(checkpoint_seq)
+        state_idx = block_trie.reserve_state_checkpoint_for_seq(checkpoint_seq)
+        assert state_idx >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(checkpoint_seq)
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        if use_scoring_cap:
+            param = SamplingParam(num_logprobs=0, logprob_start_len=block_size * 2 + 3)
+            seq = sess.add_sequence(token_ids, sampling_param=param)
+        else:
+            seq = sess.add_sequence(token_ids)
+            seq.prefix_cache.match_recompute_blocks = 1
+        block_trie.match(seq)
+
+        assert seq.num_history_ids == 0
+        assert seq.prefix_cache.restore_state == -1
+        assert seq.prefix_cache.private_recompute_start_step == 0
+        assert seq.prefix_cache.private_recompute_end_step == block_size * 4
+
+        block_mgr.allocate(seq)
+        private_blocks = seq.logical_blocks.get_real_blocks()[:4].copy()
+        assert not np.array_equal(private_blocks, cached_blocks[:4])
+        block_trie.allocate(seq)
+        assert np.array_equal(seq.logical_blocks.get_real_blocks()[:4], private_blocks)
 
     def test_match_after_sequence_blocks_are_freed(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)

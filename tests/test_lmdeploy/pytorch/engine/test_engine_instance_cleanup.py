@@ -76,6 +76,28 @@ def test_engine_instance_ends_session_after_finish():
     assert (RequestType.END_SESSION, {'session_id': 7}) in req_sender.sent_async
 
 
+def test_engine_instance_forwards_finish_logprob_carrier():
+    carrier = [([0.0, -1.0], [11, 12]), ([-2.0, -3.0], [13, 14])]
+    req_sender = _FakeReqSender([
+        _response(ResponseType.FINISH,
+                  data={
+                      'token_ids': np.array([], dtype=np.int64),
+                      'logprobs': carrier,
+                  }),
+    ])
+    instance = EngineInstance.__new__(EngineInstance)
+    instance.engine = _FakeEngine()
+    instance.req_sender = req_sender
+    instance.max_input_len = 1024
+    instance._enable_transfer_obj_ref = False
+
+    outputs = asyncio.run(_consume(instance.async_stream_infer(17, [1, 2])))
+
+    assert outputs[-1].status == ResponseType.FINISH
+    assert outputs[-1].token_ids == []
+    assert outputs[-1].logprobs == carrier
+
+
 def test_engine_instance_ends_session_when_generator_is_closed():
     req_sender = _FakeReqSender([
         _response(ResponseType.SUCCESS, data={'token_ids': np.array([10])}),
