@@ -183,3 +183,24 @@ class TestApplyRotaryComplex:
         atol = None
         torch.testing.assert_close(q_embed, q_gt, rtol=rtol, atol=atol)
         torch.testing.assert_close(k_embed, k_gt, rtol=rtol, atol=atol)
+
+    @pytest.mark.parametrize('tokens', [1, 33, 257])
+    def test_apply_rotary_complex_non_contiguous(self, tokens):
+        from lmdeploy.pytorch.kernels.cuda import apply_rotary_pos_emb
+
+        query = torch.randn(1, tokens, 32, 128, device='cuda', dtype=torch.bfloat16)[..., :64]
+        key = torch.randn(1, tokens, 128, device='cuda', dtype=torch.bfloat16)[..., :64][..., None, :]
+        positions = torch.linspace(0, 1048575, tokens, device='cuda')
+        inv_freq = 1 / (8000000**(torch.arange(0, 64, 2, device='cuda').float() / 64))
+        angles = positions[:, None] * inv_freq[None, :]
+        cos = angles.cos().to(torch.bfloat16)
+        sin = angles.sin().to(torch.bfloat16)
+        pair_cos = cos.repeat_interleave(2, dim=-1).unsqueeze(-2)
+        pair_sin = sin.repeat_interleave(2, dim=-1).unsqueeze(-2)
+        q_gt = query * pair_cos + _rotate_complex(query) * pair_sin
+        k_gt = key * pair_cos + _rotate_complex(key) * pair_sin
+
+        q_embed, k_embed = apply_rotary_pos_emb(query, key, cos, sin, complex_mode=True)
+
+        assert torch.equal(q_embed, q_gt)
+        assert torch.equal(k_embed, k_gt)

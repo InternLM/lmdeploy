@@ -150,7 +150,20 @@ def _get_kv_cache_dtype(model_config: ModelConfig):
     kv_cache_dtype = model_config.dtype
     if model_config.use_mla_fp8_cache:
         kv_cache_dtype = torch.float8_e4m3fn
+    elif model_config.mla_kv_cache_dtype == 'bfloat16':
+        kv_cache_dtype = torch.bfloat16
     return kv_cache_dtype
+
+
+def _update_mla_kv_cache_dtype(model_config: ModelConfig, cache_config: CacheConfig):
+    """Apply an explicit sparse MLA cache policy to the model config."""
+    if model_config.mla_index_topk is None or cache_config.quant_policy == QuantPolicy.NONE:
+        return
+    if cache_config.quant_policy == QuantPolicy.FP8:
+        model_config.mla_kv_cache_dtype = 'fp8_ds_mla'
+        return
+    raise ValueError(f'Sparse MLA does not support quant_policy={cache_config.quant_policy}. '
+                     'Use none/0 for BF16 or fp8/16 for FP8.')
 
 
 _FP8_CACHE_DTYPES = {
@@ -216,12 +229,13 @@ class CacheEngine:
         self.tp_rank = tp_rank
         self.cache_config = cache_config
         self.model_config = model_config
+        _update_mla_kv_cache_dtype(model_config, cache_config)
 
         self.block_size = cache_config.kernel_block_size
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = _get_kv_cache_dtype(self.model_config)
 
-        if self.model_config.use_mla_fp8_cache:
+        if self.model_config.mla_index_topk is not None:
             cache_config.quant_policy = 0
 
         if _is_fp8_quant_policy(cache_config.quant_policy):
@@ -693,6 +707,8 @@ class CacheEngine:
         Return:
             int: Required memory size in bytes.
         """
+        # Resolve the layout before sizing; CUDA graphs reuse the updated model config.
+        _update_mla_kv_cache_dtype(model_config, cache_config)
         mem_pool, _ = cls.allocate_caches(
             num_blocks=1,
             model_config=model_config,
