@@ -349,10 +349,11 @@ template<int  max_expert_num,
          int  access_size,
          bool fuse_mask_clear,
          class Mask>
-__global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
-                                 Mask*        masks,   // [E,n], padded
-                                 int*         accum,   // [E,tiles]
-                                 const float* logits,  // [n,E]
+__global__ void MoeGateKernel_v8(float*       scales,      // [e,n]
+                                 Mask*        masks,       // [E,n], padded
+                                 int*         accum,       // [E,tiles]
+                                 const float* logits,      // [n,E]
+                                 const bool*  token_mask,  // [n]; invalid tokens route nowhere
                                  int          log_tile,
                                  int          tiles,
                                  int          token_num,
@@ -516,10 +517,16 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
     const int ei2  = threadIdx.x / tokens_per_cta;
     const int ti2  = ti_base + bti2;
 
+    // Invalid tokens write no masks/scales/accum entries, so the scan compacts
+    // nothing for them and the expert group GEMM never sees them. This also
+    // keeps garbage logits (e.g. NaN in stale rows) from indexing `masks` with
+    // an uninitialized `shared_exp_id` entry.
+    const bool token_valid = ti2 < token_num && token_mask[ti2];
+
     PRAGMA_UNROLL
     for (int i = 0; i < k_per_thread; ++i) {
         const int idx = ei2 * k_per_thread + i;
-        if (ti2 < token_num && idx < top_k) {
+        if (token_valid && idx < top_k) {
             const int   expert_id = smem.shared_exp_id[idx][bti2];
             const float scale     = smem.shared_scales[idx][bti2];
 
@@ -557,6 +564,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                       void*        masks,          // [E,n]
                       int*         accum,          // [E,tiles]
                       const float* logits,         // [n,E]
+                      const bool*  token_mask,     // [n]; invalid tokens route nowhere
                       int          tokens,         //  n
                       int          tokens_padded,  //  round_up(n, 4)
                       int          experts,        //  E
@@ -568,6 +576,8 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                       float        routed_scale,
                       cudaStream_t st)
 {
+    TM_CHECK(token_mask);
+
     constexpr int base_log_tile = 9;
 
     int log_tile = base_log_tile;
@@ -601,6 +611,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                                            (int8_t*)masks,
                                            accum,
                                            logits,
+                                           token_mask,
                                            log_tile,
                                            tiles,
                                            tokens,
@@ -689,11 +700,12 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 // noaux_tc: scores = scoring_func(logits), scores_for_choice = scores + correction_bias,
 // top-k on scores_for_choice, weights from scores; renormalize; apply routed_scale.
 // Threading: one token per block, threads cooperate over expert dimension.
-__global__ void MoeGateNoAuxTCKernel(float*       scales,  // [top_k, tokens]
-                                     int8_t*      masks,   // [experts, tokens_padded]
-                                     int*         accum,   // [experts, tiles]
-                                     const float* logits,  // [tokens, experts]
-                                     const float* bias,    // [experts] or nullptr
+__global__ void MoeGateNoAuxTCKernel(float*       scales,      // [top_k, tokens]
+                                     int8_t*      masks,       // [experts, tokens_padded]
+                                     int*         accum,       // [experts, tiles]
+                                     const float* logits,      // [tokens, experts]
+                                     const bool*  token_mask,  // [tokens]; invalid tokens route nowhere
+                                     const float* bias,        // [experts] or nullptr
                                      int          tokens,
                                      int          tokens_padded,
                                      int          experts,
@@ -705,7 +717,9 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,  // [top_k, tokens]
                                      bool         use_sigmoid)
 {
     const int ti = blockIdx.x;  // one token per block
-    if (ti >= tokens) {
+    // Invalid token: leave the pre-cleared masks/accum untouched so the scan
+    // compacts nothing for it and the expert group GEMM never sees it.
+    if (ti >= tokens || !token_mask[ti]) {
         return;
     }
 
@@ -824,6 +838,7 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                            void*        masks,
                            int*         accum,
                            const float* logits,
+                           const bool*  token_mask,
                            const float* correction_bias,
                            int          tokens,
                            int          tokens_padded,
@@ -836,6 +851,7 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                            bool         use_sigmoid,
                            cudaStream_t st)
 {
+    TM_CHECK(token_mask);
     TM_CHECK(exp_per_tok > 0);
     TM_CHECK_LE(exp_per_tok, 32);
     TM_CHECK_LE(exp_per_tok, experts);
@@ -862,6 +878,7 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
                                                           (int8_t*)masks,
                                                           accum,
                                                           logits,
+                                                          token_mask,
                                                           correction_bias,
                                                           tokens,
                                                           tokens_padded,

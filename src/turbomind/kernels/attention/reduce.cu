@@ -11,17 +11,18 @@
 namespace turbomind::attention {
 
 template<int CP, int CTA_K, int HeadDim, int WarpCnt, bool First, class T>
-__global__ void reduce(T*         out,
-                       float*     partial_ML,
-                       float*     partial_O,
-                       const int* split_cnt_,
-                       int        max_split_cnt,
-                       int        query_num,
-                       int        head_num,
-                       float      exp_scale,
-                       int        cp_rank,
-                       int        stride_k,
-                       int        offset_k)
+__global__ void reduce(T*          out,
+                       float*      partial_ML,
+                       float*      partial_O,
+                       const int*  split_cnt_,
+                       const bool* token_mask,  // optional [query_num] per-token validity mask
+                       int         max_split_cnt,
+                       int         query_num,
+                       int         head_num,
+                       float       exp_scale,
+                       int         cp_rank,
+                       int         stride_k,
+                       int         offset_k)
 {
     __shared__ float s_out[WarpCnt][HeadDim];
     __shared__ float s_ML[WarpCnt][2];
@@ -33,6 +34,19 @@ __global__ void reduce(T*         out,
     const int head_idx  = ReduceCtaMap::head_idx();
     const int query_idx = ReduceCtaMap::query_idx();
     const int chunk_idx = ReduceCtaMap::split_idx();
+
+    // An invalid token wrote no partials this pass; its workspace slots may hold stale
+    // data. The reducer reads nothing for such rows, and the final stage (gridDim.z == 1)
+    // emits an exact-zero output row. CTA-uniform branch (`query_idx` is block-uniform).
+    if (token_mask && !token_mask[query_idx]) {
+        if (gridDim.z == 1) {
+            const int offset = (query_idx * head_num + head_idx) * HeadDim;
+            for (int di = threadIdx.x; di < HeadDim; di += WarpCnt * WARP_SIZE) {
+                out[offset + di] = T(0.f);
+            }
+        }
+        return;
+    }
 
     offset_k *= chunk_idx;
     const int split_cnt = (split_cnt_ != nullptr) ? split_cnt_[query_idx] : 1;
@@ -70,7 +84,7 @@ __global__ void reduce(T*         out,
         // iterates over multiple ranks (`cp_i = warp_id + i * WarpCnt`), so selecting by
         // warp alone would overwrite it with a later rank's max.
         const bool is_local_cp = !First || cp_i == cp_rank;
-        frag_M = (mask && is_local_cp) ? ML[i][0] : frag_M;
+        frag_M                 = (mask && is_local_cp) ? ML[i][0] : frag_M;
     }
 
     float block_M = -std::numeric_limits<float>::infinity();
@@ -216,6 +230,7 @@ void invokeReduceV3(T*           out,
                     float*       partial_ML,
                     float*       partial_O,
                     const int*   split_cnt,
+                    const bool*  token_mask,
                     int          partial_len,
                     int          max_split_cnt,
                     int          cp_size,
@@ -242,6 +257,7 @@ void invokeReduceV3(T*           out,
             partial_ML,
             partial_O,
             split_cnt,
+            token_mask,
             partial_len,
             query_num,
             head_num,
@@ -286,6 +302,7 @@ void invokeReduceV3(T*           out,
                                       float*       partial_ML,                                                         \
                                       float*       partial_O,                                                          \
                                       const int*   split_cnt,                                                          \
+                                      const bool*  token_mask,                                                         \
                                       int          partial_len,                                                        \
                                       int          max_split_cnt,                                                      \
                                       int          cp_size,                                                            \

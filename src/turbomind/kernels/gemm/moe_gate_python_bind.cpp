@@ -76,6 +76,7 @@ bool AllOutsProvided(const py::object& f2n,
 }
 
 py::tuple MoeGateV2Bridge(const py::object& logits_obj,
+                          const py::object& token_mask_obj,
                           int               experts_per_token,
                           bool              softmax,
                           bool              norm_topk,
@@ -98,6 +99,10 @@ py::tuple MoeGateV2Bridge(const py::object& logits_obj,
     TM_CHECK_GT(experts, 0);
     TM_CHECK_GT(experts_per_token, 0);
     TM_CHECK_LE(experts_per_token, experts);
+
+    auto token_mask = TensorFromObject(token_mask_obj, "token_mask");
+    CheckDeviceTensor(token_mask, "token_mask", data_type_v<bool>, 1);
+    CheckShape1(token_mask, "token_mask", tokens);
 
     const int tokens_padded = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
     const int flat          = experts_per_token * tokens;
@@ -152,6 +157,8 @@ py::tuple MoeGateV2Bridge(const py::object& logits_obj,
 
     cudaStream_t st = reinterpret_cast<cudaStream_t>(stream_ptr);
     TM_CUDA_CHECK(cudaMemsetAsync(accum.data<int>(), 0, accum.byte_size(), st));
+    // -1 is combine's skip sentinel; entries not written by routing must stay -1.
+    TM_CUDA_CHECK(cudaMemsetAsync(en2f.data<int>(), -1, en2f.byte_size(), st));
 
     invokeMoeGate_V2(f2n.data<int>(),
                      f2E.data<int>(),
@@ -161,6 +168,7 @@ py::tuple MoeGateV2Bridge(const py::object& logits_obj,
                      masks.data<int8_t>(),
                      accum.data<int>(),
                      logits.data<float>(),
+                     token_mask.data<bool>(),
                      tokens,
                      tokens_padded,
                      experts,
@@ -187,6 +195,7 @@ void bind_moe_gate_v2(py::module_& m)
     m.def("moe_gate_v2",
           &MoeGateV2Bridge,
           "logits"_a,
+          "token_mask"_a,
           "experts_per_token"_a,
           "softmax"_a      = true,
           "norm_topk"_a    = false,
@@ -201,7 +210,8 @@ void bind_moe_gate_v2(py::module_& m)
           "accum"_a        = py::none(),
           R"doc(Test-oriented binding for invokeMoeGate_V2.
 
-Accepts a _turbomind.Tensor (use from_dlpack) with CUDA float32 logits [tokens, experts].
+Accepts a _turbomind.Tensor (use from_dlpack) with CUDA float32 logits [tokens, experts]
+and a CUDA bool token_mask [tokens]; tokens with token_mask == false are not routed.
 Optional outs f2n,f2E,en2f,offsets,scales,masks,accum are all-or-nothing; when provided,
 no device allocation is performed (steady-state / bench path).
 Returns (f2n, f2E, en2f, offsets, scales) as _turbomind.Tensor.

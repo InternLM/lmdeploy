@@ -64,12 +64,16 @@ def moe_gate_v2(
     logits: torch.Tensor,
     experts_per_token: int,
     *,
+    token_mask: torch.Tensor | None = None,
     softmax: bool = True,
     norm_topk: bool = False,
     routed_scale: float = 1.0,
     buffers: MoeGateV2Buffers | None = None,
 ):
     """Test-oriented wrapper around _turbomind.moe_gate_v2.
+
+    token_mask is a CUDA bool tensor of shape [tokens]; tokens with mask == False are not routed (they contribute no
+    f2n/f2E/offsets entries). Defaults to all-True.
 
     If buffers is None, allocates outputs inside the binding (correctness path). If buffers is provided, writes into
     those tensors (steady-state / bench path) and returns (f2n, f2E, en2f, offsets, scales) as the same torch tensors.
@@ -80,6 +84,13 @@ def moe_gate_v2(
     if not logits.is_cuda or logits.dtype != torch.float32:
         raise ValueError('logits must be CUDA float32')
     logits = logits.contiguous()
+    if token_mask is None:
+        token_mask = torch.ones(logits.shape[0], device=logits.device, dtype=torch.bool)
+    if not token_mask.is_cuda or token_mask.dtype != torch.bool:
+        raise ValueError('token_mask must be CUDA bool')
+    if token_mask.shape != (logits.shape[0],):
+        raise ValueError(f'token_mask must be [{logits.shape[0]}], got {tuple(token_mask.shape)}')
+    token_mask = token_mask.contiguous()
     kwargs = dict(
         softmax=bool(softmax),
         norm_topk=bool(norm_topk),
@@ -87,11 +98,13 @@ def moe_gate_v2(
         stream_ptr=_current_stream_ptr(logits.device),
     )
     if buffers is None:
-        outs = tm.moe_gate_v2(tm.from_dlpack(logits), int(experts_per_token), **kwargs)
+        outs = tm.moe_gate_v2(
+            tm.from_dlpack(logits), tm.from_dlpack(token_mask), int(experts_per_token), **kwargs)
         return tuple(torch.from_dlpack(x) for x in outs)
 
     outs = tm.moe_gate_v2(
         tm.from_dlpack(logits),
+        tm.from_dlpack(token_mask),
         int(experts_per_token),
         f2n=tm.from_dlpack(buffers.f2n),
         f2E=tm.from_dlpack(buffers.f2E),

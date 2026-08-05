@@ -34,6 +34,7 @@ def time_moe_gate(
     logits: torch.Tensor,
     top_k: int,
     buffers: turbomind_moe_gate.MoeGateV2Buffers,
+    token_mask: torch.Tensor,
     *,
     warmup: int,
     iters: int,
@@ -46,7 +47,7 @@ def time_moe_gate(
     end = torch.cuda.Event(enable_timing=True)
 
     for _ in range(warmup):
-        turbomind_moe_gate.moe_gate_v2(logits, top_k, buffers=buffers)
+        turbomind_moe_gate.moe_gate_v2(logits, top_k, token_mask=token_mask, buffers=buffers)
     torch.cuda.synchronize(device)
 
     samples: list[float] = []
@@ -54,7 +55,7 @@ def time_moe_gate(
         if flusher is not None:
             flusher.flush()
         start.record(stream)
-        turbomind_moe_gate.moe_gate_v2(logits, top_k, buffers=buffers)
+        turbomind_moe_gate.moe_gate_v2(logits, top_k, token_mask=token_mask, buffers=buffers)
         end.record(stream)
         end.synchronize()
         samples.append(start.elapsed_time(end))
@@ -92,7 +93,14 @@ def main(argv: list[str] | None = None) -> int:
     for case in bench_cases():
         logits = torch.randn(case.tokens, case.experts, device='cuda', dtype=torch.float32)
         buffers = turbomind_moe_gate.allocate_moe_gate_v2_buffers(case.tokens, case.experts, case.top_k)
-        stats = time_moe_gate(logits, case.top_k, buffers, warmup=args.warmup, iters=args.iters, l2_flush=args.l2_flush)
+        token_mask = torch.ones(case.tokens, device='cuda', dtype=torch.bool)
+        stats = time_moe_gate(logits,
+                              case.top_k,
+                              buffers,
+                              token_mask,
+                              warmup=args.warmup,
+                              iters=args.iters,
+                              l2_flush=args.l2_flush)
         print(
             f'{case.name:<24} {stats["median_ms"]:10.3f} {stats["mean_ms"]:10.3f} '
             f'{stats["p90_ms"]:10.3f} {stats["gbps"]:10.2f}'
