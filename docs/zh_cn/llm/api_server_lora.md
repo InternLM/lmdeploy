@@ -4,6 +4,8 @@
 
 LoRA 目前只有 pytorch 后端支持。它的服务化，和其他模型服务化一样，命令都可以用 `lmdeploy serve api_server -h` 查看。其中 pytorch 后端支持的参数就有 LoRA 的配置内容。
 
+对于 InternVL 这类多模态模型，当前 LoRA 服务化路径主要用于语言模型侧 adapter。如果 VLM wrapper 暴露了语言模型的 LoRA 加载接口，LMDeploy 会把 adapter 加载委托给内部语言模型。视觉编码器 LoRA adapter 不属于该通用服务化路径覆盖范围；如果需要使用视觉侧 LoRA，请先将其合并进 checkpoint，或通过模型专用路径验证后再服务化。
+
 ```
 PyTorch engine arguments:
   --adapters [ADAPTERS [ADAPTERS ...]]

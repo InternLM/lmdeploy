@@ -4,6 +4,8 @@
 
 LoRA is currently only supported by the PyTorch backend. Its deployment process is similar to that of other models, and you can view the commands using lmdeploy `serve api_server -h`. Among the parameters supported by the PyTorch backend, there are configuration options for LoRA.
 
+For multimodal models, such as InternVL-style VLMs, the current LoRA serving path is intended for language-model adapters. If a VLM wrapper exposes a language-model LoRA loader, LMDeploy delegates adapter loading to that language model. Vision-encoder LoRA adapters are not covered by this generic serving path; merge them into the checkpoint or validate them with a model-specific path before serving.
+
 ```
 PyTorch engine arguments:
   --adapters [ADAPTERS [ADAPTERS ...]]
