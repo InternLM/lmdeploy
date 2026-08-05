@@ -254,8 +254,9 @@ class Xcomposer2VisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start, model_type):
+    def proc_messages(messages, chat_template, sequence_start, model_type, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         prefix_image_token = ''
@@ -278,13 +279,20 @@ class Xcomposer2VisionModel(VisionModel):
             else:
                 prompt = content[0]
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = prefix_image_token + chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = prefix_image_token + chat_template.messages2prompt(prompt_messages,
+                                                                    sequence_start,
+                                                                    tools=tools,
+                                                                    **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type)
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, tools=None, chat_template_kwargs=None,
+                   **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type, tools,
+                                                 chat_template_kwargs)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type)
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, tools=None, chat_template_kwargs=None,
+                     **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type, tools,
+                                                 chat_template_kwargs)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

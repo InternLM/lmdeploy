@@ -263,6 +263,7 @@ class VisionModel(ABC):
 
     @staticmethod
     def get_input_prompt(messages: list[dict], chat_template, sequence_start: bool,
+                         tools: list[object] | None = None,
                          chat_template_kwargs: dict | None = None) -> str | list[int]:
         """Return the input prompt for the preprocessor.
 
@@ -275,13 +276,14 @@ class VisionModel(ABC):
             messages: Preprocessed message list.
             chat_template: Chat template used to render a text prompt.
             sequence_start: Whether this is the start of a new sequence.
+            tools: Optional tools forwarded to chat template rendering.
             chat_template_kwargs: Extra kwargs forwarded to ``messages2prompt``.
         Returns:
             A list of token ids when input_ids are embedded, otherwise a str.
         """
         if VisionModel.has_input_ids(messages):
             return messages[0]['content'][0]['text']
-        return chat_template.messages2prompt(messages, sequence_start, **(chat_template_kwargs or {}))
+        return chat_template.messages2prompt(messages, sequence_start, tools=tools, **(chat_template_kwargs or {}))
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
