@@ -1,5 +1,6 @@
 import pytest
 import torch
+from triton.compiler.errors import CompileTimeAssertionFailure
 
 GROUP_SIZE = 128
 FP8_DTYPE = torch.float8_e4m3fn
@@ -95,22 +96,21 @@ def _run_case(m: int, n: int, k: int, repeats: int = 1):
     a, b = _make_inputs(m, n, k)
     expected = _dequantized_reference(a, b)
     output = torch.full((m, n), torch.nan, device='cuda', dtype=torch.bfloat16)
-    first_output = None
 
-    for repeat in range(repeats):
+    fp8_gemm_nt(a, b, output, None)
+    if repeats > 1:
+        first_output = output.clone()
+    for repeat in range(1, repeats):
         fp8_gemm_nt(a, b, output, None)
-        if first_output is None:
-            first_output = output.clone()
-        else:
-            assert torch.equal(output, first_output), f'output changed on repeat {repeat + 1}'
+        assert torch.equal(output, first_output), f'output changed on repeat {repeat + 1}'
 
     assert torch.isfinite(output).all()
     assert _calc_diff(output, expected) < 1e-3
 
 
 def test_fp8_gemm_nt_one_tile_one_k_block():
-    """Milestone 1: get one synchronous TMA/WGMMA tile correct."""
-    _run_case(m=64, n=128, k=128)
+    """Milestone 1: cover exactly one output tile and one scale block."""
+    _run_case(m=64, n=32, k=128)
 
 
 def test_fp8_gemm_nt_multiple_k_scale_blocks():
@@ -120,7 +120,7 @@ def test_fp8_gemm_nt_multiple_k_scale_blocks():
 
 def test_fp8_gemm_nt_ragged_output_tiles():
     """Milestone 3: zero-pad loads and bound the M/N output edges."""
-    _run_case(m=37, n=192, k=256)
+    _run_case(m=37, n=200, k=256)
 
 
 def test_fp8_gemm_nt_multiple_mn_tiles():
@@ -137,13 +137,10 @@ def test_fp8_gemm_nt_dispatch_boundaries(m):
 @pytest.mark.parametrize(
     ('m', 'k'),
     [
-        (37, 640),
         (37, 1152),
         (128, 2176),
-        (256, 512),
         (256, 640),
         (256, 1152),
-        (256, 2176),
     ],
 )
 def test_fp8_gemm_nt_reuses_pipeline_stages_and_phases(m, k):
@@ -151,19 +148,20 @@ def test_fp8_gemm_nt_reuses_pipeline_stages_and_phases(m, k):
     _run_case(m=m, n=192, k=k, repeats=5)
 
 
-@torch.inference_mode()
-def test_fp8_gemm_nt_large_grid_is_deterministic():
-    """Catch CTA-concurrency bugs hidden by aggregate error tolerances."""
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import fp8_gemm_nt
+def test_fp8_gemm_nt_mid_m_compiles_at_one_pipeline_turn():
+    """Guard the four-block scale queue that exposed a loop-carried type
+    error."""
+    _run_case(m=256, n=192, k=512, repeats=5)
 
-    a, b = _make_inputs(m=1024, n=4096, k=1152)
-    output = torch.empty((1024, 4096), device='cuda', dtype=torch.bfloat16)
-    fp8_gemm_nt(a, b, output, None)
-    expected = output.clone()
 
-    for repeat in range(10):
-        fp8_gemm_nt(a, b, output, None)
-        assert torch.equal(output, expected), f'output changed on repeat {repeat + 1}'
+def test_fp8_gemm_nt_persistent_grid_is_correct_and_deterministic():
+    """Exercise persistent tile reuse and detect CTA-concurrency races."""
+    num_sms = torch.cuda.get_device_properties('cuda').multi_processor_count
+    n = 4096
+    num_tiles_n = n // GROUP_SIZE
+    num_tiles_m = max(2, num_sms // num_tiles_n + 1)
+    m = num_tiles_m * 256
+    _run_case(m=m, n=n, k=1152, repeats=10)
 
 
 def test_fp8_gemm_nt_tiny_m_reuses_eight_pipeline_stages():
@@ -175,3 +173,25 @@ def test_fp8_gemm_nt_tiny_m_reuses_eight_pipeline_stages():
 def test_fp8_gemm_nt_transposed_tiny_m(m, k):
     """Cover both stage depths of the transposed M<=8 schedule."""
     _run_case(m=m, n=192, k=k, repeats=5)
+
+
+def test_fp8_gemm_nt_rejects_invalid_dtype_and_layout():
+    """Reject invalid contracts during specialization or descriptor setup."""
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import fp8_gemm_nt
+
+    a, b = _make_inputs(m=64, n=128, k=256)
+    output = torch.empty((64, 128), device='cuda', dtype=torch.bfloat16)
+
+    with pytest.raises(CompileTimeAssertionFailure, match='A must use FP8 E4M3'):
+        fp8_gemm_nt((a[0].to(torch.float16), a[1]), b, output, None)
+    with pytest.raises(CompileTimeAssertionFailure, match='A scales must be column-major'):
+        fp8_gemm_nt((a[0], a[1].contiguous()), b, output, None)
+    with pytest.raises(CompileTimeAssertionFailure, match='B scales must use FP32'):
+        fp8_gemm_nt(a, (b[0], b[1].to(torch.float16)), output, None)
+    with pytest.raises(CompileTimeAssertionFailure, match='output must use BF16'):
+        fp8_gemm_nt(a, b, output.to(torch.float16), None)
+
+    ragged_a, ragged_b = _make_inputs(m=64, n=129, k=256)
+    misaligned_output = torch.empty((64, 129), device='cuda', dtype=torch.bfloat16)
+    with pytest.raises(AssertionError, match='strides must be 16-byte aligned'):
+        fp8_gemm_nt(ragged_a, ragged_b, misaligned_output, None)

@@ -21,9 +21,17 @@ except ImportError:
     from triton.language.core import _aggregate as aggregate
 
 
-BLOCK_K = 128
+# One WGMMA K tile covers exactly one quantization block, so every raw
+# accumulator can be promoted before the next K tile is accumulated.
+SCALE_BLOCK_K = 128
+SCALE_BLOCK_N = 128
 SMALL_M_THRESHOLD = 128
 MID_M_THRESHOLD = 256
+
+# The three schedules keep the same blocked-scaling math but optimize different
+# bottlenecks. Small M keeps loading and compute in one partition to minimize
+# overhead; middle M separates a TMA producer from the compute warpgroup; large
+# M additionally persists CTAs and splits its 256-row accumulator into waves.
 
 
 @gluon.constexpr_function
@@ -67,6 +75,21 @@ def pick_wgmma_layout(dtype, block_m, block_n, num_warps):
 
 
 @gluon.jit
+def _load_block_scales(
+    a_scale_ptrs,
+    b_scale_ptrs,
+    a_scale_mask,
+    block_valid,
+    stride_ask: gl.constexpr,
+    stride_bsk: gl.constexpr,
+):
+    """Fetch one scale slot, using identity past K, and advance the streams."""
+    a_scale = gl.load(a_scale_ptrs, mask=a_scale_mask & block_valid, other=1.0)
+    b_scale = gl.load(b_scale_ptrs, mask=block_valid, other=1.0)
+    return a_scale, b_scale, a_scale_ptrs + stride_ask, b_scale_ptrs + stride_bsk
+
+
+@gluon.jit
 def _fp8_gemm_nt_small_kernel(
     a_desc,
     a_scale_ptr,
@@ -74,20 +97,33 @@ def _fp8_gemm_nt_small_kernel(
     b_scale_ptr,
     d_desc,
     M,
-    N: gl.constexpr,
     K: gl.constexpr,
     stride_asm: gl.constexpr,
     stride_ask: gl.constexpr,
     stride_bsn: gl.constexpr,
     stride_bsk: gl.constexpr,
     transpose_output: gl.constexpr,
-    lhs_in_reg: gl.constexpr,
+    scale_block_n: gl.constexpr,
     num_buffers: gl.constexpr,
     num_warps: gl.constexpr,
 ):
+    # These are compile-time contract checks: they improve compiler failures
+    # without adding instructions or latency to the generated kernel.
+    gl.static_assert(a_desc.dtype == gl.float8e4nv, 'A must use FP8 E4M3')
+    gl.static_assert(b_desc.dtype == gl.float8e4nv, 'B must use FP8 E4M3')
+    gl.static_assert(d_desc.dtype == gl.bfloat16, 'output must use BF16')
+    gl.static_assert(a_scale_ptr.dtype.element_ty == gl.float32, 'A scales must use FP32')
+    gl.static_assert(b_scale_ptr.dtype.element_ty == gl.float32, 'B scales must use FP32')
+    gl.static_assert(isinstance(a_desc.layout, gl.NVMMASharedLayout), 'A descriptor must use an NVMMA layout')
+    gl.static_assert(isinstance(b_desc.layout, gl.NVMMASharedLayout), 'B descriptor must use an NVMMA layout')
+    gl.static_assert(isinstance(d_desc.layout, gl.NVMMASharedLayout), 'output descriptor must use an NVMMA layout')
+
     block_m: gl.constexpr = a_desc.block_type.shape[0]
     block_n: gl.constexpr = b_desc.block_type.shape[0]
     block_k: gl.constexpr = a_desc.block_type.shape[1]
+    gl.static_assert(b_desc.block_type.shape[1] == block_k, 'A and B tile K must match')
+    gl.static_assert(K % block_k == 0, 'K must contain whole scale blocks')
+    gl.static_assert(stride_asm == 1, 'A scales must be column-major')
 
     if transpose_output:
         # Compute C^T = B @ A^T so WGMMA's flexible N dimension represents
@@ -113,29 +149,32 @@ def _fp8_gemm_nt_small_kernel(
     gl.static_assert(isinstance(b_smem.type.layout, gl.NVMMASharedLayout))
 
     acc_layout: gl.constexpr = pick_wgmma_layout(a_desc.dtype, block_m, block_n, num_warps)
+    # Normally A scales index WGMMA M and broadcast across WGMMA N, so dim 1
+    # is dropped. After transposition they index WGMMA N and broadcast across
+    # WGMMA M, so dim 0 is dropped instead.
     if transpose_output:
         scale_layout: gl.constexpr = gl.SliceLayout(0, acc_layout)
         scale_offsets = off_n + gl.arange(0, block_n, layout=scale_layout)
         scale_mask = scale_offsets < M
         a_scale_ptrs = a_scale_ptr + scale_offsets * stride_asm
-        b_scale_ptrs = b_scale_ptr + (off_m // 128) * stride_bsn
+        b_scale_ptrs = b_scale_ptr + (off_m // scale_block_n) * stride_bsn
     else:
         scale_layout: gl.constexpr = gl.SliceLayout(1, acc_layout)
         scale_offsets = off_m + gl.arange(0, block_m, layout=scale_layout)
         scale_mask = scale_offsets < M
         a_scale_ptrs = a_scale_ptr + scale_offsets * stride_asm
-        b_scale_ptrs = b_scale_ptr + (off_n // 128) * stride_bsn
+        b_scale_ptrs = b_scale_ptr + (off_n // scale_block_n) * stride_bsn
 
-    lhs_layout: gl.constexpr = gl.DotOperandLayout(
-        operand_index=0,
-        parent=acc_layout,
-        k_width=32 // a_desc.dtype.primitive_bitwidth,
-    )
-
+    # This schedule has no producer worker: the same warpgroup issues TMA and
+    # WGMMA in a fixed order. A stage is not wrapped until an intervening
+    # warpgroup_mma_wait has retired its consumer, so ready barriers suffice;
+    # the warp-specialized schedules below also need explicit empty barriers.
     ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
     for stage_idx in gl.static_range(0, num_buffers):
         mbarrier.init(ready_bars.index(stage_idx), count=1)
 
+    # final_acc is the long-lived, scaled FP32 result. raw_acc contains only one
+    # unscaled K-block partial so it can be promoted before entering final_acc.
     final_acc = gl.zeros((block_m, block_n), dtype=gl.float32, layout=acc_layout)
     raw_acc = warpgroup_mma_init(gl.zeros_like(final_acc))
     if transpose_output:
@@ -145,10 +184,14 @@ def _fp8_gemm_nt_small_kernel(
     b_scale = 1.0
     # Queue raw scale values one block beyond the scale paired with raw_acc.
     # Do not multiply here: that would immediately serialize on these LDGs.
-    next_a_scale = gl.load(a_scale_ptrs, mask=scale_mask, other=1.0)
-    next_b_scale = gl.load(b_scale_ptrs)
-    a_scale_ptrs += stride_ask
-    b_scale_ptrs += stride_bsk
+    next_a_scale, next_b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
+        a_scale_ptrs,
+        b_scale_ptrs,
+        scale_mask,
+        True,
+        stride_ask,
+        stride_bsk,
+    )
 
     num_k_blocks: gl.constexpr = K // block_k
     num_preloads: gl.constexpr = min(num_buffers - 2, num_k_blocks)
@@ -173,6 +216,10 @@ def _fp8_gemm_nt_small_kernel(
     num_steady: gl.constexpr = num_k_blocks - num_preloads
     num_prefix: gl.constexpr = num_steady % preferred_unroll
 
+    # Prefix, steady state, and drain preserve the same one-block lag:
+    # raw_acc/current scales describe the previous block, while next_*_scale
+    # describes the block about to be issued. The final promotion closes the
+    # lag after the last WGMMA.
     # Consume a short prefix first so the remaining runtime loop is cleanly
     # partially unrolled by the shape-specific factor.
     for producer_idx in gl.static_range(num_preloads, num_preloads + num_prefix):
@@ -199,8 +246,6 @@ def _fp8_gemm_nt_small_kernel(
         b_tile = b_smem.index(consumer_stage).permute((1, 0))
         mbarrier.wait(ready_bars.index(consumer_stage), phase=consumer_phase)
 
-        if lhs_in_reg:
-            a_tile = a_tile.load(lhs_layout)
         raw_acc = warpgroup_mma_wait(num_outstanding=0, deps=(raw_acc, ))
         if transpose_output:
             final_acc += raw_acc * (a_scale * b_scale)[None, :]
@@ -210,18 +255,14 @@ def _fp8_gemm_nt_small_kernel(
         raw_acc = warpgroup_mma(a_tile, b_tile, raw_acc, is_async=True, use_acc=False)
         a_scale = next_a_scale
         b_scale = next_b_scale
-        next_a_scale = gl.load(
+        next_a_scale, next_b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
             a_scale_ptrs,
-            mask=scale_mask & (consumer_idx + 1 < num_k_blocks),
-            other=1.0,
-        )
-        next_b_scale = gl.load(
             b_scale_ptrs,
-            mask=consumer_idx + 1 < num_k_blocks,
-            other=1.0,
+            scale_mask,
+            consumer_idx + 1 < num_k_blocks,
+            stride_ask,
+            stride_bsk,
         )
-        a_scale_ptrs += stride_ask
-        b_scale_ptrs += stride_bsk
 
     for producer_group in range(num_preloads + num_prefix, num_k_blocks, preferred_unroll):
         for producer_offset in gl.static_range(0, preferred_unroll):
@@ -249,8 +290,6 @@ def _fp8_gemm_nt_small_kernel(
             group_b_tile = b_smem.index(group_consumer_stage).permute((1, 0))
             mbarrier.wait(ready_bars.index(group_consumer_stage), phase=group_consumer_phase)
 
-            if lhs_in_reg:
-                group_a_tile = group_a_tile.load(lhs_layout)
             raw_acc = warpgroup_mma_wait(num_outstanding=0, deps=(raw_acc, ))
             if transpose_output:
                 final_acc += raw_acc * (a_scale * b_scale)[None, :]
@@ -260,18 +299,14 @@ def _fp8_gemm_nt_small_kernel(
             raw_acc = warpgroup_mma(group_a_tile, group_b_tile, raw_acc, is_async=True, use_acc=False)
             a_scale = next_a_scale
             b_scale = next_b_scale
-            next_a_scale = gl.load(
+            next_a_scale, next_b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
                 a_scale_ptrs,
-                mask=scale_mask & (group_consumer_idx + 1 < num_k_blocks),
-                other=1.0,
-            )
-            next_b_scale = gl.load(
                 b_scale_ptrs,
-                mask=group_consumer_idx + 1 < num_k_blocks,
-                other=1.0,
+                scale_mask,
+                group_consumer_idx + 1 < num_k_blocks,
+                stride_ask,
+                stride_bsk,
             )
-            a_scale_ptrs += stride_ask
-            b_scale_ptrs += stride_bsk
 
     for drain_offset in gl.static_range(0, num_preloads):
         consumer_idx = num_steady + drain_offset
@@ -281,8 +316,6 @@ def _fp8_gemm_nt_small_kernel(
         b_tile = b_smem.index(consumer_stage).permute((1, 0))
         mbarrier.wait(ready_bars.index(consumer_stage), phase=consumer_phase)
 
-        if lhs_in_reg:
-            a_tile = a_tile.load(lhs_layout)
         raw_acc = warpgroup_mma_wait(num_outstanding=0, deps=(raw_acc, ))
         if transpose_output:
             final_acc += raw_acc * (a_scale * b_scale)[None, :]
@@ -292,18 +325,14 @@ def _fp8_gemm_nt_small_kernel(
         raw_acc = warpgroup_mma(a_tile, b_tile, raw_acc, is_async=True, use_acc=False)
         a_scale = next_a_scale
         b_scale = next_b_scale
-        next_a_scale = gl.load(
+        next_a_scale, next_b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
             a_scale_ptrs,
-            mask=scale_mask & (consumer_idx + 1 < num_k_blocks),
-            other=1.0,
-        )
-        next_b_scale = gl.load(
             b_scale_ptrs,
-            mask=consumer_idx + 1 < num_k_blocks,
-            other=1.0,
+            scale_mask,
+            consumer_idx + 1 < num_k_blocks,
+            stride_ask,
+            stride_bsk,
         )
-        a_scale_ptrs += stride_ask
-        b_scale_ptrs += stride_bsk
 
     raw_acc = warpgroup_mma_wait(num_outstanding=0, deps=(raw_acc, ))
     if transpose_output:
@@ -341,6 +370,9 @@ def _load_mid_m_tile(
     a_smem, b_smem = buffers
     off_m, off_n = offsets
 
+    # The low-register producer worker owns empty -> ready for every stage.
+    # Splitting out the short prefix leaves the runtime loop two-way unrolled
+    # without changing the stage/phase sequence.
     unroll: gl.constexpr = 2
     prefix: gl.constexpr = num_k_blocks % unroll
     for prefix_k_block_idx in gl.static_range(0, prefix):
@@ -402,6 +434,7 @@ def _compute_mid_m_tile(
     stride_bsk: gl.constexpr,
     block_m: gl.constexpr,
     block_n: gl.constexpr,
+    scale_block_n: gl.constexpr,
     num_buffers: gl.constexpr,
     num_k_blocks: gl.constexpr,
 ):
@@ -410,10 +443,12 @@ def _compute_mid_m_tile(
     a_scale_ptr, b_scale_ptr = scale_ptrs
     off_m, off_n = offsets
 
+    # Drop accumulator N: one A scale is distributed per output row and then
+    # broadcast across all BLOCK_N accumulator columns.
     scale_layout: gl.constexpr = gl.SliceLayout(1, acc_layout)
     row_offsets = off_m + gl.arange(0, block_m, layout=scale_layout)
     a_scale_ptrs = a_scale_ptr + row_offsets * stride_asm
-    b_scale_ptrs = b_scale_ptr + (off_n // 128) * stride_bsn
+    b_scale_ptrs = b_scale_ptr + (off_n // scale_block_n) * stride_bsn
 
     final_acc = gl.zeros((block_m, block_n), dtype=gl.float32, layout=acc_layout)
     raw_acc = gl.zeros_like(final_acc)
@@ -421,18 +456,27 @@ def _compute_mid_m_tile(
     # Keep the next block's raw scale values live without consuming them yet.
     # Their loads can overlap two WGMMA intervals; multiplying immediately
     # would instead stall this warpgroup on the scale loads at the load site.
-    a_scale = gl.load(a_scale_ptrs, mask=row_offsets < M, other=1.0)
-    b_scale = gl.load(b_scale_ptrs)
-    a_scale_ptrs += stride_ask
-    b_scale_ptrs += stride_bsk
+    row_mask = row_offsets < M
+    a_scale, b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
+        a_scale_ptrs,
+        b_scale_ptrs,
+        row_mask,
+        True,
+        stride_ask,
+        stride_bsk,
+    )
 
     next_a_scale = gl.zeros((block_m, ), dtype=gl.float32, layout=scale_layout) + 1.0
     next_b_scale = 1.0
     if num_k_blocks > 1:
-        next_a_scale = gl.load(a_scale_ptrs, mask=row_offsets < M, other=1.0)
-        next_b_scale = gl.load(b_scale_ptrs)
-        a_scale_ptrs += stride_ask
-        b_scale_ptrs += stride_bsk
+        next_a_scale, next_b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
+            a_scale_ptrs,
+            b_scale_ptrs,
+            row_mask,
+            True,
+            stride_ask,
+            stride_bsk,
+        )
 
     # Prime K block zero without waiting on or promoting a sentinel.
     prime_stage: gl.constexpr = 0
@@ -441,6 +485,10 @@ def _compute_mid_m_tile(
     b_tile = b_smem.index(prime_stage).permute((1, 0))
     raw_acc = warpgroup_mma(a_tile, b_tile, raw_acc, is_async=True, use_acc=False)
 
+    # After priming block zero, each iteration waits for the next ready stage,
+    # retires the previous WGMMA, releases that previous stage, promotes its
+    # partial with register-resident scales, and issues the next WGMMA. The
+    # WGMMA wait—not the following proxy fence—is what makes release safe.
     unroll: gl.constexpr = 2
     prefix: gl.constexpr = (num_k_blocks - 1) % unroll
     for prefix_k_block_idx in gl.static_range(1, 1 + prefix):
@@ -463,14 +511,14 @@ def _compute_mid_m_tile(
         a_scale = next_a_scale
         b_scale = next_b_scale
         prefix_has_future_scale: gl.constexpr = prefix_k_block_idx + 1 < num_k_blocks
-        next_a_scale = gl.load(
+        next_a_scale, next_b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
             a_scale_ptrs,
-            mask=(row_offsets < M) & prefix_has_future_scale,
-            other=1.0,
+            b_scale_ptrs,
+            row_mask,
+            prefix_has_future_scale,
+            stride_ask,
+            stride_bsk,
         )
-        next_b_scale = gl.load(b_scale_ptrs, mask=prefix_has_future_scale, other=1.0)
-        a_scale_ptrs += stride_ask
-        b_scale_ptrs += stride_bsk
 
     for k_block_group in range(1 + prefix, num_k_blocks, unroll):
         for k_block_offset in gl.static_range(0, unroll):
@@ -493,14 +541,14 @@ def _compute_mid_m_tile(
             a_scale = next_a_scale
             b_scale = next_b_scale
             group_has_future_scale = group_k_block_idx + 1 < num_k_blocks
-            next_a_scale = gl.load(
+            next_a_scale, next_b_scale, a_scale_ptrs, b_scale_ptrs = _load_block_scales(
                 a_scale_ptrs,
-                mask=(row_offsets < M) & group_has_future_scale,
-                other=1.0,
+                b_scale_ptrs,
+                row_mask,
+                group_has_future_scale,
+                stride_ask,
+                stride_bsk,
             )
-            next_b_scale = gl.load(b_scale_ptrs, mask=group_has_future_scale, other=1.0)
-            a_scale_ptrs += stride_ask
-            b_scale_ptrs += stride_bsk
 
     raw_acc = warpgroup_mma_wait(num_outstanding=0, deps=(raw_acc, ))
     fence_async_shared()
@@ -517,18 +565,32 @@ def _fp8_gemm_nt_mid_m_kernel(
     b_scale_ptr,
     d_desc,
     M,
-    N: gl.constexpr,
     K: gl.constexpr,
     stride_asm: gl.constexpr,
     stride_ask: gl.constexpr,
     stride_bsn: gl.constexpr,
     stride_bsk: gl.constexpr,
+    scale_block_n: gl.constexpr,
     num_buffers: gl.constexpr,
     num_warps: gl.constexpr,
 ):
+    # Compile-time only: descriptor/pointer types and layouts are specialization
+    # properties, so these assertions do not execute on the GPU hot path.
+    gl.static_assert(a_desc.dtype == gl.float8e4nv, 'A must use FP8 E4M3')
+    gl.static_assert(b_desc.dtype == gl.float8e4nv, 'B must use FP8 E4M3')
+    gl.static_assert(d_desc.dtype == gl.bfloat16, 'output must use BF16')
+    gl.static_assert(a_scale_ptr.dtype.element_ty == gl.float32, 'A scales must use FP32')
+    gl.static_assert(b_scale_ptr.dtype.element_ty == gl.float32, 'B scales must use FP32')
+    gl.static_assert(isinstance(a_desc.layout, gl.NVMMASharedLayout), 'A descriptor must use an NVMMA layout')
+    gl.static_assert(isinstance(b_desc.layout, gl.NVMMASharedLayout), 'B descriptor must use an NVMMA layout')
+    gl.static_assert(isinstance(d_desc.layout, gl.NVMMASharedLayout), 'output descriptor must use an NVMMA layout')
+
     block_m: gl.constexpr = d_desc.block_type.shape[0]
     block_n: gl.constexpr = d_desc.block_type.shape[1]
     block_k: gl.constexpr = a_desc.block_type.shape[1]
+    gl.static_assert(b_desc.block_type.shape[1] == block_k, 'A and B tile K must match')
+    gl.static_assert(K % block_k == 0, 'K must contain whole scale blocks')
+    gl.static_assert(stride_asm == 1, 'A scales must be column-major')
     num_k_blocks: gl.constexpr = K // block_k
 
     off_m = gl.program_id(axis=0) * block_m
@@ -550,6 +612,8 @@ def _fp8_gemm_nt_mid_m_kernel(
     bars = (ready_bars, empty_bars)
     buffers = (a_smem, b_smem)
     offsets = (off_m, off_n)
+    # The default partition owns WGMMA, scale promotion, and the result. One
+    # additional worker warp owns the TMA producer side of the stage ring.
     final_acc, = gl.warp_specialize(
         [
             (
@@ -567,6 +631,7 @@ def _fp8_gemm_nt_mid_m_kernel(
                     stride_bsk,
                     block_m,
                     block_n,
+                    scale_block_n,
                     num_buffers,
                     num_k_blocks,
                 ),
@@ -629,9 +694,10 @@ class PersistentTileScheduler:
 
     @gluon.jit
     def get_tile(self, idx):
+        # Each persistent program advances by the resident grid size. Grouping
+        # nearby M tiles under the same N range improves B-tile L2 locality.
         tile_idx = self.first_tile + idx * self.num_programs
 
-        # DeepGEMM-style grouping on M for L2 locality.
         group_size_m = 16
         tiles_per_group = self.num_tiles_n * group_size_m
         group_idx = tile_idx // tiles_per_group
@@ -662,6 +728,9 @@ def _load_persistent_tiles(
 
     scheduler = PersistentTileScheduler.initialize(M, N, BLOCK_M, BLOCK_N)
 
+    # This worker owns empty -> ready across every persistent output tile. The
+    # flattened iteration keeps stage phase continuous at tile boundaries;
+    # resetting phase for each tile would eventually consume stale stages.
     for tile_iter in range(scheduler.get_num_tiles()):
         tile_m, tile_n = scheduler.get_tile(tile_iter)
         off_m = tile_m * BLOCK_M
@@ -703,7 +772,7 @@ def _compute_persistent_tiles(
     stride_bsk: gl.constexpr,
     BLOCK_M: gl.constexpr,
     BLOCK_N: gl.constexpr,
-    LHS_IN_REG: gl.constexpr,
+    SCALE_BLOCK_N: gl.constexpr,
     NUM_BUFFERS: gl.constexpr,
     NUM_K_BLOCKS: gl.constexpr,
     num_warps: gl.constexpr,
@@ -716,13 +785,8 @@ def _compute_persistent_tiles(
     WAVE_M: gl.constexpr = min(BLOCK_M, 128)
     NUM_M_WAVES: gl.constexpr = BLOCK_M // WAVE_M
     wave_acc_layout: gl.constexpr = pick_wgmma_layout(dtype, WAVE_M, BLOCK_N, num_warps)
+    # Each M wave has one A scale per accumulator row, broadcast across N.
     scale_layout: gl.constexpr = gl.SliceLayout(1, wave_acc_layout)
-
-    lhs_layout: gl.constexpr = gl.DotOperandLayout(
-        operand_index=0,
-        parent=wave_acc_layout,
-        k_width=32 // dtype.primitive_bitwidth,
-    )
 
     scheduler = PersistentTileScheduler.initialize(M, N, BLOCK_M, BLOCK_N)
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
@@ -752,7 +816,7 @@ def _compute_persistent_tiles(
 
         # Cooperatively cache all B scales for this output-column tile. Every
         # M wave reuses this cache throughout the K loop.
-        n_scale_group = off_n // 128
+        n_scale_group = off_n // SCALE_BLOCK_N
         b_scale_tile_ptr = b_scale_ptr + n_scale_group * stride_bsn
         gl.thread_barrier()
         b_scale_offs = gl.arange(0, NUM_B_SCALE_SLOTS, layout=b_scale_load_layout)
@@ -769,6 +833,9 @@ def _compute_persistent_tiles(
         if NUM_M_WAVES == 2:
             wave_1_acc = gl.zeros_like(wave_0_acc)
 
+        # The consumer reconstructs the same flattened stage/phase sequence as
+        # the producer. A and its scales arrive together through TMA; B scales
+        # come from the per-output-tile shared cache above.
         for k_block_idx in range(0, NUM_K_BLOCKS):
             pipeline_iter = tile_iter * NUM_K_BLOCKS + k_block_idx
             stage_idx = pipeline_iter % NUM_BUFFERS
@@ -793,8 +860,6 @@ def _compute_persistent_tiles(
             if NUM_M_WAVES == 2:
                 a_wave_1 = a_stage.slice(WAVE_M, WAVE_M, dim=0)
 
-            if LHS_IN_REG:
-                a_wave_0 = a_wave_0.load(lhs_layout)
             partial_acc = gl.zeros_like(wave_0_acc)
             partial_acc = warpgroup_mma(a_wave_0, b_stage, partial_acc, is_async=True, use_acc=False)
             partial_acc = warpgroup_mma_wait(num_outstanding=0, deps=(partial_acc, ))
@@ -802,15 +867,13 @@ def _compute_persistent_tiles(
             wave_0_acc += partial_acc * block_scale[:, None]
 
             if NUM_M_WAVES == 2:
-                if LHS_IN_REG:
-                    a_wave_1 = a_wave_1.load(lhs_layout)
                 partial_acc = warpgroup_mma(a_wave_1, b_stage, partial_acc, is_async=True, use_acc=False)
                 partial_acc = warpgroup_mma_wait(num_outstanding=0, deps=(partial_acc, ))
                 block_scale = a_scale_wave_1 * b_scale
                 wave_1_acc += partial_acc * block_scale[:, None]
 
-            # WGMMA has finished reading this stage. Publish that it is safe
-            # for the loader warp to overwrite on the next phase.
+            # Both M waves have finished reading this stage. Publish that it is
+            # safe for the loader warp to overwrite on the next phase.
             fence_async_shared()
             empty_barrier = empty_bars.index(stage_idx)
             mbarrier.arrive(empty_barrier, count=1)
@@ -840,13 +903,31 @@ def _fp8_gemm_nt_large_kernel(
     K: gl.constexpr,
     stride_bsn: gl.constexpr,
     stride_bsk: gl.constexpr,
-    LHS_IN_REG: gl.constexpr,
+    SCALE_BLOCK_N: gl.constexpr,
     NUM_BUFFERS: gl.constexpr,
     num_warps: gl.constexpr,
 ):
+    # Compile-time only: the persistent path additionally requires its staged
+    # A-scale descriptor to carry FP32 elements in an NVMMA shared layout.
+    gl.static_assert(a_desc.dtype == gl.float8e4nv, 'A must use FP8 E4M3')
+    gl.static_assert(b_desc.dtype == gl.float8e4nv, 'B must use FP8 E4M3')
+    gl.static_assert(d_desc.dtype == gl.bfloat16, 'output must use BF16')
+    gl.static_assert(a_scale_desc.dtype == gl.float32, 'A scales must use FP32')
+    gl.static_assert(b_scale_ptr.dtype.element_ty == gl.float32, 'B scales must use FP32')
+    gl.static_assert(isinstance(a_desc.layout, gl.NVMMASharedLayout), 'A descriptor must use an NVMMA layout')
+    gl.static_assert(isinstance(b_desc.layout, gl.NVMMASharedLayout), 'B descriptor must use an NVMMA layout')
+    gl.static_assert(
+        isinstance(a_scale_desc.layout, gl.NVMMASharedLayout),
+        'A-scale descriptor must use an NVMMA layout',
+    )
+    gl.static_assert(isinstance(d_desc.layout, gl.NVMMASharedLayout), 'output descriptor must use an NVMMA layout')
+
     BLOCK_M: gl.constexpr = d_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = d_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    gl.static_assert(b_desc.block_type.shape[1] == BLOCK_K, 'A and B tile K must match')
+    gl.static_assert(K % BLOCK_K == 0, 'K must contain whole scale blocks')
+    gl.static_assert(a_scale_desc.block_type.shape == [1, BLOCK_M], 'A-scale TMA tile must cover one M tile')
     NUM_K_BLOCKS: gl.constexpr = K // BLOCK_K
 
     a_smem = gl.allocate_shared_memory(
@@ -899,7 +980,7 @@ def _fp8_gemm_nt_large_kernel(
                     stride_bsk,
                     BLOCK_M,
                     BLOCK_N,
-                    LHS_IN_REG,
+                    SCALE_BLOCK_N,
                     NUM_BUFFERS,
                     NUM_K_BLOCKS,
                     num_warps,
@@ -934,8 +1015,8 @@ def _fp8_gemm_nt_large_kernel(
 
 def _make_matrix_descriptors(a_quant, b_quant, output, block_m, block_n):
     """Build the A/B/output descriptors shared by all schedule families."""
-    a_block_shape = [block_m, BLOCK_K]
-    b_block_shape = [block_n, BLOCK_K]
+    a_block_shape = [block_m, SCALE_BLOCK_K]
+    b_block_shape = [block_n, SCALE_BLOCK_K]
     d_block_shape = [block_m, block_n]
     a_layout = gl.NVMMASharedLayout.get_default_for(a_block_shape, gl.float8e4nv)
     b_layout = gl.NVMMASharedLayout.get_default_for(b_block_shape, gl.float8e4nv)
@@ -949,8 +1030,8 @@ def _make_matrix_descriptors(a_quant, b_quant, output, block_m, block_n):
 
 def _make_transposed_small_descriptors(a_quant, b_quant, output, block_m, block_n):
     """Build descriptors for C^T = B @ A^T while storing C in-place."""
-    lhs_block_shape = [block_m, BLOCK_K]
-    rhs_block_shape = [block_n, BLOCK_K]
+    lhs_block_shape = [block_m, SCALE_BLOCK_K]
+    rhs_block_shape = [block_n, SCALE_BLOCK_K]
     d_block_shape = [block_n, block_m]
     lhs_layout = gl.NVMMASharedLayout.get_default_for(lhs_block_shape, gl.float8e4nv)
     rhs_layout = gl.NVMMASharedLayout.get_default_for(rhs_block_shape, gl.float8e4nv)
@@ -1001,12 +1082,11 @@ def _launch_small_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
         b_scale,
         d_desc,
         m,
-        n,
         k,
         *a_scale.stride(),
         *b_scale.stride(),
         transpose_output=transpose_output,
-        lhs_in_reg=False,
+        scale_block_n=SCALE_BLOCK_N,
         num_buffers=num_buffers,
         num_warps=num_warps,
     )
@@ -1029,10 +1109,10 @@ def _launch_mid_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
         b_scale,
         d_desc,
         m,
-        n,
         k,
         *a_scale.stride(),
         *b_scale.stride(),
+        scale_block_n=SCALE_BLOCK_N,
         num_buffers=num_buffers,
         num_warps=num_warps,
         maxnreg=128,
@@ -1049,6 +1129,9 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
 
     a_desc, b_desc, d_desc = _make_matrix_descriptors(a_quant, b_quant, output, block_m, block_n)
 
+    # A scales are physically contiguous along M. The transposed descriptor
+    # exposes [K blocks, M], letting one TMA transaction stage all row scales
+    # needed by a 256-row output tile and one K block.
     a_scale_transposed = a_scale.T
     a_scale_block_shape = [1, block_m]
     a_scale_layout = gl.NVMMASharedLayout.get_default_for(a_scale_block_shape, gl.float32)
@@ -1056,6 +1139,8 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
 
     num_tiles = triton.cdiv(m, block_m) * triton.cdiv(n, block_n)
     num_sms = torch.cuda.get_device_properties(a_quant.device).multi_processor_count
+    # Cap the persistent grid at the SM count; each program obtains further
+    # logical output tiles from PersistentTileScheduler.
     grid = (min(num_sms, num_tiles), )
     _fp8_gemm_nt_large_kernel[grid](
         a_desc,
@@ -1067,7 +1152,7 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
         n,
         k,
         *b_scale.stride(),
-        LHS_IN_REG=False,
+        SCALE_BLOCK_N=SCALE_BLOCK_N,
         NUM_BUFFERS=num_buffers,
         num_warps=num_warps,
         maxnreg=168,
@@ -1077,10 +1162,13 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
 def fp8_gemm_nt(a, b, d, c):
     """Compute a blocked-scaled FP8 GEMM with an NT operand convention.
 
-    ``a`` contains FP8 values shaped ``[M, K]`` and per-row scales shaped
-    ``[M, K / 128]``. ``b`` contains FP8 values shaped ``[N, K]`` and scales
-    shaped ``[N / 128, K / 128]``. The result is written to ``d``; ``c`` is
-    accepted for compatibility with the DeepGEMM-style launcher interface.
+    ``a`` contains contiguous FP8 values shaped ``[M, K]`` and per-row scales
+    shaped ``[M, K / 128]``. The A scales must have stride 1 along M; their
+    physical K-block stride must be 16-byte aligned for the large-M TMA path.
+    ``b`` contains contiguous FP8 values shaped ``[N, K]`` and contiguous
+    scales shaped ``[ceil(N / 128), K / 128]``. Both K and N scale groups are
+    128 elements. The result is written to contiguous BF16 ``d``; ``c`` is
+    accepted for DeepGEMM-style signature compatibility and is not used.
 
     M up to 128 uses a single-partition multistage schedule. Within that body,
     M up to 8 with K at least 4096 computes the equivalent transposed GEMM to
