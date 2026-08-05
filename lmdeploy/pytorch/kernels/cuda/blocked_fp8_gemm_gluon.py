@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Shape-specialized blocked-FP8 GEMM for NVIDIA Hopper GPUs."""
 
+import functools
+
 import torch
 import triton
 from triton.experimental import gluon
@@ -14,6 +16,8 @@ from triton.experimental.gluon.language.nvidia.hopper import (
     warpgroup_mma_wait,
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+
+from .utils import get_device_props
 
 try:
     from gluon import aggregate
@@ -33,8 +37,9 @@ MID_M_THRESHOLD = 256
 
 # The three schedules keep the same blocked-scaling math but optimize different
 # bottlenecks. Small M keeps loading and compute in one partition to minimize
-# overhead; middle M separates a TMA producer from the compute warpgroup; large
-# M additionally persists CTAs and splits its 256-row accumulator into waves.
+# overhead; the middle schedule separates a TMA producer from the compute
+# warpgroup while its grid fits two CTAs per SM; larger grids additionally
+# persist CTAs and split each 256-row accumulator into waves.
 
 
 @gluon.constexpr_function
@@ -1141,7 +1146,7 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
     a_scale_desc = TensorDescriptor.from_tensor(a_scale_transposed, a_scale_block_shape, a_scale_layout)
 
     num_tiles = triton.cdiv(m, block_m) * triton.cdiv(n, block_n)
-    num_sms = torch.cuda.get_device_properties(a_quant.device).multi_processor_count
+    num_sms = get_device_props(a_quant.device.index)['multi_processor_count']
     # Cap the persistent grid at the SM count; each program obtains further
     # logical output tiles from PersistentTileScheduler.
     grid = (min(num_sms, num_tiles), )
@@ -1162,6 +1167,21 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
     )
 
 
+@functools.lru_cache
+def _use_mid_m_kernel(m, n, device_index):
+    """Use the mid schedule while its grid fits one resident CTA wave."""
+    if m <= MID_M_THRESHOLD:
+        return True
+
+    # The mid kernel can keep two CTAs resident per Hopper SM, whereas the
+    # register-heavy persistent kernel is limited to one. Prefer mid when all
+    # of its 64x128 tiles fit in that resident capacity; this avoids launching
+    # an underfilled persistent grid, notably at M=512, N=4096 on H200.
+    mid_tiles = triton.cdiv(m, 64) * triton.cdiv(n, 128)
+    num_sms = get_device_props(device_index)['multi_processor_count']
+    return mid_tiles <= 2 * num_sms
+
+
 def fp8_gemm_nt(a, b, d, c):
     """Compute a blocked-scaled FP8 GEMM with an NT operand convention.
 
@@ -1175,17 +1195,17 @@ def fp8_gemm_nt(a, b, d, c):
 
     M up to 128 uses a single-partition multistage schedule. Within that body,
     M up to 8 with K at least 4096 computes the equivalent transposed GEMM to
-    avoid padding the tensor-core result to 64 rows. M from 129 through 256
-    uses a primed warp-specialized schedule. Larger M uses a persistent
-    two-wave schedule that reuses B data and scales while controlling
-    accumulator register pressure.
+    avoid padding the tensor-core result to 64 rows. M above 128 uses a primed
+    warp-specialized schedule while its 64x128 tile grid fits the two-CTA-per-SM
+    resident capacity. Larger grids use a persistent two-wave schedule that
+    reuses B data and scales while controlling accumulator register pressure.
     """
     a_quant, a_scale = a
     b_quant, b_scale = b
 
     if d.size(0) <= SMALL_M_THRESHOLD:
         _launch_small_m_kernel(a_quant, a_scale, b_quant, b_scale, d)
-    elif d.size(0) <= MID_M_THRESHOLD:
+    elif _use_mid_m_kernel(d.size(0), d.size(1), d.device.index):
         _launch_mid_m_kernel(a_quant, a_scale, b_quant, b_scale, d)
     else:
         _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, d)
