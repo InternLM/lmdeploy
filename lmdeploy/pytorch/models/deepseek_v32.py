@@ -11,6 +11,7 @@ from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
+    ParallelLMHead,
     RMSNorm,
     RopeType,
     build_rotary_embedding,
@@ -21,7 +22,6 @@ from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
     build_merged_colwise_linear,
     build_o_proj,
-    build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_index_cache
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
@@ -464,11 +464,13 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         self.ctx_mgr = ctx_mgr
         self.model = self.model_cls(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = ParallelLMHead(config.vocab_size,
+                                      config.hidden_size,
+                                      bias=False,
+                                      dtype=dtype,
+                                      device=device)
+        if config.tie_word_embeddings:
+            self.lm_head.tie_weights(self.model.get_input_embeddings())
         self._load_buffers = dict()
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],

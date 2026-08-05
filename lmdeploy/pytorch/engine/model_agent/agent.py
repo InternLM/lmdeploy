@@ -26,6 +26,7 @@ from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, Samplin
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
+from lmdeploy.pytorch.nn import ParallelLMHead
 from lmdeploy.pytorch.spec_decode import build_spec_agent
 from lmdeploy.pytorch.strategies import build_strategy_factory
 from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
@@ -328,6 +329,7 @@ class BaseModelAgent:
         self.tp = tp
         self.world_size = world_size
         self.need_output = rank % self.dist_config.attn_tp == 0
+        self.sample_all_ranks = False
 
         self.patched_model = None
         self.cache_engine = None
@@ -725,7 +727,8 @@ class BaseModelAgent:
                                             return_ce_loss: bool = False,
                                             seq_length: torch.Tensor = None,
                                             all_routed_experts: Any = None,
-                                            extra_inputs: ExtraInputs = None):
+                                            extra_inputs: ExtraInputs = None,
+                                            emit_output: bool = True):
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
@@ -766,16 +769,17 @@ class BaseModelAgent:
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
-        self._push_output(
-            BatchedOutputs(next_token_ids=output_token_ids,
-                           logits=logits if return_logits else None,
-                           stopped=stopped,
-                           stop_pos=stop_pos,
-                           model_metas=model_metas,
-                           logprobs=logprobs,
-                           all_routed_experts=all_routed_experts,
-                           extra_outputs=extra_outputs,
-                           ce_loss=ce_loss))
+        if emit_output:
+            self._push_output(
+                BatchedOutputs(next_token_ids=output_token_ids,
+                               logits=logits if return_logits else None,
+                               stopped=stopped,
+                               stop_pos=stop_pos,
+                               model_metas=model_metas,
+                               logprobs=logprobs,
+                               all_routed_experts=all_routed_experts,
+                               extra_outputs=extra_outputs,
+                               ce_loss=ce_loss))
 
         return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
 
@@ -831,7 +835,9 @@ class BaseModelAgent:
         dist_config = dist_ctx.dist_config
         rank = self.rank
         tp = dist_config.attn_tp
-        need_broadcast_next = (tp > 1)
+        # Vocab-parallel logits are all-gathered, so every TP rank samples the
+        # same token locally and does not need a rank-0 token broadcast.
+        need_broadcast_next = (tp > 1 and not self.sample_all_ranks)
         dp = dist_config.dp
         need_update_inputs = False
 
@@ -900,7 +906,7 @@ class BaseModelAgent:
         extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
         model_metas = output.get('model_metas')
 
-        if self.need_output:
+        if self.need_output or self.sample_all_ranks:
             logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
             # for router replay
             if return_routed_experts:
@@ -928,6 +934,7 @@ class BaseModelAgent:
                     seq_length=seq_length,
                     all_routed_experts=all_routed_experts,
                     extra_inputs=extra_inputs,
+                    emit_output=self.need_output,
                 ))
         else:
             (
@@ -1178,6 +1185,13 @@ class BaseModelAgent:
                                             num_spec_tokens=self.spec_agent.num_spec_tokens,
                                             max_batch_size=self.cache_config.max_batches)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
+        uses_parallel_lm_head = isinstance(getattr(patched_model, 'lm_head', None), ParallelLMHead)
+        self.sample_all_ranks = uses_parallel_lm_head and self.dist_config.attn_tp > 1
+        if uses_parallel_lm_head and self.dist_config.attn_tp > 1:
+            if self.memdecode_agent is not None:
+                raise ValueError('MemDecode does not support vocabulary-parallel LM heads yet.')
+            if self.cache_config.role != EngineRole.Hybrid:
+                raise ValueError('DistServe does not support vocabulary-parallel LM heads yet.')
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)
