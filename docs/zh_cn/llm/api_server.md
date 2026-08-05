@@ -186,13 +186,14 @@ curl http://{server_ip}:{server_port}/generate \
 ```
 
 `meta_info.input_token_logprobs` 只发送一次。对于
-`N=logprob_start_len`，返回行对应 `input_ids[N + 1:]`，每项为
-`[value, token_id]`。边界后必须至少有一个 token，否则端点会拒绝该请求。
-流式和非流式都只返回一个终止 payload，流式随后发送 `[DONE]`。
+`N=logprob_start_len`，返回行对应位置 `N` 之后的已处理源 token ids，每项为
+`[value, token_id]`。如果直接传入 `input_ids`，即对应
+`input_ids[N + 1:]`；如果传入 `prompt` 或图像输入，则在分词和 VLM 占位符扩展后
+检查边界。边界后必须至少有一个 token，否则端点会拒绝该请求。流式和非流式都只返回一个终止
+payload，流式随后发送 `[DONE]`。
 
-此直接接口要求使用 `input_ids`（不接受 prompt 或图像输入）、设置
-`max_tokens=0` 并禁用推测解码。TurboMind、DistServe、代理 `/generate` 以及
-OpenAI、Anthropic 和 Responses 协议暂不支持输入 logprob。
+此直接接口要求设置 `max_tokens=0` 并禁用推测解码。TurboMind、DistServe、代理
+`/generate` 以及 OpenAI、Anthropic 和 Responses 协议暂不支持输入 logprob。
 
 ### 使用 Java/Golang/Rust
 

@@ -220,16 +220,17 @@ curl http://{server_ip}:{server_port}/generate \
 ```
 
 `meta_info.input_token_logprobs` is emitted once. For
-`N=logprob_start_len`, rows align with `input_ids[N + 1:]`, and every entry is
-`[value, token_id]`; the boundary token itself is not emitted. At least one
-token must follow the boundary; otherwise the endpoint rejects the request. Both
-streaming and non-streaming forms return one terminal payload; streaming then
-emits `[DONE]`.
+`N=logprob_start_len`, rows align with the processed source token ids after
+position `N`, and every entry is `[value, token_id]`; the boundary token itself
+is not emitted. With direct `input_ids`, this is `input_ids[N + 1:]`; with
+`prompt` or image input, the boundary is checked after tokenization and VLM
+placeholder expansion. At least one token must follow the boundary; otherwise
+the endpoint rejects the request. Both streaming and non-streaming forms return
+one terminal payload; streaming then emits `[DONE]`.
 
-This direct route requires `input_ids` (not prompt or image input),
-`max_tokens=0`, and speculative decoding disabled. Input scoring is not
-available for TurboMind, DistServe, proxy `/generate`, or the
-OpenAI/Anthropic/Responses schemas.
+This direct route requires `max_tokens=0` and speculative decoding disabled.
+Input scoring is not available for TurboMind, DistServe, proxy `/generate`, or
+the OpenAI/Anthropic/Responses schemas.
 
 ## Launch multiple api servers
 
