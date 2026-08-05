@@ -99,6 +99,11 @@ def check_request(request: ChatCompletionRequest, server_context) -> str:
         if request.image_data is not None and request.input_ids is None:
             return 'image_data requires input_ids to be set when messages is empty.'
 
+    parser_cls = server_context.response_parser_cls
+    if request.tool_choice != 'none' and request.tools:
+        if parser_cls is None or parser_cls.tool_parser_cls is None:
+            return 'Please launch the api_server with --tool-call-parser if you want to use tools.'
+
     if request.return_routed_experts and not engine_config.enable_return_routed_experts:
         return (
             'routed experts requested but not configured in engine configuration. '
@@ -350,14 +355,6 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
         parser_cls = server_context.response_parser_cls
-        if request.tool_choice != 'none' and request.tools:
-            if parser_cls is None or parser_cls.tool_parser_cls is None:
-                return create_error_response(
-                    HTTPStatus.BAD_REQUEST,
-                    'Please launch the api_server with --tool-call-parser if you want to use tool.'
-                )
-
-        parser_cls = server_context.response_parser_cls
         try:
             response_parser = parser_cls(request)
         except ValueError as e:
@@ -389,8 +386,7 @@ def register(router: APIRouter, server_context) -> None:
                 '`enable_thinking` will be deprecated in the future, '
                 'please use `chat_template_kwargs` instead.')
             if chat_template_kwargs.get('enable_thinking') is None:
-                chat_template_kwargs[
-                    'enable_thinking'] = request.enable_thinking
+                chat_template_kwargs['enable_thinking'] = request.enable_thinking
             else:
                 logger.warning(
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.'
@@ -485,8 +481,7 @@ def register(router: APIRouter, server_context) -> None:
                                             in ('stop', 'length') and
                                             (request.return_token_ids
                                              or request.return_routed_experts))
-                if should_validate_complete and not response_parser.validate_complete(
-                ):
+                if should_validate_complete and not response_parser.validate_complete():
                     res.finish_reason = 'parse_error'
 
                 for delta_index, (delta_message,
@@ -552,8 +547,7 @@ def register(router: APIRouter, server_context) -> None:
                 if await raw_request.is_disconnected():
                     # Abort the request if the client disconnects.
                     await session.async_abort()
-                    return create_error_response(HTTPStatus.BAD_REQUEST,
-                                                 'Client disconnected')
+                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
                 final_res = res
                 text += res.response
                 if res.token_ids:
