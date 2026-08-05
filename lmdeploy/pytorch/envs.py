@@ -175,6 +175,8 @@ with set_envs():
     # deepgemm
     os.getenv('DG_JIT_DEBUG', '0')
     os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')
+
+    # blocked FP8 GEMM
     blocked_fp8_gemm_backend = env_to_choice('LMDEPLOY_BLOCKED_FP8_GEMM_BACKEND', 'auto',
                                              {'auto', 'deepgemm', 'gluon', 'triton'})
 

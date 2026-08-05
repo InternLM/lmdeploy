@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import functools
+from abc import abstractmethod
 
 import torch
 from packaging import version
@@ -16,16 +17,16 @@ from .warmup_manager import WarmupMeta, get_warmup_manager
 logger = get_logger('lmdeploy')
 
 _GLUON_TRITON_MIN_VERSION = version.parse('3.6.0')
-_GLUON_TRITON_MAX_VERSION = version.parse('3.7.0')
+_GLUON_TRITON_MAX_EXCLUSIVE = version.parse('3.8.0')
 
 
 def _is_supported_gluon_triton_version(triton_version: str) -> bool:
     """Whether the installed Triton has the validated experimental API."""
     try:
-        triton_version = version.parse(triton_version)
+        parsed_version = version.parse(triton_version)
     except version.InvalidVersion:
         return False
-    return _GLUON_TRITON_MIN_VERSION <= triton_version < _GLUON_TRITON_MAX_VERSION
+    return _GLUON_TRITON_MIN_VERSION <= parsed_version < _GLUON_TRITON_MAX_EXCLUSIVE
 
 
 class CudaLinearBlockedF8Impl(LinearBlockedF8Impl):
@@ -44,6 +45,7 @@ class CudaLinearBlockedF8Impl(LinearBlockedF8Impl):
         self.fp8_dtype = fp8_dtype
         self.block_size = block_size
 
+    @abstractmethod
     def _gemm(self, x: torch.Tensor, weight: torch.Tensor, scale: torch.Tensor):
         raise NotImplementedError
 
@@ -255,7 +257,8 @@ class CudaLinearBlockedF8Builder(LinearBlockedF8Builder):
                 except ImportError:
                     triton_version = 'not installed'
                 raise RuntimeError('Gluon blocked-FP8 linear requires Hopper, BF16 output, FP8 E4M3, block size 128, '
-                                   'K divisible by 128, N divisible by 8, and Triton >=3.6.0,<3.7.0 '
+                                   'K divisible by 128, N divisible by 8, and Triton '
+                                   f'>={_GLUON_TRITON_MIN_VERSION},<{_GLUON_TRITON_MAX_EXCLUSIVE} '
                                    f'(found {triton_version}).')
             impl_cls = GluonLinearBlockedF8Impl
         else:

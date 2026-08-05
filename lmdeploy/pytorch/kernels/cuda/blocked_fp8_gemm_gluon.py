@@ -20,6 +20,9 @@ try:
 except ImportError:
     from triton.language.core import _aggregate as aggregate
 
+# Triton 3.7 renamed the CTA-wide thread_barrier builtin to barrier.
+_cta_barrier = getattr(gl, 'barrier', None) or gl.thread_barrier
+
 
 # One WGMMA K tile covers exactly one quantization block, so every raw
 # accumulator can be promoted before the next K tile is accumulated.
@@ -818,12 +821,12 @@ def _compute_persistent_tiles(
         # M wave reuses this cache throughout the K loop.
         n_scale_group = off_n // SCALE_BLOCK_N
         b_scale_tile_ptr = b_scale_ptr + n_scale_group * stride_bsn
-        gl.thread_barrier()
+        _cta_barrier()
         b_scale_offs = gl.arange(0, NUM_B_SCALE_SLOTS, layout=b_scale_load_layout)
         b_scale_mask = b_scale_offs < NUM_K_BLOCKS
         b_scales = gl.load(b_scale_tile_ptr + b_scale_offs * stride_bsk, mask=b_scale_mask, other=0.0)
         b_scale_smem_flat.store(b_scales)
-        gl.thread_barrier()
+        _cta_barrier()
 
         wave_0_acc = gl.zeros(
             (WAVE_M, BLOCK_N),

@@ -46,8 +46,8 @@ class BlockedF8Linear(LinearBase):
         impl_builder = get_backend().get_layer_impl_builder(OpType.LinearBlockedF8)
         self.impl = impl_builder.build(in_features,
                                        out_features,
-                                       block_size=128,
-                                       bias=bias is not None,
+                                       block_size=self.block_size,
+                                       bias=bias,
                                        dtype=self.dtype,
                                        fp8_dtype=self.fp8_dtype)
         self.impl.set_scale_fmt(scale_fmt)
