@@ -48,7 +48,8 @@ class BlockedF8Linear(LinearBase):
                                        out_features,
                                        block_size=128,
                                        bias=bias is not None,
-                                       dtype=self.dtype)
+                                       dtype=self.dtype,
+                                       fp8_dtype=self.fp8_dtype)
         self.impl.set_scale_fmt(scale_fmt)
         weight, weight_scale_inv, bias = self.create_weights(in_features, out_features, bias, self.dtype, self.device)
         self.register_all_parameters(weight, weight_scale_inv, bias)
