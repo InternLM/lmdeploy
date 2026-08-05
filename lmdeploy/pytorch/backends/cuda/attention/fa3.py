@@ -48,6 +48,9 @@ class FA3Impl(TritonAttentionImpl):
             causal=causal,
             **kwargs,
         )
+        if self.logit_softcapping <= 0.0:
+            self.logit_softcapping = 0.0
+
         from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func, flash_attn_with_kvcache
         self.flash_attn_varlen_func_v3 = flash_attn_varlen_func
         self.flash_attn_with_kvcache_v3 = flash_attn_with_kvcache
