@@ -51,6 +51,26 @@ response = pipe((f'describe this image', image))
 print(response)
 ```
 
+### 控制动态图片预处理
+
+InternVL 模型默认会使用动态图片预处理：输入图片在推理前可能会被 resize，并被切分成多个视觉 patch。你可以通过 `image_url` 传入图片级参数来控制该行为。例如，`max_dynamic_patch` 可以限制动态 patch 数量上限；当业务已经提前处理好图片，并且需要稳定映射回该图片时，可以设置 `skip_preprocess=True` 跳过动态切分步骤。
+
+```python
+from lmdeploy import pipeline
+
+pipe = pipeline('OpenGVLab/InternVL2-8B')
+messages = [dict(role='user', content=[
+    dict(type='text', text='Describe this image.'),
+    dict(type='image_url', image_url=dict(
+        url='https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
+        max_dynamic_patch=1,
+        skip_preprocess=True))
+])]
+response = pipe(messages)
+```
+
+`skip_preprocess=True` 只会跳过 InternVL 的动态预处理。图片仍会经过视觉编码器所需的模型 transform。
+
 更多例子如下：
 
 <details>

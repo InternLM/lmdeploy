@@ -51,6 +51,26 @@ response = pipe((f'describe this image', image))
 print(response)
 ```
 
+### Control dynamic image preprocessing
+
+InternVL models use dynamic image preprocessing by default: an input image may be resized and split into multiple visual patches before inference. You can pass image-level parameters through `image_url` to control this behavior. For example, `max_dynamic_patch` limits the maximum number of dynamic patches, and `skip_preprocess=True` skips the dynamic splitting step when your application has already prepared the image and needs a stable mapping back to that image.
+
+```python
+from lmdeploy import pipeline
+
+pipe = pipeline('OpenGVLab/InternVL2-8B')
+messages = [dict(role='user', content=[
+    dict(type='text', text='Describe this image.'),
+    dict(type='image_url', image_url=dict(
+        url='https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
+        max_dynamic_patch=1,
+        skip_preprocess=True))
+])]
+response = pipe(messages)
+```
+
+`skip_preprocess=True` only skips InternVL's dynamic preprocessing. The image still goes through the model transform required by the vision encoder.
+
 More examples are listed below:
 
 <details>
