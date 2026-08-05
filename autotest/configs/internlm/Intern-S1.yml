@@ -53,12 +53,14 @@ h:
       suites:
       - base
       - logprob
+      - anthropic
       extra:
         logprobs-mode: raw_logprobs
     turbomind:
       suites:
       - base
       - logprob
+      - anthropic
       extra:
         logprobs-mode: raw_logprobs
   quantization:

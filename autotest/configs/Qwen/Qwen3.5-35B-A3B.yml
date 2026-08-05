@@ -18,7 +18,7 @@ a100:
   - func
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
       - experts
@@ -29,8 +29,13 @@ a100:
         enable-return-routed-experts: null
         tool-call-parser: qwen3coder
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: null
     turbomind:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -39,6 +44,10 @@ a100:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3coder
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8
@@ -84,7 +93,7 @@ h:
   - quantization
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
       - experts
@@ -95,8 +104,13 @@ h:
         enable-return-routed-experts: null
         tool-call-parser: qwen3coder
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: null
     turbomind:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -105,6 +119,10 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3coder
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - awq

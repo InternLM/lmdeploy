@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import sys
@@ -17,7 +18,7 @@ from utils.constant import (
     RESTFUL_MODEL_LIST,
     TOOL_REASONING_MODEL_LIST,
 )
-from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
+from utils.proxy_distributed_utils import ApiServerPerTest
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, terminate_restful_api
 
@@ -78,6 +79,35 @@ def _scrub_outer_xdist_env(env: dict[str, str]) -> dict[str, str]:
     return cleaned
 
 
+def _phase_run_configs(run_config: dict) -> list[dict]:
+    """Expand ``run_config`` into one cfg per launch profile / api_server
+    phase.
+
+    Prefers ``interface_phases`` from :func:`get_interface_run_config_list`
+    (each item: ``suites``, ``case_info``, ``extra_params``). Falls back to a
+    single phase using top-level ``case_info`` / ``extra_params``.
+    """
+    phases = list(run_config.get('interface_phases') or [])
+    if not phases:
+        case_info = list(run_config.get('case_info') or [])
+        if not case_info:
+            return []
+        return [copy.deepcopy(run_config)]
+
+    out: list[dict] = []
+    for phase in phases:
+        case_info = list(phase.get('case_info') or [])
+        if not case_info:
+            continue
+        cfg = copy.deepcopy(run_config)
+        cfg['case_info'] = case_info
+        cfg['extra_params'] = copy.deepcopy(phase.get('extra_params') or {})
+        if phase.get('suites') is not None:
+            cfg['interface_suites'] = list(phase['suites'])
+        out.append(cfg)
+    return out
+
+
 def _pytest_cmd(
     test_path: str,
     *,
@@ -87,14 +117,7 @@ def _pytest_cmd(
     n_workers: int,
     log_path: str,
 ) -> int:
-    """Run a nested pytest against one interface suite file.
-
-    The nested run can cover hundreds of parametrized cases; letting it
-    inherit the outer process's stdout means pytest's own fd-level capture
-    buffers all of it against the single outer test item, which then gets
-    dumped/attached wholesale on failure. Redirect to a log file and attach
-    that instead.
-    """
+    """Run a nested pytest against one interface suite file."""
     cmd = [
         sys.executable,
         '-m',
@@ -171,6 +194,8 @@ def _run_interface_suites(
         # Exclude return_token_ids / routed_experts / encode(input_ids) cases.
         toolcall_marker += ' and not experts'
 
+    anthropic_marker = f'anthropic and not not_{backend}'
+
     suite_map = [
         (
             'chat_completions_v1',
@@ -186,6 +211,16 @@ def _run_interface_suites(
             'generate',
             'autotest/interface/restful/test_restful_generate.py',
             generate_marker,
+        ),
+        (
+            'anthropic_v1',
+            'autotest/interface/restful/test_restful_anthropic_v1.py',
+            anthropic_marker,
+        ),
+        (
+            'anthropic_sdk',
+            'autotest/interface/restful/test_restful_anthropic_sdk_messages.py',
+            anthropic_marker,
         ),
         (
             'toolcall',
@@ -220,35 +255,72 @@ def _run_interface_suites(
 
 
 def run_interface_restful_test(config, run_config, worker_id) -> None:
-    """Start api_server for ``run_config``, then run configured interface
+    """Start api_server per interface launch profile, then run that phase's
     suites.
 
-    Mirrors ``run_llm_test`` GPU/port isolation via ``worker_id``, but executes
-    the existing ``autotest/interface/restful`` protocol suites against the
-    worker-local port (``LMDEPLOY_PORT``).
+    Each yaml ``{suites, extra}`` profile is one phase (own ``extra_params``).
     """
-    pid, content = start_openai_service(config, run_config, worker_id)
-    try:
-        assert pid > 0, f'Failed to start RESTful API server: {content}'
-        port = DEFAULT_PORT + get_workerid(worker_id)
-        _run_interface_suites(config, run_config, port)
-    finally:
-        if pid > 0:
-            terminate_restful_api(worker_id)
+    port = DEFAULT_PORT + get_workerid(worker_id)
+    for phase_idx, phase_cfg in enumerate(_phase_run_configs(run_config)):
+        print(
+            f'interface phase {phase_idx}: suites={phase_cfg.get("interface_suites")} '
+            f'cases={phase_cfg.get("case_info")} '
+            f'extra_keys={sorted((phase_cfg.get("extra_params") or {}).keys())}',
+            flush=True,
+        )
+        pid, content = start_openai_service(config, phase_cfg, worker_id)
+        try:
+            assert pid > 0, f'Failed to start RESTful API server (phase {phase_idx}): {content}'
+            _run_interface_suites(config, phase_cfg, port)
+        finally:
+            if pid > 0:
+                terminate_restful_api(worker_id)
 
 
 def run_interface_restful_ray_distributed_test(config, run_config, manager) -> None:
-    """Run interface suites against a Ray multi-node api_server (tp16)."""
+    """Run interface suites against a Ray multi-node api_server (tp16).
+
+    One api_server restart per launch profile. Workers wait on Ray GCS;
+    intermediate ``cleanup(force=False)`` does not tear down the cluster.
+    """
     assert manager is not None, 'Manager instance must be provided'
+    phases = _phase_run_configs(run_config)
+
     if manager.is_master:
-        manager.start_lmdeploy_api_server(config=config, run_config=run_config)
         try:
-            _run_interface_suites(config, run_config, PROXY_PORT)
+            for phase_idx, phase_cfg in enumerate(phases):
+                print(
+                    f'interface phase {phase_idx}: suites={phase_cfg.get("interface_suites")} '
+                    f'cases={phase_cfg.get("case_info")} '
+                    f'extra_keys={sorted((phase_cfg.get("extra_params") or {}).keys())}',
+                    flush=True,
+                )
+                manager.start_lmdeploy_api_server(config=config, run_config=phase_cfg)
+                try:
+                    _run_interface_suites(config, phase_cfg, PROXY_PORT)
+                finally:
+                    manager.cleanup(force=False)
         finally:
             manager.cleanup(force=False)
     else:
         time.sleep(10)
         ray_worker_node_wait(manager, timeout_minutes=4880)
+
+
+def _proxy_phase_flag_path(config, run_config, phase_idx: int) -> str:
+    log_dir = config.get('log_path') or config.get('server_log_path') or '/tmp'
+    case_str = get_case_str_by_config(run_config)
+    return os.path.join(log_dir, f'.interface_phase_done_{case_str}_{phase_idx}')
+
+
+def _proxy_worker_wait_phase_done(flag_path: str, timeout_minutes: int = 4880) -> None:
+    """Worker waits until master writes the phase-done flag (shared log fs)."""
+    deadline = time.time() + timeout_minutes * 60
+    while time.time() < deadline:
+        if os.path.exists(flag_path):
+            return
+        time.sleep(5)
+    raise TimeoutError(f'proxy worker timed out waiting for phase flag {flag_path}')
 
 
 def run_interface_restful_proxy_distributed_test(config, run_config, manager) -> None:
@@ -257,18 +329,40 @@ def run_interface_restful_proxy_distributed_test(config, run_config, manager) ->
     Skips ``generate`` and toolcall ``experts``-marked cases: proxy cannot
     safely carry large ``/generate`` / encode / return_token_ids /
     routed_experts payloads.
+
+    One ``ApiServerPerTest`` restart per launch profile. All ranks join each
+    phase; workers sync via a shared done-flag.
     """
     assert manager is not None, 'Manager instance must be provided'
-    api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
-    api_server.start()
-    try:
+    phases = _phase_run_configs(run_config)
+
+    for phase_idx, phase_cfg in enumerate(phases):
         if manager.is_master:
-            api_server.wait_until_ready()
-            _run_interface_suites(config, run_config, PROXY_PORT, via_proxy=True)
-        else:
-            print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete test...')
-            proxy_worker_node_wait(manager, timeout_minutes=4880)
-    finally:
-        api_server.cleanup()
-        if manager.is_master:
-            time.sleep(1)
+            print(
+                f'interface phase {phase_idx}: suites={phase_cfg.get("interface_suites")} '
+                f'cases={phase_cfg.get("case_info")} '
+                f'extra_keys={sorted((phase_cfg.get("extra_params") or {}).keys())}',
+                flush=True,
+            )
+
+        flag_path = _proxy_phase_flag_path(config, phase_cfg, phase_idx)
+        if manager.is_master and os.path.exists(flag_path):
+            os.remove(flag_path)
+
+        api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=phase_cfg)
+        api_server.start()
+        try:
+            if manager.is_master:
+                api_server.wait_until_ready()
+                _run_interface_suites(config, phase_cfg, PROXY_PORT, via_proxy=True)
+                Path(flag_path).touch()
+            else:
+                print(
+                    f'⏸️ Worker node {manager.node_rank} waiting for master phase '
+                    f'{phase_idx} ({phase_cfg.get("case_info")})...',
+                )
+                _proxy_worker_wait_phase_done(flag_path)
+        finally:
+            api_server.cleanup()
+            if manager.is_master:
+                time.sleep(1)

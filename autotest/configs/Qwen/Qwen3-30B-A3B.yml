@@ -26,6 +26,7 @@ a100:
       - base
       - logprob
       - experts
+      - anthropic
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: null
@@ -33,6 +34,7 @@ a100:
       suites:
       - base
       - logprob
+      - anthropic
       extra:
         logprobs-mode: raw_logprobs
   quantization:
@@ -68,6 +70,7 @@ h:
       - base
       - logprob
       - experts
+      - anthropic
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: null
@@ -75,6 +78,7 @@ h:
       suites:
       - base
       - logprob
+      - anthropic
       extra:
         logprobs-mode: raw_logprobs
   quantization:

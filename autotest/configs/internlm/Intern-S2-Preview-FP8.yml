@@ -21,7 +21,7 @@ h:
   - mllm_evaluate
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -30,8 +30,12 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: interns2-preview
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
     turbomind:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -40,6 +44,10 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: interns2-preview
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   gen_config:
     temperature: 1.0
     top-k: 20

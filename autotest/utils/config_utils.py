@@ -25,9 +25,9 @@ PARALLEL_LAYOUT_KEYS = ('tp', 'dp', 'ep', 'cp')
 ENGINE_CONFIG_KEY = 'engine_config'
 TEST_COVERAGE_KEY = 'test_coverage'
 INTERFACE_KEY = 'interface'
-INTERFACE_SUITES = frozenset({'base', 'logprob', 'experts', 'toolcall', 'reasoning'})
+INTERFACE_SUITES = frozenset({'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning'})
 GENERATE_SUITES = frozenset({'base', 'logprob', 'experts'})
-INTERFACE_SUITE_ORDER = ('base', 'logprob', 'experts', 'toolcall', 'reasoning')
+INTERFACE_SUITE_ORDER = ('base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning')
 INTERFACE_BACKENDS_ENV = 'INTERFACE_BACKENDS'
 
 
@@ -435,101 +435,259 @@ def _normalize_interface_suites(raw: Any) -> list[str]:
     return [s for s in INTERFACE_SUITE_ORDER if s in items]
 
 
-def _normalize_interface_backend_cfg(raw: Any) -> dict[str, Any]:
-    """Normalize one backend's interface block to ``{suites, extra}``.
+def _normalize_suites_extra_profile(raw: Any, *, default_suites: list[str] | None = None) -> dict[str, Any]:
+    """Normalize one ``{suites, extra}`` launch profile."""
+    if not isinstance(raw, dict):
+        raise TypeError(f'interface profile must be {{suites, extra}}, got {type(raw).__name__}')
+    extra = raw.get('extra') or {}
+    if not isinstance(extra, dict):
+        raise TypeError(f'interface.extra must be a dict, got {type(extra).__name__}')
+    suites_raw = raw.get('suites')
+    if suites_raw is None and default_suites is not None:
+        suites = list(default_suites)
+    else:
+        suites = _normalize_interface_suites(suites_raw or [])
+    return {'suites': suites, 'extra': copy.deepcopy(extra)}
 
-    ``extra`` uses the same dict shape as ``engine_config.extra`` (kebab-case
-    keys; ``null`` means a boolean CLI flag).
+
+def _interface_extra_key(extra: dict[str, Any] | None) -> tuple:
+    """Stable key for comparing launch ``extra`` dicts (merge identical
+    phases)."""
+    return tuple(sorted((extra or {}).items(), key=lambda item: item[0]))
+
+
+def _profiles_compatible_for_merge(
+    suites_a: list[str],
+    suites_b: list[str],
+) -> bool:
+    """Whether two same-``extra`` profiles can share one api_server phase.
+
+    ``anthropic`` must not share a phase with ``toolcall``/``reasoning``: those
+    suites need ``tool-call-parser`` / ``reasoning-parser`` in yaml ``extra``,
+    which break anthropic Messages when present on the same api_server.
     """
+    combined = set(suites_a) | set(suites_b)
+    if 'anthropic' in combined and combined & {'toolcall', 'reasoning'}:
+        return False
+    return True
+
+
+def _merge_profiles_same_extra(profiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse profiles that share identical ``extra`` into one launch
+    phase."""
+    buckets: list[dict[str, Any]] = []
+    for profile in profiles:
+        if not (profile.get('suites') or profile.get('extra')):
+            continue
+        ek = _interface_extra_key(profile.get('extra'))
+        suites = list(profile.get('suites') or [])
+        found = None
+        for bucket in buckets:
+            if bucket['ek'] != ek:
+                continue
+            if not _profiles_compatible_for_merge(bucket['suites'], suites):
+                continue
+            found = bucket
+            break
+        if found is None:
+            buckets.append({
+                'ek': ek,
+                'extra': copy.deepcopy(profile.get('extra') or {}),
+                'suites': suites,
+            })
+            continue
+        for suite in suites:
+            if suite not in found['suites']:
+                found['suites'].append(suite)
+    merged: list[dict[str, Any]] = []
+    for bucket in buckets:
+        ordered = [s for s in INTERFACE_SUITE_ORDER if s in bucket['suites']]
+        ordered += [s for s in bucket['suites'] if s not in INTERFACE_SUITE_ORDER]
+        merged.append({'suites': ordered, 'extra': bucket['extra']})
+    return merged
+
+
+def _backend_cfg_from_profiles(profiles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build backend cfg from ordered launch profiles.
+
+    Each distinct ``extra`` is one api_server phase. Profiles with identical
+    ``extra`` are merged (same launch command → one restart). ``suites`` on the
+    cfg is the ordered union across profiles; ``extra`` is the first profile's
+    extra (convenience for single-phase callers).
+    """
+    cleaned = _merge_profiles_same_extra(profiles)
+    suites_union: list[str] = []
+    for profile in cleaned:
+        for suite in profile.get('suites') or []:
+            if suite not in suites_union:
+                suites_union.append(suite)
+    suites_union = [s for s in INTERFACE_SUITE_ORDER if s in suites_union]
+    return {
+        'profiles': cleaned,
+        'suites': suites_union,
+        'extra': copy.deepcopy(cleaned[0]['extra']) if cleaned else {},
+    }
+
+
+def _normalize_interface_backend_cfg(raw: Any) -> dict[str, Any]:
+    """Normalize one backend's interface block to ``{profiles, suites,
+    extra}``.
+
+    Preferred form — list of launch profiles (each ``{suites, extra}``):
+
+    .. code-block:: yaml
+
+        pytorch:
+        - suites: [base, logprob, experts, toolcall, reasoning]
+          extra:
+            tool-call-parser: qwen3coder
+            reasoning-parser: default
+        - suites: [anthropic]
+          extra:
+            logprobs-mode: raw_logprobs
+
+    Also accepted:
+    - suite list shorthand: ``pytorch: [base, logprob]``
+    - single dict: ``{suites, extra}``
+    - legacy nested ``anthropic: {extra: {...}}`` on a single dict
+    """
+    # List of profiles: [{suites, extra}, ...]
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict) and (
+            'suites' in raw[0] or 'extra' in raw[0]):
+        profiles = [_normalize_suites_extra_profile(item) for item in raw]
+        return _backend_cfg_from_profiles(profiles)
+
     if isinstance(raw, (list, str)):
-        return {'suites': _normalize_interface_suites(raw), 'extra': {}}
+        suites = _normalize_interface_suites(raw)
+        profiles: list[dict[str, Any]] = []
+        # Shorthand has no per-suite extra: split anthropic away from
+        # toolcall/reasoning so a later yaml-less merge cannot share a phase
+        # that must carry parsers (set explicitly in profile ``extra``).
+        # Otherwise keep one shared phase.
+        needs_split = (
+            'anthropic' in suites
+            and bool(set(suites) & {'toolcall', 'reasoning'})
+        )
+        if needs_split:
+            other = [s for s in suites if s != 'anthropic']
+            if other:
+                profiles.append({'suites': other, 'extra': {}})
+            profiles.append({'suites': ['anthropic'], 'extra': {}})
+        elif suites:
+            profiles.append({'suites': suites, 'extra': {}})
+        return _backend_cfg_from_profiles(profiles)
+
     if not isinstance(raw, dict):
         raise TypeError(
-            f'interface backend config must be a suite list or '
+            f'interface backend config must be a suite list, profile list, or '
             f'{{suites, extra}} dict, got {type(raw).__name__}',
         )
-    # Full form: {suites: [...], extra: {...}}
+
+    # Legacy nested anthropic key on a single profile dict.
+    if 'anthropic' in raw and ('suites' in raw or 'extra' in raw):
+        main = _normalize_suites_extra_profile(
+            {'suites': raw.get('suites') or [], 'extra': raw.get('extra') or {}},
+        )
+        anth_raw = raw.get('anthropic')
+        if anth_raw is True or anth_raw == {} or anth_raw is None:
+            anth = {'suites': ['anthropic'], 'extra': {}}
+        elif isinstance(anth_raw, dict):
+            anth = _normalize_suites_extra_profile(anth_raw, default_suites=['anthropic'])
+            anth['suites'] = ['anthropic']
+        else:
+            raise TypeError('legacy interface.anthropic must be a dict or true')
+        main['suites'] = [s for s in main['suites'] if s != 'anthropic']
+        profiles = []
+        if main['suites'] or main['extra']:
+            profiles.append(main)
+        profiles.append(anth)
+        return _backend_cfg_from_profiles(profiles)
+
     if 'suites' in raw or 'extra' in raw:
-        extra = raw.get('extra') or {}
-        if not isinstance(extra, dict):
-            raise TypeError(f'interface.extra must be a dict, got {type(extra).__name__}')
-        return {
-            'suites': _normalize_interface_suites(raw.get('suites') or []),
-            'extra': copy.deepcopy(extra),
-        }
+        # Explicit {suites, extra}: keep as written (including anthropic in the
+        # same suites list when launch extras match). Split only via a profile
+        # list or legacy nested anthropic when extras differ.
+        main = _normalize_suites_extra_profile(raw)
+        return _backend_cfg_from_profiles([main] if (main['suites'] or main['extra']) else [])
+
     raise TypeError(
-        'interface backend config must be a suite list or {suites: [...], extra: {...}}',
+        'interface backend config must be a suite list, a list of '
+        '{suites, extra} profiles, or a single {suites, extra} dict',
     )
 
 
 def _normalize_interface_map(raw: Any) -> dict[str, dict[str, Any]]:
-    """Normalize sibling ``interface`` to ``{backend: {suites, extra}}``.
+    """Normalize sibling ``interface`` to ``{backend: {profiles, suites,
+    extra}}``.
 
     Supported forms:
     - ``interface: [base, logprob]``
     - ``interface: {pytorch: [base, logprob], turbomind: [base]}``
     - ``interface: {pytorch: {suites: [...], extra: {...}}}``
+    - ``interface: {pytorch: [{suites, extra}, {suites: [anthropic], extra}]}``
     """
     if not raw:
         return {}
     if isinstance(raw, list):
         cfg = _normalize_interface_backend_cfg(raw)
-        return {'*': cfg} if cfg['suites'] or cfg['extra'] else {}
+        if cfg['profiles'] or cfg['suites'] or cfg['extra']:
+            return {'*': cfg}
+        return {}
     if not isinstance(raw, dict):
         raise TypeError(f'interface must be a dict or list, got {type(raw).__name__}')
     out: dict[str, dict[str, Any]] = {}
     for backend, value in raw.items():
         cfg = _normalize_interface_backend_cfg(value)
-        if cfg['suites'] or cfg['extra']:
+        if cfg['profiles'] or cfg['suites'] or cfg['extra']:
             out[str(backend)] = cfg
     return out
 
 
 def get_interface_backend_config(entry: dict[str, Any], backend: str) -> dict[str, Any]:
-    """Return ``{suites, extra}`` for ``backend`` (empty suites if unset)."""
+    """Return ``{profiles, suites, extra}`` for ``backend`` (empty if
+    unset)."""
     mapping = _normalize_interface_map(entry.get(INTERFACE_KEY))
+    empty = {'profiles': [], 'suites': [], 'extra': {}}
     if not mapping:
-        return {'suites': [], 'extra': {}}
+        return empty
     if backend in mapping:
         return copy.deepcopy(mapping[backend])
     if '*' in mapping:
         return copy.deepcopy(mapping['*'])
-    return {'suites': [], 'extra': {}}
+    return empty
 
 
 def get_interface_suites(entry: dict[str, Any], backend: str) -> list[str]:
-    """Return interface suites enabled for ``backend`` on a yaml entry."""
+    """Return union of interface suites enabled for ``backend``."""
     return list(get_interface_backend_config(entry, backend).get('suites') or [])
 
 
-def _default_tool_parser_name(model_case: str) -> str:
-    """Model-family fallback for ``--tool-call-parser`` (no serve imports)."""
-    name = model_case.lower().replace('_', '-')
-    if 'llama' in name:
-        return 'llama3'
-    if 'glm' in name:
-        return 'glm47'
-    if 'intern-s2' in name or 'interns2' in name:
-        return 'interns2-preview'
-    if 'qwen2.5' in name:
-        return 'qwen2d5'
-    if 'qwen3.5' in name:
-        return 'qwen3coder'
-    return 'qwen3'
+def get_interface_profiles(entry: dict[str, Any], backend: str) -> list[dict[str, Any]]:
+    """Return ordered ``[{suites, extra}, ...]`` launch profiles for
+    ``backend``."""
+    cfg = get_interface_backend_config(entry, backend)
+    profiles = cfg.get('profiles')
+    if profiles:
+        return copy.deepcopy(profiles)
+    suites = list(cfg.get('suites') or [])
+    extra = copy.deepcopy(cfg.get('extra') or {})
+    if suites or extra:
+        return [{'suites': suites, 'extra': extra}]
+    return []
 
 
-def _suite_launch_extra_defaults(suites: list[str] | set[str], model_path: str) -> dict[str, Any]:
-    """Suite → recommended launch keys (filled only when configs omit them)."""
+def _suite_launch_extra_defaults(suites: list[str] | set[str]) -> dict[str, Any]:
+    """Suite → recommended launch keys (filled only when configs omit them).
+
+    ``tool-call-parser`` / ``reasoning-parser`` are never defaulted — set them in
+    each interface profile's ``extra`` in yaml.
+    """
     suite_set = set(suites)
     defaults: dict[str, Any] = {}
     if suite_set & {'logprob', 'experts'}:
         defaults['logprobs-mode'] = 'raw_logprobs'
-    if 'experts' in suite_set:
+    if suite_set & {'experts', 'toolcall'}:
         defaults['enable-return-routed-experts'] = None
-    if 'toolcall' in suite_set:
-        defaults['tool-call-parser'] = _default_tool_parser_name(model_path or '')
-    if 'reasoning' in suite_set:
-        defaults['reasoning-parser'] = 'default'
     return defaults
 
 
@@ -538,26 +696,28 @@ def build_interface_launch_extra(
     backend: str,
     suites: list[str] | set[str] | None = None,
     model_path: str | None = None,
+    *,
+    interface_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build launch ``extra`` dict for interface ``api_server``.
 
     Same structure as tools/pipeline ``engine_config.extra``. Merge order
     (later wins):
 
-    1. suite defaults (only for missing keys at the end — see below)
+    1. suite defaults (``logprobs-mode``, ``enable-return-routed-experts`` only)
     2. ``engine_config.extra`` (shared row launch)
-    3. ``interface.<backend>.extra`` (interface-specific)
+    3. ``interface_extra`` if provided, else ``interface.<backend>.extra``
 
-    Suite defaults are applied first, then overwritten by yaml, so configs are
-    the source of truth when present.
+    ``tool-call-parser`` / ``reasoning-parser`` must come from yaml (or
+    ``engine_config.extra``); they are not inferred from suites / model path.
     """
     iface = get_interface_backend_config(entry, backend)
     suite_list = list(suites) if suites is not None else list(iface.get('suites') or [])
-    model = model_path or ''
+    extra_src = iface.get('extra') or {} if interface_extra is None else interface_extra
     merged: dict[str, Any] = {}
-    merged.update(_suite_launch_extra_defaults(suite_list, model))
+    merged.update(_suite_launch_extra_defaults(suite_list))
     merged.update(_parallel_launch_extra(_entry_engine_config(entry)))
-    merged.update(copy.deepcopy(iface.get('extra') or {}))
+    merged.update(copy.deepcopy(extra_src or {}))
     return merged
 
 
@@ -566,19 +726,27 @@ def derive_interface_server_extra(
     model_path: str | None = None,
     entry: dict[str, Any] | None = None,
     backend: str | None = None,
+    *,
+    interface_extra: dict[str, Any] | None = None,
 ) -> str:
     """Format interface launch flags via ``get_cli_str`` (same as tools)."""
     entry = entry or {}
     backend = backend or 'pytorch'
-    extra = build_interface_launch_extra(entry, backend, suites=suites, model_path=model_path)
+    extra = build_interface_launch_extra(
+        entry,
+        backend,
+        suites=suites,
+        model_path=model_path,
+        interface_extra=interface_extra,
+    )
     return get_cli_str(extra).strip()
 
 
 def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]) -> list[str]:
     """Derive REST case groups from model profiles + interface suites.
 
-    Directory-based suites (toolcall / reasoning) are selected by path in CI; generate logprob/experts stay in one file
-    and are filtered by pytest marks.
+    Directory-based suites (toolcall / reasoning) and anthropic protocol files are selected by path in CI; generate
+    logprob/experts stay in one file and are filtered by pytest marks.
     """
     suite_set = set(suites)
     case_info: list[str] = []
@@ -590,6 +758,9 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
         if suite_set & GENERATE_SUITES:
             case_info.append('chat_completions_v1')
             case_info.append('generate')
+    if 'anthropic' in suite_set:
+        case_info.append('anthropic_v1')
+        case_info.append('anthropic_sdk')
     if 'toolcall' in suite_set:
         case_info.append('toolcall')
     if 'reasoning' in suite_set:
@@ -650,15 +821,27 @@ def get_interface_matrix(
 
         for backend in target_backends:
             iface_cfg = get_interface_backend_config(entry, backend)
+            launch_profiles = get_interface_profiles(entry, backend)
             suites = list(iface_cfg.get('suites') or [])
-            if not suites:
+            if not launch_profiles:
                 continue
             key = (model_id, backend)
             if key in seen:
                 # Prefer the first yaml row that declares interface for this pair.
                 continue
             seen.add(key)
-            case_info = derive_interface_case_info(profiles, suites)
+            case_info: list[str] = []
+            phase_extras: list[str] = []
+            for prof in launch_profiles:
+                case_info.extend(derive_interface_case_info(profiles, prof['suites']))
+                phase_extras.append(
+                    derive_interface_server_extra(
+                        prof['suites'],
+                        model_path=model_id,
+                        entry=entry,
+                        backend=backend,
+                        interface_extra=prof.get('extra') or {},
+                    ))
             rows.append({
                 'model': model_name,
                 'model_path': model_id,
@@ -666,9 +849,8 @@ def get_interface_matrix(
                 'backend': backend,
                 'suites': suites,
                 'case_info': case_info,
-                'extra': derive_interface_server_extra(
-                    suites, model_path=model_id, entry=entry, backend=backend,
-                ),
+                'extra': phase_extras[0] if phase_extras else '',
+                'phase_extras': phase_extras,
                 'generate_marker': derive_generate_marker(suites, backend),
             })
 
@@ -696,11 +878,11 @@ def get_interface_run_config_list(
     profile = deps_profile if deps_profile is not None else 'all'
 
     for model_id, entry in _iter_per_model_entries(matrix_env, deps_profile=profile):
-        suites = get_interface_suites(entry, backend)
-        if not suites:
+        launch_profiles = get_interface_profiles(entry, backend)
+        if not launch_profiles:
             continue
-        profiles = set(_normalize_profiles(entry.get('model_type', 'chat')))
-        if not (profiles & wanted):
+        model_profiles = set(_normalize_profiles(entry.get('model_type', 'chat')))
+        if not (model_profiles & wanted):
             continue
         layout = _parallel_layout(_entry_engine_config(entry))
         if not _parallel_dicts_equal(layout, parallel_config):
@@ -708,25 +890,52 @@ def get_interface_run_config_list(
         backend_map = _normalize_entry_backends(entry, config, layout)
         communicators = backend_map.get(backend) or ['nccl']
         communicator = communicators[0]
-        key = (model_id, backend, communicator, tuple(sorted(layout.items())), tuple(suites))
+        suites = get_interface_suites(entry, backend)
+        phase_key = tuple(
+            (tuple(p.get('suites') or []), tuple(sorted((p.get('extra') or {}).items())))
+            for p in launch_profiles
+        )
+        key = (model_id, backend, communicator, tuple(sorted(layout.items())), phase_key)
         if key in seen:
             continue
         seen.add(key)
-        launch_extra = build_interface_launch_extra(
-            entry, backend, suites=suites, model_path=model_id,
-        )
-        case_info = derive_interface_case_info(list(profiles), suites)
+
+        interface_phases: list[dict[str, Any]] = []
+        all_case_info: list[str] = []
+        for prof in launch_profiles:
+            case_info = derive_interface_case_info(list(model_profiles), prof['suites'])
+            if not case_info:
+                continue
+            extra_params = build_interface_launch_extra(
+                entry,
+                backend,
+                suites=prof['suites'],
+                model_path=model_id,
+                interface_extra=prof.get('extra') or {},
+            )
+            interface_phases.append({
+                'suites': list(prof['suites']),
+                'case_info': case_info,
+                'extra_params': extra_params,
+            })
+            all_case_info.extend(case_info)
+
+        if not interface_phases:
+            continue
+
         rows.append({
             'model': model_id,
             'backend': backend,
             'communicator': communicator,
             'quant_policy': 0,
             'parallel_config': copy.deepcopy(layout),
-            'extra_params': launch_extra,
+            'extra_params': copy.deepcopy(interface_phases[0]['extra_params']),
             'interface_suites': list(suites),
-            'case_info': case_info,
+            'case_info': all_case_info,
+            'interface_phases': interface_phases,
             'generate_marker': derive_generate_marker(suites, backend),
         })
+
     return rows
 
 

@@ -113,26 +113,55 @@ Launch params use the **same dict shape as `engine_config.extra`** (kebab-case
 keys; `null` => boolean CLI flag). Formatting goes through `get_cli_str`, shared
 with tools/pipeline.
 
-Recommended form (suites + explicit launch `extra`):
+Recommended form — each backend is `{suites, extra}`, or a **list of launch
+profiles** when different suites need **different** `api_server` extras.
+
+Same launch command → one profile (merge suites; no extra restart):
 
 ```yaml
 interface:
   pytorch:
-    suites: [base, logprob, experts, toolcall, reasoning]
+    suites: [base, logprob, anthropic]
+    extra:
+      logprobs-mode: raw_logprobs
+  turbomind:
+    suites: [base, logprob, anthropic]
+    extra:
+      logprobs-mode: raw_logprobs
+```
+
+Different launch extras (e.g. tool/reasoning parsers must not be on the
+anthropic server) → list of profiles:
+
+```yaml
+interface:
+  pytorch:
+  - suites: [base, logprob, experts, toolcall, reasoning]
     extra:
       logprobs-mode: raw_logprobs
       enable-return-routed-experts: null
       tool-call-parser: qwen3coder
       reasoning-parser: default
+  - suites: [anthropic]
+    extra:
+      logprobs-mode: raw_logprobs
+      enable-return-routed-experts: null
   turbomind:
-    suites: [base, logprob, toolcall, reasoning]
+  - suites: [base, logprob, toolcall, reasoning]
     extra:
       logprobs-mode: raw_logprobs
       tool-call-parser: qwen3coder
       reasoning-parser: default
+  - suites: [anthropic]
+    extra:
+      logprobs-mode: raw_logprobs
 ```
 
-Shorthand (suites only; missing launch keys filled from suite defaults):
+(YAML cannot have two sibling `suites:` keys under the same mapping; use a
+list of profiles when extras differ. Profiles with identical `extra` are
+merged at normalize time into one api_server phase.)
+
+Shorthand (single suite list; missing launch keys filled from suite defaults):
 
 ```yaml
 interface:
@@ -140,24 +169,41 @@ interface:
   turbomind: [base, logprob]
 ```
 
-Merge order for the interface `api_server` command (later wins):
+If shorthand mixes `anthropic` with `toolcall`/`reasoning`, anthropic is
+split into its own empty-extra phase so it does not share a server that must
+carry tool/reasoning parsers from yaml.
 
-1. suite defaults (logprob/experts/toolcall/reasoning recommended flags)
+Legacy single-dict form `{suites, extra, anthropic: {extra: ...}}` is still
+accepted and normalized into the two-profile shape.
+
+Merge order for each profile's `api_server` command (later wins):
+
+1. suite defaults (`logprobs-mode` for logprob/experts; `enable-return-routed-experts` for experts/toolcall)
 2. row `engine_config.extra` (shared with tools on the same row)
-3. `interface.<backend>.extra` (interface-specific overrides)
+3. that profile's `extra`
+
+`tool-call-parser` / `reasoning-parser` are **not** suite-defaulted — set them
+in profile `extra` (or `engine_config.extra`) whenever `toolcall` / `reasoning`
+is enabled.
 
 Suites:
 
 - `base` — chat/completions basic cases; generate without logprob/experts
 - `logprob` — generate logprob cases
 - `experts` — generate routed-experts cases
-- `toolcall` — `interface/restful/tool_parser/`
-- `reasoning` — `interface/restful/reasoning_parser/`
+- `anthropic` — Anthropic Messages HTTP + SDK smoke (`RESTFUL_MODEL_LIST`). Share a profile with `base`/`logprob` when `extra` matches; otherwise its own profile **without** `tool-call-parser` / `reasoning-parser`.
+- `toolcall` — `interface/restful/tool_parser/` (requires `tool-call-parser` in yaml `extra`; also suite-defaults `--enable-return-routed-experts`, because toolcall includes `@experts`-marked return_token_ids / routed_experts cases)
+- `reasoning` — `interface/restful/reasoning_parser/` (requires `reasoning-parser` in yaml `extra`)
 
 Notes:
 
-- Prefer putting launch flags in `interface.<backend>.extra` so interface does not
+- Prefer putting launch flags in profile `extra` so interface does not
   pollute tools when sharing a row with `test_coverage: func`.
+- Each distinct `extra` is one api_server phase (generic; not hardcoded to anthropic).
+  Add more `- suites: [...]` / `extra:` blocks only when launch flags differ.
+- Put tool-call / reasoning parsers only on profiles that need them (yaml only).
+- Suite defaults for `experts` / `toolcall` include `enable-return-routed-experts`;
+  yaml `extra` can still override if needed.
 - Chat/vl rows run `chat_completions_v1` + `generate` when any of base/logprob/experts is set.
 - Base-only rows run `completions_v1`.
 - Generate logprob/experts stay in one file and use pytest marks (`-m`).

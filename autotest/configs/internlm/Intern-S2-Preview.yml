@@ -60,7 +60,7 @@ h:
   - quantization
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -69,8 +69,12 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: interns2-preview
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
     turbomind:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -79,6 +83,10 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: interns2-preview
         reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     pytorch:
     - fp8

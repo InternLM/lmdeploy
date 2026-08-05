@@ -17,7 +17,7 @@ h:
   - func
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -26,6 +26,10 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3
         reasoning-parser: intern-s1
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   gen_config:
     temperature: 0.8
     top-p: 0.95
@@ -45,7 +49,7 @@ h:
   - func
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
       - toolcall
@@ -54,6 +58,10 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3
         reasoning-parser: intern-s1
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   gen_config:
     temperature: 0.8
     top-p: 0.95
