@@ -1,11 +1,18 @@
 # Tools Calling
 
-LMDeploy supports tools for InternLM2, InternLM2.5, llama3.1 and Qwen2.5 models. Please use `--tool-call-parser` to specify
+LMDeploy supports tools for InternLM2, InternLM2.5, Llama3.1, Qwen2.5, and GLM-4.7 models. Please use `--tool-call-parser` to specify
 which parser to use when launching the api_server. Supported names are:
 
 1. internlm
 2. qwen
 3. llama3
+4. glm47
+
+For example, start a GLM-4.7 service with:
+
+```shell
+lmdeploy serve api_server /path/to/GLM-4.7-Flash --tool-call-parser glm47
+```
 
 ## Single Round Invocation
 

@@ -1,11 +1,18 @@
 # Tools
 
-LMDeploy 支持 InternLM2, InternLM2.5, Llama3.1 和 Qwen2.5模型的工具调用。请在启动 api_server 的时候使用 `--tool-call-parser` 指定
+LMDeploy 支持 InternLM2, InternLM2.5, Llama3.1, Qwen2.5 和 GLM-4.7 模型的工具调用。请在启动 api_server 的时候使用 `--tool-call-parser` 指定
 parser 名字。以下是支持的名字:
 
 1. internlm
 2. qwen
 3. llama3
+4. glm47
+
+例如，启动 GLM-4.7 服务时可以使用：
+
+```shell
+lmdeploy serve api_server /path/to/GLM-4.7-Flash --tool-call-parser glm47
+```
 
 ## 单轮调用
 
