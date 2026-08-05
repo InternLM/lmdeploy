@@ -162,6 +162,20 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
                 terminate_restful_api(f'gw{i}')
             stop_restful_api(proxy_pid, proxy_process)
     else:  # eval
+        model_path = get_model_path_from_config(config, run_config.get('model'))
+        # Longtext suites (needlebench / ruler / niah) use rule-based metrics;
+        # skip judge api_server + proxy startup.
+        if eval_config_name in ('longtext-256k', 'longtext-512k'):
+            eval_test(model_path,
+                      eval_path,
+                      case_name,
+                      port=constant.PROXY_PORT,
+                      test_type=test_type,
+                      extra_config=extra_config,
+                      eval_config_name=eval_config_name,
+                      **preset_config)
+            return
+
         port = constant.PROXY_PORT + get_workerid(worker_id)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port, f'{case_name}_eval')
         eval_run_config = build_eval_judge_run_config(
