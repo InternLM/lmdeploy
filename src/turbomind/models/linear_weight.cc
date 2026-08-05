@@ -124,6 +124,11 @@ void LinearWeight::prepare()
 
     auto stream = core::Context::stream().handle();
 
+    // TM_GEMM_WEIGHT_PACK=0: keep load-time storage; no transpose / tiled pack.
+    if (gemm::WeightPackEnv() == 0) {
+        return;
+    }
+
     if (weight_format.dtype == kFloat8_e4m3 && input_dtype() == kFloat8_e4m3) {
         // FP8 native path: transpose weight and scales for native kernels.
         auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
@@ -152,6 +157,35 @@ void LinearWeight::prepare()
 
         auto [conv_w, conv_s] =
             GetConverters(data_type, weight_format.dtype, input_dtype(), is_grouped_, getSMVersion());
+
+        // SM90 dense + grouped BF16/FP16: no pack converter (GetConverters returns {}),
+        // but GMMA+TMA need physical (N, K) with K contiguous (same as FP8 native
+        // prepare). Plain (K, N) row-major cannot use SW128 TMA boxes along K.
+        // Grouped experts prepare as 2D before MoeWeight::LinkLinearExperts; SM100
+        // grouped stays (K, N) for cuBLAS (sm gate excludes >= 100).
+        if (!conv_w && getSMVersion() >= 90 && getSMVersion() < 100
+            && (weight_format.dtype == kBfloat16 || weight_format.dtype == kHalf)) {
+            Tensor trans{{weight.shape(1), weight.shape(0)}, weight.dtype(), kDEVICE};
+            if (weight.dtype() == kBfloat16) {
+                invokeTransposeAxis01((nv_bfloat16*)trans.raw_data(),
+                                      (nv_bfloat16*)weight.raw_data(),
+                                      weight.shape(0),
+                                      weight.shape(1),
+                                      1,
+                                      stream);
+            }
+            else {
+                invokeTransposeAxis01(
+                    (half*)trans.raw_data(), (half*)weight.raw_data(), weight.shape(0), weight.shape(1), 1, stream);
+            }
+            weight       = std::move(trans);
+            k_desc.type  = weight.dtype();
+            k_desc.order = gemm::kColMajor;
+            k_desc.rows  = (int)weight.shape(1);
+            k_desc.cols  = (int)weight.shape(0);
+            k_desc.ld    = (int)weight.stride(0);
+            k_desc.pack  = {};
+        }
 
         if (conv_w) {
             const auto order_w = conv_w->order;

@@ -53,6 +53,10 @@ class CudaGraphMeta:
 class CudaGraphMixin:
     """Mixin class to support cudagraph."""
 
+    def get_cudagraph_extra_key(self, **kwargs) -> tuple:
+        """Get model-specific CUDA graph keys."""
+        return ()
+
     def support_cuda_graph(
         self,
         input_ids: torch.Tensor,
@@ -129,7 +133,8 @@ class CudaGraphMixin:
 
         # Compatibility path for backends that reuse CUDAGraphRunner without
         # installing the CUDA implementation-derived metadata plan.
-        elif graph_meta.use_flash_mla is True:
+        elif (graph_meta.use_flash_mla is True
+              and (graph_meta.use_mla_fp8_cache or graph_meta.mla_index_topk is None)):
             from lmdeploy.pytorch.backends.cuda.attention.mla import build_flash_mla_graph_metadata
 
             step_ctx = get_step_ctx_manager().current_context()
@@ -222,19 +227,26 @@ class CudaGraphMixin:
 
         # Compatibility path for backends that reuse CUDAGraphRunner without
         # installing the CUDA implementation-derived metadata plan.
-        elif graph_meta.use_flash_mla is True:
+        elif (graph_meta.use_flash_mla is True
+              and (graph_meta.use_mla_fp8_cache or graph_meta.mla_index_topk is None)):
             from lmdeploy.pytorch.backends.cuda.attention.mla import build_flash_mla_graph_metadata
 
             step_ctx = get_step_ctx_manager().current_context()
-            metadata = build_flash_mla_graph_metadata(
-                step_ctx,
-                attn_metadata.kv_seqlens,
-                decoding_query_len=decode_query_len,
-            )
-            # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
-            input_buffers['tile_scheduler_metadata'].copy_(metadata.tile_scheduler_metadata)
-            input_buffers['num_splits'][:new_batch_size + 1].copy_(metadata.num_splits[:new_batch_size + 1])
-            attn_metadata.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
+            scheduler_buffer = input_buffers['tile_scheduler_metadata']
+            # The old API returns tensor metadata that must be refreshed while
+            # preserving its CUDA graph address. The new FlashMLASchedMeta API
+            # owns and initializes its metadata object on first use.
+            if isinstance(scheduler_buffer, torch.Tensor):
+                metadata = build_flash_mla_graph_metadata(
+                    step_ctx,
+                    attn_metadata.kv_seqlens,
+                    decoding_query_len=decode_query_len,
+                )
+                # Keep graph input addresses stable for the old FlashMLA metadata API.
+                scheduler_buffer.copy_(metadata.tile_scheduler_metadata)
+                input_buffers['num_splits'][:new_batch_size + 1].copy_(
+                    metadata.num_splits[:new_batch_size + 1])
+            attn_metadata.tile_scheduler_metadata = scheduler_buffer
             attn_metadata.num_splits = input_buffers['num_splits']
 
         # use fa3 decode kernel for spec decode

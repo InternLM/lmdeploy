@@ -159,7 +159,7 @@ LMDeploy will run unit test for the posted Pull Request on different platforms (
 
 #### 7. Resolve conflicts
 
-If your local branch conflicts with the latest master branch of "upstream", you'll need to resolove them. There are two ways to do this:
+If your local branch conflicts with the latest master branch of "upstream", you'll need to resolve them. There are two ways to do this:
 
 ```shell
 git fetch --all --prune
@@ -205,7 +205,7 @@ We use the following tools for linting and formatting:
 - [docformatter](https://github.com/myint/docformatter): A formatter to format docstring.
 
 We use [pre-commit hook](https://pre-commit.com/) that checks and formats for `flake8`, `yapf`, `isort`, `trailing whitespaces`, `markdown files`,
-fixes `end-of-files`, `double-quoted-strings`, `python-encoding-pragma`, `mixed-line-ending`, sorts `requirments.txt` automatically on every commit.
+fixes `end-of-files`, `double-quoted-strings`, `python-encoding-pragma`, `mixed-line-ending`, sorts `requirements.txt` automatically on every commit.
 The config for a pre-commit hook is stored in [.pre-commit-config](../.pre-commit-config.yaml).
 
 #### C++ and CUDA

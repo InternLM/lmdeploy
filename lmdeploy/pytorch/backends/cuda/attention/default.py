@@ -34,6 +34,7 @@ class TritonAttentionMetadata(AttentionMetadata):
         num_splits: Number of splits for Flash MLA.
         cu_seqlens_q: Cumulative query sequence lengths [batch_size + 1].
         cu_seqlens_k: Cumulative KV sequence lengths [batch_size + 1].
+        indexer_kv_seqlens: Per-query causal KV lengths for DSA top-k.
         scheduler_metadata: Scheduler metadata for FA3.
         max_kv_seqlen: Maximum KV sequence length in the batch.
         max_q_seqlen: Maximum query sequence length in the batch.
@@ -51,6 +52,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     num_splits: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
+    indexer_kv_seqlens: torch.Tensor = None
     # flash attn
     scheduler_metadata: torch.Tensor = None
     max_kv_seqlen: int = None

@@ -1059,11 +1059,13 @@ class Scheduler:
 
     @property
     def schedule_metrics(self):
+        total_blocks = self.block_manager.num_gpu_blocks
+        free_blocks = self.block_manager.get_num_free_gpu_blocks()
+        cache_usage = 1.0 - free_blocks / total_blocks if total_blocks else 0.0
         return ScheduleMetrics(
             active_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready(),
-            total_blocks=self.block_manager.num_gpu_blocks,
-            free_blocks=self.block_manager.get_num_free_gpu_blocks(),
+            cache_usage=cache_usage,
             prefix_cache_hit_rate=self.block_trie.hit_rate(),
             scheduler_tick=self.scheduler_tick,
         )

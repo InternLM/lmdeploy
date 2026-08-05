@@ -256,7 +256,9 @@ class CUDAGraphRunner(GraphRunner):
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch, query_len)
+        graph_key = (batch_size, is_decoding, enable_microbatch, query_len)
+        graph_key += self.model.get_cudagraph_extra_key(**kwargs)
+        return graph_key
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""

@@ -1018,7 +1018,12 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
-    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
+    def create_generate_response_json(res,
+                                      text,
+                                      output_ids,
+                                      logprobs,
+                                      finish_reason,
+                                      routed_experts=None):
         # only output router experts in last chunk
         routed_experts = None if finish_reason is None else routed_experts
         meta = GenerateReqMetaOutput(finish_reason=dict(type=finish_reason) if finish_reason else None,
@@ -1027,7 +1032,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                      routed_experts=routed_experts,
                                      completion_tokens=res.generate_token_len)
 
-        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta, routed_experts=routed_experts)
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
         return response.model_dump_json()
 
     async def generate_stream_generator():

@@ -141,15 +141,23 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig, decoding_query_len: int):
         """Update meta for flashmla."""
-        from .attention.mla import update_flash_mla_metadata
+        from .attention.mla import needs_flash_mla_scheduler, update_flash_mla_metadata
+
+        is_fp8_kvcache = model_config.use_mla_fp8_cache
+        index_topk = model_config.mla_index_topk
+        # FlashMLA block tables and BF16 sparse physical-slot indices are int32.
+        if attn_metadata.block_offsets.dtype != torch.int32:
+            attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
+        if not needs_flash_mla_scheduler(is_fp8_kvcache, index_topk):
+            return
 
         num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
         update_flash_mla_metadata(
             attn_metadata,
             num_attention_heads=num_attention_heads,
             decoding_query_len=decoding_query_len,
-            is_fp8_kvcache=model_config.use_mla_fp8_cache,
-            index_topk=model_config.mla_index_topk,
+            is_fp8_kvcache=is_fp8_kvcache,
+            index_topk=index_topk,
         )
 
     @classmethod

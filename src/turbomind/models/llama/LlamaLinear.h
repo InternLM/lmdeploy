@@ -1,5 +1,4 @@
 // Copyright (c) OpenMMLab. All rights reserved.
-
 #pragma once
 
 #include <istream>
@@ -23,6 +22,23 @@ public:
                  const Buffer_<int>& indices,
                  const Buffer_<int>& offsets,
                  Ref<Tensor>         output);
+
+    /// Forward with optional dynamic act-scale companions.
+    /// ``input_scales``: when ``input`` is already FP8, used as GEMM U (skip QuantizeSymm).
+    /// ``output_scales``: when ``weight.output_dtype()`` is FP8, filled with group-128 scales (W).
+    void Forward(const Tensor&       input,
+                 const Tensor&       input_scales,
+                 const LinearWeight& weight,
+                 const Buffer_<int>& indices,
+                 const Buffer_<int>& offsets,
+                 Ref<Tensor>         output,
+                 Ref<Tensor>         output_scales);
+
+    void Forward(const Tensor&       input,
+                 const Tensor&       input_scales,
+                 const LinearWeight& weight,
+                 Ref<Tensor>         output,
+                 Ref<Tensor>         output_scales);
 
     void set_measure(bool measure);
 
