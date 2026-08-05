@@ -3,7 +3,6 @@
 
 import functools
 
-import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
@@ -36,10 +35,10 @@ SMALL_M_THRESHOLD = 128
 MID_M_THRESHOLD = 256
 
 # The three schedules keep the same blocked-scaling math but optimize different
-# bottlenecks. Small M keeps loading and compute in one partition to minimize
-# overhead; the middle schedule separates a TMA producer from the compute
-# warpgroup while its grid fits two CTAs per SM; larger grids additionally
-# persist CTAs and split each 256-row accumulator into waves.
+# bottlenecks. The single-partition schedule keeps loading and compute together
+# to minimize overhead. Middle M otherwise separates a TMA producer from the
+# compute warpgroup, while larger grids additionally persist CTAs and split
+# each 256-row accumulator into waves.
 
 
 @gluon.constexpr_function
@@ -98,7 +97,7 @@ def _load_block_scales(
 
 
 @gluon.jit
-def _fp8_gemm_nt_small_kernel(
+def _fp8_gemm_nt_single_partition_kernel(
     a_desc,
     a_scale_ptr,
     b_desc,
@@ -566,7 +565,7 @@ def _compute_mid_m_tile(
 
 
 @gluon.jit
-def _fp8_gemm_nt_mid_m_kernel(
+def _fp8_gemm_nt_warp_specialized_kernel(
     a_desc,
     a_scale_ptr,
     b_desc,
@@ -900,7 +899,7 @@ def _compute_persistent_tiles(
 
 
 @gluon.jit
-def _fp8_gemm_nt_large_kernel(
+def _fp8_gemm_nt_persistent_kernel(
     a_desc,
     a_scale_desc,
     b_desc,
@@ -1051,7 +1050,7 @@ def _make_transposed_small_descriptors(a_quant, b_quant, output, block_m, block_
     return lhs_desc, rhs_desc, d_desc
 
 
-def _launch_small_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
+def _launch_single_partition(a_quant, a_scale, b_quant, b_scale, output):
     m, n = output.shape
     k = a_quant.size(-1)
     transpose_output = m <= 8 and k >= 4096
@@ -1083,7 +1082,7 @@ def _launch_small_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
     grid = (triton.cdiv(m, block_m), triton.cdiv(n, block_n))
     if transpose_output:
         grid = (triton.cdiv(m, block_n), triton.cdiv(n, block_m))
-    _fp8_gemm_nt_small_kernel[grid](
+    _fp8_gemm_nt_single_partition_kernel[grid](
         a_desc,
         a_scale,
         b_desc,
@@ -1100,7 +1099,7 @@ def _launch_small_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
     )
 
 
-def _launch_mid_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
+def _launch_warp_specialized(a_quant, a_scale, b_quant, b_scale, output):
     m, n = output.shape
     k = a_quant.size(-1)
     block_m = 64
@@ -1110,7 +1109,7 @@ def _launch_mid_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
 
     a_desc, b_desc, d_desc = _make_matrix_descriptors(a_quant, b_quant, output, block_m, block_n)
     grid = (triton.cdiv(m, block_m), triton.cdiv(n, block_n))
-    _fp8_gemm_nt_mid_m_kernel[grid](
+    _fp8_gemm_nt_warp_specialized_kernel[grid](
         a_desc,
         a_scale,
         b_desc,
@@ -1127,7 +1126,7 @@ def _launch_mid_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
     )
 
 
-def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
+def _launch_persistent(a_quant, a_scale, b_quant, b_scale, output):
     m, n = output.shape
     k = a_quant.size(-1)
     block_m = 256
@@ -1150,7 +1149,7 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
     # Cap the persistent grid at the SM count; each program obtains further
     # logical output tiles from PersistentTileScheduler.
     grid = (min(num_sms, num_tiles), )
-    _fp8_gemm_nt_large_kernel[grid](
+    _fp8_gemm_nt_persistent_kernel[grid](
         a_desc,
         a_scale_desc,
         b_desc,
@@ -1167,19 +1166,46 @@ def _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, output):
     )
 
 
+def _prefer_single_partition(m, n, num_sms):
+    """Select the single-partition schedule for small or compact grids."""
+    if m <= SMALL_M_THRESHOLD:
+        return True
+    if m > MID_M_THRESHOLD:
+        return False
+
+    num_tiles_m = triton.cdiv(m, 64)
+    single_partition_tiles = num_tiles_m * triton.cdiv(n, 64)
+    if single_partition_tiles <= num_sms:
+        return True
+
+    # BN64 removes the producer/consumer barrier but doubles the grid relative
+    # to the warp-specialized BN128 schedule. It remains profitable for up to
+    # two dense CTA waves. Sparse final M tiles lose that tradeoff, so require
+    # at least 48 of their 64 rows to be useful in the second case.
+    warp_specialized_tiles = num_tiles_m * triton.cdiv(n, 128)
+    final_tile_rows = m - (num_tiles_m - 1) * 64
+    return warp_specialized_tiles <= num_sms and final_tile_rows >= 48
+
+
 @functools.lru_cache
-def _use_mid_m_kernel(m, n, device_index):
-    """Use the mid schedule while its grid fits one resident CTA wave."""
+def _use_single_partition(m, n, device_index):
+    num_sms = get_device_props(device_index)['multi_processor_count']
+    return _prefer_single_partition(m, n, num_sms)
+
+
+@functools.lru_cache
+def _use_warp_specialized(m, n, device_index):
+    """Use warp specialization while its grid fits one resident CTA wave."""
     if m <= MID_M_THRESHOLD:
         return True
 
-    # The mid kernel can keep two CTAs resident per Hopper SM, whereas the
-    # register-heavy persistent kernel is limited to one. Prefer mid when all
-    # of its 64x128 tiles fit in that resident capacity; this avoids launching
-    # an underfilled persistent grid, notably at M=512, N=4096 on H200.
-    mid_tiles = triton.cdiv(m, 64) * triton.cdiv(n, 128)
+    # The warp-specialized kernel can keep two CTAs resident per Hopper SM,
+    # whereas the register-heavy persistent kernel is limited to one. Prefer
+    # warp specialization when all 64x128 tiles fit in that resident capacity;
+    # this avoids an underfilled persistent grid, notably at M=512, N=4096.
+    warp_specialized_tiles = triton.cdiv(m, 64) * triton.cdiv(n, 128)
     num_sms = get_device_props(device_index)['multi_processor_count']
-    return mid_tiles <= 2 * num_sms
+    return warp_specialized_tiles <= 2 * num_sms
 
 
 def fp8_gemm_nt(a, b, d, c):
@@ -1187,7 +1213,7 @@ def fp8_gemm_nt(a, b, d, c):
 
     ``a`` contains contiguous FP8 values shaped ``[M, K]`` and per-row scales
     shaped ``[M, K / 128]``. The A scales must have stride 1 along M; their
-    physical K-block stride must be 16-byte aligned for the large-M TMA path.
+    physical K-block stride must be 16-byte aligned for the persistent path.
     ``b`` contains contiguous FP8 values shaped ``[N, K]`` and contiguous
     scales shaped ``[ceil(N / 128), K / 128]``. Both K and N scale groups are
     128 elements. The result is written to contiguous BF16 ``d``; ``c`` is
@@ -1195,17 +1221,19 @@ def fp8_gemm_nt(a, b, d, c):
 
     M up to 128 uses a single-partition multistage schedule. Within that body,
     M up to 8 with K at least 4096 computes the equivalent transposed GEMM to
-    avoid padding the tensor-core result to 64 rows. M above 128 uses a primed
-    warp-specialized schedule while its 64x128 tile grid fits the two-CTA-per-SM
-    resident capacity. Larger grids use a persistent two-wave schedule that
-    reuses B data and scales while controlling accumulator register pressure.
+    avoid padding the tensor-core result to 64 rows. For M up to 256, dense
+    64x64 grids that fit at most two CTA waves reuse the single-partition body
+    to avoid warp-specialization barriers. Other middle shapes use a primed
+    warp-specialized 64x128 schedule. Larger grids use a persistent two-wave
+    schedule that reuses B data and scales while controlling accumulator
+    register pressure.
     """
     a_quant, a_scale = a
     b_quant, b_scale = b
 
-    if d.size(0) <= SMALL_M_THRESHOLD:
-        _launch_small_m_kernel(a_quant, a_scale, b_quant, b_scale, d)
-    elif _use_mid_m_kernel(d.size(0), d.size(1), d.device.index):
-        _launch_mid_m_kernel(a_quant, a_scale, b_quant, b_scale, d)
+    if _use_single_partition(d.size(0), d.size(1), d.device.index):
+        _launch_single_partition(a_quant, a_scale, b_quant, b_scale, d)
+    elif _use_warp_specialized(d.size(0), d.size(1), d.device.index):
+        _launch_warp_specialized(a_quant, a_scale, b_quant, b_scale, d)
     else:
-        _launch_large_m_kernel(a_quant, a_scale, b_quant, b_scale, d)
+        _launch_persistent(a_quant, a_scale, b_quant, b_scale, d)

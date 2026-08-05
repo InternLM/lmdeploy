@@ -140,6 +140,27 @@ def test_fp8_gemm_nt_dispatch_boundaries(m):
 
 
 @pytest.mark.parametrize(
+    ('m', 'n', 'expected'),
+    [
+        (128, 2048, True),
+        (129, 2048, True),
+        (256, 2048, True),
+        (160, 4096, False),
+        (192, 4096, True),
+        (224, 4096, False),
+        (256, 4096, True),
+        (256, 8192, False),
+        (257, 2048, False),
+    ],
+)
+def test_fp8_gemm_nt_single_partition_policy(m, n, expected):
+    """Use the single-partition schedule within its measured wave budget."""
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import _prefer_single_partition
+
+    assert _prefer_single_partition(m, n, num_sms=132) is expected
+
+
+@pytest.mark.parametrize(
     ('m', 'k'),
     [
         (37, 1152),
