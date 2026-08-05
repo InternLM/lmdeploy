@@ -55,11 +55,14 @@ class InferOutput:
     # when Prefill Engine is Done.
     cache_block_ids: list[int] = None
 
-    # for logging
+    # logging
     req_metrics: RequestMetrics = None
 
     # expert ids
     routed_experts: torch.Tensor = None
+
+    # multimodal outputs, e.g. time series predictions
+    multimodal_outputs: dict[str, Any] | None = None
 
     # summed, unnormalized cross-entropy (NLL) of the input prompt
     ce_loss: float = None
