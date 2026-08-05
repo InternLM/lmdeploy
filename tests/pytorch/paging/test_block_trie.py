@@ -469,7 +469,7 @@ class TestBlockTire:
         block_trie.match(matched)
         assert np.array_equal(matched.all_routed_experts.get_real(), experts)
 
-    def test_match_does_not_partially_replay_routed_experts(self, block_trie, block_mgr, scheduler):
+    def test_match_stops_before_block_missing_routed_experts(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
         token_ids = [1] * block_size + [2] * block_size + [3]
@@ -483,8 +483,10 @@ class TestBlockTire:
         matched = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
         block_trie.match(matched)
 
-        assert matched.num_history_ids == block_size * 2
-        assert len(matched.all_routed_experts) == 0
+        assert matched.num_history_ids == block_size
+        assert np.array_equal(matched.all_routed_experts.get_real(), self._routed_experts(block_size))
+        assert matched.prefix_cache.private_recompute_start_step == block_size
+        assert matched.prefix_cache.private_recompute_end_step == block_size * 2
 
     def test_missing_replay_does_not_enrich_from_misaligned_tail(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
@@ -501,7 +503,7 @@ class TestBlockTire:
         matched = sess.add_sequence(token_ids, sampling_param=SamplingParam(return_routed_experts=True))
         block_trie.match(matched)
 
-        assert matched.num_history_ids == block_size * 2
+        assert matched.num_history_ids == 0
         assert len(matched.all_routed_experts) == 0
 
         matched.append_routed_experts(self._routed_experts(1, offset=1000))

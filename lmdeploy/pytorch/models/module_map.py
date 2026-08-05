@@ -54,7 +54,6 @@ MODULE_MAP.update({
 })
 
 # glm4.7
-
 MODULE_MAP.update({'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
 
 # glm4.7 mtp
@@ -63,7 +62,10 @@ MODULE_MAP.update({
 })
 
 # glm5
-MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
+MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa.GlmMoeDsaForCausalLM'})
+
+# glm5 mtp
+MODULE_MAP.update({'GlmMoeDsaMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa_mtp.GlmMoeDsaMTPModel'})
 
 # internlm2
 MODULE_MAP.update({

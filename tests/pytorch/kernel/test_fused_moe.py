@@ -71,6 +71,39 @@ def test_compact_blocked_fp8_configs_use_average_routes(num_routes, block_m):
                                                                                 num_stages=3)
 
 
+@pytest.mark.parametrize(('num_routes', 'gate_out_features', 'block_m', 'block_n'), [
+    (256 * 4, 512, 16, 64),
+    (256 * 8, 512, 16, 64),
+    (256 * 16, 512, 32, 128),
+    (256 * 32, 512, 64, 128),
+    (256 * 4, 4096, 64, 128),
+])
+def test_compact_blocked_fp8_both_configs(num_routes, gate_out_features, block_m, block_n):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _compact_blocked_fp8_moe_both_config
+
+    assert _compact_blocked_fp8_moe_both_config(num_routes, 256, gate_out_features) == dict(
+        block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
+
+
+@pytest.mark.parametrize(('num_tokens', 'num_routes', 'num_experts', 'local_experts', 'expected'), [
+    (64, 256 * 4, 256, 256, False),
+    (128, 256 * 3, 256, 256, False),
+    (128, 256 * 4, 256, 256, True),
+    (1536, 256 * 48, 256, 256, True),
+    (2048, 256 * 64, 256, 256, False),
+    (128, 256 * 4, 512, 256, False),
+    (128, 256 * 4, 256, 128, False),
+])
+def test_compact_blocked_fp8_both_policy_uses_measured_route_density(num_tokens, num_routes, num_experts,
+                                                                    local_experts, expected):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
+        _should_use_compact_blocked_fp8_moe_both_by_shape,
+    )
+
+    assert _should_use_compact_blocked_fp8_moe_both_by_shape(
+        num_tokens, num_routes, num_experts, local_experts) is expected
+
+
 @pytest.mark.parametrize(('num_tokens', 'num_routes', 'origin_ctas', 'compact_ctas'), [
     (65, 650, 512 * 2 * 32, 512 * 1 * 32),
     (1024, 512 * 20, 512 * 16 * 32, 512 * 1 * 32),

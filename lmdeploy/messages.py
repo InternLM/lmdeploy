@@ -22,7 +22,7 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
-    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale. DSA uses the fp8_ds_mla layout)
     FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
@@ -427,7 +427,7 @@ class PytorchEngineConfig:
             If unspecified, will use the default version.
         quant_policy: default to 0. When k/v is quantized into int4,
             int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
-            respectively
+            respectively. For DSA models, fp8 selects the fp8_ds_mla layout.
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
