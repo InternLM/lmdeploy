@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
 
 import torch
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
     matmul_kernel_static_quant,
     per_tensor_quant_fp8,
@@ -46,24 +46,13 @@ class TritonLinearStaticF8Impl(LinearStaticF8Impl):
         self.in_features = in_features
         self.out_features = out_features
         self.out_dtype = out_dtype
-        self.use_scaled_mm = (
-            os.getenv('LMDEPLOY_STATIC_FP8_USE_SCALED_MM', '0') == '1'
-        )
+        self.use_scaled_mm = _envs.static_fp8_use_scaled_mm
         self.use_compiled_quant = (
-            os.getenv(
-                'LMDEPLOY_STATIC_FP8_USE_COMPILED_QUANT',
-                '0',
-            ) == '1'
+            _envs.static_fp8_use_compiled_quant
         )
-        compiled_quant_token_counts = os.getenv(
-            'LMDEPLOY_STATIC_FP8_COMPILED_QUANT_TOKEN_COUNTS',
-            '1',
+        self.compiled_quant_token_counts = set(
+            _envs.static_fp8_compiled_quant_token_counts
         )
-        self.compiled_quant_token_counts = {
-            int(token_count)
-            for token_count in compiled_quant_token_counts.split(',')
-            if token_count
-        }
 
     def forward(
         self,

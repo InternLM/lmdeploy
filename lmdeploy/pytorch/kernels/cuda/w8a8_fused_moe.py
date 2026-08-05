@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-import os
 
 import torch
 import triton
 import triton.language as tl
+
+from lmdeploy.pytorch import envs as _envs
 
 from .activation import silu_and_mul
 from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
@@ -14,11 +15,7 @@ from .w8a8_triton_kernels import (
 )
 
 _USE_COMPILED_STATIC_FP8_QUANT = (
-    os.getenv(
-        'LMDEPLOY_MOE_STATIC_FP8_USE_COMPILED_QUANT',
-        '0',
-    )
-    == '1'
+    _envs.moe_static_fp8_use_compiled_quant
 )
 
 

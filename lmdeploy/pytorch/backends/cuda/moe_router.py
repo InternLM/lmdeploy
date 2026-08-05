@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
-
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
 from lmdeploy.pytorch.kernels.cuda.fused_single_group_router import (
     fused_single_group_topk_router,
@@ -49,10 +48,7 @@ class TritonRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
             and self.topk_group == 1
         )
         self.enable_single_group_fused = (
-            os.getenv(
-                'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
-                '0',
-            ) == '1'
+            _envs.router_single_group_fused
             and single_group_eligible
             and self.n_routed_experts == 192
             and self.top_k == 8

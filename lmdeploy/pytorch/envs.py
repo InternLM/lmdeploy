@@ -179,6 +179,28 @@ with set_envs():
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
 
+    # kernel optimizations
+    router_single_group_fused = env_to_bool(
+        'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
+        False,
+    )
+    static_fp8_use_scaled_mm = env_to_bool(
+        'LMDEPLOY_STATIC_FP8_USE_SCALED_MM',
+        False,
+    )
+    static_fp8_use_compiled_quant = env_to_bool(
+        'LMDEPLOY_STATIC_FP8_USE_COMPILED_QUANT',
+        False,
+    )
+    static_fp8_compiled_quant_token_counts = env_to_list_int(
+        'LMDEPLOY_STATIC_FP8_COMPILED_QUANT_TOKEN_COUNTS',
+        [1],
+    )
+    moe_static_fp8_use_compiled_quant = env_to_bool(
+        'LMDEPLOY_MOE_STATIC_FP8_USE_COMPILED_QUANT',
+        False,
+    )
+
     # Hy3
     hy3_shared_expert_overlap = env_to_bool(
         'LMDEPLOY_HY3_SHARED_EXPERT_OVERLAP',

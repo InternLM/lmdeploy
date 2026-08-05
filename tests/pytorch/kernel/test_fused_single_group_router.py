@@ -9,6 +9,7 @@ if not torch.cuda.is_available():
         allow_module_level=True,
     )
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.cuda.moe_router import (
     TritonRouterNoauxTCImpl,
 )
@@ -84,10 +85,7 @@ def _assert_matches_reference(router, logits, bias):
 
 
 def test_single_group_fused_router_is_default_off(monkeypatch):
-    monkeypatch.delenv(
-        'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
-        raising=False,
-    )
+    monkeypatch.setattr(_envs, 'router_single_group_fused', False)
     router = _make_router()
     assert not router.enable_single_group_fused
 
@@ -120,10 +118,7 @@ def test_single_group_fused_router_rejects_ineligible_shapes(
     monkeypatch,
     overrides,
 ):
-    monkeypatch.setenv(
-        'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
-        '1',
-    )
+    monkeypatch.setattr(_envs, 'router_single_group_fused', True)
     router = _make_router(**overrides)
     assert not router.enable_single_group_fused
 
@@ -139,10 +134,7 @@ def test_single_group_fused_router_matches_reference(
     num_tokens,
     logit_scale,
 ):
-    monkeypatch.setenv(
-        'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
-        '1',
-    )
+    monkeypatch.setattr(_envs, 'router_single_group_fused', True)
     router = _make_router()
     generator = torch.Generator(device='cuda')
     generator.manual_seed(20260729 + num_tokens)
@@ -170,10 +162,7 @@ def test_single_group_fused_router_matches_reference(
     reason='CUDA is required for the fused router',
 )
 def test_single_group_fused_router_matches_near_ties(monkeypatch):
-    monkeypatch.setenv(
-        'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
-        '1',
-    )
+    monkeypatch.setattr(_envs, 'router_single_group_fused', True)
     router = _make_router()
     logits = torch.zeros(
         (32, 192),
@@ -196,10 +185,7 @@ def test_single_group_fused_router_matches_near_ties(monkeypatch):
     reason='CUDA is required for the fused router',
 )
 def test_single_group_fused_router_exact_tie_invariants(monkeypatch):
-    monkeypatch.setenv(
-        'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
-        '1',
-    )
+    monkeypatch.setattr(_envs, 'router_single_group_fused', True)
     routed_scaling_factor = 1.25
     router = _make_router(
         routed_scaling_factor=routed_scaling_factor,
@@ -241,10 +227,7 @@ def test_single_group_fused_router_cuda_graph_replays(
     monkeypatch,
     num_tokens,
 ):
-    monkeypatch.setenv(
-        'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
-        '1',
-    )
+    monkeypatch.setattr(_envs, 'router_single_group_fused', True)
     router = _make_router()
     static_logits = torch.randn(
         (num_tokens, 192),

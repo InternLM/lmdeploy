@@ -9,6 +9,7 @@ if not torch.cuda.is_available():
         allow_module_level=True,
     )
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.cuda.static_fp8_modules import (
     TritonLinearStaticF8Impl,
     _per_tensor_quant_fp8_e4m3fn_inductor,
@@ -112,18 +113,10 @@ def _make_impl(
     use_compiled_quant,
     compiled_token_counts='1,2,3,8,16,29,32,128',
 ):
-    monkeypatch.setenv(
-        'LMDEPLOY_STATIC_FP8_USE_SCALED_MM',
-        '1' if use_scaled_mm else '0',
-    )
-    monkeypatch.setenv(
-        'LMDEPLOY_STATIC_FP8_USE_COMPILED_QUANT',
-        '1' if use_compiled_quant else '0',
-    )
-    monkeypatch.setenv(
-        'LMDEPLOY_STATIC_FP8_COMPILED_QUANT_TOKEN_COUNTS',
-        compiled_token_counts,
-    )
+    token_counts = [int(value) for value in compiled_token_counts.split(',') if value]
+    monkeypatch.setattr(_envs, 'static_fp8_use_scaled_mm', use_scaled_mm)
+    monkeypatch.setattr(_envs, 'static_fp8_use_compiled_quant', use_compiled_quant)
+    monkeypatch.setattr(_envs, 'static_fp8_compiled_quant_token_counts', token_counts)
     return TritonLinearStaticF8Impl(
         in_features,
         out_features,
@@ -145,14 +138,8 @@ def _assert_outputs_match(actual, expected):
 def test_static_fp8_linear_feature_gates_are_default_off(
     monkeypatch,
 ):
-    monkeypatch.delenv(
-        'LMDEPLOY_STATIC_FP8_USE_SCALED_MM',
-        raising=False,
-    )
-    monkeypatch.delenv(
-        'LMDEPLOY_STATIC_FP8_USE_COMPILED_QUANT',
-        raising=False,
-    )
+    monkeypatch.setattr(_envs, 'static_fp8_use_compiled_quant', False)
+    monkeypatch.setattr(_envs, 'static_fp8_use_scaled_mm', False)
     impl = TritonLinearStaticF8Impl(
         128,
         256,
