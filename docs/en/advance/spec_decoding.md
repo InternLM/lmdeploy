@@ -53,8 +53,7 @@ meta-llama/Llama-3.1-8B-Instruct \
 --speculative-draft-model yuhuili/EAGLE3-LLaMA3.1-Instruct-8B \
 --speculative-algorithm eagle3 \
 --speculative-num-draft-tokens 3 \
---max-batch-size 128 \
---enable-metrics
+--max-batch-size 128
 ```
 
 ### Deepseek MTP
@@ -102,8 +101,7 @@ deepseek-ai/DeepSeek-V3 \
 --tp 16 \
 --speculative-algorithm deepseek_mtp \
 --speculative-num-draft-tokens 3 \
---max-batch-size 128 \
---enable-metrics
+--max-batch-size 128
 ```
 
 ### DFlash

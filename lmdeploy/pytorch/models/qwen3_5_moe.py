@@ -365,6 +365,8 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
 
             if 'mtp.' in name:
                 continue
+            if name.startswith(('model.time_series.', 'time_series_forecaster.')):
+                continue
             if 'rotary_emb.inv_freq' in name:
                 continue
             if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):

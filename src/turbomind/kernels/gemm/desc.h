@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <tuple>
 #include <type_traits>
 
@@ -88,9 +89,10 @@ inline std::string to_string(const GemmDesc& d)
 enum class OpClass
 {
     kSIMT,
-    kMMA_s884,
-    kMMA_s16816,
-    kGMMA_s64n16
+    kMMA_h884,
+    kMMA_h16816,
+    kGMMA_h64n16,
+    kGMMA_q64n32
 };
 
 inline const char* to_string(OpClass op)
@@ -98,10 +100,14 @@ inline const char* to_string(OpClass op)
     switch (op) {
         case OpClass::kSIMT:
             return "simt";
-        case OpClass::kMMA_s884:
-            return "s884";
-        case OpClass::kMMA_s16816:
-            return "s16816";
+        case OpClass::kMMA_h884:
+            return "mma_h884";
+        case OpClass::kMMA_h16816:
+            return "mma_h16816";
+        case OpClass::kGMMA_h64n16:
+            return "gmma_h64n16";
+        case OpClass::kGMMA_q64n32:
+            return "gmma_q64n32";
         default:
             return "unknown_op_cls";
     }
@@ -111,6 +117,8 @@ inline const char* to_string(OpClass op)
 struct KernelDesc {
     int       arch;
     OpClass   op_class;
+    uint32_t  algo;    // opaque; each KernelImpl defines its own bit-field layout (0 = default)
+    Order     raster;  // tile-scheduler raster order
     DataType  type_a;
     DataType  type_b;
     DataType  type_c;
@@ -130,11 +138,13 @@ struct KernelDesc {
     int       policy_b;
     int3      cta_tile;
     int3      mma_tile;
+    int3      atom_layout;
     int2      cluster_shape;
     int3      align;
     int2      c_tile;
     int       stages;
     bool      split_k;
+    bool      supports_fused_silu;
     int       group_axis;
     int       backend;
     bool      transpose;
@@ -179,11 +189,13 @@ inline KernelDesc transpose(const KernelDesc& d)
 
     k.policy_a = d.policy_b;
     k.policy_b = d.policy_a;
+    k.raster   = ~d.raster;
 
     auto swap = [](auto& v) { std::swap(v.x, v.y); };
 
     swap(k.cta_tile);
     swap(k.mma_tile);
+    swap(k.atom_layout);
     swap(k.cluster_shape);
     swap(k.align);
     swap(k.c_tile);

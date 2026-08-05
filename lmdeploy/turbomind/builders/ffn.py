@@ -20,6 +20,9 @@ __all__ = [
     'fuse_w1w3',
 ]
 
+_SM90_FP8_FUSED_SILU_BLOCK = 128
+_SM90_BF16_FUSED_SILU_BLOCK = 64
+
 # ---------------------------------------------------------------------------
 # @transform_output_dim / @transform_input_dim helpers
 # ---------------------------------------------------------------------------
@@ -29,6 +32,24 @@ __all__ = [
 def _interleave_w1w3(w1: torch.Tensor, w3: torch.Tensor) -> torch.Tensor:
     """Interleave w1 and w3 along output dim for fused SiLU epilogue."""
     return torch.stack([w1, w3], dim=-1).reshape(w1.shape[:-1] + (-1,)).contiguous()
+
+
+@transform_output_dim
+def _block_pack_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
+                     groups: int) -> torch.Tensor:
+    """Interleave gate/up by logical output groups.
+
+    The elements per group self-adapt for each Linear tensor kind. For FP8, one logical 128-wide weight group
+    corresponds to one scale element.
+    """
+    assert groups > 0, f'groups must be positive, got {groups}'
+    assert w1.shape[-1] % groups == 0, (
+        f'output dim {w1.shape[-1]} not divisible by groups {groups}')
+    assert w3.shape[-1] == w1.shape[-1], (
+        f'w1/w3 output dims differ: {w1.shape[-1]} != {w3.shape[-1]}')
+    w1g = w1.unflatten(-1, (groups, -1))
+    w3g = w3.unflatten(-1, (groups, -1))
+    return torch.stack([w1g, w3g], dim=-2).flatten(-3, -1).contiguous()
 
 
 @transform_output_dim
@@ -49,61 +70,67 @@ def _chunk_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
 # ---------------------------------------------------------------------------
 
 
+def _is_sm90() -> bool:
+    """Whether the current CUDA device is Hopper SM90."""
+    return (torch.cuda.is_available()
+            and torch.cuda.get_device_capability() == (9, 0))
+
+
 def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) -> bool:
-    """Determine if fused SiLU (interleave) should be used for w1+w3 fusion.
+    """Determine if fused SiLU should be used for w1+w3 fusion.
 
     Gold standard condition (from GEMM kernel constraints — trust it):
 
-    act_type == SiLU && (int4 || mxfp4 || fp8 || moe) && !(fp8 && SM90)
+    act_type == SiLU && (int4 || mxfp4 || fp8 || moe)
+
+    Packing depends on format: FP8 uses [g128|u128|...] and SM90 BF16 uses
+    [g64|u64|...]; int4/mxfp4 use element interleave. Controllable via
+    config.fuse_silu after commit.
     """
     if act_type not in ('', 'silu', 'SiLU'):
         return False
 
-    # Dense bf16/fp16 without MoE -> chunk, not interleave
-    weight = w1_linear.tensors.get('weight')
-    is_quantized = weight is not None and weight.element_size() < 2
+    # SM90 BF16 dense uses the native fused-SiLU kernel. Other dense
+    # bf16/fp16 paths keep chunk layout and apply activation separately.
+    weight = w1_linear.tensors['weight']
+    is_quantized = weight.element_size() < 2
     if not is_quantized and not is_moe:
-        return False
-
-    # FP8 on SM90 -> chunk
-    fmt = w1_linear.weight_format
-    if fmt is not None and fmt.name == 'fp8':
-        if torch.cuda.is_available():
-            cap = torch.cuda.get_device_capability()
-            if cap == (9, 0):
-                return False
+        return weight.dtype == torch.bfloat16 and _is_sm90()
 
     # SM100+ grouped bf16 MoE: CublasGroupedKernel has no fused GatedSilu
-    if is_moe:
-        weight = w1_linear.tensors.get('weight')
-        if weight is not None and weight.dtype == torch.bfloat16:
-            if torch.cuda.is_available():
-                cap = torch.cuda.get_device_capability()
-                if cap >= (10, 0):
-                    return False
+    if (is_moe and weight.dtype == torch.bfloat16
+            and torch.cuda.is_available()
+            and torch.cuda.get_device_capability() >= (10, 0)):
+        return False
 
     return True
 
 
-def _can_fuse_w1w3(w1: Linear, tp: int) -> bool:
+def _fused_silu_block(w1: Linear) -> int | None:
+    """Return the gate/up block width required by the fused SiLU kernel."""
+    if w1.weight_format.name == 'fp8' and _is_sm90():
+        return _SM90_FP8_FUSED_SILU_BLOCK
+    if _is_sm90() and w1.tensors['weight'].dtype == torch.bfloat16:
+        return _SM90_BF16_FUSED_SILU_BLOCK
+    return None
+
+
+def _can_fuse_w1w3(w1: Linear, tp: int, *,
+                    pack_block: int | None = None) -> bool:
     """Check whether w1+w3 fusion is safe for the given TP.
 
-    Fusion (interleave or chunk) concatenates w1 and w3 along the output dim.
-    For block-quantized formats (e.g. FP8 with block_out=128), the fused
-    scale count ``2 * cdiv(N/tp, block_out)`` must equal
-    ``cdiv(2*N/tp, block_out)``.  This holds iff ``(N/tp) % block_out == 0``.
-    When it doesn't, the fused module's C++ allocation won't match the
-    concatenated scales and we must commit w1/w3 separately.
+    Fusion (interleave, block-pack, or chunk) concatenates w1 and w3 along the
+    output dim. For block-quantized formats, the local output must align to
+    ``block_out`` so concatenated scale counts match the fused allocation.
+    Native SM90 fused SiLU additionally requires format-specific gate/up groups.
+    Misaligned projections are committed separately.
     """
-    if tp <= 1:
-        return True
-    fmt = w1.weight_format
-    if fmt is None or fmt.block_out is None:
-        return True
-    w = w1.tensors.get('weight')
-    if w is None:
-        return True
-    return (w.size(-1) // tp) % fmt.block_out == 0
+    w = w1.tensors['weight']
+    if w.size(-1) % tp != 0:
+        return False
+    block_out = w1.weight_format.block_out or 1
+    required_block = math.lcm(block_out, pack_block or 1)
+    return (w.size(-1) // tp) % required_block == 0
 
 
 def fuse_w1w3(
@@ -124,10 +151,15 @@ def fuse_w1w3(
     block-scale alignment check in ``_can_fuse_w1w3``.
     """
     fused_silu = _should_fuse_silu(w1, act_type, is_moe)
-    can_fuse = _can_fuse_w1w3(w1, tp)
+    pack_block = _fused_silu_block(w1) if fused_silu else None
+    can_fuse = _can_fuse_w1w3(w1, tp, pack_block=pack_block)
 
     if can_fuse:
-        if fused_silu:
+        if pack_block is not None:
+            inter_size = w1.tensors['weight'].shape[-1]
+            w1w3 = _block_pack_w1w3(
+                w1, w3, groups=inter_size // pack_block)
+        elif fused_silu:
             w1w3 = _interleave_w1w3(w1, w3)
         else:
             w1w3 = _chunk_w1w3(w1, w3, tp=tp)

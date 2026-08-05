@@ -17,7 +17,7 @@ struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
 
     static constexpr int kThreadCount = 32;
 
-    static constexpr auto kOpClass = OpClass::kMMA_s16816;
+    static constexpr auto kOpClass = OpClass::kMMA_h16816;
 
     using FragA = Array<T, 8>;
     using FragB = Array<T, 4>;

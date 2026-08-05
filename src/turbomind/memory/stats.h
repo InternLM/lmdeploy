@@ -28,10 +28,17 @@ struct SlabStats {
     size_t free_objects;
 };
 
+struct MemoryUsage {
+    size_t live_allocations{};
+    size_t live_bytes{};
+    size_t region_bytes{};
+};
+
 struct MemoryStats {
     PageStats              page;
     std::vector<SlabStats> slabs;
     size_t                 live_allocations;  // pool_.size() - free_.size()
+    size_t                 live_bytes;        // sum of aligned bytes held by live object parts
     size_t                 region_bytes;
 };
 

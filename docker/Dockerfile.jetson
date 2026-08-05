@@ -27,12 +27,19 @@ RUN --mount=type=cache,target=/root/.cache \
 COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
-# The Jetson AI Lab index may lag xgrammar releases. Force xgrammar from PyPI,
-# while keeping the LMDeploy wheel and its CUDA/Torch dependencies on the Jetson index.
+# Install the Jetson-specific Torch stack from the Jetson AI Lab index first.
+# Resolve generic LMDeploy dependencies from PyPI so packages missing from the
+# Jetson index, such as pydantic, do not fail dependency resolution.
 RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/opt/pytorch \
+    pip install --upgrade pip && \
     pip install build change-wheel-version && \
     python -m build -w -o /wheels -v . && \
     change_wheel_version --local-version cu126 --delete-old-wheel /wheels/lmdeploy*.whl && \
-    pip install -v --no-deps --only-binary=:all: xgrammar==0.1.33 --index-url https://pypi.org/simple/ && \
-    pip install -v /wheels/lmdeploy*.whl --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/+simple/
+    grep -E '^torch(vision)?([<>=]|$)' requirements/runtime_cuda.txt > /tmp/requirements_torch.txt && \
+    mkdir -p /tmp/pytorch-wheels && \
+    pip download --no-deps --only-binary=:all: -r /tmp/requirements_torch.txt -d /tmp/pytorch-wheels \
+        --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/+simple/ && \
+    pip install -v /tmp/pytorch-wheels/*.whl --index-url https://pypi.org/simple/ && \
+    pip install -v --no-deps --only-binary=:all: xgrammar==0.1.33 \
+        --index-url https://pypi.org/simple/ && \
+    pip install -v /wheels/lmdeploy*.whl --index-url https://pypi.org/simple/

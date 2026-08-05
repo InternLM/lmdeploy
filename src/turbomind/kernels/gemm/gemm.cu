@@ -12,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/tuner/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <numeric>
@@ -194,6 +195,15 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
+        if (std::getenv("TM_GEMM_TUNE_VERBOSE")) {
+            for (const auto& s : specs) {
+                std::cout << "[tune] " << to_string(ctx.desc()) << " " << s.kernel->name()  //
+                          << " swizzle=" << s.swizzle                                       //
+                          << " splits=" << s.splits                                         //
+                          << " measured=" << s.measured << "\n";
+            }
+        }
+
         // for (const auto& s : specs) {
         //     std::cout << s.kernel->name()          //
         //               << " swizzle=" << s.swizzle  //
@@ -259,6 +269,8 @@ int Gemm::Run(const Operation&    operation,
               const MatrixLayout& Cdesc,
               void*               D,
               const MatrixLayout& Ddesc,
+              void*               W,
+              const MatrixLayout& Wdesc,
               const Workspace&    workspace,
               cudaStream_t        stream)
 {
@@ -289,6 +301,8 @@ int Gemm::Run(const Operation&    operation,
                                    Cdesc,
                                    D,
                                    Ddesc,
+                                   W,
+                                   Wdesc,
                                    spec.swizzle,
                                    spec.splits,
                                    _workspace,
