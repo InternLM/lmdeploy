@@ -94,10 +94,6 @@ class ServerContext:
             return None
         return session_mgr.get(session_id, create_if_not_exists=False)
 
-server_context = ServerContext()
-router = create_openai_router(server_context)
-
-
 def handle_torchrun():
     """To disable mmengine logging logic when using torchrun."""
 
@@ -112,26 +108,24 @@ def handle_torchrun():
                   dummy_get_device_id)
 
 
-@router.on_event('startup')
-async def startup_event():
-    async_engine = server_context.async_engine
-    async_engine.start_loop(asyncio.get_running_loop(), use_async_api=True)
-
-    if server_context.proxy_url is None:
+def register_to_proxy(context: ServerContext):
+    """Register the API server with its proxy, when configured."""
+    async_engine = context.async_engine
+    if context.proxy_url is None:
         return
     elif getattr(async_engine.engine, 'is_dummy', False):
         logger.info('Dummy node started')
         return
     try:
         import requests
-        engine_config = server_context.engine_config
+        engine_config = context.engine_config
         engine_role = engine_config.role.value if hasattr(
             engine_config, 'role') else 1
-        url = f'{server_context.proxy_url}/nodes/add'
+        url = f'{context.proxy_url}/nodes/add'
         data = {
-            'url': server_context.api_server_url,
+            'url': context.api_server_url,
             'status': {
-                'models': get_model_list(server_context),
+                'models': get_model_list(context),
                 'role': engine_role
             }
         }
@@ -146,13 +140,6 @@ async def startup_event():
                                 detail=response.text)
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
-
-
-@router.on_event('shutdown')
-async def shutdown_event():
-    async_engine = server_context.async_engine
-    if async_engine is not None:
-        async_engine.close()
 
 
 async def validation_exception_handler(request: Request,
@@ -228,6 +215,8 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig
         health_monitor = EngineHealthMonitor(async_engine)
         context.health_monitor = health_monitor
         try:
+            async_engine.start_loop(asyncio.get_running_loop(), use_async_api=True)
+            register_to_proxy(context)
             health_monitor.start()
             if getattr(backend_config, 'enable_metrics', False):
                 metrics_processor.start_metrics_handler(enable_metrics=True)
@@ -255,6 +244,7 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig
             if task:
                 task.cancel()
             await metrics_processor.stop_metrics_handler()
+            async_engine.close()
 
     return lifespan_handler
 
@@ -344,6 +334,7 @@ def serve(model_path: str,
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
 
+    server_context = ServerContext()
     server_context.allow_terminate_by_client = allow_terminate_by_client
     server_context.enable_abort_handling = enable_abort_handling
     from lmdeploy.serve.parsers import validate_parser_names
@@ -398,6 +389,7 @@ def serve(model_path: str,
     else:
         app = FastAPI(docs_url='/', lifespan=lifespan)
 
+    router = create_openai_router(server_context)
     app.include_router(router)
     app.include_router(create_anthropic_router(server_context))
     app.include_router(create_responses_router(server_context))
