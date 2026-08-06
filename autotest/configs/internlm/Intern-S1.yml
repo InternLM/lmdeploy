@@ -50,16 +50,30 @@ h:
   - prefix_cache
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: intern-s1
+        reasoning-parser: intern-s1
+    - suites:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
     turbomind:
-      suites:
+    - suites:
       - base
       - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: intern-s1
+        reasoning-parser: intern-s1
+    - suites:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs

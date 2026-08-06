@@ -241,6 +241,7 @@ TOOL_REASONING_MODEL_LIST_LATEST = [
     'deepseek-ai/DeepSeek-V3',
     'unsloth/gpt-oss-20b-BF16',
     'Qwen/Qwen2.5-7B-Instruct',
+    'internlm/Intern-S1',
     'internlm/Intern-S1-Pro-FP8',
     'internlm/Intern-S2-Preview',
     'internlm/Intern-S2-Preview-FP8',

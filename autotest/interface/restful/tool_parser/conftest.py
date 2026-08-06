@@ -73,7 +73,7 @@ SINGLE_TOOL_CALL_SKIP_REASON = (
     '(get_tool_close_tag() is None; chat template is single-tool-per-turn)')
 
 MM_TOOL_CALL_SKIP_REASON = (
-    'Multimodal tool-call tests require native VL models (Qwen3.5 / Intern-S2)')
+    'Multimodal tool-call tests require native VL models (Qwen3.5 / Intern-S1 / Intern-S2 / Qwen3-VL)')
 
 # Test media filenames under config['resource_path'].
 MM_TEST_IMAGE_TIGER = 'tiger.jpeg'
@@ -99,6 +99,7 @@ MM_VIDEO_EXTRA_BODY = {'media_io_kwargs': {'video': {'num_frames': 3}}}
 # Substrings matched against model_case for multimodal tool-call capability.
 _MM_TOOL_CALL_MODEL_MARKERS = (
     'Qwen3.5',
+    'Intern-S1',
     'Intern-S2',
     'Qwen3-VL',
 )

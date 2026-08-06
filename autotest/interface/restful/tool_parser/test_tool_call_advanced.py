@@ -733,6 +733,59 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
         except RoutedExpertsNotSupported as exc:
             pytest.skip(str(exc))
 
+    def test_streaming_routed_experts_max_tokens_cap_followup(self, backend, model_case):
+        """Hit DEFAULT max_completion_tokens with routed_experts; no overshoot;
+        follow-up OK.
+
+        Does not require a tool call — forces length finish via ignore_eos so experts length stays correct when
+        completion hits the default cap (8192).
+        """
+        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        overshoot_slack = 1
+        messages = [
+            {
+                'role': 'user',
+                'content': 'Continue writing forever without stopping.',
+            },
+        ]
+        r = self._stream_tool_call_with_tokens(
+            messages,
+            tools=None,
+            ignore_eos=True,
+            max_completion_tokens=max_tokens,
+        )
+        assert r['stream_complete'], 'stream ended before data: [DONE]'
+        assert r['finish_reason'] == 'length', (
+            f'Expected finish_reason length, got {r["finish_reason"]!r}')
+        validate_output_ids_present(r)
+        validate_output_ids_match_usage(r)
+        try:
+            validate_routed_experts_length(r)
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
+        completion_tokens = r.get('completion_tokens') or len(r['output_ids'])
+        assert completion_tokens <= max_tokens + overshoot_slack, (
+            f'Length cap overshoot: completion_tokens={completion_tokens} > '
+            f'max_tokens={max_tokens}+{overshoot_slack}')
+
+        followup = self._stream_tool_call_with_tokens(
+            [
+                {
+                    'role': 'user',
+                    'content': 'Say hi in one word.',
+                },
+            ],
+            tools=None,
+            max_completion_tokens=8,
+        )
+        assert followup['stream_complete'], 'follow-up stream ended before data: [DONE]'
+        validate_output_ids_present(followup)
+        try:
+            validate_routed_experts_length(followup)
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
     def test_streaming_tool_call_with_tokens_full_validation(self, backend, model_case):
         """Single-turn: tool call + output_ids + routed_experts + parser checks."""
         r = self._stream_tool_call_with_tokens(

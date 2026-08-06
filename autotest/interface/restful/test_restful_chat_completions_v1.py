@@ -2,7 +2,7 @@ from typing import Literal
 
 import pytest
 from openai import OpenAI
-from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
     assert_chat_completions_stream_return,
@@ -423,6 +423,53 @@ class TestRestfulInterfaceChatCompletions:
         assert output.get('usage').get('completion_tokens') == 101 or output.get('usage').get(
             'completion_tokens') == 100
         assert output.get('choices')[0].get('finish_reason') == 'length'
+
+    def test_max_tokens_default_cap_no_overshoot_followup(self, backend, model_case):
+        """Hit DEFAULT max_tokens (8192) with ignore_eos; no overshoot; follow-
+        up must succeed.
+
+        Catches regressions where length-capped generation returns a few extra tokens and breaks the next
+        /v1/chat/completions request.
+        """
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        overshoot_slack = 1
+
+        for output in api_client.chat_completions_v1(
+                model=model_name,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': 'Continue writing forever without stopping.',
+                    },
+                ],
+                ignore_eos=True,
+                max_tokens=max_tokens,
+                temperature=0.01,
+        ):
+            continue
+        assert_chat_completions_batch_return(output, model_name)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        completion_tokens = output.get('usage', {}).get('completion_tokens')
+        assert completion_tokens is not None, 'Missing usage.completion_tokens'
+        assert completion_tokens <= max_tokens + overshoot_slack, (
+            f'Length cap overshoot: completion_tokens={completion_tokens} > '
+            f'max_tokens={max_tokens}+{overshoot_slack}')
+
+        for followup in api_client.chat_completions_v1(
+                model=model_name,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': 'Say hi in one word.',
+                    },
+                ],
+                max_tokens=8,
+                temperature=0.01,
+        ):
+            continue
+        assert_chat_completions_batch_return(followup, model_name)
 
     def test_ignore_eos_streaming(self, backend, model_case):
         api_client = APIClient(BASE_URL)
