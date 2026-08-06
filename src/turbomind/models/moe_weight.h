@@ -28,9 +28,7 @@ struct MoeConfig: ModuleConfig {
     X(double, routed_scale)                                                                                            \
     X(int, ep_size, 1)                                                                                                 \
     X(int, ep_rank, 0)                                                                                                 \
-    X(DataType, data_type)                                                                                             \
-    X(int, meta_group, -1)                                                                                             \
-    X(bool, is_meta_donor, false)
+    X(DataType, data_type)
 
     MOE_FIELDS(TM_MEMBER)
     TM_FOR_EACH(MoeConfig, MOE_FIELDS)
@@ -54,7 +52,6 @@ public:
     MoeWeight(const core::MoeConfig& cfg);
 
     void prepare() override;
-    void prepare_routed_linears();
     void link_block();
     int  num_experts() const
     {
@@ -98,10 +95,21 @@ public:
     int         router_n_groups{};
     int         ep_size{1};
     int         ep_rank{0};
-    int         meta_group{-1};
-    bool        is_meta_donor{false};
+
+    // Wire the shared meta-MoE pack (a ModelWeight::meta_experts entry) whose
+    // routed gate/experts this layer aliases in prepare(). Called by the
+    // Python loader; never set for a MoE that owns its routed weights.
+    void set_meta_pack(const MoeWeight* meta_pack)
+    {
+        meta_pack_ = meta_pack;
+    }
 
 private:
+    // Create gate/experts children that share the meta pack's tensors.
+    void AliasRouted(const MoeWeight& meta_pack);
+
+    const MoeWeight* meta_pack_{};  // non-owning; nullptr = own routed weights
+
     ActivationType act_type_{};
     bool           fuse_silu_act_{};
 

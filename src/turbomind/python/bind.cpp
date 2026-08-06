@@ -868,7 +868,15 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::return_value_policy::reference,
             "name"_a,
-            "child"_a);
+            "child"_a)
+        // Wire a meta-MoE layer weight to its shared routed pack (non-owning)
+        .def(
+            "set_meta_pack",
+            [](ft::core::Module& m, ft::core::Module* pack) {
+                auto& moe = dynamic_cast<ft::MoeWeight&>(m);
+                moe.set_meta_pack(dynamic_cast<ft::MoeWeight*>(pack));
+            },
+            "pack"_a);
 
     // Standalone module creation (no parent needed)
     m.def(

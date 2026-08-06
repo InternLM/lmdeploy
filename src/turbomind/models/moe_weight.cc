@@ -25,8 +25,61 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     expert_num        = cfg.expert_num;
     ep_size           = cfg.ep_size;
     ep_rank           = cfg.ep_rank;
-    meta_group        = cfg.meta_group;
-    is_meta_donor     = cfg.is_meta_donor;
+}
+
+// Shallow alias of an already-prepared linear: shares its tensors and
+// copies its metadata. The alias is never prepared itself (MoeWeight::prepare
+// aliases only after its own Module::prepare() pass).
+static std::unique_ptr<LinearWeight> AliasLinear(const LinearWeight& src)
+{
+    auto dst    = std::make_unique<LinearWeight>();
+    dst->weight = src.weight;
+    dst->bias   = src.bias;
+    dst->scales = src.scales;
+    dst->zeros  = src.zeros;
+    src.copy_metadata_to(*dst);
+    return dst;
+}
+
+static std::unique_ptr<FfnWeight> AliasFfn(const FfnWeight& src)
+{
+    auto dst           = std::make_unique<FfnWeight>();
+    dst->hidden_dim    = src.hidden_dim;
+    dst->inter_size    = src.inter_size;
+    dst->act_type      = src.act_type;
+    dst->is_fused_silu = src.is_fused_silu;
+    dst->tp_size       = src.tp_size;
+    dst->tp_rank       = src.tp_rank;
+    if (src.w1w3) {
+        dst->add_child("w1w3", AliasLinear(*src.w1w3));
+    }
+    else {
+        dst->add_child("w1", AliasLinear(*TM_CHECK_NOTNULL(src.w1.get())));
+        dst->add_child("w3", AliasLinear(*TM_CHECK_NOTNULL(src.w3.get())));
+    }
+    dst->add_child("w2", AliasLinear(*TM_CHECK_NOTNULL(src.w2.get())));
+    return dst;
+}
+
+void MoeWeight::AliasRouted(const MoeWeight& meta_pack)
+{
+    TM_CHECK(meta_pack.gate && meta_pack.experts);
+    TM_CHECK(!gate && !experts);
+    TM_CHECK_NOTNULL(meta_pack.expert(0));
+
+    add_child("gate", AliasLinear(*meta_pack.gate));
+
+    // Experts are EP-sharded; iterate the local slice and keep global
+    // expert indices as child names (see MoeWeight::expert()).
+    TM_CHECK_EQ(ep_size, meta_pack.ep_size);
+    TM_CHECK_EQ(ep_rank, meta_pack.ep_rank);
+    const int local_num = meta_pack.num_local_experts();
+    const int offset    = meta_pack.local_expert_offset();
+    create_child("experts", core::ModuleListConfig{});
+    for (int e = 0; e < local_num; ++e) {
+        experts->add_child(std::to_string(offset + e), AliasFfn(*TM_CHECK_NOTNULL(meta_pack.expert(e))));
+    }
+    // never touch shared_gate
 }
 
 // Adapted from LinkExperts for LinearWeight
@@ -78,9 +131,20 @@ FfnWeight* MoeWeight::expert(int i) const
     return static_cast<FfnWeight*>(experts->child(std::to_string(local_expert_offset() + i)));
 }
 
-void MoeWeight::prepare_routed_linears()
+void MoeWeight::prepare()
 {
     Module::prepare();
+
+    if (meta_pack_) {
+        // Meta-MoE layer weight: alias the routed gate/experts from the
+        // shared pack. ModelWeight::prepare() prepares meta_experts before
+        // the layers, so the pack is already prepared at this point.
+        AliasRouted(*meta_pack_);
+    }
+
+    if (experts) {
+        link_block();
+    }
 }
 
 void MoeWeight::link_block()
@@ -147,12 +211,6 @@ void MoeWeight::link_block()
     // is_fused_silu() now reflects whether the GEMM epilogue applies
     // SiLU.
     block_->is_fused_silu = e0->is_fused_silu;
-}
-
-void MoeWeight::prepare()
-{
-    prepare_routed_linears();
-    link_block();
 }
 
 TM_MODULE_REGISTER(MoeWeight, core::MoeConfig);

@@ -4,7 +4,6 @@
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
-#include "src/turbomind/models/meta_moe.h"
 
 namespace turbomind {
 
@@ -15,15 +14,16 @@ ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg):
 
 void ModelWeight::prepare()
 {
-    if (ModelHasMetaMoe(*this)) {
-        PrepareMetaMoe(*this);
+    // The shared meta-MoE packs must be fully prepared before any layer
+    // weight aliases their routed gate/expert tensors (MoeWeight::prepare).
+    if (meta_experts) {
+        meta_experts->prepare();
     }
-    else {
-        for_each_child([](const char* /*name*/, Module* child) {
-            if (child)
-                child->prepare();
-        });
-    }
+    for_each_child([this](const char* /*name*/, Module* child) {
+        if (child && child != meta_experts.get()) {
+            child->prepare();
+        }
+    });
 
     auto* l0 = layer(0);
     TM_CHECK(l0);

@@ -10,7 +10,6 @@ add_library(models STATIC
         attention_weight.cc
         ffn_weight.cc
         moe_weight.cc
-        meta_moe.cc
         delta_net_weight.cc
         decoder_layer_weight.cc
         model_weight.cc

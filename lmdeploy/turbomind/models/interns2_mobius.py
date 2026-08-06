@@ -9,10 +9,13 @@ meta-MoE packs shared across layer groups::
 
 The names are translated onto the canonical meta-MoE layout
 (``meta_experts.{g}.*`` / ``meta_experts_gate.{g}.weight``) consumed by the
-loading helpers below. Each meta group's routed gate/expert device buffers
-exist once (on the donor layer); non-donor layers alias them in C++ via
-``alias_routed_moe``. Groups are strided (``layer_id % n_groups``) so each
-pack aligns with the repeating layer-type cycle (3×DeltaNet + 1×Attn).
+loading helpers below. Each pack is loaded exactly once, as a model-level
+``meta_experts`` child of ``ModelWeight``. Per-layer MoE weights carry only
+their own ``shared_gate``/``shared_expert`` and are wired to their pack via
+``MoeWeight::set_meta_pack``; ``MoeWeight::prepare()`` aliases the pack's
+routed gate/expert tensors through that pointer. Groups are strided
+(``layer_id % n_groups``) so each pack aligns with the repeating layer-type
+cycle (3×DeltaNet + 1×Attn).
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ from ..builders import (
     ModuleListBuilder,
     ModuleListConfig,
     MoeBuilder,
+    TextModelBuilder,
 )
 from .base import INPUT_MODELS
 from .qwen3_5 import (
@@ -31,6 +35,7 @@ from .qwen3_5 import (
     Qwen3_5TextModel,
     Qwen3_5VisionModel,
 )
+from .utils import make_model_weight_config
 
 
 def map_mobius_meta_moe_names(name: str) -> str:
@@ -73,22 +78,21 @@ def infer_meta_geometry(lm_pfx, num_hidden_layers: int):
     return n_groups, layers_per_group, expert_num
 
 
-def build_meta_moe_layer(text_model, pfx, layer_id: int):
-    # Stride by n_groups so each meta pack aligns with the repeating
-    # layer-type cycle (3×DeltaNet MoE + 1×Attn MoE). Contiguous
-    # // layers_per_group would mix Attn and DeltaNet layers onto the
-    # same expert pack.
-    n_groups = text_model._n_meta_groups
-    g = layer_id % n_groups
-    is_donor = layer_id < n_groups
+def build_meta_experts(text_model):
+    """Build the shared meta-MoE packs once, as a model-level ModuleList.
 
-    cfg = text_model._moe_cfg.clone()
-    cfg.expert_num = text_model._n_experts
-    cfg.meta_group = g
-    cfg.is_meta_donor = is_donor
-
-    m = MoeBuilder(cfg, text_model._ctx, ep=text_model._ep)
-    if is_donor:
+    Pack ``g`` holds the routed gate (``meta_experts_gate.{g}``) and the
+    EP-sharded packed experts (``meta_experts.{g}``); it is a full routed
+    ``MoeWeight`` prepared exactly once by the default recursion. The
+    per-group BuiltModules are stashed on the text model so
+    ``build_meta_moe_layer`` can wire each layer weight to its pack.
+    """
+    packs = ModuleListBuilder(ModuleListConfig(), text_model._ctx)
+    pack_modules = []
+    for g in range(text_model._n_meta_groups):
+        cfg = text_model._moe_cfg.clone()
+        cfg.expert_num = text_model._n_experts
+        m = MoeBuilder(cfg, text_model._ctx, ep=text_model._ep)
         # Prefix ...meta_experts_gate.{g} ; resolver reads .weight
         m.add_gate('gate', text_model._linear(
             text_model._lm_pfx + f'meta_experts_gate.{g}'))
@@ -100,13 +104,39 @@ def build_meta_moe_layer(text_model, pfx, layer_id: int):
             experts[e] = text_model._moe_expert_ffn(
                 experts_pfx, e, text_model.cfg.moe_intermediate_size)
         m.experts = experts.build()
-    # non-donor: no gate/experts — C++ alias_routed_moe creates them
+        pack_modules.append(m.build())
+        packs[g] = pack_modules[-1]
+    text_model._meta_pack_modules = pack_modules
+    return packs.build()
 
+
+def build_meta_moe_layer(text_model, pfx, layer_id: int):
+    """Per-layer MoE weight: the layer's own shared gate/expert, wired to
+    its shared meta pack. Routed gate/experts are not loaded here — the
+    C++ ``MoeWeight::prepare()`` aliases them through the wired pointer.
+
+    Groups stride by n_groups so each meta pack aligns with the repeating
+    layer-type cycle (3×DeltaNet MoE + 1×Attn MoE). Contiguous
+    // layers_per_group would mix Attn and DeltaNet layers onto the
+    same expert pack.
+    """
+    cfg = text_model._moe_cfg.clone()
+    cfg.expert_num = text_model._n_experts
+
+    m = MoeBuilder(cfg, text_model._ctx, ep=text_model._ep)
     m.add_gate('shared_gate', text_model._linear(pfx + 'shared_expert_gate'))
+    moe = m.build()
+
+    pack = text_model._meta_pack_modules[layer_id % text_model._n_meta_groups]
+    for i, (moe_h, pack_h) in enumerate(zip(moe.handles, pack.handles)):
+        if moe_h is not None and pack_h is not None:
+            with text_model._ctx.devices[i]:
+                moe_h.set_meta_pack(pack_h)
+
     shared = text_model.ffn(
         pfx + 'shared_expert',
         text_model.cfg.shared_expert_intermediate_size)
-    return m.build(), shared
+    return moe, shared
 
 
 class InternS2MobiusTextModel(Qwen3_5TextModel):
@@ -118,13 +148,33 @@ class InternS2MobiusTextModel(Qwen3_5TextModel):
     ]
 
     def model(self, pfx):
-        # Geometry must be known before layers() builds the MoE modules.
+        # Geometry must be known before packs/layers are built.
         self._lm_pfx = pfx + 'model.language_model'
         self._n_meta_groups, _, e = infer_meta_geometry(
             self._lm_pfx, int(self.cfg.num_hidden_layers))
         self._n_experts = e
         self._moe_cfg.expert_num = e
-        super().model(pfx)
+
+        # Same topology as Qwen3_5TextModel.model(), plus the model-level
+        # meta_experts packs that layer weights are wired to.
+        root_cfg = make_model_weight_config(self.cfg)
+        builder = TextModelBuilder(
+            root_cfg, self._ctx,
+            root_handles=self._root_handles,
+            tp=self._model_tp,
+            vocab_size=self.cfg.vocab_size)
+        builder.add_token_embeds(pfx.get('model.language_model.embed_tokens.weight'))
+        builder.norm = self.norm(
+            pfx + 'model.language_model.norm',
+            zero_centered=True,
+        )
+        lm_pfx = (pfx + 'model.language_model.embed_tokens'
+                  if self.cfg.tie_word_embeddings
+                  else pfx + 'lm_head')
+        builder.add_lm_head(self._linear(lm_pfx))
+        builder.meta_experts = build_meta_experts(self)
+        builder.layers = self.layers(pfx + 'model.language_model.layers')
+        builder.build()
 
     def layers(self, pfx):
         # Mobius is always meta-MoE — no per-layer-experts fallback.
