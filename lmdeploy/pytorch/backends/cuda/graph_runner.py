@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import torch
+from packaging import version
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
@@ -73,10 +74,9 @@ def _configure_decode_torch_compile():
 
     # Decode capture intentionally specializes fixed batch buckets. Keep those
     # specializations compiled instead of falling back to eager at the default
-    # recompile limit. These names alias the recompile limits in PyTorch 2.10.
-    config.accumulated_cache_size_limit = 1024
-    if hasattr(config, 'cache_size_limit'):
-        config.cache_size_limit = 1024
+    # recompile limit.
+    config.recompile_limit = 1024
+    config.accumulated_recompile_limit = 1024
 
     # Dynamo otherwise enters user Triton launchers and may fail on mutable
     # autotune state or infer incorrect fake shapes. The outer CUDA graph still
@@ -87,22 +87,41 @@ def _configure_decode_torch_compile():
     trace_rules.add('triton')
 
 
+def _get_decode_torch_compile_options(config) -> dict[str, bool]:
+    """Build options supported by the installed Inductor version."""
+    options = {
+        'emulate_precision_casts': True,
+        'triton.cudagraphs': False,
+    }
+
+    # Division-rounding emulation was added in PyTorch 2.10 and renamed in
+    # PyTorch 2.11. Inductor rejects unknown options instead of ignoring them.
+    if hasattr(config, 'emulate_divison_rounding'):
+        options['emulate_divison_rounding'] = True
+    elif hasattr(config, 'eager_numerics') and hasattr(config.eager_numerics, 'division_rounding'):
+        options['eager_numerics.division_rounding'] = True
+
+    return options
+
+
 def _build_decode_model_forward(model: torch.nn.Module) -> Callable[..., Any]:
     """Build the model callable used only while capturing decode graphs."""
     if not enable_decode_torch_compile:
         return model
 
+    if version.parse(torch.__version__) < version.parse('2.8'):
+        logger.warning(f'Decode torch.compile requires PyTorch >= 2.8, but found {torch.__version__}; '
+                       'using the raw model.')
+        return model
+
     logger.info('Enabling torch.compile for decode CUDA graph capture.')
     _configure_decode_torch_compile()
+    from torch._inductor import config
     return torch.compile(
         model,
         fullgraph=False,
         dynamic=False,
-        options={
-            'emulate_divison_rounding': True,
-            'emulate_precision_casts': True,
-            'triton.cudagraphs': False,
-        },
+        options=_get_decode_torch_compile_options(config),
     )
 
 
