@@ -40,6 +40,10 @@
 #include "src/turbomind/models/vision_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
+#include "src/turbomind/rust/c_api.h"
+#ifdef LMDEPLOY_ENABLE_RUST_API_SERVER
+#include "src/turbomind/rust/server_api.h"
+#endif
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -713,6 +717,7 @@ PYBIND11_MODULE(_turbomind, m)
                 param.enable_metrics = enable_metrics;
 
                 auto ret = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
+                    ScopedGIL gil;
                     try {
                         cb();
                     }
@@ -884,16 +889,16 @@ PYBIND11_MODULE(_turbomind, m)
         .def_static(
             "create",
             [](std::string model_dir, turbomind::EngineConfig config) -> std::shared_ptr<TurboMind> {
-                auto gil_factory = [] {  //
-                    // erase the type
-                    return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
-                };
+                // The gateway is shared by Python and native Rust callers, so
+                // it must not acquire the GIL for every notification. Python
+                // callbacks acquire it at their callback boundary above.
+                auto ffi_ctx_factory = [] { return std::shared_ptr<void>{}; };
                 auto no_gil_deleter = [](TurboMind* ptr) {
                     pybind11::gil_scoped_release release;
                     delete ptr;
                 };
 
-                std::shared_ptr<TurboMind> model(new TurboMind(model_dir, std::move(config), gil_factory),
+                std::shared_ptr<TurboMind> model(new TurboMind(model_dir, std::move(config), ffi_ctx_factory),
                                                  no_gil_deleter);
                 return model;
             },
@@ -942,6 +947,33 @@ PYBIND11_MODULE(_turbomind, m)
         .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a)
         .def("ep_rank", &TurboMind::GetEpRank, "index"_a)
         .def("model_tp_rank", &TurboMind::GetModelTpRank, "index"_a);
+
+#ifdef LMDEPLOY_ENABLE_RUST_API_SERVER
+    m.def(
+        "rust_api_server",
+        [](std::shared_ptr<TurboMind> model, const py::bytes& config_json) {
+            std::string config = config_json;
+            auto*       engine = turbomind::rust::RetainEngine(std::move(model));
+            if (!engine) {
+                throw std::invalid_argument("TurboMind engine is null");
+            }
+            std::array<char, 2048> error{};
+            int32_t                result;
+            {
+                py::gil_scoped_release release;
+                result = lmdeploy_rust_api_server_run(engine,
+                                                       reinterpret_cast<const uint8_t*>(config.data()),
+                                                       config.size(),
+                                                       error.data(),
+                                                       error.size());
+            }
+            if (result != 0) {
+                throw std::runtime_error(error.data());
+            }
+        },
+        "engine"_a,
+        "config_json"_a);
+#endif
 
     turbomind::linear_attn::delta_rule::bind_delta_rule(m);
     turbomind::python_linear::bind_linear(m);

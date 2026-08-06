@@ -181,6 +181,52 @@ class SubCliServe:
         ArgumentHelper.add_spec_group(parser)
 
     @staticmethod
+    def add_parser_rust_api_server():
+        """Add the TurboMind-only Rust API server command."""
+        parser = SubCliServe.subparsers.add_parser(
+            'rust_api_server',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=SubCliServe.rust_api_server.__doc__,
+            help=SubCliServe.rust_api_server.__doc__)
+        parser.set_defaults(run=SubCliServe.rust_api_server)
+        parser.add_argument('model_path', type=str, help='Local path or Hugging Face model id.')
+        parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host IP for serving.')
+        parser.add_argument('--server-port', type=int, default=23333, help='Server port.')
+        ArgumentHelper.model_name(parser)
+        ArgumentHelper.log_level(parser)
+        ArgumentHelper.api_keys(parser)
+        ArgumentHelper.trust_remote_code(parser)
+        ArgumentHelper.tool_call_parser(parser)
+        ArgumentHelper.reasoning_parser(parser)
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
+
+        group = parser.add_argument_group('TurboMind engine arguments')
+        ArgumentHelper.dtype(group)
+        ArgumentHelper.tp(group)
+        ArgumentHelper.dp(group)
+        ArgumentHelper.cp(group)
+        ArgumentHelper.ep(group)
+        ArgumentHelper.num_nodes(group)
+        ArgumentHelper.node_rank(group)
+        ArgumentHelper.dist_init_addr(group)
+        ArgumentHelper.session_len(group)
+        ArgumentHelper.max_batch_size(group)
+        ArgumentHelper.cache_max_entry_count(group)
+        ArgumentHelper.cache_block_seq_len(group)
+        ArgumentHelper.enable_prefix_caching(group)
+        ArgumentHelper.max_prefill_token_num(group)
+        ArgumentHelper.quant_policy(group)
+        ArgumentHelper.model_format(group)
+        ArgumentHelper.hf_overrides(group)
+        ArgumentHelper.disable_metrics(group)
+        ArgumentHelper.rope_scaling_factor(group)
+        ArgumentHelper.num_tokens_per_iter(group)
+        ArgumentHelper.max_prefill_iters(group)
+        ArgumentHelper.async_(group)
+        ArgumentHelper.communicator(group)
+
+    @staticmethod
     def add_parser_proxy():
         """Add parser for proxy server command."""
         parser = SubCliServe.subparsers.add_parser('proxy',
@@ -369,6 +415,52 @@ class SubCliServe:
             )
 
     @staticmethod
+    def rust_api_server(args):
+        """Serve TurboMind through the in-process Rust/Axum API server."""
+        from lmdeploy.messages import TurbomindEngineConfig
+
+        max_batch_size = args.max_batch_size or get_max_batch_size('cuda')
+        backend_config = TurbomindEngineConfig(
+            dtype=args.dtype,
+            tp=args.tp,
+            dp=args.dp,
+            cp=args.cp,
+            ep=args.ep,
+            nnodes=args.nnodes,
+            node_rank=args.node_rank,
+            dist_init_addr=args.dist_init_addr,
+            max_batch_size=max_batch_size,
+            session_len=args.session_len,
+            model_format=args.model_format,
+            quant_policy=args.quant_policy,
+            rope_scaling_factor=args.rope_scaling_factor,
+            cache_max_entry_count=args.cache_max_entry_count,
+            cache_block_seq_len=args.cache_block_seq_len,
+            enable_prefix_caching=args.enable_prefix_caching,
+            max_prefill_token_num=args.max_prefill_token_num,
+            num_tokens_per_iter=args.num_tokens_per_iter,
+            max_prefill_iters=args.max_prefill_iters,
+            async_=args.async_,
+            communicator=args.communicator,
+            language_model_only=True,
+            enable_metrics=not args.disable_metrics,
+            hf_overrides=args.hf_overrides,
+        )
+        from lmdeploy.serve.rust_api_server import serve
+        serve(
+            args.model_path,
+            model_name=args.model_name,
+            backend_config=backend_config,
+            server_name=args.server_name,
+            server_port=args.server_port,
+            log_level=args.log_level.upper(),
+            api_keys=args.api_keys,
+            reasoning_parser=args.reasoning_parser,
+            tool_call_parser=args.tool_call_parser,
+            trust_remote_code=args.trust_remote_code,
+        )
+
+    @staticmethod
     def proxy(args):
         """Proxy server that manages distributed api_server nodes."""
         from lmdeploy.serve.proxy.proxy import proxy
@@ -378,4 +470,5 @@ class SubCliServe:
     @staticmethod
     def add_parsers():
         SubCliServe.add_parser_api_server()
+        SubCliServe.add_parser_rust_api_server()
         SubCliServe.add_parser_proxy()

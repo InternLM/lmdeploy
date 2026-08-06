@@ -58,6 +58,7 @@ Documentation
 
    llm/pipeline.md
    llm/api_server.md
+   llm/rust_api_server.md
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_anthropic.md

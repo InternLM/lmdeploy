@@ -1,0 +1,36 @@
+[package]
+name = "rust-api-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = []
+ffi = []
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+bytes.workspace = true
+futures.workspace = true
+lmdeploy-serving = { path = "../lmdeploy-serving" }
+lmdeploy-parser = { path = "../lmdeploy-parser" }
+prometheus-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+turbomind-runtime = { path = "../turbomind-runtime" }
+turbomind-sys = { path = "../turbomind-sys" }
+uuid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+http-body-util.workspace = true
+tower.workspace = true

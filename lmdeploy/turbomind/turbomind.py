@@ -126,6 +126,7 @@ class TurboMind:
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
                  trust_remote_code: bool = False,
+                 load_tokenizer: bool = True,
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -162,7 +163,9 @@ class TurboMind:
                                                       trust_remote_code=trust_remote_code)
         self.source_model = model_loader.model
         self.is_dummy = self.model_comm.is_dummy_node()
-        self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
+        # rust_api_server owns tokenization and chat rendering. Avoid loading a
+        # second Python/Transformers tokenizer in that bootstrap-only path.
+        self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code) if load_tokenizer else None
         if not _engine_config.empty_init:
             with torch.cuda.device(self.devices[0]):
                 model_loader.export()
