@@ -10,7 +10,7 @@ struct CpPostContext {
     CpPostContext(comm::DeviceCommImpl* d_comm, int attn_cp_group, int cp_size);
     ~CpPostContext();
 
-    CpPostContext(const CpPostContext&)            = delete;
+    CpPostContext(const CpPostContext&) = delete;
     CpPostContext& operator=(const CpPostContext&) = delete;
 
     comm::DeviceCommImpl* d_comm;
