@@ -95,18 +95,18 @@ def _calc_diff(actual: torch.Tensor, expected: torch.Tensor) -> torch.Tensor:
 
 
 @torch.inference_mode()
-def _run_case(m: int, n: int, k: int, repeats: int = 1):
+def _run_case(m: int, n: int, k: int, repeats: int = 1, num_sms: int | None = None):
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import fp8_gemm_nt
 
     a, b = _make_inputs(m, n, k)
     expected = _dequantized_reference(a, b)
     output = torch.full((m, n), torch.nan, device='cuda', dtype=torch.bfloat16)
 
-    fp8_gemm_nt(a, b, output, None)
+    fp8_gemm_nt(a, b, output, None, num_sms=num_sms)
     if repeats > 1:
         first_output = output.clone()
     for repeat in range(1, repeats):
-        fp8_gemm_nt(a, b, output, None)
+        fp8_gemm_nt(a, b, output, None, num_sms=num_sms)
         assert torch.equal(output, first_output), f'output changed on repeat {repeat + 1}'
 
     assert torch.isfinite(output).all()
@@ -190,6 +190,16 @@ def test_fp8_gemm_nt_persistent_grid_is_correct_and_deterministic():
     _run_case(m=m, n=n, k=1152, repeats=10)
 
 
+def test_fp8_gemm_nt_persistent_grid_honors_sm_budget():
+    """Redistribute every logical tile across a deliberately smaller grid."""
+    device_num_sms = torch.cuda.get_device_properties('cuda').multi_processor_count
+    n = 4096
+    num_tiles_n = n // GROUP_SIZE
+    num_tiles_m = max(2, device_num_sms // num_tiles_n + 1)
+    m = num_tiles_m * 256
+    _run_case(m=m, n=n, k=1152, repeats=3, num_sms=max(1, device_num_sms - 8))
+
+
 def test_fp8_gemm_nt_tiny_m_reuses_eight_pipeline_stages():
     """Exercise reuse and a full phase wrap in the tuned M<=64 path."""
     _run_case(m=4, n=192, k=2176, repeats=5)
@@ -234,3 +244,11 @@ def test_fp8_gemm_nt_rejects_invalid_dtype_and_layout():
     misaligned_output = torch.empty((64, 129), device='cuda', dtype=torch.bfloat16)
     with pytest.raises(AssertionError, match='strides must be 16-byte aligned'):
         fp8_gemm_nt(ragged_a, ragged_b, misaligned_output, None)
+
+    device_num_sms = torch.cuda.get_device_properties('cuda').multi_processor_count
+    with pytest.raises(TypeError, match='num_sms must be an integer or None'):
+        fp8_gemm_nt(a, b, output, None, num_sms=1.5)
+    with pytest.raises(ValueError, match='num_sms must be between 1 and'):
+        fp8_gemm_nt(a, b, output, None, num_sms=0)
+    with pytest.raises(ValueError, match='num_sms must be between 1 and'):
+        fp8_gemm_nt(a, b, output, None, num_sms=device_num_sms + 1)

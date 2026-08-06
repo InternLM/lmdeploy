@@ -1139,7 +1139,7 @@ def _launch_warp_specialized(a_quant, a_scale, b_quant, b_scale, output):
     )
 
 
-def _launch_persistent(a_quant, a_scale, b_quant, b_scale, output):
+def _launch_persistent(a_quant, a_scale, b_quant, b_scale, output, num_sms):
     m, n = output.shape
     k = a_quant.size(-1)
     block_m = 256
@@ -1158,9 +1158,8 @@ def _launch_persistent(a_quant, a_scale, b_quant, b_scale, output):
     a_scale_desc = TensorDescriptor.from_tensor(a_scale_transposed, a_scale_block_shape, a_scale_layout)
 
     num_tiles = triton.cdiv(m, block_m) * triton.cdiv(n, block_n)
-    num_sms = get_device_props(a_quant.device.index)['multi_processor_count']
-    # Cap the persistent grid at the SM count; each program obtains further
-    # logical output tiles from PersistentTileScheduler.
+    # Cap the persistent grid at the per-call SM budget; each program obtains
+    # further logical output tiles from PersistentTileScheduler.
     grid = (min(num_sms, num_tiles), )
     _fp8_gemm_nt_persistent_kernel[grid](
         a_desc,
@@ -1221,7 +1220,7 @@ def _use_warp_specialized(m, n, device_index):
     return warp_specialized_tiles <= 2 * num_sms
 
 
-def fp8_gemm_nt(a, b, d, c):
+def fp8_gemm_nt(a, b, d, c, *, num_sms=None):
     """Compute a blocked-scaled FP8 GEMM with an NT operand convention.
 
     ``a`` contains contiguous FP8 values shaped ``[M, K]`` and per-row scales
@@ -1240,14 +1239,25 @@ def fp8_gemm_nt(a, b, d, c):
     single-partition body to avoid warp-specialization barriers. Other middle
     shapes use a primed warp-specialized 64x128 schedule. Larger grids use a
     persistent two-wave schedule that reuses B data and scales while
-    controlling accumulator register pressure.
+    controlling accumulator register pressure. ``num_sms`` optionally limits
+    the persistent launch to that many programs, leaving the remaining SMs
+    available for overlapping work. It is a scheduling hint for the persistent
+    path; the finite small and middle grids are unchanged.
     """
     a_quant, a_scale = a
     b_quant, b_scale = b
+
+    device_num_sms = get_device_props(d.device.index)['multi_processor_count']
+    if num_sms is None:
+        num_sms = device_num_sms
+    elif not isinstance(num_sms, int) or isinstance(num_sms, bool):
+        raise TypeError(f'num_sms must be an integer or None, got {type(num_sms).__name__}')
+    elif not 1 <= num_sms <= device_num_sms:
+        raise ValueError(f'num_sms must be between 1 and {device_num_sms}, got {num_sms}')
 
     if _use_single_partition(d.size(0), d.size(1), d.device.index):
         _launch_single_partition(a_quant, a_scale, b_quant, b_scale, d)
     elif _use_warp_specialized(d.size(0), d.size(1), d.device.index):
         _launch_warp_specialized(a_quant, a_scale, b_quant, b_scale, d)
     else:
-        _launch_persistent(a_quant, a_scale, b_quant, b_scale, d)
+        _launch_persistent(a_quant, a_scale, b_quant, b_scale, d, num_sms)
