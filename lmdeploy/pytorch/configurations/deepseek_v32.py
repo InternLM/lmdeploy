@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig
 from lmdeploy.pytorch.consts import DSA_INDEX_CACHE_NAME, dsa_packed_index_cache_shape
 
@@ -12,11 +13,11 @@ def _check_env_v32(device: str = 'cuda'):
     if device != 'cuda':
         return
 
-    # check cuda
-    try:
-        import fast_hadamard_transform  # noqa: F401
-    except ImportError:
-        raise ImportError('Deepseek V3.2 requires <fast_hadamard_transform>.')
+    if _envs.disable_dsa_indexer_fusion:
+        try:
+            import fast_hadamard_transform  # noqa: F401
+        except ImportError:
+            raise ImportError('Deepseek V3.2 requires <fast_hadamard_transform> when indexer fusion is disabled.')
 
     try:
         import flash_mla  # noqa: F401
@@ -59,7 +60,6 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
-        is_draft_model = kwargs.get('is_draft_model', False)
         config = DeepseekV2ModelConfigBuilder.build(hf_config, model_path=model_path, **kwargs)
 
         assert hf_config.use_flash_mla, 'DeepSeek-V3.2 requires flash_mla to be available.'
@@ -70,6 +70,4 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
         config.mla_index_topk = hf_config.index_topk
         config.check_env_func = _check_env_v32
         config.post_build_func = _finalize_v32_cache_specs
-        if is_draft_model:
-            hf_config.architectures[0] = 'DeepseekV32MTPModel'
         return config

@@ -11,11 +11,10 @@ from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
 
 from .deepseek_mtp import DeepseekMTPModel, build_deepseek_rotary_embedding
-from .deepseek_v32 import _load_fused_qkv_a_weight
+from .deepseek_v32 import _load_fused_indexer_weight, _load_fused_qkv_a_weight
 from .glm_moe_dsa import (
     DSATopKIndicesBuffer,
     GlmMoeDsaDecoderLayer,
-    _load_fused_indexer_weight,
 )
 
 
