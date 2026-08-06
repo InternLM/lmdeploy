@@ -4,13 +4,13 @@ import asyncio
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.messages import EngineOutput, PytorchEngineConfig, ResponseType
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
 
 from .base import MPEngine
-from .base_worker import EngineOutputGather, EngineWorkerBase
+from .base_worker import EngineOutputGather, EngineWorkerBase, StreamMailbox, StreamPollResult, iter_stream_poll_outputs
 
 logger = get_logger('lmdeploy')
 
@@ -39,7 +39,7 @@ class RayEngineWorker(EngineWorkerBase):
     async def _stream_task_wrapper(self, stream_id: int, init_event: asyncio.Event, func: str, *args, **kwargs):
         """Create a stream task."""
         method = getattr(self, func)
-        event = self._stream_aiter[stream_id][0]
+        stream_state = self._stream_aiter[stream_id]
 
         # notify after add msg
         def _notify_add_msg():
@@ -49,44 +49,29 @@ class RayEngineWorker(EngineWorkerBase):
         if func == 'instance_async_stream_infer':
             kwargs['notify_add_msg_func'] = _notify_add_msg
 
-        result = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
-        has_output = False
         try:
             generator = method(*args, **kwargs)
             async for result in generator:
-                has_output = True
                 self._engine_output_gather.add(stream_id, result)
-                self._stream_aiter[stream_id][1] = (result, False)
-                event.set()
-        except Exception:
+                stream_state.publish(result)
+        except asyncio.CancelledError:
+            stream_state.finish()
+            raise
+        except Exception as error:
             logger.exception(f'Stream task {stream_id} failed.')
+            stream_state.fail(error)
+        else:
+            stream_state.finish()
         finally:
             if not init_event.is_set():
                 init_event.set()
-            stream_out = self._stream_aiter[stream_id]
-            pending = stream_out[1]
-            # The last EngineOutput may already have been consumed while the
-            # remote generator is doing its async cleanup.  In that case send
-            # only an end-of-stream marker; replaying ``result`` duplicates the
-            # final token chunk.  If it has not been consumed yet, return that
-            # pending output and mark it as the last one.
-            if pending is not None:
-                terminal_result = pending[0]
-            elif has_output:
-                terminal_result = None
-            else:
-                # Preserve the previous empty/error-stream behavior: callers
-                # must receive INTERNAL_ENGINE_ERROR instead of a clean EOF.
-                terminal_result = result
-            stream_out[1] = (terminal_result, True)
-            event.set()
 
     async def create_stream_task(self, func, *args, **kwargs):
         """Create a stream task."""
         stream_id = self._stream_id
         self._stream_id += 1
         event_loop = asyncio.get_event_loop()
-        self._stream_aiter[stream_id] = [asyncio.Event(), None]
+        self._stream_aiter[stream_id] = StreamMailbox()
         init_event = asyncio.Event()
         task = event_loop.create_task(self._stream_task_wrapper(stream_id, init_event, func, *args, **kwargs))
         self._stream_task[stream_id] = task
@@ -98,22 +83,19 @@ class RayEngineWorker(EngineWorkerBase):
         """Get the result of a stream task."""
         stream_out = self._stream_aiter.get(stream_id)
         if stream_out is None:
-            return None, True
-        event = stream_out[0]
-        await event.wait()
-        stream_result = stream_out[1]
-        stream_out[1] = None
-        event.clear()
-        if stream_result is None:
-            return None, True
-        result, stopped = stream_result
+            return StreamPollResult(done=True)
+        await stream_out.event.wait()
+        poll_result = stream_out.drain()
 
-        result = self._engine_output_gather.pop(stream_id, result)
+        if poll_result.has_output:
+            poll_result.output = self._engine_output_gather.pop(stream_id, poll_result.output)
+        elif poll_result.done:
+            self._engine_output_gather.discard(stream_id)
 
-        if stopped:
+        if poll_result.done:
             self._stream_aiter.pop(stream_id, None)
             self._stream_task.pop(stream_id, None)
-        return result, stopped
+        return poll_result
 
     async def drop_stream_task(self, stream_id: int):
         """Drop an abandoned stream task."""
@@ -140,10 +122,7 @@ class RayEngineWorker(EngineWorkerBase):
             except Exception:
                 logger.exception(f'Ray MP abandoned stream task failed during drop: stream_id={stream_id}.')
         if stream_out is not None:
-            event = stream_out[0]
-            if stream_out[1] is None:
-                stream_out[1] = (None, True)
-            event.set()
+            stream_out.finish()
         self._stream_aiter.pop(stream_id, None)
         self._stream_task.pop(stream_id, None)
         self._engine_output_gather.discard(stream_id)
@@ -258,9 +237,10 @@ class RayMPEngine(MPEngine):
         try:
             stream_id = await asyncio.shield(stream_task)
             while not stopped:
-                result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
-                if result is not None:
-                    yield result
+                poll_result = await self._collective_rpc_async('get_stream_task_result', stream_id)
+                stopped = poll_result.done
+                for output in iter_stream_poll_outputs(poll_result, func):
+                    yield output
         except asyncio.CancelledError:
             raise
         except Exception:
