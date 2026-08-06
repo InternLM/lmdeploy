@@ -61,7 +61,14 @@ class RayEngineWorker(EngineWorkerBase):
         finally:
             if not init_event.is_set():
                 init_event.set()
-            self._stream_aiter[stream_id][1] = (result, True)
+            stream_out = self._stream_aiter[stream_id]
+            pending = stream_out[1]
+            # The last EngineOutput may already have been consumed while the
+            # remote generator is doing its async cleanup.  In that case send
+            # only an end-of-stream marker; replaying ``result`` duplicates the
+            # final token chunk.  If it has not been consumed yet, return that
+            # pending output and mark it as the last one.
+            stream_out[1] = (None, True) if pending is None else (pending[0], True)
             event.set()
 
     async def create_stream_task(self, func, *args, **kwargs):
@@ -85,6 +92,7 @@ class RayEngineWorker(EngineWorkerBase):
         event = stream_out[0]
         await event.wait()
         stream_result = stream_out[1]
+        stream_out[1] = None
         event.clear()
         if stream_result is None:
             return None, True
