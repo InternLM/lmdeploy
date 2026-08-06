@@ -239,7 +239,8 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         shard_idx = self.out_names_map[shard_id]
         if loaded_weight.dim() == 2 and loaded_weight.dtype != self.fp8_dtype:
             loaded_weight = loaded_weight.to(torch.float32)
-            param_w = param.data.split(self.scale_split_section, 0)[shard_idx]
+            local_scale_sections = [div_up(feats, self.block_size) for feats in self.all_out_features]
+            param_w = param.data.split(local_scale_sections, 0)[shard_idx]
         else:
             param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         if not self.replicate[shard_idx]:
