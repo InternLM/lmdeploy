@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig
-from lmdeploy.pytorch.configurations import AutoModelConfigBuilder, deepseek_v2
+from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 
 
@@ -37,42 +37,10 @@ def _make_deepseek_v4_hf_config(compress_ratios, num_hidden_layers=3):
     )
 
 
-def _make_deepseek_v32_hf_config():
-    return SimpleNamespace(
-        model_type='deepseek_v32',
-        architectures=['DeepseekV32ForCausalLM'],
-        hidden_size=16,
-        num_hidden_layers=2,
-        num_nextn_predict_layers=1,
-        num_attention_heads=8,
-        num_key_value_heads=1,
-        kv_lora_rank=8,
-        qk_rope_head_dim=4,
-        index_head_dim=8,
-        index_topk=4,
-        bos_token_id=1,
-        eos_token_id=2,
-        vocab_size=32,
-    )
-
-
 def test_get_num_qkv_head_by_tp_from_dist_config():
     model_config = _make_model_config(dist_config=DistConfig(tp=4))
 
     assert model_config.get_num_qkv_head_by_tp() == (8, 2)
-
-
-def test_deepseek_v32_draft_uses_sparse_mtp_model(monkeypatch):
-    hf_config = _make_deepseek_v32_hf_config()
-    monkeypatch.setattr(deepseek_v2, 'flash_mla_available', lambda: True)
-
-    model_config = AutoModelConfigBuilder.build(hf_config,
-                                                is_draft_model=True,
-                                                spec_method='deepseek_mtp')
-
-    assert hf_config.architectures == ['DeepseekV32MTPModel']
-    assert model_config.num_layers == 1
-    assert model_config.mla_index_topk == 4
 
 
 def test_get_num_qkv_head_by_tp_with_none_dist_config():

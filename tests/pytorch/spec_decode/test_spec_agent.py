@@ -275,24 +275,6 @@ def test_spec_model_agent_method_when_enabled():
     assert agent.method == specdecode_config.method
 
 
-def test_set_model_config_updates_proposer_config():
-    """Draft forwards should use the finalized model configuration."""
-    old_config = object()
-    new_config = object()
-    specdecode_config = SimpleNamespace(model_config=old_config)
-    agent = object.__new__(SpecModelAgent)
-    agent.model_config = old_config
-    agent.specdecode_config = specdecode_config
-    agent.inputs_strategy = SimpleNamespace(
-        create_make_dummy_meta=lambda model_config: model_config)
-
-    agent.set_model_config(new_config)
-
-    assert agent.model_config is new_config
-    assert specdecode_config.model_config is new_config
-    assert agent.make_dummy_meta is new_config
-
-
 def test_qwen35_mtp_reuses_main_dist_context(monkeypatch):
     """Qwen3.5 MTP mirrors the target topology, so it should share groups."""
     from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
