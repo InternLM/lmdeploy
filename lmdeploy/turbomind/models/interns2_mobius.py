@@ -58,7 +58,7 @@ def map_meta_expert_names(name: str) -> str:
     )
 
 
-def infer_meta_geometry(lm_pfx, num_hidden_layers: int):
+def infer_meta_groups(lm_pfx, num_hidden_layers: int) -> int:
     n_groups = 0
     while lm_pfx.has(f'meta_experts.{n_groups}.gate_up_proj.weight'):
         n_groups += 1
@@ -68,14 +68,7 @@ def infer_meta_geometry(lm_pfx, num_hidden_layers: int):
     assert num_hidden_layers % n_groups == 0, (
         f'num_hidden_layers={num_hidden_layers} not divisible by '
         f'n_meta_groups={n_groups}')
-    layers_per_group = num_hidden_layers // n_groups
-    # Host shape only — never Prefix.get() (would .cuda() the full pack)
-    expert_num = int(lm_pfx.shape('meta_experts.0.gate_up_proj.weight')[0])
-    assert int(lm_pfx.shape('meta_experts_gate.0.weight')[0]) == expert_num
-    for g in range(1, n_groups):
-        assert int(lm_pfx.shape(f'meta_experts.{g}.gate_up_proj.weight')[0]) == expert_num
-        assert int(lm_pfx.shape(f'meta_experts_gate.{g}.weight')[0]) == expert_num
-    return n_groups, layers_per_group, expert_num
+    return n_groups
 
 
 def build_meta_experts(text_model):
@@ -148,12 +141,12 @@ class InternS2MobiusTextModel(Qwen3_5TextModel):
     ]
 
     def model(self, pfx):
-        # Geometry must be known before packs/layers are built.
+        # Group count must be known before packs/layers are built.
+        # self._n_experts/_moe_cfg.expert_num come from cfg.num_experts
+        # (base __init__).
         self._lm_pfx = pfx + 'model.language_model'
-        self._n_meta_groups, _, e = infer_meta_geometry(
+        self._n_meta_groups = infer_meta_groups(
             self._lm_pfx, int(self.cfg.num_hidden_layers))
-        self._n_experts = e
-        self._moe_cfg.expert_num = e
 
         # Same topology as Qwen3_5TextModel.model(), plus the model-level
         # meta_experts packs that layer weights are wired to.

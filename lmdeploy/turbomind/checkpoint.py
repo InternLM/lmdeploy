@@ -74,9 +74,6 @@ class Prefix:
     def has(self, name: str = '', sep: str = '.') -> bool:
         return self.ckpt.has(self._joined(name, sep))
 
-    def shape(self, name: str = '', sep: str = '.') -> tuple[int, ...]:
-        return self.ckpt.shape(self._joined(name, sep))
-
     def pop(self, name: str = '', sep: str = '.', *, index=None) -> torch.Tensor:
         """Read and remove the tensor at ``self.prefix + sep + name``.
 
@@ -160,10 +157,6 @@ class Checkpoint(ABC):
         """Return whether ``key`` exists in this checkpoint."""
 
     @abstractmethod
-    def shape(self, key: str) -> tuple[int, ...]:
-        """Return tensor shape on host without device transfer."""
-
-    @abstractmethod
     def pop(self, key: str, index=None) -> torch.Tensor:
         """Return tensor at ``key`` and remove it. Raises ``KeyError`` on miss.
 
@@ -226,8 +219,6 @@ class SafetensorsCheckpoint(Checkpoint):
         return t.cuda()
 
     def has(self, key: str) -> bool: return key in self._data
-    def shape(self, key: str) -> tuple[int, ...]:
-        return tuple(self._data[key].shape)
     def keys(self): return iter(self._data.keys())
     def close(self) -> None: self._data = {}
 
@@ -260,8 +251,6 @@ class PytorchCheckpoint(Checkpoint):
         return t.cuda()
 
     def has(self, key: str) -> bool: return key in self._data
-    def shape(self, key: str) -> tuple[int, ...]:
-        return tuple(self._data[key].shape)
     def keys(self): return iter(self._data.keys())
     def close(self) -> None: self._data = {}
 
