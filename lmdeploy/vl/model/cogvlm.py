@@ -53,8 +53,9 @@ class CogVLMVisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, sequence_start, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         for message in messages:
             if isinstance(message['content'], str):
@@ -77,12 +78,15 @@ class CogVLMVisionModel(VisionModel):
                 role = msg['role']
                 msg = llm_chat_template.messages2prompt([msg], sequence_start and i == 0)
                 msg = dict(role=role, content=msg)
-            prompt_i = chat_template.messages2prompt([msg], sequence_start and i == 0)
+            render_kwargs = dict(chat_template_kwargs) if i == 0 else {}
+            render_kwargs['tools'] = tools if i == 0 else None
+            prompt_i = chat_template.messages2prompt([msg], sequence_start and i == 0, **render_kwargs)
             if num_images > 0:
                 prompt_i = (IMAGE_TOKEN * num_images) + prompt_i
             prompt += prompt_i
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, tools=None, chat_template_kwargs=None,
+                   **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, tools, chat_template_kwargs)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
