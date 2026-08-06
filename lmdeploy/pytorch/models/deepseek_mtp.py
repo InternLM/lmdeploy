@@ -369,8 +369,7 @@ class SharedHead(nn.Module):
 def build_deepseek_rotary_embedding(config: PretrainedConfig):
     """Build deepseek rotary embedding."""
     emb_type = RopeType.LinearScaling
-    rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
-                                                                                 config.num_attention_heads)
+    rope_dim = config.qk_rope_head_dim
     rope_max_pos_emb = config.max_position_embeddings
     rope_base = get_rope_theta(config)
 
@@ -765,7 +764,7 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
                 name = self._rewrite_spec_layer_name(layer_idx, name)
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
-            elif '.self_attn' in name and getattr(config, 'use_mla', True):
+            elif '.self_attn' in name:
                 # attention
                 self._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
             else:

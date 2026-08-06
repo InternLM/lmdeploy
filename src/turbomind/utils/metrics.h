@@ -13,10 +13,6 @@ struct ScheduleMetrics {
     int active_seqs{};   // the number of active sequences
     int waiting_seqs{};  // the number of waiting sequences
 
-    // Cache-object counts. The heterogeneous allocator has no fixed-size free-block pool.
-    int64_t total_blocks{};  // the number of live cache objects
-    int64_t free_blocks{};   // always zero for the heterogeneous allocator
-
     double cache_usage{};            // live cache-object bytes / cache region bytes
     double prefix_cache_hit_rate{};  // skipped prompt tokens / queried prompt tokens
 
@@ -47,8 +43,6 @@ inline std::ostream& operator<<(std::ostream& os, const ScheduleMetrics& m)
     os << ", scheduler_tick=" << m.scheduler_tick;
     os << ", cache_usage=" << m.cache_usage;
     os << ", prefix_cache_hit_rate=" << m.prefix_cache_hit_rate;
-    os << ", total_blocks=" << m.total_blocks;
-    os << ", free_blocks=" << m.free_blocks;
     os << " }";
     return os;
 }

@@ -70,7 +70,8 @@ def test_concurrent_refresh_snapshot_serializes_probes():
 
 
 async def _run_health_endpoint_refreshes_cached_unhealthy_snapshot():
-    from lmdeploy.serve.openai.api_server import VariableInterface, health
+    from lmdeploy.serve.openai.api_server import ServerContext
+    from lmdeploy.serve.openai.endpoints import create_openai_router
 
     class _FakeMonitor:
 
@@ -85,12 +86,11 @@ async def _run_health_endpoint_refreshes_cached_unhealthy_snapshot():
             return dict(status='healthy', message='fresh probe succeeded')
 
     monitor = _FakeMonitor()
-    original_monitor = VariableInterface.health_monitor
-    VariableInterface.health_monitor = monitor
-    try:
-        response = await health()
-    finally:
-        VariableInterface.health_monitor = original_monitor
+    context = ServerContext()
+    context.health_monitor = monitor
+    router = create_openai_router(context)
+    health = next(route.endpoint for route in router.routes if route.path == '/health')
+    response = await health()
 
     assert response.status_code == 200
     assert json.loads(response.body) == dict(status='healthy', message='fresh probe succeeded')
@@ -102,7 +102,8 @@ def test_health_endpoint_refreshes_cached_unhealthy_snapshot():
 
 
 async def _run_health_endpoint_does_not_refresh_initializing_snapshot():
-    from lmdeploy.serve.openai.api_server import VariableInterface, health
+    from lmdeploy.serve.openai.api_server import ServerContext
+    from lmdeploy.serve.openai.endpoints import create_openai_router
 
     class _FakeMonitor:
 
@@ -117,12 +118,11 @@ async def _run_health_endpoint_does_not_refresh_initializing_snapshot():
             return dict(status='healthy', message='fresh probe succeeded')
 
     monitor = _FakeMonitor()
-    original_monitor = VariableInterface.health_monitor
-    VariableInterface.health_monitor = monitor
-    try:
-        response = await health()
-    finally:
-        VariableInterface.health_monitor = original_monitor
+    context = ServerContext()
+    context.health_monitor = monitor
+    router = create_openai_router(context)
+    health = next(route.endpoint for route in router.routes if route.path == '/health')
+    response = await health()
 
     assert response.status_code == 503
     assert json.loads(response.body) == dict(status='initializing', message='Engine health monitor is starting.')

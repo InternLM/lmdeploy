@@ -14,6 +14,7 @@ endif()
 
 pybind11_add_module(${PROJECT_NAME}
     bind.cpp
+    linear_bind.cpp
     ../kernels/linear_attn/python_bind.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
 

@@ -35,6 +35,8 @@ public:
                           const MatrixLayout& Cdesc,
                           void*               D,
                           const MatrixLayout& Ddesc,
+                          void*               W,
+                          const MatrixLayout& Wdesc,
                           const Workspace&    workspace,
                           cudaStream_t        stream);
 

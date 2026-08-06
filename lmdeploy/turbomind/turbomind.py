@@ -399,8 +399,6 @@ class TurboMind:
         tm_metrics = self.model_comm.get_schedule_metrics(0)
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
-                               total_blocks=tm_metrics.total_blocks,
-                               free_blocks=tm_metrics.free_blocks,
                                cache_usage=tm_metrics.cache_usage,
                                prefix_cache_hit_rate=tm_metrics.prefix_cache_hit_rate,
                                scheduler_tick=tm_metrics.scheduler_tick)

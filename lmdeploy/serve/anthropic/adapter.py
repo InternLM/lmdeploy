@@ -29,7 +29,7 @@ def get_model_list(server_context) -> list[str]:
     """Return available model names from the server context."""
 
     model_names = [server_context.async_engine.model_name]
-    cfg = server_context.async_engine.backend_config
+    cfg = server_context.engine_config
     model_names += getattr(cfg, 'adapters', None) or []
     return model_names
 
