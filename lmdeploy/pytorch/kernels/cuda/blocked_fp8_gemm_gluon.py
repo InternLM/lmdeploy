@@ -1050,16 +1050,29 @@ def _make_transposed_small_descriptors(a_quant, b_quant, output, block_m, block_
     return lhs_desc, rhs_desc, d_desc
 
 
+def _get_transpose_m_limit(k):
+    """Choose where avoiding padded WGMMA rows outweighs reloading B."""
+    if k <= 5120:
+        return 32
+    if k < 8192:
+        return 24
+    if k < 16384:
+        return 16
+    return 8
+
+
 def _launch_single_partition(a_quant, a_scale, b_quant, b_scale, output):
     m, n = output.shape
     k = a_quant.size(-1)
-    transpose_output = m <= 8 and k >= 4096
+    transpose_output = m <= _get_transpose_m_limit(k) and k >= 4096
     block_m = 64
     # Transposing the GEMM makes WGMMA's flexible N dimension represent the
-    # tiny logical M dimension, avoiding 56-63 rows of padded tensor-core and
-    # FP32 promotion work. Short K does not amortize the smaller 64-CTA grid.
+    # small logical M dimension. Use BN8 for slices and BN16 at exactly M=32;
+    # the K-dependent limit balances avoided padded promotion against reloading
+    # each B tile for another M slice. Short K does not amortize the smaller
+    # 64-CTA grid used by M <= 8.
     if transpose_output:
-        block_n = 8
+        block_n = 16 if m == 32 else 8
         num_buffers = 16 if k >= 8192 else 8
     elif m <= 64:
         block_n = 32
@@ -1220,13 +1233,14 @@ def fp8_gemm_nt(a, b, d, c):
     accepted for DeepGEMM-style signature compatibility and is not used.
 
     M up to 128 uses a single-partition multistage schedule. Within that body,
-    M up to 8 with K at least 4096 computes the equivalent transposed GEMM to
-    avoid padding the tensor-core result to 64 rows. For M up to 256, dense
-    64x64 grids that fit at most two CTA waves reuse the single-partition body
-    to avoid warp-specialization barriers. Other middle shapes use a primed
-    warp-specialized 64x128 schedule. Larger grids use a persistent two-wave
-    schedule that reuses B data and scales while controlling accumulator
-    register pressure.
+    small M with K at least 4096 computes the equivalent transposed GEMM to
+    avoid padding the tensor-core result to 64 rows. Its tuned M limit shrinks
+    from 32 to 8 as K grows because each additional M slice reloads B. For M up
+    to 256, dense 64x64 grids that fit at most two CTA waves reuse the
+    single-partition body to avoid warp-specialization barriers. Other middle
+    shapes use a primed warp-specialized 64x128 schedule. Larger grids use a
+    persistent two-wave schedule that reuses B data and scales while
+    controlling accumulator register pressure.
     """
     a_quant, a_scale = a
     b_quant, b_scale = b

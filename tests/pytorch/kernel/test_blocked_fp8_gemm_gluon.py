@@ -195,10 +195,19 @@ def test_fp8_gemm_nt_tiny_m_reuses_eight_pipeline_stages():
     _run_case(m=4, n=192, k=2176, repeats=5)
 
 
-@pytest.mark.parametrize(('m', 'k'), [(1, 4096), (8, 8192)])
+@pytest.mark.parametrize(('m', 'k'), [(1, 4096), (32, 4096), (24, 6144), (8, 8192), (16, 8192)])
 def test_fp8_gemm_nt_transposed_tiny_m(m, k):
-    """Cover both stage depths of the transposed M<=8 schedule."""
+    """Cover the K-dependent transposed schedule and both stage depths."""
     _run_case(m=m, n=192, k=k, repeats=5)
+
+
+@pytest.mark.parametrize(('k', 'expected'), [(4096, 32), (5120, 32), (6144, 24), (8192, 16), (15360, 16),
+                                              (16384, 8), (17408, 8)])
+def test_fp8_gemm_nt_transpose_m_limit(k, expected):
+    """Keep long-K B-reload regressions outside the transposed schedule."""
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import _get_transpose_m_limit
+
+    assert _get_transpose_m_limit(k) == expected
 
 
 def test_fp8_gemm_nt_rejects_invalid_dtype_and_layout():
