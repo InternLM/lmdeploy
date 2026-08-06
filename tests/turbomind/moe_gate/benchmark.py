@@ -5,8 +5,8 @@ import statistics
 
 import torch
 
-from tests.turbomind.moe_gate import turbomind_moe_gate
-from tests.turbomind.moe_gate.cases import bench_cases
+from . import turbomind_moe_gate
+from .cases import bench_cases
 
 DEFAULT_L2_FLUSH_BYTES = 64 * 1024 * 1024
 

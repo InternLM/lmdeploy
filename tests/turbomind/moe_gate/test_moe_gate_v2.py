@@ -1,9 +1,9 @@
 import pytest
 import torch
 
-from tests.turbomind.moe_gate import turbomind_moe_gate
-from tests.turbomind.moe_gate.cases import SMOKE_CASES
-from tests.turbomind.moe_gate.reference import moe_gate_v2_reference
+from . import turbomind_moe_gate
+from .cases import SMOKE_CASES
+from .reference import moe_gate_v2_reference
 
 cuda_required = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
