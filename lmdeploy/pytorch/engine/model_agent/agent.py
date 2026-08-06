@@ -27,6 +27,7 @@ from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.nn import ParallelLMHead
+from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.spec_decode import build_spec_agent
 from lmdeploy.pytorch.strategies import build_strategy_factory
 from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
@@ -1186,12 +1187,15 @@ class BaseModelAgent:
                                             max_batch_size=self.cache_config.max_batches)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         uses_parallel_lm_head = isinstance(getattr(patched_model, 'lm_head', None), ParallelLMHead)
+        if (uses_parallel_lm_head and self.dist_config.attn_tp > 1
+                and (self.memdecode_agent is not None or self.cache_config.role != EngineRole.Hybrid)):
+            patched_model.lm_head = build_rowwise_linear(self.model_config.hidden_size,
+                                                         self.model_config.vocab_size,
+                                                         bias=False,
+                                                         dtype=self.model_config.dtype,
+                                                         device=device)
+            uses_parallel_lm_head = False
         self.sample_all_ranks = uses_parallel_lm_head and self.dist_config.attn_tp > 1
-        if uses_parallel_lm_head and self.dist_config.attn_tp > 1:
-            if self.memdecode_agent is not None:
-                raise ValueError('MemDecode does not support vocabulary-parallel LM heads yet.')
-            if self.cache_config.role != EngineRole.Hybrid:
-                raise ValueError('DistServe does not support vocabulary-parallel LM heads yet.')
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)
