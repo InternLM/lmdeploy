@@ -28,7 +28,7 @@ from ..builders import (
 from ..builders._base import ParallelGroup
 from ..linear import Linear, transform_output_dim
 from ..supported_models import SUPPORTED_ARCHS
-from ..text_model import TextModel
+from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat
 from .base import INPUT_MODELS
 
@@ -150,7 +150,7 @@ def _split_packed_vision_qkv(tensor: torch.Tensor):
     return tuple(x.contiguous() for x in tensor.chunk(3, dim=-1))
 
 
-class InternVitVisionModel(TextModel):
+class InternVitVisionModel(VisionModel):
     """InternVit weight model rooted at ``ModelRoot.vision_model``."""
 
     def __init__(self, cfg: PretrainedConfig, *, resolver, parent_cfg: PretrainedConfig):
@@ -462,9 +462,6 @@ class InternVLModel:
             self.vision_model.bind_runtime(
                 ctx=ctx,
                 root_handles=root_handles,
-                attn_tp=attn_tp,
-                mlp_tp=mlp_tp,
-                ep=ep,
                 model_tp=model_tp,
             )
 

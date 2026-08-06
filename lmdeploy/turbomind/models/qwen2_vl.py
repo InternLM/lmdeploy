@@ -26,7 +26,7 @@ from ..builders import (
 )
 from ..builders._base import ParallelGroup
 from ..linear import Linear, transform_input_dim, transform_output_dim
-from ..text_model import TextModel
+from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat
 from .base import INPUT_MODELS
 from .qwen2 import Qwen2Model
@@ -86,7 +86,7 @@ def _resolve_fingerprint(input_mm: dict, grid_thw: tuple[int, int, int]) -> byte
     return h_obj.digest()
 
 
-class _BaseQwen2VisionModel(TextModel):
+class _BaseQwen2VisionModel(VisionModel):
     """Common Qwen2-VL vision sub-tree rooted at ``ModelRoot.vision_model``."""
 
     _gated_mlp = False
@@ -436,16 +436,20 @@ class Qwen2VLModel:
 
     def bind_runtime(self, *, ctx, root_handles,
                      attn_tp, mlp_tp, ep, model_tp):
-        for m in (self.text_model, self.vision_model):
-            if m is not None:
-                m.bind_runtime(
-                    ctx=ctx,
-                    root_handles=root_handles,
-                    attn_tp=attn_tp,
-                    mlp_tp=mlp_tp,
-                    ep=ep,
-                    model_tp=model_tp,
-                )
+        self.text_model.bind_runtime(
+            ctx=ctx,
+            root_handles=root_handles,
+            attn_tp=attn_tp,
+            mlp_tp=mlp_tp,
+            ep=ep,
+            model_tp=model_tp,
+        )
+        if self.vision_model is not None:
+            self.vision_model.bind_runtime(
+                ctx=ctx,
+                root_handles=root_handles,
+                model_tp=model_tp,
+            )
 
     @property
     def _vocab_size(self):

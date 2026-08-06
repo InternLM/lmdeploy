@@ -51,6 +51,7 @@ from ..builders._base import ParallelGroup
 from ..builders.attention import split_output_gate
 from ..linear import Linear, transform_input_dim, transform_output_dim
 from ..text_model import TextModel
+from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat
 from .base import INPUT_MODELS
 from .utils import (
@@ -374,13 +375,8 @@ def _resolve_fingerprint(input_mm: dict) -> bytes:
     return fp if fp is not None else _image_fingerprint(input_mm)
 
 
-class Qwen3_5VisionModel(TextModel):
-    """Vision sub-tree for Qwen3.5 VLM, rooted at ModelRoot.vision_model.
-
-    Subclasses ``TextModel`` purely to reuse the two-phase lifecycle
-    (``__init__`` / ``bind_runtime``) and the ``_linear`` resolver helper;
-    its ``cfg`` is the HF ``vision_config`` and ``_vocab_size`` is never used.
-    """
+class Qwen3_5VisionModel(VisionModel):
+    """Vision sub-tree for Qwen3.5 VLM, rooted at ModelRoot.vision_model."""
 
     def __init__(self, vision_cfg, *, resolver):
         super().__init__(vision_cfg, resolver=resolver)
@@ -644,16 +640,20 @@ class Qwen3_5Model:
 
     def bind_runtime(self, *, ctx, root_handles,
                      attn_tp, mlp_tp, ep, model_tp):
-        for m in (self.text_model, self.vision_model):
-            if m is not None:
-                m.bind_runtime(
-                    ctx=ctx,
-                    root_handles=root_handles,
-                    attn_tp=attn_tp,
-                    mlp_tp=mlp_tp,
-                    ep=ep,
-                    model_tp=model_tp,
-                )
+        self.text_model.bind_runtime(
+            ctx=ctx,
+            root_handles=root_handles,
+            attn_tp=attn_tp,
+            mlp_tp=mlp_tp,
+            ep=ep,
+            model_tp=model_tp,
+        )
+        if self.vision_model is not None:
+            self.vision_model.bind_runtime(
+                ctx=ctx,
+                root_handles=root_handles,
+                model_tp=model_tp,
+            )
 
     @property
     def _vocab_size(self):
