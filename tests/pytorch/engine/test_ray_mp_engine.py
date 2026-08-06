@@ -170,3 +170,28 @@ async def _async_test_ray_stream_returns_unconsumed_final_output_once():
 
 def test_ray_stream_returns_unconsumed_final_output_once():
     asyncio.run(_async_test_ray_stream_returns_unconsumed_final_output_once())
+
+
+async def _async_test_ray_stream_failure_before_output_returns_engine_error():
+    worker = RayEngineWorker.__new__(RayEngineWorker)
+    worker._stream_id = 0
+    worker._stream_aiter = {}
+    worker._stream_task = {}
+    worker._engine_output_gather = EngineOutputGather()
+
+    async def fake_stream(notify_add_msg_func=None):
+        notify_add_msg_func()
+        raise RuntimeError('failed before first output')
+        yield
+
+    worker.instance_async_stream_infer = fake_stream
+    stream_id = await worker.create_stream_task('instance_async_stream_infer')
+
+    result, stopped = await worker.get_stream_task_result(stream_id)
+    assert result.status == ResponseType.INTERNAL_ENGINE_ERROR
+    assert result.token_ids == []
+    assert stopped is True
+
+
+def test_ray_stream_failure_before_output_returns_engine_error():
+    asyncio.run(_async_test_ray_stream_failure_before_output_returns_engine_error())

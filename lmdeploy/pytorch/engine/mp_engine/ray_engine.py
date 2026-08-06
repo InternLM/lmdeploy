@@ -50,9 +50,11 @@ class RayEngineWorker(EngineWorkerBase):
             kwargs['notify_add_msg_func'] = _notify_add_msg
 
         result = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+        has_output = False
         try:
             generator = method(*args, **kwargs)
             async for result in generator:
+                has_output = True
                 self._engine_output_gather.add(stream_id, result)
                 self._stream_aiter[stream_id][1] = (result, False)
                 event.set()
@@ -68,7 +70,15 @@ class RayEngineWorker(EngineWorkerBase):
             # only an end-of-stream marker; replaying ``result`` duplicates the
             # final token chunk.  If it has not been consumed yet, return that
             # pending output and mark it as the last one.
-            stream_out[1] = (None, True) if pending is None else (pending[0], True)
+            if pending is not None:
+                terminal_result = pending[0]
+            elif has_output:
+                terminal_result = None
+            else:
+                # Preserve the previous empty/error-stream behavior: callers
+                # must receive INTERNAL_ENGINE_ERROR instead of a clean EOF.
+                terminal_result = result
+            stream_out[1] = (terminal_result, True)
             event.set()
 
     async def create_stream_task(self, func, *args, **kwargs):
