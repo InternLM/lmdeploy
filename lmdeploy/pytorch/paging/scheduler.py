@@ -20,8 +20,8 @@ Successful prefill scheduling keeps this order:
 
 SSM scheduling detail:
 
-* ``block_trie.match(seq)`` may find a ready checkpoint and record
-  ``seq.prefix_cache.restore_state`` before the request owns a runtime state.
+* ``block_trie.match(seq)`` may find a published checkpoint and record
+  ``seq.prefix_cache.restore`` before the request owns a runtime state.
   The scheduler must treat that as tentative until KV blocks and one runtime
   state slot are guaranteed.
 * A matched restore checkpoint can be pinned before eviction so checkpoint LRU
@@ -38,10 +38,8 @@ SSM scheduling detail:
   checkpoint readiness.
 """
 
-import logging
 import time
 from collections import Counter, OrderedDict
-from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -73,28 +71,6 @@ class SchedulerOutput:
     swap_in_map: MapType
     swap_out_map: MapType
     copy_map: MapType
-
-
-_PREFILL_GATE_SKIP = 'skip'
-_PREFILL_GATE_BREAK = 'break'
-
-
-@dataclass
-class _PrefixMatchForPrefillGate:
-    """Tentative prefix match kept only because it passes a prefill gate."""
-
-    stats_snapshot: object
-    prefill_token_count: int
-    is_nonfinal_long_prefill: bool
-
-
-@dataclass
-class _PrefillGateCheck:
-    """Result of prefill-gate checks before final resource admission."""
-
-    prefix_match: _PrefixMatchForPrefillGate | None = None
-    rollback_action: str | None = None
-    reject_action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -276,6 +252,8 @@ class _PrefillAdmissionAttempt:
         self.has_admitted = has_admitted
         self.allow_long_prefill = allow_long_prefill
         self._alloc_size = prealloc_size
+        self._gate_match_stats_snapshot = None
+        self._gate_match_rollback_result = None
 
     def run(self):
         """Run the admission route for one waiting prefill.
@@ -286,54 +264,26 @@ class _PrefillAdmissionAttempt:
         4. Return skip/stop if resources block the candidate.
         5. On success, allocate blocks/states and publish any prefix-cache hit.
         """
-        scheduler = self.scheduler
-        gate_check = scheduler._check_prefill_admission_gates(
-            self.seq,
-            token_count=self.token_count,
-            has_admitted=self.has_admitted,
-            allow_long_prefill=self.allow_long_prefill,
-        )
+        gate_result = self._check_prefill_admission_gates()
+        if gate_result is not None:
+            return self._check_result(gate_result)
 
-        if gate_check.reject_action is not None:
-            return self._check_result(
-                self._result_for_gate_action(gate_check.reject_action))
-
-        resource_result = self._admit_resources(gate_check)
+        resource_result = self._admit_resources()
         if resource_result is not None:
             return self._check_result(resource_result)
 
         return self._check_result(self._finish_admission())
 
-    def _result_for_gate_action(self, action: str | None):
-        if action == _PREFILL_GATE_SKIP:
-            return _PrefillAdmissionResult.skip()
-        if action == _PREFILL_GATE_BREAK:
-            return _PrefillAdmissionResult.stop()
-        self._warn_unexpected_state(f'unknown prefill gate action: action={action!r}')
-        return _PrefillAdmissionResult.stop()
-
-    def _gate_rollback_result(self, gate_check: _PrefillGateCheck):
-        """Reject a candidate whose gate-only prefix hit was rolled back."""
-        if gate_check.prefix_match is None:
-            return None
-        if gate_check.rollback_action is None:
-            self._warn_unexpected_state('gate-only prefix match rollback has no reject action')
-            return _PrefillAdmissionResult.stop()
-        return self._result_for_gate_action(gate_check.rollback_action)
-
-    def _rollback_gate(self,
-                       stats_snapshot,
-                       gate_check: _PrefillGateCheck,
-                       reason: str):
+    def _rollback_gate(self, stats_snapshot, reason: str):
         """Rollback a tentative prefix hit and return any gate-only rejection.
 
         A prefill gate may do a tentative prefix-cache match before resource
         admission. If that match is rolled back, the candidate should follow
-        the gate's original skip/break action. Matches created after the gate
+        the gate's original skip/stop result. Matches created after the gate
         return ``None`` so the resource branch keeps its own retry/stop behavior.
         """
         self._rollback_prefix_match(stats_snapshot, reason)
-        return self._gate_rollback_result(gate_check)
+        return self._gate_match_rollback_result
 
     def _check_result(self, result: _PrefillAdmissionResult):
         if result.admitted and result.should_skip:
@@ -349,14 +299,14 @@ class _PrefillAdmissionAttempt:
         logger.warning('Unexpected prefill admission state: session_id=%s seq_id=%s %s',
                        seq.session_id, seq.seq_id, message)
 
-    def _admit_resources(self, gate_check: _PrefillGateCheck):
-        if self.scheduler.block_trie.enable:
-            return self._admit_prefix_cache_resources(gate_check)
+    def _admit_resources(self):
+        if self.scheduler.block_trie.enabled:
+            return self._admit_prefix_cache_resources()
         if not self._prepare_and_evict():
             return _PrefillAdmissionResult.stop()
         return None
 
-    def _admit_prefix_cache_resources(self, gate_check: _PrefillGateCheck):
+    def _admit_prefix_cache_resources(self):
         """Admit resources for prefix-cache scheduling.
 
         Route map:
@@ -371,24 +321,20 @@ class _PrefillAdmissionAttempt:
         """
         scheduler = self.scheduler
         seq = self.seq
-        if gate_check.prefix_match is None:
-            stats_snapshot = scheduler.block_trie.snapshot_stats()
-        else:
-            stats_snapshot = gate_check.prefix_match.stats_snapshot
-
-        if gate_check.prefix_match is None:
+        stats_snapshot = self._gate_match_stats_snapshot
+        if stats_snapshot is None:
+            stats_snapshot = scheduler.block_trie.stats.snapshot()
             scheduler.block_trie.match(seq)
 
-        had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore_state >= 0
-        if not scheduler._acquire_ssm_restore_if_needed(seq):
-            result = self._rollback_gate(stats_snapshot, gate_check,
-                                         'failed to acquire SSM restore checkpoint')
+        had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore.is_selected
+        if not scheduler._pin_ssm_restore_if_needed(seq):
+            result = self._rollback_gate(stats_snapshot, 'failed to pin SSM restore checkpoint')
             if result is not None:
                 return result
 
         if not self._prepare_and_evict():
             if not had_ssm_restore:
-                result = self._rollback_gate(stats_snapshot, gate_check, 'eviction failed')
+                result = self._rollback_gate(stats_snapshot, 'eviction failed')
                 if result is not None:
                     return result
                 return _PrefillAdmissionResult.stop()
@@ -396,16 +342,14 @@ class _PrefillAdmissionAttempt:
             # A matched SSM restore may be pinning the only checkpoint state
             # that eviction would otherwise free. Roll it back once and retry
             # eviction before declaring the sequence unschedulable.
-            result = self._rollback_gate(stats_snapshot, gate_check,
-                                         'eviction failed with pinned SSM restore')
+            result = self._rollback_gate(stats_snapshot, 'eviction failed with pinned SSM restore')
             if result is not None:
                 return result
             if not self._prepare_and_evict():
                 return _PrefillAdmissionResult.stop()
 
         if scheduler.is_ssm and not scheduler._ensure_runtime_state_available():
-            result = self._rollback_gate(stats_snapshot, gate_check,
-                                         'no runtime SSM state available')
+            result = self._rollback_gate(stats_snapshot, 'no runtime SSM state available')
             if result is not None:
                 return result
             if not self._prepare_and_evict():
@@ -415,6 +359,59 @@ class _PrefillAdmissionAttempt:
                 return _PrefillAdmissionResult.stop()
 
         return None
+
+    def _match_prefix_for_prefill_gate(self):
+        """Tentatively match once so a request can be rechecked by a gate."""
+        scheduler = self.scheduler
+        if not scheduler.block_trie.enabled:
+            return None
+        stats_snapshot = scheduler.block_trie.stats.snapshot()
+        scheduler.block_trie.match(self.seq)
+        return stats_snapshot
+
+    def _keep_gate_prefix_match(self, stats_snapshot, rollback_result: _PrefillAdmissionResult):
+        """Keep a gate-enabling match for the following resource admission."""
+        self._gate_match_stats_snapshot = stats_snapshot
+        self._gate_match_rollback_result = rollback_result
+
+    def _token_budget_rejection(self):
+        if self.allow_long_prefill:
+            return _PrefillAdmissionResult.stop()
+        return _PrefillAdmissionResult.skip()
+
+    def _check_prefill_admission_gates(self):
+        """Apply prefill gates, tentatively matching only when it may help."""
+        scheduler = self.scheduler
+        seq = self.seq
+        token_budget = scheduler.cache_config.max_prefill_token_num
+        prefill_token_count = scheduler._prefill_admission_token_count(seq)
+        is_nonfinal_long_prefill = scheduler._prefill_kv_token_limit(seq) is not None
+
+        if is_nonfinal_long_prefill and not self.allow_long_prefill:
+            stats_snapshot = self._match_prefix_for_prefill_gate()
+            if stats_snapshot is None:
+                return _PrefillAdmissionResult.skip()
+            if scheduler._prefill_kv_token_limit(seq) is not None:
+                self._rollback_prefix_match(stats_snapshot, 'still non-final long prefill on short turn')
+                return _PrefillAdmissionResult.skip()
+            self._keep_gate_prefix_match(stats_snapshot, _PrefillAdmissionResult.skip())
+            prefill_token_count = scheduler._prefill_admission_token_count(seq)
+
+        exceeds_token_budget = self.has_admitted and self.token_count + prefill_token_count > token_budget
+        if not exceeds_token_budget:
+            return None
+
+        if self._gate_match_stats_snapshot is None:
+            stats_snapshot = self._match_prefix_for_prefill_gate()
+            if stats_snapshot is not None:
+                prefill_token_count = scheduler._prefill_admission_token_count(seq)
+                if self.token_count + prefill_token_count <= token_budget:
+                    self._keep_gate_prefix_match(stats_snapshot, self._token_budget_rejection())
+                    return None
+                self._rollback_prefix_match(stats_snapshot, 'still exceeds prefill token budget')
+        else:
+            self._rollback_prefix_match(self._gate_match_stats_snapshot, 'still exceeds prefill token budget')
+        return self._token_budget_rejection()
 
     def _prepare_and_evict(self):
         """Apply chunk allocation limits and evict for this prefill."""
@@ -438,10 +435,9 @@ class _PrefillAdmissionAttempt:
 
     def _rollback_prefix_match(self, stats_snapshot, reason: str):
         seq = self.seq
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
-                         f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                         f'restore_state={seq.prefix_cache.restore_state}')
+        logger.debug('Rollback tentative prefix-cache match: session_id=%s seq_id=%s reason=%s '
+                     'num_history_ids=%s restore_state=%s', seq.session_id, seq.seq_id, reason, seq.num_history_ids,
+                     seq.prefix_cache.restore.slot)
         self.scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
 
     def _finish_admission(self):
@@ -453,11 +449,11 @@ class _PrefillAdmissionAttempt:
         # estimate used to decide whether this sequence is worth trying.
         prefill_token_count = scheduler._prefill_admission_token_count(seq)
         scheduler.block_manager.allocate(seq, self._alloc_size)
-        if scheduler.block_trie.enable:
+        if scheduler.block_trie.enabled:
             scheduler.block_trie.allocate(seq)
         if scheduler.is_ssm:
             scheduler.state_manager.allocate(seq)
-        if scheduler.block_trie.enable:
+        if scheduler.block_trie.enabled:
             scheduler._finish_prefix_cache_schedule(seq)
         return _PrefillAdmissionResult.admit(prefill_token_count)
 
@@ -485,8 +481,12 @@ class Scheduler:
 
         self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
-        self.block_trie = BlockTrie(self.cache_config, self.block_manager, self.state_manager)
         self.is_ssm = len(self.cache_config.states_shapes) > 0
+        checkpoint_state_manager = self.state_manager if self.is_ssm else None
+        self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
+                                   block_size=self.cache_config.block_size,
+                                   enabled=self.cache_config.enable_prefix_caching,
+                                   checkpoint_state_manager=checkpoint_state_manager)
 
         self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
 
@@ -511,14 +511,14 @@ class Scheduler:
             return True
         if self.state_manager.get_num_free_runtime() > 0:
             return True
-        self.block_trie.evict_state_checkpoints(1)
+        self.block_trie.state_checkpoints.evict(1)
         return self.state_manager.get_num_free_runtime() > 0
 
-    def _acquire_ssm_restore_if_needed(self, seq: SchedulerSequence):
+    def _pin_ssm_restore_if_needed(self, seq: SchedulerSequence):
         """Pin a matched SSM checkpoint before scheduler-side eviction."""
-        if not self.is_ssm or seq.prefix_cache.restore_state < 0:
+        if not self.is_ssm or not seq.prefix_cache.restore.is_selected:
             return True
-        return self.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+        return self.block_trie.state_checkpoints.pin_restore(seq)
 
     def _rollback_unscheduled_prefix_match(self, seq: SchedulerSequence, stats_snapshot=None):
         """Drop a tentative prefix match that will not be used now.
@@ -528,109 +528,20 @@ class Scheduler:
         If later eviction or state allocation fails, undo those side effects so
         the waiting sequence can be scheduled cleanly in a later round.
         """
-        self.block_trie.restore_stats(stats_snapshot)
+        self.block_trie.stats.restore(stats_snapshot)
         if self.is_ssm:
-            self.block_trie.release_state_checkpoint_restore_for_seq(seq)
+            self.block_trie.state_checkpoints.unpin_restore(seq)
         if seq.num_blocks > 0 or seq.logical_state >= 0:
             seq.state.free()
         elif seq.num_history_ids > 0:
             seq.set_step(0)
         seq.kv_token_limit = None
         prefix_cache = seq.prefix_cache
-        prefix_cache.last_shared_node = None
-        prefix_cache.restore_state = -1
-        prefix_cache.restore_node = None
-        prefix_cache.restore_state_acquired = False
+        prefix_cache.trie_cursor = None
+        prefix_cache.restore.clear()
         prefix_cache.match_start_step = -1
-        prefix_cache.private_recompute_start_step = -1
-        prefix_cache.private_recompute_end_step = -1
+        prefix_cache.recompute_overlap.clear_tracking()
         seq.cached_tokens = 0
-
-    def _rollback_prefix_match_for_prefill_gate(self, seq: SchedulerSequence, stats_snapshot, reason: str):
-        """Rollback a prefix match tried only to re-check prefill gates."""
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f'Rollback tentative prefix-cache gate match: session_id={seq.session_id} '
-                         f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
-                         f'restore_state={seq.prefix_cache.restore_state}')
-        self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
-
-    def _try_prefix_match_for_prefill_gate(
-        self,
-        seq: SchedulerSequence,
-        accept_match: Callable[[_PrefixMatchForPrefillGate], bool],
-        rollback_reason: str,
-    ):
-        """Tentatively match prefix cache before rejecting a prefill candidate.
-
-        This helper is intentionally limited to pre-admission gates.  It does not evict, allocate, acquire SSM restore
-        state, or publish cache state. The caller either continues into the normal admission path with the returned
-        match, or the helper rolls every match side effect back.
-        """
-        if not self.block_trie.enable:
-            return None
-
-        stats_snapshot = self.block_trie.snapshot_stats()
-        self.block_trie.match(seq)
-
-        prefix_match = _PrefixMatchForPrefillGate(
-            stats_snapshot=stats_snapshot,
-            prefill_token_count=self._prefill_admission_token_count(seq),
-            is_nonfinal_long_prefill=self._prefill_kv_token_limit(seq) is not None,
-        )
-        if accept_match(prefix_match):
-            return prefix_match
-
-        self._rollback_prefix_match_for_prefill_gate(seq, stats_snapshot, rollback_reason)
-        return None
-
-    def _check_prefill_admission_gates(self, seq: SchedulerSequence, token_count: int, has_admitted: bool,
-                                       allow_long_prefill: bool):
-        """Check prefill policy gates before resource admission.
-
-        A prefix-cache hit can shrink a request enough to pass a short-turn or
-        token-budget gate.  When that happens, the returned prefix match is
-        still tentative; if later resource admission rolls it back, the caller
-        must reject this candidate with ``rollback_action`` for the current
-        scheduler turn.
-        """
-        prefill_token_count = self._prefill_admission_token_count(seq)
-        is_nonfinal_long_prefill = self._prefill_kv_token_limit(seq) is not None
-        prefix_match = None
-        rollback_action = None
-
-        if is_nonfinal_long_prefill and not allow_long_prefill:
-            prefix_match = self._try_prefix_match_for_prefill_gate(
-                seq,
-                accept_match=lambda match: not match.is_nonfinal_long_prefill,
-                rollback_reason='still non-final long prefill on short turn')
-            if prefix_match is None:
-                return _PrefillGateCheck(reject_action=_PREFILL_GATE_SKIP)
-            prefill_token_count = prefix_match.prefill_token_count
-            rollback_action = _PREFILL_GATE_SKIP
-
-        exceeds_token_budget = (has_admitted
-                                and token_count + prefill_token_count > self.cache_config.max_prefill_token_num)
-        if exceeds_token_budget:
-            if prefix_match is None:
-                prefix_match = self._try_prefix_match_for_prefill_gate(
-                    seq,
-                    accept_match=lambda match: token_count +
-                    match.prefill_token_count <= self.cache_config.max_prefill_token_num,
-                    rollback_reason='still exceeds prefill token budget')
-                if prefix_match is not None:
-                    prefill_token_count = prefix_match.prefill_token_count
-                    rollback_action = _PREFILL_GATE_SKIP if not allow_long_prefill else _PREFILL_GATE_BREAK
-
-            still_exceeds_token_budget = token_count + prefill_token_count > self.cache_config.max_prefill_token_num
-            if prefix_match is None or still_exceeds_token_budget:
-                if prefix_match is not None:
-                    self._rollback_prefix_match_for_prefill_gate(seq, prefix_match.stats_snapshot,
-                                                                 'still exceeds prefill token budget')
-                reject_action = _PREFILL_GATE_SKIP if not allow_long_prefill else _PREFILL_GATE_BREAK
-                return _PrefillGateCheck(reject_action=reject_action)
-
-        return _PrefillGateCheck(prefix_match=prefix_match,
-                                 rollback_action=rollback_action)
 
     @staticmethod
     def _finalize_prefix_cache_match(seq: SchedulerSequence):
@@ -1066,6 +977,6 @@ class Scheduler:
             active_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready(),
             cache_usage=cache_usage,
-            prefix_cache_hit_rate=self.block_trie.hit_rate(),
+            prefix_cache_hit_rate=self.block_trie.stats.hit_rate(),
             scheduler_tick=self.scheduler_tick,
         )

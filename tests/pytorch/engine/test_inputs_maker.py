@@ -15,7 +15,7 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     _compact_state_prefix_cache_restore_offsets,
     _compact_state_prefix_cache_save_offsets,
 )
-from lmdeploy.pytorch.messages import MessageStatus
+from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore
 
 
 @dataclass
@@ -61,7 +61,7 @@ class _DummySeq:
 
 def _state_seq(logical_state: int, restore_state: int = -1):
     return SimpleNamespace(logical_state=logical_state,
-                           prefix_cache=SimpleNamespace(restore_state=restore_state))
+                           prefix_cache=SimpleNamespace(restore=StateCheckpointRestore(slot=restore_state)))
 
 
 class _FakeScheduler:
@@ -126,68 +126,51 @@ def _fake_model_inputs(is_chunk: bool = False):
                            is_chunk_multimodal=False)
 
 
-def test_engine_loop_skips_prefix_cache_publish_when_disabled():
-
-    class _DisabledBlockTrie:
-        enable = False
-
-        def commit_state_checkpoints(self, seqs):
-            raise AssertionError('disabled prefix cache must not commit state checkpoints')
-
-        def release_state_checkpoint_restores(self, seqs):
-            raise AssertionError('disabled prefix cache must not release state checkpoint restores')
-
-    loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(block_trie=_DisabledBlockTrie())
-
-    loop._publish_forward_prefix_cache([object()], has_state_checkpoint_save=True)
-
-
 def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     events = []
 
-    class _BlockTrie:
-        enable = True
+    class _StateCheckpoints:
         pinned = False
 
-        def commit_state_checkpoints(self, seqs, acquire_save_ref=False):
-            events.append(('commit', acquire_save_ref))
-            assert acquire_save_ref
+        def publish_saves(self, seqs, pin_saves=False):
+            events.append(('publish_saves', pin_saves))
+            assert pin_saves
             self.pinned = True
 
-        def release_state_checkpoint_restores(self, seqs):
-            events.append(('release_restore', self.pinned))
+        def unpin_restores(self, seqs):
+            events.append(('unpin_restores', self.pinned))
 
-        def release_state_checkpoint_saves(self, seqs):
-            events.append(('release_save', self.pinned))
+        def unpin_saves(self, seqs):
+            events.append(('unpin_saves', self.pinned))
             self.pinned = False
 
     class _InputsMaker:
 
-        def __init__(self, block_trie):
-            self.block_trie = block_trie
+        def __init__(self, state_checkpoints):
+            self.state_checkpoints = state_checkpoints
 
         def update_running_seqs(self, running, model_inputs):
             events.append('update_running')
 
         async def prefetch_next_inputs(self):
-            events.append(('prefetch', self.block_trie.pinned))
+            events.append(('prefetch', self.state_checkpoints.pinned))
             return None, None
 
     class _Executor:
 
-        def __init__(self, block_trie):
-            self.block_trie = block_trie
+        def __init__(self, state_checkpoints):
+            self.state_checkpoints = state_checkpoints
 
         async def get_output_async(self):
-            events.append(('get_output', self.block_trie.pinned))
+            events.append(('get_output', self.state_checkpoints.pinned))
             return None
 
-    block_trie = _BlockTrie()
+    state_checkpoints = _StateCheckpoints()
+    block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
-    loop.inputs_maker = _InputsMaker(block_trie)
-    loop.executor = _Executor(block_trie)
+    loop.inputs_maker = _InputsMaker(state_checkpoints)
+    loop.executor = _Executor(state_checkpoints)
     loop._sleep_requested = False
     model_inputs = SimpleNamespace(state_prefix_cache_save_offsets=[1])
     forward_inputs = dict(inputs=model_inputs, delta=None)
@@ -198,31 +181,30 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     assert next_running is None
     assert events == [
         'update_running',
-        ('commit', True),
-        ('release_restore', True),
+        ('publish_saves', True),
+        ('unpin_restores', True),
         ('prefetch', True),
         ('get_output', True),
-        ('release_save', True),
+        ('unpin_saves', True),
     ]
-    assert not block_trie.pinned
+    assert not state_checkpoints.pinned
 
 
-def test_engine_loop_skips_prefetch_when_sleep_requested_but_releases_state_save():
+def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save():
     events = []
 
-    class _BlockTrie:
-        enable = True
+    class _StateCheckpoints:
         pinned = False
 
-        def commit_state_checkpoints(self, seqs, acquire_save_ref=False):
-            events.append(('commit', acquire_save_ref))
+        def publish_saves(self, seqs, pin_saves=False):
+            events.append(('publish_saves', pin_saves))
             self.pinned = True
 
-        def release_state_checkpoint_restores(self, seqs):
-            events.append(('release_restore', self.pinned))
+        def unpin_restores(self, seqs):
+            events.append(('unpin_restores', self.pinned))
 
-        def release_state_checkpoint_saves(self, seqs):
-            events.append(('release_save', self.pinned))
+        def unpin_saves(self, seqs):
+            events.append(('unpin_saves', self.pinned))
             self.pinned = False
 
     class _InputsMaker:
@@ -239,7 +221,8 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_releases_state_save
             events.append('get_output')
             return None
 
-    block_trie = _BlockTrie()
+    state_checkpoints = _StateCheckpoints()
+    block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
     loop.inputs_maker = _InputsMaker()
@@ -254,12 +237,12 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_releases_state_save
     assert next_running is None
     assert events == [
         'update_running',
-        ('commit', True),
-        ('release_restore', True),
+        ('publish_saves', True),
+        ('unpin_restores', True),
         'get_output',
-        ('release_save', True),
+        ('unpin_saves', True),
     ]
-    assert not block_trie.pinned
+    assert not state_checkpoints.pinned
 
 
 def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
