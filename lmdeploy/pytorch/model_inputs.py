@@ -537,6 +537,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         super().__init__(None)
         build_ctx = build_ctx or BuildModelContext()
         self.build_ctx = build_ctx
+        self.backend_step_meta_plan: object | None = None
 
     @record_function('build_step_context')
     def build_context(

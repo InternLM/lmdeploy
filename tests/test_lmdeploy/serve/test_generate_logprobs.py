@@ -1,23 +1,29 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import importlib
 from types import SimpleNamespace
 
 import pytest
+from fastapi import APIRouter
 from pydantic import ValidationError
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.serve.openai.api_server import (
-    VariableInterface,
+from lmdeploy.serve.openai.endpoints.generate import (
     _create_token_logprobs,
     _create_top_logprobs,
-    generate,
+    check_request,
+    register,
 )
 from lmdeploy.serve.openai.protocol import GenerateReqInput
-from lmdeploy.serve.openai.serving_generate import check_request
 
-api_server_module = importlib.import_module('lmdeploy.serve.openai.api_server')
+
+def _make_generate(context):
+    router = APIRouter()
+    register(router, context)
+    for route in router.routes:
+        if getattr(route, 'path', None) == '/generate':
+            return route.endpoint
+    raise AssertionError('/generate route not registered')
 
 
 class _SessionManager:
@@ -28,18 +34,30 @@ class _SessionManager:
     def get(self, *args, **kwargs):
         raise AssertionError('empty scoring response must not create a session')
 
+    def remove(self, session):
+        pass
+
 
 class _ServerContext:
 
-    def __init__(self, config, speculative_config=None):
-        self.config = config
-        self.async_engine = SimpleNamespace(speculative_config=speculative_config)
+    def __init__(self, config, speculative_config=None, async_engine=None):
+        self._session_manager = _SessionManager()
+        self.async_engine = async_engine or SimpleNamespace(
+            backend_config=config,
+            session_mgr=self._session_manager,
+            speculative_config=speculative_config)
+        self.default_gen_config = {}
 
-    def get_engine_config(self):
-        return self.config
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
 
-    def get_session_manager(self):
-        return _SessionManager()
+    @property
+    def session_manager(self):
+        return self._session_manager
+
+    def create_session(self, session_id):
+        return SimpleNamespace()
 
 
 def test_generate_input_logprob_validation():
@@ -190,40 +208,29 @@ class _NonemptyEngine:
         )
 
 
-async def _call_nonempty_route(monkeypatch,
-                               stream,
+async def _call_nonempty_route(stream,
                                image_data=None,
                                top_logprobs_num=None,
                                logprob_token_ids=None,
                                logprobs=None):
-    old_engine = VariableInterface.async_engine
-    VariableInterface.async_engine = _NonemptyEngine(
+    engine = _NonemptyEngine(
         expect_image=image_data is not None,
         expected_logprobs=top_logprobs_num or 1,
         logprob_token_ids=logprob_token_ids,
         logprobs=logprobs)
-
-    async def passthrough(generator, result_generators, sessions):
-        async for item in generator:
-            yield item
-
-    monkeypatch.setattr(api_server_module, '_with_request_cleanup', passthrough)
-    monkeypatch.setattr(VariableInterface, 'create_session',
-                        classmethod(lambda cls, session_id: SimpleNamespace()))
-    try:
-        request = GenerateReqInput(input_ids=[1, 2, 3],
-                                   image_data=image_data,
-                                   return_logprob=True,
-                                   logprob_start_len=0,
-                                   max_tokens=0,
-                                   top_logprobs_num=top_logprobs_num,
-                                   stream=stream)
-        result = await generate(request, raw_request=_RawRequest())
-        if stream:
-            return ''.join([chunk async for chunk in result.body_iterator])
-        return result
-    finally:
-        VariableInterface.async_engine = old_engine
+    context = _ServerContext(engine.backend_config, async_engine=engine)
+    generate = _make_generate(context)
+    request = GenerateReqInput(input_ids=[1, 2, 3],
+                               image_data=image_data,
+                               return_logprob=True,
+                               logprob_start_len=0,
+                               max_tokens=0,
+                               top_logprobs_num=top_logprobs_num,
+                               stream=stream)
+    result = await generate(request, raw_request=_RawRequest())
+    if stream:
+        return ''.join([chunk async for chunk in result.body_iterator])
+    return result
 
 
 class _DecodeEngine:
@@ -254,23 +261,15 @@ class _DecodeEngine:
         )
 
 
-def test_generate_keeps_decode_logprobs_and_routed_experts(monkeypatch):
-    old_engine = VariableInterface.async_engine
-    old_default = VariableInterface.default_gen_config
-    VariableInterface.async_engine = _DecodeEngine()
-    VariableInterface.default_gen_config = {}
-    monkeypatch.setattr(VariableInterface, 'create_session',
-                        classmethod(lambda cls, session_id: SimpleNamespace()))
-
-    try:
-        request = GenerateReqInput(input_ids=[1, 2],
-                                   max_tokens=2,
-                                   return_logprob=True,
-                                   return_routed_experts=True)
-        result = asyncio.run(generate(request, raw_request=_RawRequest()))
-    finally:
-        VariableInterface.async_engine = old_engine
-        VariableInterface.default_gen_config = old_default
+def test_generate_keeps_decode_logprobs_and_routed_experts():
+    engine = _DecodeEngine()
+    context = _ServerContext(engine.backend_config, async_engine=engine)
+    generate = _make_generate(context)
+    request = GenerateReqInput(input_ids=[1, 2],
+                               max_tokens=2,
+                               return_logprob=True,
+                               return_routed_experts=True)
+    result = asyncio.run(generate(request, raw_request=_RawRequest()))
 
     assert result.text == 'x'
     assert result.output_ids == [7]
@@ -280,24 +279,16 @@ def test_generate_keeps_decode_logprobs_and_routed_experts(monkeypatch):
     assert result.meta_info.routed_experts == [[[1, 2]]]
 
 
-def test_generate_keeps_decode_top_logprobs(monkeypatch):
-    old_engine = VariableInterface.async_engine
-    old_default = VariableInterface.default_gen_config
-    VariableInterface.async_engine = _DecodeEngine(expected_logprobs=2)
-    VariableInterface.default_gen_config = {}
-    monkeypatch.setattr(VariableInterface, 'create_session',
-                        classmethod(lambda cls, session_id: SimpleNamespace()))
-
-    try:
-        request = GenerateReqInput(input_ids=[1, 2],
-                                   max_tokens=2,
-                                   return_logprob=True,
-                                   top_logprobs_num=2,
-                                   return_routed_experts=True)
-        result = asyncio.run(generate(request, raw_request=_RawRequest()))
-    finally:
-        VariableInterface.async_engine = old_engine
-        VariableInterface.default_gen_config = old_default
+def test_generate_keeps_decode_top_logprobs():
+    engine = _DecodeEngine(expected_logprobs=2)
+    context = _ServerContext(engine.backend_config, async_engine=engine)
+    generate = _make_generate(context)
+    request = GenerateReqInput(input_ids=[1, 2],
+                               max_tokens=2,
+                               return_logprob=True,
+                               top_logprobs_num=2,
+                               return_routed_experts=True)
+    result = asyncio.run(generate(request, raw_request=_RawRequest()))
 
     assert result.meta_info.output_token_logprobs == [(-0.125, 7)]
     assert result.meta_info.output_top_logprobs == [[(-0.125, 7), (-2.0, 8)]]
@@ -305,27 +296,25 @@ def test_generate_keeps_decode_top_logprobs(monkeypatch):
     assert result.meta_info.input_top_logprobs is None
 
 
-def test_generate_nonempty_input_logprobs_nonstream(monkeypatch):
-    result = asyncio.run(_call_nonempty_route(monkeypatch, stream=False))
+def test_generate_nonempty_input_logprobs_nonstream():
+    result = asyncio.run(_call_nonempty_route(stream=False))
     assert result.text == ''
     assert result.output_ids == []
     assert result.meta_info.input_token_logprobs == [(-0.25, 2), (-0.5, 3)]
     assert result.meta_info.output_token_logprobs is None
 
 
-def test_generate_input_logprobs_allow_image_with_input_ids(monkeypatch):
+def test_generate_input_logprobs_allow_image_with_input_ids():
     result = asyncio.run(
-        _call_nonempty_route(monkeypatch,
-                             stream=False,
+        _call_nonempty_route(stream=False,
                              image_data='https://example.com/image.png'))
     assert result.meta_info.input_token_logprobs == [(-0.25, 2), (-0.5, 3)]
     assert result.meta_info.output_token_logprobs is None
 
 
-def test_generate_input_logprobs_use_processed_input_ids(monkeypatch):
+def test_generate_input_logprobs_use_processed_input_ids():
     result = asyncio.run(
-        _call_nonempty_route(monkeypatch,
-                             stream=False,
+        _call_nonempty_route(stream=False,
                              image_data='https://example.com/image.png',
                              logprob_token_ids=[8, 9, 2, 3],
                              logprobs=[{
@@ -344,17 +333,17 @@ def test_generate_input_logprobs_use_processed_input_ids(monkeypatch):
     assert result.meta_info.output_token_logprobs is None
 
 
-def test_generate_nonempty_input_top_logprobs_nonstream(monkeypatch):
+def test_generate_nonempty_input_top_logprobs_nonstream():
     result = asyncio.run(
-        _call_nonempty_route(monkeypatch, stream=False, top_logprobs_num=2))
+        _call_nonempty_route(stream=False, top_logprobs_num=2))
     assert result.meta_info.input_token_logprobs == [(-0.25, 2), (-0.5, 3)]
     assert result.meta_info.input_top_logprobs == [[(-0.25, 2), (-2.0, 8)], [(-0.5, 3), (-3.0, 9)]]
     assert result.meta_info.output_token_logprobs is None
     assert result.meta_info.output_top_logprobs is None
 
 
-def test_generate_nonempty_input_logprobs_stream(monkeypatch):
-    body = asyncio.run(_call_nonempty_route(monkeypatch, stream=True))
+def test_generate_nonempty_input_logprobs_stream():
+    body = asyncio.run(_call_nonempty_route(stream=True))
     assert body.count('"input_token_logprobs":[[-0.25,2],[-0.5,3]]') == 1
     assert body.count('\ndata: ') == 1
     assert body.endswith('data: [DONE]\n\n')
