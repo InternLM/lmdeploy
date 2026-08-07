@@ -26,11 +26,16 @@ from ..builders import (
     make_norm_config,
 )
 from ..builders._base import ParallelGroup
-from ..linear import Linear, transform_output_dim
+from ..linear import Linear
 from ..supported_models import SUPPORTED_ARCHS
 from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat
 from .base import INPUT_MODELS
+from .vision_utils import (
+    split_packed_qkv,
+    to_tm_norm_type,
+    to_tm_tensor,
+)
 
 
 def _cfg_get(cfg, name: str, default=None):
@@ -45,14 +50,6 @@ def _resolve_fingerprint(input_mm: dict) -> bytes:
         return fp
     pixels = input_mm['pixel_values'].contiguous().cpu().view(torch.uint8)
     return hashlib.sha256(pixels.numpy().tobytes()).digest()
-
-
-def _to_tm_norm_type(norm_type: str):
-    if norm_type == 'layer_norm':
-        return _tm.NormType.LAYER_NORM
-    if norm_type == 'rms_norm':
-        return _tm.NormType.RMS_NORM
-    raise ValueError(f'Unsupported InternVit vision norm_type: {norm_type!r}')
 
 
 def map_interns1_hf_keys(name: str) -> str:
@@ -142,14 +139,6 @@ def _legacy_square_size(value) -> int:
     return int(value)
 
 
-@transform_output_dim
-def _split_packed_vision_qkv(tensor: torch.Tensor):
-    """Split packed vision QKV layout [Q | K | V] along output dim."""
-    if tensor.shape[-1] % 3 != 0:
-        raise ValueError(f'packed vision qkv output dim is not divisible by 3: {tuple(tensor.shape)}')
-    return tuple(x.contiguous() for x in tensor.chunk(3, dim=-1))
-
-
 class InternVitVisionModel(VisionModel):
     """InternVit weight model rooted at ``ModelRoot.vision_model``."""
 
@@ -166,7 +155,7 @@ class InternVitVisionModel(VisionModel):
         self._image_h, self._image_w = int(image_h), int(image_w)
         self._patch_h, self._patch_w = int(patch_h), int(patch_w)
         self._norm_eps = float(cfg.layer_norm_eps)
-        self._norm_type = _to_tm_norm_type(cfg.norm_type)
+        self._norm_type = to_tm_norm_type(cfg.norm_type)
         self._use_qk_norm = bool(cfg.use_qk_norm)
         self._head_dim = self._hidden // self._heads
         self._patch_in_dim = self._channels * self._patch_h * self._patch_w
@@ -184,7 +173,7 @@ class InternVitVisionModel(VisionModel):
             if modality not in (Modality.IMAGE, Modality.IMAGE.value, 'image'):
                 raise ValueError(f'InternVit TurboMind does not support modality {modality!r}')
 
-            pixel_values = self._tm_tensor(input_mm['pixel_values'])
+            pixel_values = to_tm_tensor(input_mm['pixel_values'])
             token_begin = int(input_mm['offset'])
             token_end = token_begin + int(input_mm['image_tokens'])
             fingerprint = _resolve_fingerprint(input_mm)
@@ -291,15 +280,6 @@ class InternVitVisionModel(VisionModel):
             m.k_norm = self._rms_norm(pfx + 'k_norm', tp=attn_tp)
         return m.build()
 
-    def _tm_tensor(self, tensor: torch.Tensor):
-        if not isinstance(tensor, torch.Tensor):
-            raise TypeError(f'InternVit multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
-        return _tm.from_dlpack(tensor.contiguous())
-
-    def _restore_dtype(self, builder):
-        builder.config.data_type = self._resolver.data_type
-        return builder
-
     def _patch_embed(self, pfx):
         weight = pfx.pop('weight')
         weight = weight.reshape(weight.shape[0], -1).t().contiguous()
@@ -379,7 +359,7 @@ class LegacyInternVitVisionModel(InternVitVisionModel):
         super().__init__(normalized_cfg, resolver=resolver, parent_cfg=normalized_parent_cfg)
 
     def vit_attn(self, pfx):
-        q, k, v = _split_packed_vision_qkv(self._linear(pfx + 'qkv'))
+        q, k, v = split_packed_qkv(self._linear(pfx + 'qkv'))
         o = self._linear(pfx + 'projection_layer')
 
         cfg = self._make_attn_cfg()

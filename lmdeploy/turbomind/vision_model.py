@@ -35,6 +35,11 @@ class VisionModel(ABC):
                 optional: bool = False) -> Linear | None:
         return self._resolver.resolve(pfx, optional=optional)
 
+    def _restore_dtype(self, builder):
+        """Restore the vision-native dtype overwritten by Builder."""
+        builder.config.data_type = self._resolver.data_type
+        return builder
+
     def model(self, pfx: Prefix) -> None:
         raise NotImplementedError(
             f'{type(self).__name__}.model(pfx) must be overridden')

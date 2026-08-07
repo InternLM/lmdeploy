@@ -49,7 +49,7 @@ from ..builders import (
 )
 from ..builders._base import ParallelGroup
 from ..builders.attention import split_output_gate
-from ..linear import Linear, transform_input_dim, transform_output_dim
+from ..linear import Linear
 from ..text_model import TextModel
 from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat
@@ -61,6 +61,11 @@ from .utils import (
     make_moe_config,
     read_packed_moe_expert,
     reorder_rotary_emb,
+)
+from .vision_utils import (
+    pad_attn_head_dim,
+    split_packed_qkv,
+    to_tm_tensor,
 )
 
 if TYPE_CHECKING:
@@ -284,54 +289,6 @@ def _padded_vit_head_dim(real_hd: int) -> int:
     return _VIT_HEAD_DIM_PADDED[real_hd]
 
 
-def _assert_trivial(linear: Linear, name: str) -> None:
-    """Padding only handles trivial weights for now.
-
-    Callers must gate this on `padded_hd != real_hd` so quantized 2B-style paths stay untouched.
-    """
-    if not isinstance(linear.weight_format, TrivialFormat):
-        raise NotImplementedError(
-            f'ViT {name} weight is {type(linear.weight_format).__name__}; '
-            f'head_dim padding currently supports TrivialFormat only '
-            f'(dequant ViT before padding).')
-
-
-@transform_output_dim
-def _pad_head_dim_out(t: torch.Tensor, *, num_heads: int, src_hd: int,
-                      dst_hd: int) -> torch.Tensor:
-    """Pad each head's OUTPUT block from src_hd to dst_hd; num_heads unchanged.
-
-    Applied to Q/K/V projections: weight (in_dim, num_heads*src_hd) becomes (in_dim, num_heads*dst_hd) with the new
-    [src_hd, dst_hd) slice zeroed. The @transform_output_dim decorator handles bias by promoting it to 2-D and squeezing
-    back, so the bias is padded the same way as weight.
-    """
-    rest = t.shape[:-1]
-    t = t.reshape(rest + (num_heads, src_hd))
-    pad = t.new_zeros(rest + (num_heads, dst_hd - src_hd))
-    return torch.cat([t, pad], dim=-1).reshape(rest + (num_heads * dst_hd,))
-
-
-@transform_input_dim
-def _pad_head_dim_in(t: torch.Tensor, *, num_heads: int, src_hd: int,
-                     dst_hd: int) -> torch.Tensor:
-    """Pad each head's INPUT block from src_hd to dst_hd; num_heads unchanged.
-
-    Applied to the wo projection: weight (num_heads*src_hd, out_dim) becomes
-    (num_heads*dst_hd, out_dim). The @transform_input_dim decorator passes
-    1-D tensors (wo bias, which lives on the OUTPUT axis) through unchanged.
-    """
-    rest = t.shape[1:]
-    t = t.reshape((num_heads, src_hd) + rest)
-    pad = t.new_zeros((num_heads, dst_hd - src_hd) + rest)
-    return torch.cat([t, pad], dim=1).reshape((num_heads * dst_hd,) + rest)
-
-
-@transform_output_dim
-def _split_packed_vision_qkv(qkv):
-    """Split HF vision QKV layout [Q | K | V] along output dim."""
-    return tuple(x.contiguous() for x in qkv.chunk(3, dim=-1))
-
-
 def _image_fingerprint(input_mm: dict) -> bytes:
     """SHA-256 over the Qwen3.5 ViT-forward inputs plus the mRoPE scalar.
 
@@ -420,23 +377,17 @@ class Qwen3_5VisionModel(VisionModel):
             raise ValueError(f'Qwen3.5 ViT grid_thw should contain 3 values, got {values!r}')
         return int(values[0]), int(values[1]), int(values[2])
 
-    @staticmethod
-    def _tm_tensor(tensor: torch.Tensor):
-        if not isinstance(tensor, torch.Tensor):
-            raise TypeError(f'Qwen3.5 ViT multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
-        return _tm.from_dlpack(tensor.contiguous())
-
     def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
         """Convert Qwen3.5 VL preprocessor outputs to typed TurboMind input."""
         items = []
         for input_mm in multimodal:
             modality = input_mm.get('modality')
             if modality == Modality.IMAGE or modality == Modality.IMAGE.value:
-                data = self._tm_tensor(input_mm['pixel_values'])
+                data = to_tm_tensor(input_mm['pixel_values'])
                 grid_thw = self._grid_thw(input_mm['image_grid_thw'])
                 tm_modality = _tm.multimodal.Modality.IMAGE
             elif modality == Modality.VIDEO or modality == Modality.VIDEO.value:
-                data = self._tm_tensor(input_mm['pixel_values_videos'])
+                data = to_tm_tensor(input_mm['pixel_values_videos'])
                 grid_thw = self._grid_thw(input_mm['video_grid_thw'])
                 tm_modality = _tm.multimodal.Modality.VIDEO
             else:
@@ -462,16 +413,6 @@ class Qwen3_5VisionModel(VisionModel):
 
     def model(self, pfx):
         self._build_vision_model(pfx + 'model.visual')
-
-    def _restore_dtype(self, builder):
-        """Builder.__init__ unconditionally overwrites cfg.data_type with the
-        context's (text-engine) dtype.
-
-        The cfg is held by reference, so re-pinning it here propagates to every downstream _add_linear call on this
-        builder, keeping the vision sub-tree on its native dtype.
-        """
-        builder.config.data_type = self._resolver.data_type
-        return builder
 
     def _build_vision_model(self, pfx):
         cfg = self._make_vision_root_cfg()
@@ -570,7 +511,7 @@ class Qwen3_5VisionModel(VisionModel):
         padded_hd = cfg.head_dim
         H = cfg.head_num
 
-        q, k, v = _split_packed_vision_qkv(self._linear(pfx + 'qkv'))
+        q, k, v = split_packed_qkv(self._linear(pfx + 'qkv'))
 
         # Qwen3.5 ViT applies RoPE before invoking the attention kernel.
         # Reorder Q/K once at export time so the runtime can use the same
@@ -583,14 +524,15 @@ class Qwen3_5VisionModel(VisionModel):
 
         # Only force TrivialFormat on the padded path; the native-head_dim
         # path keeps the existing quantized/non-quantized behavior intact.
-        if padded_hd != real_hd:
-            for ln, name in [(q, 'q'), (k, 'k'), (v, 'v'), (proj, 'proj')]:
-                _assert_trivial(ln, name)
-            pad_kwargs = dict(num_heads=H, src_hd=real_hd, dst_hd=padded_hd)
-            q = _pad_head_dim_out(q, **pad_kwargs)
-            k = _pad_head_dim_out(k, **pad_kwargs)
-            v = _pad_head_dim_out(v, **pad_kwargs)
-            proj = _pad_head_dim_in(proj, **pad_kwargs)
+        q, k, v, proj = pad_attn_head_dim(
+            q,
+            k,
+            v,
+            proj,
+            num_heads=H,
+            src_head_dim=real_hd,
+            dst_head_dim=padded_hd,
+        )
 
         attn_tp = self._model_tp if self._vis_heads % self._model_tp.size == 0 else ParallelGroup(1, None)
         m = self._restore_dtype(

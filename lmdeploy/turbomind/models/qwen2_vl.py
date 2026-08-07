@@ -30,13 +30,13 @@ from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat
 from .base import INPUT_MODELS
 from .qwen2 import Qwen2Model
-from .qwen3_5 import (
-    _assert_trivial,
-    _pad_head_dim_in,
-    _pad_head_dim_out,
-    _split_packed_vision_qkv,
-)
 from .utils import reorder_rotary_emb
+from .vision_utils import (
+    pad_attn_head_dim,
+    split_packed_qkv,
+    to_tm_norm_type,
+    to_tm_tensor,
+)
 
 _VIT_HEAD_DIM_PADDED = {
     64: 64,
@@ -66,14 +66,6 @@ def _padded_vit_head_dim(real_hd: int) -> int:
             f'Qwen2 ViT head_dim={real_hd} is not supported; '
             f'known: {sorted(_VIT_HEAD_DIM_PADDED)}')
     return _VIT_HEAD_DIM_PADDED[real_hd]
-
-
-def _to_tm_norm_type(norm_type: str):
-    if norm_type == 'layer_norm':
-        return _tm.NormType.LAYER_NORM
-    if norm_type == 'rms_norm':
-        return _tm.NormType.RMS_NORM
-    raise ValueError(f'Unsupported Qwen2 ViT norm_type: {norm_type!r}')
 
 
 def _resolve_fingerprint(input_mm: dict, grid_thw: tuple[int, int, int]) -> bytes:
@@ -135,14 +127,6 @@ class _BaseQwen2VisionModel(VisionModel):
             return torch.float32
         return None
 
-    def _tm_tensor(self, tensor: torch.Tensor):
-        if not isinstance(tensor, torch.Tensor):
-            raise TypeError(f'Qwen2 ViT multimodal data should be a torch.Tensor, got {type(tensor).__name__}')
-        target_dtype = self._torch_dtype()
-        if target_dtype is not None and tensor.is_floating_point() and tensor.dtype != target_dtype:
-            tensor = tensor.to(target_dtype)
-        return _tm.from_dlpack(tensor.contiguous())
-
     @staticmethod
     def _grid_thw(grid_thw) -> tuple[int, int, int]:
         if isinstance(grid_thw, torch.Tensor):
@@ -178,7 +162,8 @@ class _BaseQwen2VisionModel(VisionModel):
             if modality not in (Modality.IMAGE, Modality.IMAGE.value, 'image'):
                 raise ValueError(f'Qwen2 TurboMind native vision only supports image inputs, got {modality!r}')
 
-            data = self._tm_tensor(input_mm['pixel_values'])
+            data = to_tm_tensor(
+                input_mm['pixel_values'], dtype=self._torch_dtype())
             grid_thw = self._grid_thw(input_mm['image_grid_thw'])
             token_begin, token_end = self._token_range(input_mm)
             fingerprint = _resolve_fingerprint(input_mm, grid_thw)
@@ -197,10 +182,6 @@ class _BaseQwen2VisionModel(VisionModel):
     def model(self, pfx):
         self._build_vision_model(pfx + 'visual')
 
-    def _restore_dtype(self, builder):
-        builder.config.data_type = self._resolver.data_type
-        return builder
-
     def _make_vision_root_cfg(self):
         cfg = _tm.QwenVitConfig()
         cfg.data_type = self._resolver.data_type
@@ -217,7 +198,7 @@ class _BaseQwen2VisionModel(VisionModel):
         cfg.window_size = self._window_size
         cfg.gated_mlp = self._gated_mlp
         cfg.use_window_attention = self._use_window_attention
-        cfg.norm_type = _to_tm_norm_type(self._norm_type)
+        cfg.norm_type = to_tm_norm_type(self._norm_type)
         cfg.fullatt_block_indexes = self._fullatt_block_indexes
         cfg.norm_eps = self._vis_norm_eps
         return cfg
@@ -305,19 +286,20 @@ class _BaseQwen2VisionModel(VisionModel):
         padded_hd = cfg.head_dim
         H = cfg.head_num
 
-        q, k, v = _split_packed_vision_qkv(self._linear(pfx + 'qkv'))
+        q, k, v = split_packed_qkv(self._linear(pfx + 'qkv'))
         q = reorder_rotary_emb(q, real_hd, real_hd, resolver=self._resolver)
         k = reorder_rotary_emb(k, real_hd, real_hd, resolver=self._resolver)
         proj = self._linear(pfx + 'proj')
 
-        if padded_hd != real_hd:
-            for ln, name in [(q, 'q'), (k, 'k'), (v, 'v'), (proj, 'proj')]:
-                _assert_trivial(ln, name)
-            pad_kwargs = dict(num_heads=H, src_hd=real_hd, dst_hd=padded_hd)
-            q = _pad_head_dim_out(q, **pad_kwargs)
-            k = _pad_head_dim_out(k, **pad_kwargs)
-            v = _pad_head_dim_out(v, **pad_kwargs)
-            proj = _pad_head_dim_in(proj, **pad_kwargs)
+        q, k, v, proj = pad_attn_head_dim(
+            q,
+            k,
+            v,
+            proj,
+            num_heads=H,
+            src_head_dim=real_hd,
+            dst_head_dim=padded_hd,
+        )
 
         attn_tp = self._model_tp if self._vis_heads % self._model_tp.size == 0 else ParallelGroup(1, None)
         m = self._restore_dtype(AttentionBuilder(cfg, self._ctx, tp=attn_tp))
