@@ -153,16 +153,20 @@ class InternVLVisionModel(VisionModel):
         self.model = model.eval()
 
     def _preprocess_v1_5(self, image, params=None):
+        params = params or {}
         image_res = {'low': 6, 'medium': 12, 'high': 24}
-        max_num = params.get('max_dynamic_patch')
-        if max_num is None or not isinstance(max_num, int):
-            res_key = params.get('detail', 'default')
-            max_num = image_res.get(res_key, self.config.max_dynamic_patch)
-        out = dynamic_preprocess(image,
-                                 min_num=self.config.min_dynamic_patch,
-                                 max_num=max_num,
-                                 image_size=self.vision_config.image_size,
-                                 use_thumbnail=self.config.use_thumbnail)
+        if params.get('skip_preprocess', False):
+            out = [image]
+        else:
+            max_num = params.get('max_dynamic_patch')
+            if max_num is None or not isinstance(max_num, int):
+                res_key = params.get('detail', 'default')
+                max_num = image_res.get(res_key, self.config.max_dynamic_patch)
+            out = dynamic_preprocess(image,
+                                     min_num=self.config.min_dynamic_patch,
+                                     max_num=max_num,
+                                     image_size=self.vision_config.image_size,
+                                     use_thumbnail=self.config.use_thumbnail)
         pixel_values = [self.transform(x) for x in out]
         # (patch) x c x h x w
         pixel_values = torch.stack(pixel_values)
