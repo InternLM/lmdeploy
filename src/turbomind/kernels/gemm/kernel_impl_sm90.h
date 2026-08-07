@@ -420,6 +420,14 @@ public:
             if (!Gemm::kSupportsFusedSilu || desc.type_c != kFloat8_e4m3) {
                 return false;
             }
+        }
+        // A/B strides span K, C stride spans N (half-width for fused SiLU).
+        const int c_ld = fuse_silu ? desc.n / 2 : desc.n;
+        if (!is_tma_stride_feasible(desc.type_a, desc.k) || !is_tma_stride_feasible(desc.type_b, desc.k)
+            || !is_tma_stride_feasible(desc.type_c, c_ld)) {
+            return false;
+        }
+        if (fuse_silu) {
             GemmDesc canonical = desc;
             canonical.type_c   = desc_.type_c;
             return Kernel::is_feasible(canonical);
