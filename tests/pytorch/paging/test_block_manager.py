@@ -1,4 +1,5 @@
 # yapf: disable
+import numpy as np
 import pytest
 import torch
 
@@ -142,6 +143,33 @@ class TestDefaultBlockManager:
         token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ), dtype=torch.int64)
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
+
+    def test_resolve_gpu_block_offsets(self, block_mgr):
+        allocator = block_mgr.allocator
+        logical_ids = allocator.allocate(3, 'gpu')
+        expected = allocator.get_physical_blocks(logical_ids)
+
+        block_offsets = block_mgr.resolve_gpu_block_offsets(logical_ids[[0, 2, 0]])
+
+        assert np.array_equal(block_offsets, expected[[0, 2, 0]])
+
+    @pytest.mark.parametrize(
+        ('logical_ids', 'error'),
+        [
+            pytest.param(np.array([-1]), 'out-of-range', id='negative'),
+            pytest.param(np.array([8]), 'out-of-range', id='too-large'),
+            pytest.param(np.array([0]), 'unallocated', id='unallocated'),
+        ],
+    )
+    def test_resolve_gpu_block_offsets_rejects_invalid_logical_ids(self, block_mgr, logical_ids, error):
+        with pytest.raises(ValueError, match=error):
+            block_mgr.resolve_gpu_block_offsets(logical_ids)
+
+    def test_resolve_gpu_block_offsets_rejects_cpu_resident_blocks(self, block_mgr):
+        logical_ids = block_mgr.allocator.allocate(1, 'cpu')
+
+        with pytest.raises(ValueError, match='not GPU-resident'):
+            block_mgr.resolve_gpu_block_offsets(logical_ids)
 
     def test_num_required_blocks(self, scheduler, block_mgr):
         from lmdeploy.pytorch.messages import InputEmbeddings
