@@ -186,14 +186,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
 })
 
-# interns2preview
-MODULE_MAP.update({
-    'InternS2PreviewForConditionalGeneration':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
-    'InternS2PreviewForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
-})
-
 MODULE_MAP.update({
     'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
 })
@@ -213,6 +205,14 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Qwen3OmniMoeForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_omni_moe_thinker.Qwen3OmniMoeThinkerForConditionalGeneration',
+})
+
+# interns2-preview
+MODULE_MAP.update({
+    'InternS2PreviewForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_preview.InternS2PreviewForConditionalGeneration',
+    'InternS2PreviewForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_preview.InternS2PreviewForConditionalGeneration',
 })
 
 # phi-3
