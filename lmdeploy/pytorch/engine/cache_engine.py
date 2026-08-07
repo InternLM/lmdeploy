@@ -424,21 +424,8 @@ class CacheEngine:
 
         This must stay in sync with allocate_caches().
         """
-        names = []
-        use_std = model_config.use_standard_kv_cache
-
-        if use_std:
-            k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
-            v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
-            quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
-            names.append((k_cache_desc, 'k_cache'))
-            names.append((v_cache_desc, 'v_cache'))
-            for idx, desc in enumerate(quant_cache_descs):
-                names.append((desc, f'quant_{idx}'))
-        else:
-            k_cache_desc = None
-            v_cache_desc = None
-            quant_cache_descs = []
+        names = cls._get_standard_cache_desc_names(model_config, cache_config,
+                                                   world_size)
 
         block_size = cache_config.kernel_block_size
 
@@ -456,11 +443,22 @@ class CacheEngine:
         return names
 
     @classmethod
-    def _use_layer_packed_block_caches(cls, model_config: ModelConfig):
-        """Whether named block caches can be allocated by declared layer
-        ids."""
-        return (model_config is not None and not model_config.use_standard_kv_cache
-                and len(model_config.block_cache_specs) > 0)
+    def _get_standard_cache_desc_names(cls, model_config: ModelConfig,
+                                       cache_config: CacheConfig,
+                                       world_size: int):
+        """Describe the caches exposed through ``past_key_values``."""
+        if not model_config.use_standard_kv_cache:
+            return []
+        k_cache_desc = cls.get_k_cache_desc(model_config, cache_config,
+                                            world_size)
+        v_cache_desc = cls.get_v_cache_desc(model_config, cache_config,
+                                            world_size)
+        quant_cache_descs = cls.get_quant_cache_descs(
+            k_cache_desc, v_cache_desc, model_config, cache_config)
+        names = [(k_cache_desc, 'k_cache'), (v_cache_desc, 'v_cache')]
+        names.extend((desc, f'quant_{idx}')
+                     for idx, desc in enumerate(quant_cache_descs))
+        return names
 
     @staticmethod
     def _get_block_cache_resources(model_config: ModelConfig) -> tuple[_CacheResource, ...]:
@@ -477,7 +475,7 @@ class CacheEngine:
     @staticmethod
     def _get_block_cache_layer_maps(model_config: ModelConfig) -> dict[str, dict[int, int]]:
         """Build global-layer-id to local-row maps for named block caches."""
-        if not CacheEngine._use_layer_packed_block_caches(model_config):
+        if model_config is None or len(model_config.block_cache_specs) == 0:
             return {}
         return _layer_maps_from_resources(CacheEngine._get_block_cache_resources(model_config))
 
@@ -495,6 +493,23 @@ class CacheEngine:
             mem_pools.append(mem_pool)
             caches.append(cache)
         return mem_pools, caches
+
+    @staticmethod
+    def _allocate_shared_cache_pool(num_layers: int, num_blocks: int,
+                                    cache_descs: list[CacheDesc], device: str):
+        """Allocate block-strided cache descriptors from one shared pool."""
+        mem_pool_size = sum(desc.aligned_size for desc in cache_descs)
+        mem_pool = torch.zeros((num_layers, num_blocks, mem_pool_size),
+                               dtype=torch.uint8,
+                               device=device)
+        caches = []
+        remain_pool = mem_pool
+        for desc in cache_descs:
+            cache = remain_pool[:, :, :desc.size].view(desc.dtype).view(
+                (num_layers, num_blocks, *desc.shape))
+            remain_pool = remain_pool[:, :, desc.aligned_size:]
+            caches.append(cache)
+        return mem_pool, caches
 
     @classmethod
     def get_custom_cache_descs(cls, model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
@@ -531,38 +546,38 @@ class CacheEngine:
         kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
         num_blocks *= kernel_blocks_per_kv
 
-        use_std = model_config.use_standard_kv_cache
+        standard_descs = [
+            desc for desc, _ in cls._get_standard_cache_desc_names(
+                model_config, cache_config, world_size)
+        ]
+        if model_config.block_cache_specs:
+            mem_pools = []
+            caches = []
+            if standard_descs:
+                mem_pool, standard_caches = cls._allocate_shared_cache_pool(
+                    num_layers, num_blocks, standard_descs, device)
+                mem_pools.append(mem_pool)
+                caches.extend(standard_caches)
+            named_pools, named_caches = cls._allocate_layer_packed_block_caches(
+                num_blocks, model_config, device)
+            mem_pools.extend(named_pools)
+            caches.extend(named_caches)
+            return mem_pools, caches
 
-        if cls._use_layer_packed_block_caches(model_config):
-            return cls._allocate_layer_packed_block_caches(num_blocks, model_config, device)
+        cache_descs = standard_descs + cls.get_custom_cache_descs(
+            model_config, cache_config)
+        return cls._allocate_shared_cache_pool(num_layers, num_blocks,
+                                               cache_descs, device)
 
-        # get all descs
-        cache_descs = []
-        if use_std:
-            k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
-            v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
-            quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
-            cache_descs += [k_cache_desc, v_cache_desc] + quant_cache_descs
-
-        custom_cache_descs = cls.get_custom_cache_descs(model_config, cache_config)
-        cache_descs += custom_cache_descs
-
-        # get mempool size
-        mem_pool_size = 0
-        for desc in cache_descs:
-            mem_pool_size += desc.aligned_size
-
-        # create pool
-        mem_pool = torch.zeros((num_layers, num_blocks, mem_pool_size), dtype=torch.uint8, device=device)
-
-        # slice caches
-        caches = []
-        remain_pool = mem_pool
-        for desc in cache_descs:
-            cache = remain_pool[:, :, :desc.size].view(desc.dtype).view((num_layers, num_blocks, *desc.shape))
-            remain_pool = remain_pool[:, :, desc.aligned_size:]
-            caches.append(cache)
-        return mem_pool, caches
+    def _get_local_layer_caches(self, caches: list[torch.Tensor]):
+        """Return only caches passed to model layers as ``past_key_values``."""
+        if self.model_config.block_cache_specs:
+            num_standard = len(
+                self._get_standard_cache_desc_names(self.model_config,
+                                                    self.cache_config,
+                                                    self.world_size))
+            caches = caches[:num_standard]
+        return list(zip(*caches)) if caches else []
 
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
@@ -576,10 +591,7 @@ class CacheEngine:
             device='cuda',
         )
         self.full_gpu_cache = mem_pool
-        if self._use_layer_packed_block_caches(self.model_config):
-            self.local_gpu_cache = []
-        else:
-            self.local_gpu_cache = list(zip(*caches))
+        self.local_gpu_cache = self._get_local_layer_caches(caches)
         self._cache_names = [name for _, name in self._get_cache_desc_names(
             self.model_config, self.cache_config, self.world_size)]
         self._block_cache_layer_maps = self._get_block_cache_layer_maps(self.model_config)
@@ -596,10 +608,7 @@ class CacheEngine:
             device='cpu',
         )
         self.full_cpu_cache = mem_pool
-        if self._use_layer_packed_block_caches(self.model_config):
-            self.local_cpu_cache = []
-        else:
-            self.local_cpu_cache = list(zip(*caches))
+        self.local_cpu_cache = self._get_local_layer_caches(caches)
         return self.local_cpu_cache
 
     @property

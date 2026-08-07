@@ -52,9 +52,9 @@ class TestNoauxTC:
                 torch.set_default_dtype(origin_dtype)
                 torch.set_default_device(origin_device)
 
-    @pytest.fixture
-    def batch_size(self):
-        yield 32
+    @pytest.fixture(params=[1, 16, 96, 256])
+    def batch_size(self, request):
+        yield request.param
 
     @pytest.fixture
     def num_experts(self):
@@ -66,18 +66,28 @@ class TestNoauxTC:
 
     @pytest.fixture
     def bias(self, num_experts):
-        yield torch.randn(num_experts)
+        yield torch.empty(num_experts).uniform_(-0.05, 0.05)
 
-    @pytest.fixture
-    def kwargs(self):
-        yield {
+    @pytest.fixture(params=[
+        {
+            'num_experts': 256,
+            'n_group': 1,
+            'topk_group': 1,
+            'top_k': 8,
+            'renormalize': True,
+            'routed_scaling_factor': 2.5,
+        },
+        {
             'num_experts': 256,
             'n_group': 8,
             'topk_group': 4,
             'top_k': 8,
             'renormalize': True,
             'routed_scaling_factor': 2.5,
-        }
+        },
+    ])
+    def kwargs(self, request):
+        yield request.param
 
     @pytest.fixture
     def gt(self, logits, bias, kwargs):
@@ -89,5 +99,12 @@ class TestNoauxTC:
         out_weights, out_ids = fused_noaux_tc_routing(logits, bias, **kwargs)
         gt_weights, gt_ids = gt
 
+        out_order = out_ids.argsort(dim=-1)
+        out_ids = out_ids.gather(1, out_order)
+        out_weights = out_weights.gather(1, out_order)
+        gt_order = gt_ids.argsort(dim=-1)
+        gt_ids = gt_ids.gather(1, gt_order)
+        gt_weights = gt_weights.gather(1, gt_order)
+
+        torch.testing.assert_close(out_ids, gt_ids, rtol=0, atol=0)
         torch.testing.assert_close(out_weights, gt_weights, rtol=1e-4, atol=1e-5)
-        # topk in torch is not stable, so we won't assert ids

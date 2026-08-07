@@ -72,6 +72,7 @@ def test_compact_blocked_fp8_configs_use_average_routes(num_routes, block_m):
 
 
 @pytest.mark.parametrize(('num_routes', 'gate_out_features', 'block_m', 'block_n'), [
+    (256 * 3, 512, 16, 128),
     (256 * 4, 512, 16, 64),
     (256 * 8, 512, 16, 64),
     (256 * 16, 512, 32, 128),
@@ -87,7 +88,8 @@ def test_compact_blocked_fp8_both_configs(num_routes, gate_out_features, block_m
 
 @pytest.mark.parametrize(('num_tokens', 'num_routes', 'num_experts', 'local_experts', 'expected'), [
     (64, 256 * 4, 256, 256, False),
-    (128, 256 * 3, 256, 256, False),
+    (79, 256 * 3, 256, 256, False),
+    (80, 256 * 3, 256, 256, True),
     (128, 256 * 4, 256, 256, True),
     (1536, 256 * 48, 256, 256, True),
     (2048, 256 * 64, 256, 256, False),

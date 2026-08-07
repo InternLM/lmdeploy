@@ -8,7 +8,7 @@ import torch.multiprocessing as mp
 from torch import nn
 
 from lmdeploy.pytorch.distributed import DefaultContext
-from lmdeploy.pytorch.nn import ParallelEmbedding
+from lmdeploy.pytorch.nn import ParallelEmbedding, ParallelLMHead
 
 
 def parallel_emb(rank: int, world_size: int, vocab_size: int, feat_size: int, padding_idx: int, dtype: torch.dtype,
@@ -40,6 +40,33 @@ def parallel_emb(rank: int, world_size: int, vocab_size: int, feat_size: int, pa
 
     if dist.is_initialized():
         dist.destroy_process_group()
+
+
+def parallel_lm_head(rank: int, world_size: int, vocab_size: int, feat_size: int, dtype: torch.dtype,
+                     x: torch.Tensor, weight: torch.Tensor, result_queue: mp.Queue):
+    dist.init_process_group('nccl', rank=rank, world_size=world_size)
+    gpu_group = dist.new_group(ranks=list(range(world_size)), backend='nccl')
+
+    DefaultContext.attn_tp_group.rank = rank
+    DefaultContext.dist_config.attn_tp = world_size
+    DefaultContext.attn_tp_group.gpu_group = gpu_group
+
+    device = torch.device(type='cuda', index=rank)
+    model = ParallelLMHead(vocab_size=vocab_size,
+                           hidden_size=feat_size,
+                           dtype=dtype,
+                           device=device)
+    model.weight_loader(model.weight, weight)
+
+    with torch.inference_mode():
+        out = model(x.to(device))
+
+    expected = torch.nn.functional.linear(x.to(device), weight.to(device))
+    torch.testing.assert_close(out, expected)
+    if rank == 0:
+        result_queue.put(mp.reductions.reduce_tensor(out))
+
+    dist.destroy_process_group()
 
 
 class TestEmbedding:
@@ -123,3 +150,35 @@ class TestEmbedding:
                     p.kill()
 
         torch.testing.assert_close(out, gt)
+
+
+def test_parallel_lm_head():
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29501'
+    os.environ['NCCL_SOCKET_IFNAME'] = 'lo'
+
+    world_size = 2
+    vocab_size = 131
+    feat_size = 32
+    dtype = torch.bfloat16
+    x = torch.rand(4, feat_size, dtype=dtype)
+    weight = torch.rand(vocab_size, feat_size, dtype=dtype)
+
+    mp.set_start_method('spawn', force=True)
+    result_queue = mp.Queue()
+    processes = [
+        mp.Process(target=parallel_lm_head,
+                   args=(rank, world_size, vocab_size, feat_size, dtype, x, weight, result_queue))
+        for rank in range(world_size)
+    ]
+    for process in processes:
+        process.start()
+
+    func, args = result_queue.get()
+    out = func(*args)
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    expected = torch.nn.functional.linear(x.cuda(), weight.cuda())
+    torch.testing.assert_close(out, expected)

@@ -225,14 +225,14 @@ class TestDSIndex:
                                            atol=0)
 
         deep_gemm = pytest.importorskip('deep_gemm')
-        from lmdeploy.pytorch.backends.cuda.v4_compressor import _get_v4_packed_index_cache_views
-        from lmdeploy.pytorch.consts import v4_packed_index_cache_shape
+        from lmdeploy.pytorch.backends.cuda.nsa import _get_dsa_indexer_k_cache_views
+        from lmdeploy.pytorch.consts import dsa_packed_indexer_k_cache_shape
 
         packed_cache = torch.zeros(batch_size * max_num_blocks,
-                                   *v4_packed_index_cache_shape(block_size, head_dim),
+                                   *dsa_packed_indexer_k_cache_shape(block_size, head_dim),
                                    dtype=torch.uint8,
                                    device=device)
-        packed_values, packed_scales = _get_v4_packed_index_cache_views(packed_cache, head_dim)
+        packed_values, packed_scales = _get_dsa_indexer_k_cache_views(packed_cache, head_dim)
         packed_values.copy_(k_cache)
         packed_scales.squeeze(-1).copy_(k_s_cache)
 

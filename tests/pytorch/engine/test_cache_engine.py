@@ -160,6 +160,43 @@ def test_named_block_cache_specs_allocate_only_declared_layers():
     }
 
 
+def test_named_block_cache_can_be_contiguous_beside_standard_kv():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    model_config = _make_model_config(
+        block_cache_specs=[
+            BlockCacheSpec('index', [1, 3], (64, 1, 12), torch.uint8),
+        ],
+    )
+
+    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=3,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+
+    assert [tuple(pool.shape) for pool in mem_pool] == [(4, 3, 4096),
+                                                       (2, 3, 768)]
+    assert [tuple(cache.shape) for cache in caches] == [
+        (4, 3, 64, 2, 8),
+        (4, 3, 64, 2, 8),
+        (2, 3, 64, 1, 12),
+    ]
+    # The dedicated index cache has no standard-KV bytes in its block stride.
+    assert caches[-1].stride(1) == 64 * 12
+
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.model_config = model_config
+    cache_engine.cache_config = cache_config
+    cache_engine.world_size = 1
+    layer_caches = cache_engine._get_local_layer_caches(caches)
+    assert len(layer_caches) == 4
+    assert all(len(layer_cache) == 2 for layer_cache in layer_caches)
+
+
 def test_layered_state_cache_specs_allocate_only_declared_layers():
     state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 3])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
