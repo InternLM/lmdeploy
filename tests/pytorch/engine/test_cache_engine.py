@@ -113,6 +113,123 @@ def test_allocate_caches_requires_block_size_divisible_by_kernel_block_size():
                                     device='meta')
 
 
+def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    model_config = _make_model_config(dtype=torch.bfloat16)
+
+    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=3,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+
+    assert tuple(mem_pool.shape) == (4, 3, 4096)
+    assert mem_pool.dtype == torch.uint8
+    assert torch.count_nonzero(mem_pool) == 0
+    assert [tuple(cache.shape) for cache in caches] == [
+        (4, 3, 64, 2, 8),
+        (4, 3, 64, 2, 8),
+    ]
+    assert [cache.dtype for cache in caches] == [torch.bfloat16, torch.bfloat16]
+    assert [cache.stride(1) for cache in caches] == [2048, 2048]
+    assert [cache.storage_offset() for cache in caches] == [0, 1024]
+    assert CacheEngine.get_cache_block_size(cache_config, model_config) == mem_pool.numel() // 3
+
+
+@pytest.mark.parametrize(
+    ('quant_policy', 'resource_shapes', 'resource_dtypes', 'pool_bytes'),
+    [
+        (
+            QuantPolicy.INT4,
+            [(64, 2, 4), (64, 2, 4), (64, 2, 2), (64, 2, 2)],
+            [torch.uint8, torch.uint8, torch.bfloat16, torch.bfloat16],
+            2048,
+        ),
+        (
+            QuantPolicy.INT8,
+            [(64, 2, 8), (64, 2, 8), (64, 2, 2), (64, 2, 2)],
+            [torch.uint8, torch.uint8, torch.bfloat16, torch.bfloat16],
+            3072,
+        ),
+        (
+            QuantPolicy.TURBO_QUANT,
+            [(64, 2, 4), (64, 2, 2), (64, 2, 2), (64, 2, 1)],
+            [torch.uint8, torch.uint8, torch.bfloat16, torch.bfloat16],
+            1536,
+        ),
+    ],
+)
+def test_quantized_cache_layout_preserves_resource_order(quant_policy, resource_shapes, resource_dtypes, pool_bytes):
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               quant_policy=quant_policy)
+    model_config = _make_model_config(dtype=torch.bfloat16)
+
+    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=2,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+
+    assert tuple(mem_pool.shape) == (4, 2, pool_bytes)
+    assert [tuple(cache.shape[2:]) for cache in caches] == resource_shapes
+    assert [cache.dtype for cache in caches] == resource_dtypes
+    assert CacheEngine.get_cache_block_size(cache_config, model_config) == 4 * pool_bytes
+
+
+def test_split_kernel_blocks_scale_physical_allocation_and_sizing():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=128,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    model_config = _make_model_config(dtype=torch.bfloat16)
+
+    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=3,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+
+    assert tuple(mem_pool.shape) == (4, 6, 4096)
+    assert all(cache.shape[1] == 6 for cache in caches)
+    assert CacheEngine.get_cache_block_size(cache_config, model_config) == mem_pool.numel() // 3
+
+
+def test_legacy_custom_cache_layout_preserves_alignment_and_tuple_order():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    model_config = _make_model_config(
+        use_standard_kv_cache=False,
+        cache_shapes=[((3, ), torch.float32), ((5, ), torch.float16)],
+    )
+
+    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=2,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+
+    assert tuple(mem_pool.shape) == (4, 2, 1536)
+    assert [tuple(cache.shape) for cache in caches] == [
+        (4, 2, 64, 3),
+        (4, 2, 64, 5),
+    ]
+    assert [cache.dtype for cache in caches] == [torch.float32, torch.float16]
+    assert [cache.storage_offset() for cache in caches] == [0, 384]
+    assert CacheEngine.get_cache_block_size(cache_config, model_config) == 4 * 1536
+
+
 def test_pd_migration_rejects_split_kernel_blocks():
     cache_engine = object.__new__(CacheEngine)
     cache_engine.cache_config = CacheConfig(max_batches=1,
@@ -126,7 +243,7 @@ def test_pd_migration_rejects_split_kernel_blocks():
         asyncio.run(cache_engine.migrate(migration_inputs))
 
 
-def test_named_block_cache_specs_allocate_only_declared_layers():
+def test_named_block_cache_specs_do_not_require_total_layer_count():
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                kernel_block_size=64,
@@ -135,8 +252,8 @@ def test_named_block_cache_specs_allocate_only_declared_layers():
     model_config = _make_model_config(
         use_standard_kv_cache=False,
         block_cache_specs=[
-            BlockCacheSpec('r4', [1, 3], (40, ), torch.float32),
-            BlockCacheSpec('r128', [2], (96, ), torch.float32),
+            BlockCacheSpec('r4', [1, 9], (40, ), torch.float32),
+            BlockCacheSpec('r128', [7], (96, ), torch.float32),
         ],
     )
 
@@ -152,28 +269,27 @@ def test_named_block_cache_specs_allocate_only_declared_layers():
     assert CacheEngine._get_block_cache_layer_maps(model_config) == {
         'r4': {
             1: 0,
-            3: 1,
+            9: 1,
         },
         'r128': {
-            2: 0,
+            7: 0,
         },
     }
 
 
-def test_layered_state_cache_specs_allocate_only_declared_layers():
-    state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 3])]
+def test_layered_state_cache_specs_do_not_require_total_layer_count():
+    state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 9])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
 
     mem_pool, caches = StateCacheEngine.allocate_caches(num_caches=2,
                                                         state_shapes=state_shapes,
                                                         state_specs=state_specs,
-                                                        num_layers=4,
                                                         device='cpu')
 
     assert tuple(mem_pool.shape) == (2, 768)
     assert tuple(caches[0].shape) == (2, 2, 96)
-    assert StateCacheEngine.get_cache_state_size(state_shapes, state_specs=state_specs, num_layers=4) == 768
-    assert StateCacheEngine._get_state_cache_layer_maps(state_specs, 4) == {'subset': {1: 0, 3: 1}}
+    assert StateCacheEngine.get_cache_state_size(state_shapes, state_specs=state_specs) == 768
+    assert StateCacheEngine._get_state_cache_layer_maps(state_specs) == {'subset': {1: 0, 9: 1}}
 
 
 def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
@@ -194,12 +310,11 @@ def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
                                     world_size=1,
                                     device='meta')
 
-    out_of_range = [StateCacheSpec('bad', (1, ), torch.float32, layer_ids=[4])]
-    with pytest.raises(ValueError, match='out of range'):
+    negative_layer = [StateCacheSpec('bad', (1, ), torch.float32, layer_ids=[-1])]
+    with pytest.raises(ValueError, match='non-negative'):
         StateCacheEngine.allocate_caches(num_caches=1,
                                          state_shapes=[((1, ), torch.float32)],
-                                         state_specs=out_of_range,
-                                         num_layers=4,
+                                         state_specs=negative_layer,
                                          device='meta')
 
     empty_state_layers = [StateCacheSpec('empty', (1, ), torch.float32, layer_ids=[])]
@@ -207,7 +322,6 @@ def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
         StateCacheEngine.allocate_caches(num_caches=1,
                                          state_shapes=[((1, ), torch.float32)],
                                          state_specs=empty_state_layers,
-                                         num_layers=4,
                                          device='meta')
 
 

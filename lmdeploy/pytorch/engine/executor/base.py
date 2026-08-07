@@ -292,10 +292,7 @@ class ExecutorBase:
         if model_config is None:
             model_config = getattr(self, 'model_config', None)
         state_specs = getattr(model_config, 'state_cache_specs', None)
-        num_layers = getattr(model_config, 'num_layers', None)
-        mems = StateCacheEngine.get_cache_state_size(states_shapes,
-                                                     state_specs=state_specs,
-                                                     num_layers=num_layers)
+        mems = StateCacheEngine.get_cache_state_size(states_shapes, state_specs=state_specs)
         mems *= num_state_caches
 
         return mems

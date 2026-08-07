@@ -2,12 +2,10 @@
 """PyTorch cache allocation and runtime lifecycle."""
 
 from .engine import (
-    CacheDesc,
     CacheEngine,
     KVCache,
     NamedCacheView,
     StateCacheEngine,
-    round_up,
 )
 from .engine import (
     _describe_kv_cache_quant_policy as _describe_kv_cache_quant_policy,
@@ -15,6 +13,7 @@ from .engine import (
 from .engine import (
     _get_fp8_cache_dtype as _get_fp8_cache_dtype,
 )
+from .schema import CacheDesc, round_up
 
 __all__ = [
     'CacheDesc',

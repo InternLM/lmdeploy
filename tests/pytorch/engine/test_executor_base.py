@@ -345,7 +345,7 @@ def test_get_mem_state_cache_mem_uses_memory_model_state_specs():
     executor = object.__new__(ExecutorBase)
     state_specs = [StateCacheSpec('memory_state', (96, ), torch.float32, layer_ids=[1, 3])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
-    memory_model_config = SimpleNamespace(states_shapes=state_shapes, state_cache_specs=state_specs, num_layers=4)
+    memory_model_config = SimpleNamespace(states_shapes=state_shapes, state_cache_specs=state_specs)
     executor.cache_config = CacheConfig(max_batches=1,
                                         block_size=64,
                                         num_cpu_blocks=0,
@@ -356,8 +356,7 @@ def test_get_mem_state_cache_mem_uses_memory_model_state_specs():
 
     mem = executor._get_mem_state_cache_mem()
 
-    expected = StateCacheEngine.get_cache_state_size(
-        state_shapes, state_specs=state_specs, num_layers=memory_model_config.num_layers) * 2
+    expected = StateCacheEngine.get_cache_state_size(state_shapes, state_specs=state_specs) * 2
     assert mem == expected
 
 
