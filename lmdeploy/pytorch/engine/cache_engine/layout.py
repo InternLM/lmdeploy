@@ -37,6 +37,22 @@ class CacheAllocation:
         """Count owning pools without double-counting resource views."""
         return sum(pool.nbytes for pool in self.pools)
 
+    @property
+    def legacy_pool(self) -> torch.Tensor | list[torch.Tensor]:
+        """Return the temporary tensor-or-list owning-pool facade."""
+        pool_tensors = [pool.tensor for pool in self.pools]
+        if len(pool_tensors) == 1:
+            return pool_tensors[0]
+        return pool_tensors
+
+    def as_legacy(self) -> tuple[torch.Tensor | list[torch.Tensor], list[torch.Tensor]]:
+        """Return the temporary two-value allocation facade."""
+        return self.legacy_pool, list(self.caches)
+
+    def __iter__(self):
+        """Preserve legacy ``mem_pool, caches = allocate_caches()`` use."""
+        return iter(self.as_legacy())
+
 
 @dataclass(frozen=True)
 class PackedBlockCacheLayout:

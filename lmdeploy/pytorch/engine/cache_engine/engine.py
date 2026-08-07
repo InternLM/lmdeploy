@@ -20,6 +20,7 @@ from lmdeploy.utils import get_logger
 
 from ....messages import QuantPolicy
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
+from .layout import CacheAllocation
 from .schema import (
     CacheDesc,
     CacheResource,
@@ -31,6 +32,15 @@ from .schema import (
 KVCache = tuple[torch.Tensor, torch.Tensor]
 
 logger = get_logger('lmdeploy')
+
+
+def _unpack_cache_allocation(result):
+    """Return the native owner and temporary compatibility views."""
+    if isinstance(result, CacheAllocation):
+        mem_pool, caches = result.as_legacy()
+        return result, mem_pool, caches
+    mem_pool, caches = result
+    return None, mem_pool, caches
 
 
 class NamedCacheView(Mapping[str, torch.Tensor]):
@@ -396,7 +406,7 @@ class CacheEngine:
 
     @classmethod
     def allocate_caches(cls, num_blocks: int, model_config: ModelConfig, cache_config: CacheConfig, world_size: int,
-                        device: str):
+                        device: str) -> CacheAllocation:
         """Allocate caches."""
 
         if cache_config.block_size < cache_config.kernel_block_size:
@@ -416,21 +426,20 @@ class CacheEngine:
         cache_backend = get_backend().get_cache_backend()
         layout = cache_backend.build_block_layout(resources, num_layers=num_layers)
         allocation = layout.allocate(num_blocks=num_blocks, device=device)
-        mem_pools = [pool.tensor for pool in allocation.pools]
-        mem_pool = mem_pools[0] if len(mem_pools) == 1 else mem_pools
-        return mem_pool, list(allocation.caches)
+        return allocation
 
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
-        mem_pool, caches = self.allocate_caches(
+        result = self.allocate_caches(
             num_blocks=self.num_gpu_blocks,
             model_config=self.model_config,
             cache_config=self.cache_config,
             world_size=self.world_size,
             device='cuda',
         )
+        self.gpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_gpu_cache = mem_pool
         if self._uses_layer_scoped_block_caches(self.model_config):
             self.local_gpu_cache = []
@@ -444,13 +453,14 @@ class CacheEngine:
 
     def allocate_cpu_cache(self):
         """Allocate caches on Host."""
-        mem_pool, caches = self.allocate_caches(
+        result = self.allocate_caches(
             num_blocks=self.num_cpu_blocks,
             model_config=self.model_config,
             cache_config=self.cache_config,
             world_size=self.world_size,
             device='cpu',
         )
+        self.cpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_cpu_cache = mem_pool
         if self._uses_layer_scoped_block_caches(self.model_config):
             self.local_cpu_cache = []
@@ -565,14 +575,16 @@ class CacheEngine:
         """
         # Resolve the layout before sizing; CUDA graphs reuse the updated model config.
         _update_mla_kv_cache_dtype(model_config, cache_config)
-        mem_pool, _ = cls.allocate_caches(
+        result = cls.allocate_caches(
             num_blocks=1,
             model_config=model_config,
             cache_config=cache_config,
             world_size=world_size,
             device='meta',
         )
-
+        allocation, mem_pool, _ = _unpack_cache_allocation(result)
+        if allocation is not None:
+            return allocation.nbytes
         return cls._mem_pool_nbytes(mem_pool)
 
     """ Metheds for PD Disaggregation Begin. """
@@ -657,24 +669,28 @@ class StateCacheEngine:
         self._state_cache_layer_maps = layer_maps_from_resources(resources)
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
-        self.mem_pool, self._state_caches = self.allocate_caches(num_caches=cache_config.num_state_caches,
-                                                                 state_shapes=cache_config.states_shapes,
-                                                                 state_specs=state_specs,
-                                                                 device='cuda')
+        allocate_kwargs = dict(num_caches=cache_config.num_state_caches,
+                               state_shapes=cache_config.states_shapes,
+                               device='cuda')
+        if state_specs is not None:
+            allocate_kwargs['state_specs'] = state_specs
+        result = self.allocate_caches(**allocate_kwargs)
+        self.allocation, self.mem_pool, self._state_caches = _unpack_cache_allocation(result)
 
     @staticmethod
     def allocate_caches(num_caches: int,
                         state_shapes: list[tuple[tuple[int], torch.dtype]],
                         device: torch.device,
-                        state_specs: list[StateCacheSpec] | None = None):
+                        state_specs: list[StateCacheSpec] | None = None) -> CacheAllocation:
         """Allocate cache implement."""
 
         resources = build_state_cache_resources(state_shapes, state_specs=state_specs)
         cache_backend = get_backend().get_cache_backend()
         layout = cache_backend.build_state_layout(resources)
         allocation = layout.allocate(num_caches=num_caches, device=device)
-        assert len(allocation.pools) == 1
-        return allocation.pools[0].tensor, list(allocation.caches)
+        if len(allocation.pools) != 1:
+            raise RuntimeError('StateCacheEngine requires one owning pool until state operations are allocation-aware.')
+        return allocation
 
     @staticmethod
     def _get_state_cache_layer_maps(state_specs: list[StateCacheSpec]) -> dict[str, dict[int, int]]:
@@ -693,10 +709,13 @@ class StateCacheEngine:
         Return:
             int: Required memory size in bytes.
         """
-        mem_pool, _ = StateCacheEngine.allocate_caches(num_caches=1,
-                                                       state_shapes=state_shapes,
-                                                       state_specs=state_specs,
-                                                       device='meta')
+        allocate_kwargs = dict(num_caches=1, state_shapes=state_shapes, device='meta')
+        if state_specs is not None:
+            allocate_kwargs['state_specs'] = state_specs
+        result = StateCacheEngine.allocate_caches(**allocate_kwargs)
+        allocation, mem_pool, _ = _unpack_cache_allocation(result)
+        if allocation is not None:
+            return allocation.nbytes
         return mem_pool.numel() * mem_pool.element_size()
 
     @property

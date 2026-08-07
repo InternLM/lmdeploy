@@ -6,11 +6,13 @@ import numpy as np
 import pytest
 import torch
 
+import lmdeploy.pytorch.engine.cache_engine.engine as cache_engine_module
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.config import BlockCacheSpec, CacheConfig, ModelConfig, StateCacheSpec
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, NamedCacheView, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool
 
 
 def _make_model_config(**kwargs):
@@ -121,12 +123,15 @@ def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():
                                num_gpu_blocks=0)
     model_config = _make_model_config(dtype=torch.bfloat16)
 
-    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=3,
-                                                   model_config=model_config,
-                                                   cache_config=cache_config,
-                                                   world_size=1,
-                                                   device='cpu')
+    allocation = CacheEngine.allocate_caches(num_blocks=3,
+                                             model_config=model_config,
+                                             cache_config=cache_config,
+                                             world_size=1,
+                                             device='cpu')
+    mem_pool, caches = allocation
 
+    assert isinstance(allocation, CacheAllocation)
+    assert allocation.nbytes == mem_pool.numel() * mem_pool.element_size()
     assert tuple(mem_pool.shape) == (4, 3, 4096)
     assert mem_pool.dtype == torch.uint8
     assert torch.count_nonzero(mem_pool) == 0
@@ -277,19 +282,103 @@ def test_named_block_cache_specs_do_not_require_total_layer_count():
     }
 
 
+def test_cache_engine_retains_cpu_allocation_owner():
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cache_config = CacheConfig(max_batches=1,
+                                            block_size=64,
+                                            kernel_block_size=64,
+                                            num_cpu_blocks=2,
+                                            num_gpu_blocks=0)
+    cache_engine.model_config = _make_model_config(dtype=torch.bfloat16)
+    cache_engine.world_size = 1
+
+    cache_engine.allocate_cpu_cache()
+
+    assert isinstance(cache_engine.cpu_allocation, CacheAllocation)
+    assert cache_engine.full_cpu_cache is cache_engine.cpu_allocation.pools[0].tensor
+
+
+def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
+    mem_pool = torch.empty((2, 1, 8), dtype=torch.uint8)
+    caches = [torch.empty((2, 1, 1)), torch.empty((2, 1, 1))]
+
+    @classmethod
+    def legacy_allocate(cls, **kwargs):
+        return mem_pool, caches
+
+    monkeypatch.setattr(CacheEngine, 'allocate_caches', legacy_allocate)
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cache_config = CacheConfig(max_batches=1,
+                                            block_size=64,
+                                            kernel_block_size=64,
+                                            num_cpu_blocks=1,
+                                            num_gpu_blocks=0)
+    cache_engine.model_config = _make_model_config(dtype=torch.bfloat16)
+    cache_engine.world_size = 1
+
+    cache_engine.allocate_cpu_cache()
+
+    assert cache_engine.cpu_allocation is None
+    assert cache_engine.full_cpu_cache is mem_pool
+    assert CacheEngine.get_cache_block_size(cache_engine.cache_config, cache_engine.model_config) == mem_pool.numel()
+
+
 def test_layered_state_cache_specs_do_not_require_total_layer_count():
     state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 9])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
 
-    mem_pool, caches = StateCacheEngine.allocate_caches(num_caches=2,
-                                                        state_shapes=state_shapes,
-                                                        state_specs=state_specs,
-                                                        device='cpu')
+    allocation = StateCacheEngine.allocate_caches(num_caches=2,
+                                                  state_shapes=state_shapes,
+                                                  state_specs=state_specs,
+                                                  device='cpu')
+    mem_pool, caches = allocation
 
+    assert isinstance(allocation, CacheAllocation)
     assert tuple(mem_pool.shape) == (2, 768)
     assert tuple(caches[0].shape) == (2, 2, 96)
     assert StateCacheEngine.get_cache_state_size(state_shapes, state_specs=state_specs) == 768
     assert StateCacheEngine._get_state_cache_layer_maps(state_specs) == {'subset': {1: 0, 9: 1}}
+
+
+def test_state_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
+    mem_pool = torch.empty((2, 8), dtype=torch.uint8)
+    caches = [torch.empty((2, 2), dtype=torch.float32)]
+
+    @staticmethod
+    def legacy_allocate(num_caches, state_shapes, device):
+        return mem_pool, caches
+
+    monkeypatch.setattr(StateCacheEngine, 'allocate_caches', legacy_allocate)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               num_state_caches=2,
+                               states_shapes=[((2, ), torch.float32)])
+
+    cache_engine = StateCacheEngine(cache_config)
+
+    assert cache_engine.allocation is None
+    assert cache_engine.mem_pool is mem_pool
+    assert cache_engine.state_caches is caches
+    assert StateCacheEngine.get_cache_state_size(cache_config.states_shapes) == mem_pool.numel()
+
+
+def test_state_cache_engine_rejects_multi_pool_layout_before_operations_are_migrated(monkeypatch):
+    allocation = CacheAllocation(
+        pools=(
+            CachePool(torch.empty((2, 1), dtype=torch.uint8), entry_axis=0),
+            CachePool(torch.empty((2, 1), dtype=torch.uint8), entry_axis=0),
+        ),
+        caches=(),
+    )
+    layout = SimpleNamespace(allocate=lambda **kwargs: allocation)
+    cache_backend = SimpleNamespace(build_state_layout=lambda resources: layout)
+    ops_backend = SimpleNamespace(get_cache_backend=lambda: cache_backend)
+    monkeypatch.setattr(cache_engine_module, 'get_backend', lambda: ops_backend)
+
+    with pytest.raises(RuntimeError, match='requires one owning pool'):
+        StateCacheEngine.allocate_caches(num_caches=2, state_shapes=[], device='cpu')
 
 
 def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
@@ -364,11 +453,12 @@ def _make_state_cache_engine(num_caches: int = 4):
                                             num_gpu_blocks=0,
                                             num_state_caches=num_caches,
                                             states_shapes=[((2, 3), torch.float32), ((2, ), torch.float16)])
-    cache_engine.mem_pool, cache_engine._state_caches = StateCacheEngine.allocate_caches(
+    cache_engine.allocation = StateCacheEngine.allocate_caches(
         num_caches=num_caches,
         state_shapes=cache_engine.cache_config.states_shapes,
         device='cpu',
     )
+    cache_engine.mem_pool, cache_engine._state_caches = cache_engine.allocation
     return cache_engine
 
 
