@@ -404,7 +404,7 @@ struct QwenVit::Impl {
             }
             case NormType::kRMSNorm: {
                 const auto& rms = static_cast<const NormWeight&>(norm);
-                invokeRMSNorm(out, input, rms.weight, rms.norm_eps_, stream);
+                invokeRMSNorm(out, input, rms.weight, rms.norm_eps_, rms.zero_centered_, stream);
                 break;
             }
             default:
@@ -445,6 +445,7 @@ struct QwenVit::Impl {
                                           config_.hidden_dim,
                                           hidden_states.shape(0),
                                           rms.norm_eps_,
+                                          rms.zero_centered_,
                                           stream);
                 break;
             }
