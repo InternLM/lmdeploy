@@ -689,7 +689,8 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
         Tensor q_a;
         TM_SCOPE_CALL(linear_.Forward(hidden_state, *w.q_a_proj, q_a));
 
-        invokeRMSNorm(q_a, q_a, w.q_a_layernorm->weight, w.q_a_layernorm->norm_eps_, stream);
+        invokeRMSNorm(
+            q_a, q_a, w.q_a_layernorm->weight, w.q_a_layernorm->norm_eps_, w.q_a_layernorm->zero_centered_, stream);
         TM_CUDA_CHECK(cudaGetLastError());
 
         TM_SCOPE_CALL(linear_.Forward(q_a, *w.q_b_proj, q));
@@ -699,7 +700,8 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     TM_SCOPE_CALL(linear_.Forward(hidden_state, *w.kv_a_proj, kv_a_k_pe));
 
     auto kv_a = kv_a_k_pe.slice({0, 0}, {-1, kv_lora_rank});
-    invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm->weight, w.kv_a_layernorm->norm_eps_, stream);
+    invokeRMSNorm(
+        kv_a, kv_a, w.kv_a_layernorm->weight, w.kv_a_layernorm->norm_eps_, w.kv_a_layernorm->zero_centered_, stream);
     TM_CUDA_CHECK(cudaGetLastError());
 
     const int local_q_kv_head_num = local_head_num + 1 * local_kv_head_num;
@@ -734,23 +736,19 @@ void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
 
     const auto stream = core::Context::stream().handle();
 
-    TM_CUDA_CHECK(cudaEventRecord(qkv_event_, stream));
-    TM_CUDA_CHECK(cudaStreamWaitEvent(aux_stream_, qkv_event_));
-
     const auto token_num = qkv.shape(0);
 
     auto qkv3 = qkv.view({token_num, -1, size_per_head});
 
-    auto q = qkv3.slice({0, 0, 0}, {-1, local_head_num, -1});
-    invokeRMSNormQK(q, weights.q_norm->weight, weights.q_norm->norm_eps_, stream);
+    invokeQkRMSNorm(qkv3,
+                    weights.q_norm->weight,
+                    weights.k_norm->weight,
+                    local_head_num,
+                    local_kv_head_num,
+                    weights.q_norm->norm_eps_,
+                    weights.q_norm->zero_centered_,
+                    stream);
     TM_CUDA_CHECK(cudaGetLastError());
-
-    auto k = qkv3.slice({0, local_head_num, 0}, {-1, local_kv_head_num, -1});
-    invokeRMSNormQK(k, weights.k_norm->weight, weights.k_norm->norm_eps_, aux_stream_);
-    TM_CUDA_CHECK(cudaGetLastError());
-
-    TM_CUDA_CHECK(cudaEventRecord(aux_event_, aux_stream_));
-    TM_CUDA_CHECK(cudaStreamWaitEvent(stream, aux_event_));
 }
 
 }  // namespace turbomind

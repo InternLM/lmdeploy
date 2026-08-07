@@ -78,10 +78,6 @@ def map_packed_qwen35_experts(name: str) -> str:
     return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
 
 
-def _center_norm(w):
-    return 1.0 + w.float()
-
-
 class Qwen3_5TextModel(TextModel):
     """Weight model for Qwen3.5 (dense + linear-attn + optional MoE)."""
 
@@ -138,7 +134,10 @@ class Qwen3_5TextModel(TextModel):
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
         builder.add_token_embeds(pfx.get('model.language_model.embed_tokens.weight'))
-        builder.norm = self.norm(pfx + 'model.language_model.norm', _center_norm)
+        builder.norm = self.norm(
+            pfx + 'model.language_model.norm',
+            zero_centered=True,
+        )
         lm_pfx = (pfx + 'model.language_model.embed_tokens'
                   if self.cfg.tie_word_embeddings
                   else pfx + 'lm_head')
@@ -166,10 +165,16 @@ class Qwen3_5TextModel(TextModel):
         m.add_qkv_proj(q, k, v, gate=gate)
         m.add_o_proj(o)
 
-        m.q_norm = self.norm(pfx + 'q_norm',
-                             lambda w: reorder(_center_norm(w)))
-        m.k_norm = self.norm(pfx + 'k_norm',
-                             lambda w: reorder(_center_norm(w)))
+        m.q_norm = self.norm(
+            pfx + 'q_norm',
+            reorder,
+            zero_centered=True,
+        )
+        m.k_norm = self.norm(
+            pfx + 'k_norm',
+            reorder,
+            zero_centered=True,
+        )
 
         return m.build()
 
@@ -264,8 +269,14 @@ class Qwen3_5TextModel(TextModel):
                 d.moe_ffn, d.feed_forward = self.moe(p + 'mlp')
             else:
                 d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size)
-            d.attention_norm = self.norm(p + 'input_layernorm', _center_norm)
-            d.ffn_norm = self.norm(p + 'post_attention_layernorm', _center_norm)
+            d.attention_norm = self.norm(
+                p + 'input_layernorm',
+                zero_centered=True,
+            )
+            d.ffn_norm = self.norm(
+                p + 'post_attention_layernorm',
+                zero_centered=True,
+            )
             layers[i] = d.build()
         return layers.build()
 

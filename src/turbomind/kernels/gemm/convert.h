@@ -26,8 +26,10 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
                                                     bool     grouped,
                                                     int      sm);
 
+// TM_GEMM_WEIGHT_PACK: unset/-1 = auto, 0 = force plain, 1 = force pack
+int WeightPackEnv();
+
 // Free with `cudaFree`
 void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);
-void* MakeBlockedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);
 
 }  // namespace turbomind::gemm

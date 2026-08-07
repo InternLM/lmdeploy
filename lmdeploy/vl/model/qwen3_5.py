@@ -8,6 +8,8 @@ from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
 _INTERN_S2_ARCHS = [
+    'InternS2MobiusForConditionalGeneration',
+    'InternS2MobiusForCausalLM',
     'InternS2PreviewForConditionalGeneration',
     'InternS2PreviewForCausalLM',
 ]

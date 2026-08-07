@@ -169,9 +169,23 @@ std::vector<LaunchSpec> Context::Populate(const Kernel& kernel, const PopulatePa
     const auto& desc = kernel.desc();
     const auto& info = kernel.info();
 
-    const int64_t tiled_shape_m = cdiv(m, desc.cta_tile.x * (desc.group_axis == 0 ? num : 1));
-    const int64_t tiled_shape_n = cdiv(n, desc.cta_tile.y * (desc.group_axis == 1 ? num : 1));
-    const int     chunk_cnt_k   = cdiv(k, kernel.chunk_size_k());
+    // Along a group axis, `m`/`n` is the packed sum across groups. Estimate tiles *per
+    // group* from the average group size so cost tracks real per-group tiling
+    // (`num * cdiv(m_e, TILE)`). Using `cdiv(packed, TILE * num)` jumps at every
+    // `k * TILE * num` boundary and incorrectly demotes large TILE_M for MoE.
+    const int64_t tiled_shape_m = [&]() -> int64_t {
+        if (desc.group_axis == 0 && num > 1) {
+            return cdiv(std::max<int64_t>(m / num, 1), (int64_t)desc.cta_tile.x);
+        }
+        return cdiv((int64_t)m, (int64_t)desc.cta_tile.x);
+    }();
+    const int64_t tiled_shape_n = [&]() -> int64_t {
+        if (desc.group_axis == 1 && num > 1) {
+            return cdiv(std::max<int64_t>(n / num, 1), (int64_t)desc.cta_tile.y);
+        }
+        return cdiv((int64_t)n, (int64_t)desc.cta_tile.y);
+    }();
+    const int chunk_cnt_k = cdiv(k, kernel.chunk_size_k());
 
     // Despite we only have sm_count * constant tensor cores, this is the granularity for scheduling
     const int   concurrency     = sm_count_ * kernel.info().max_active_ctas;

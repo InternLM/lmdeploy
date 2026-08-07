@@ -18,7 +18,7 @@ from lmdeploy.pytorch.nn import (
 )
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_rowwise_linear
-from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8
+from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, update_nsa_indexer_kv_seqlens
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 
 from .deepseek_v2 import (
@@ -239,7 +239,10 @@ class DeepseekV32Attention(DeepseekV2Attention):
             quant_config=quantization_config,
         )
 
-        self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
+        self.indexer = self._build_indexer(config, layer_idx, dtype, device)
+
+    def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype, device: torch.device):
+        return Indexer(config, layer_idx, dtype=dtype, device=device)
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
         """Q proj."""
@@ -333,6 +336,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
 
 
 class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
+    attention_cls = DeepseekV32Attention
 
     def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         nn.Module.__init__(self)
@@ -340,12 +344,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         quantization_config = None
 
         # build attention layer
-        if getattr(config, 'use_mla', True):
-            self.self_attn = DeepseekV32Attention(config, layer_idx, dtype=dtype, device=device)
-        else:
-            # deepseek-vl2-tiny uses MHA LlamaAttention structure
-            from lmdeploy.pytorch.models.llama import LlamaAttention
-            self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
+        self.self_attn = self.attention_cls(config, layer_idx, dtype=dtype, device=device)
 
         # mlp
         self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
@@ -367,6 +366,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
 
 
 class DeepseekV32Model(DeepseekV2Model):
+    decoder_layer_cls = DeepseekV32DecoderLayer
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         nn.Module.__init__(self)
@@ -382,7 +382,7 @@ class DeepseekV32Model(DeepseekV2Model):
             ep_size_, _ = get_ep_world_rank()
             EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)
         self.layers = nn.ModuleList([
-            DeepseekV32DecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            self.decoder_layer_cls(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
@@ -394,8 +394,7 @@ class DeepseekV32Model(DeepseekV2Model):
                             device=device)
 
         emb_type = RopeType.LinearScaling
-        rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
-                                                                                     config.num_attention_heads)
+        rope_dim = config.qk_rope_head_dim
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = get_rope_theta(config)
 
@@ -406,6 +405,7 @@ class DeepseekV32Model(DeepseekV2Model):
 
 
 class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
+    model_cls = DeepseekV32Model
 
     def __init__(self,
                  config: Any,
@@ -417,7 +417,7 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         self.quantization_config = getattr(config, 'quantization_config', None)
         self.dtype = dtype
         self.ctx_mgr = ctx_mgr
-        self.model = DeepseekV32Model(config, dtype=dtype, device=device)
+        self.model = self.model_cls(config, dtype=dtype, device=device)
         # build lm_head
         self.lm_head = build_rowwise_linear(config.hidden_size,
                                             config.vocab_size,
@@ -425,3 +425,22 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """Model forward."""
+        num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
+        update_nsa_indexer_kv_seqlens(num_tokens, attn_metadata)
+        return super().forward(input_ids=input_ids,
+                               position_ids=position_ids,
+                               past_key_values=past_key_values,
+                               attn_metadata=attn_metadata,
+                               inputs_embeds=inputs_embeds,
+                               **kwargs)

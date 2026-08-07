@@ -2,6 +2,10 @@
 
 LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视化界面。
 
+对于 Turbomind 后端，`lmdeploy:gpu_cache_usage_perc` 表示存活的前缀缓存和检查点对象所占字节数与已配置缓存区域大小的比值。
+前缀缓存命中指标统计请求首次被调度时实际跳过的 prompt token。Turbomind 目前仅在 DP 1 时报告调度指标，
+尚不支持 DP 大于 1 时的逐 rank Turbomind 指标。
+
 ## 配置指南
 
 本节介绍如何设置 `lmdeploy/monitoring` 目录中提供的监控套件（Prometheus + Grafana）
@@ -17,7 +21,7 @@ LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视�
 1. **启动已启用指标的 LMDeploy 服务**
 
 ```
-lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct --enable-metrics
+lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct
 ```
 
 请根据需求替换模型路径。默认 metrics endpoint 位于 `http://<lmdeploy_server_host>:23333/metrics`。
@@ -72,8 +76,7 @@ lmdeploy serve api_server \
     --dp 2 \
     --proxy-url http://0.0.0.0:8000 \
     --nnodes 1 \
-    --node-rank 0 \
-    --enable-metrics
+    --node-rank 0
 ```
 
 您应该能在代理服务器列表中看到多个 API 服务实例。详细信息可以在 `lmdeploy/serve/proxy/proxy_config.json` 中找到。

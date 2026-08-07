@@ -32,7 +32,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         super().__post_init__()
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
-        self.prefix_cache.match_recompute_blocks = 1
+        self.prefix_cache.recompute_overlap.recompute_blocks = 1
 
     @property
     def num_valid_ids(self):
@@ -46,8 +46,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         end = max(0, self.num_valid_ids - 1)
         if 0 < end <= len(self.all_routed_experts):
             return self.all_routed_experts.get_real()[:end]
-        else:
-            return None
+        return None
 
     @property
     def generated_ids(self) -> np.ndarray:
