@@ -11,7 +11,7 @@ V4_FLASHMLA_D_ROPE = 64
 V4_FLASHMLA_TILE_SIZE = 64
 V4_FLASHMLA_NUM_TILES = 7
 V4_INDEX_SCALE_BYTES = 4
-DSA_INDEX_CACHE_NAME = 'dsa_index_kv'
+DSA_INDEXER_K_CACHE_NAME = 'dsa_indexer_k'
 DSA_INDEX_SCALE_BYTES = 4
 
 
@@ -20,6 +20,6 @@ def v4_packed_index_cache_shape(entries_per_block: int, head_dim: int) -> tuple[
     return (entries_per_block, 1, head_dim + V4_INDEX_SCALE_BYTES)
 
 
-def dsa_packed_index_cache_shape(entries_per_block: int, head_dim: int) -> tuple[int, int, int]:
-    """Return the logical uint8 shape for the packed DSA index cache."""
+def dsa_packed_indexer_k_cache_shape(entries_per_block: int, head_dim: int) -> tuple[int, int, int]:
+    """Return the logical uint8 shape for the packed DSA indexer-K cache."""
     return (entries_per_block, 1, head_dim + DSA_INDEX_SCALE_BYTES)

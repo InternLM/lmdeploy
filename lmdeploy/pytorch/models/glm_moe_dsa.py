@@ -10,7 +10,7 @@ from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
-from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_index_cache
+from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_indexer_k_cache
 
 from .deepseek_v2 import DeepseekV2MoE
 from .deepseek_v32 import (
@@ -111,7 +111,7 @@ class GlmMoeDsaIndexer(nn.Module):
         freqs_cis: tuple[torch.Tensor, torch.Tensor],
         attn_metadata: Any = None,
     ):
-        index_cache = get_dsa_index_cache(self.cache_layer_idx)
+        indexer_k_cache = get_dsa_indexer_k_cache(self.cache_layer_idx)
         q = self.wq_b(qr).unflatten(-1, (-1, self.head_dim))
         if self.use_fusion:
             kw = self.wk_weights_proj(x)
@@ -124,7 +124,7 @@ class GlmMoeDsaIndexer(nn.Module):
                                                    self.k_norm.bias,
                                                    cos,
                                                    sin,
-                                                   index_cache,
+                                                   indexer_k_cache,
                                                    norm_eps=self.k_norm.eps,
                                                    head_gate_scale=self.n_heads**-0.5,
                                                    rope_interleaved=self.rope_interleave,
@@ -140,12 +140,12 @@ class GlmMoeDsaIndexer(nn.Module):
         return self.indexer_topk(q[0],
                                  k[:, 0],
                                  weights[0],
-                                 index_cache,
+                                 indexer_k_cache,
                                  attn_metadata=attn_metadata)
 
 
 class DSATopKIndicesBuffer(nn.Module):
-    """Persistent DSA top-k buffer shared by full and reuse layers."""
+    """Share current-forward top-k indices between full and reuse layers."""
 
     def __init__(self, topk: int):
         super().__init__()

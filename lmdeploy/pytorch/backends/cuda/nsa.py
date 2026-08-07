@@ -30,19 +30,19 @@ from ..nsa import (
 logger = get_logger('lmdeploy')
 
 
-def _get_dsa_index_cache_views(index_cache: Tensor,
-                               head_dim: int) -> tuple[Tensor, Tensor]:
-    """Return FP8 value and FP32 scale views of a packed DSA index cache."""
-    if index_cache.dtype != torch.uint8:
-        raise TypeError(f'Packed DSA index cache must be uint8, got {index_cache.dtype}.')
-    if index_cache.dim() != 4 or index_cache.size(2) != 1:
-        raise ValueError('Packed DSA index cache must have shape [num_blocks, entries, 1, head_dim + 4].')
-    if index_cache.size(-1) != head_dim + DSA_INDEX_SCALE_BYTES:
-        raise ValueError(f'Packed DSA index cache last dim must be {head_dim + DSA_INDEX_SCALE_BYTES}, '
-                         f'got {index_cache.size(-1)}.')
+def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
+                                   head_dim: int) -> tuple[Tensor, Tensor]:
+    """Return FP8 K and FP32 scale views of a packed DSA indexer-K cache."""
+    if indexer_k_cache.dtype != torch.uint8:
+        raise TypeError(f'Packed DSA indexer-K cache must be uint8, got {indexer_k_cache.dtype}.')
+    if indexer_k_cache.dim() != 4 or indexer_k_cache.size(2) != 1:
+        raise ValueError('Packed DSA indexer-K cache must have shape [num_blocks, entries, 1, head_dim + 4].')
+    if indexer_k_cache.size(-1) != head_dim + DSA_INDEX_SCALE_BYTES:
+        raise ValueError(f'Packed DSA indexer-K cache last dim must be {head_dim + DSA_INDEX_SCALE_BYTES}, '
+                         f'got {indexer_k_cache.size(-1)}.')
 
-    num_blocks, entries_per_block = index_cache.shape[:2]
-    flat = index_cache.view(num_blocks, -1)
+    num_blocks, entries_per_block = indexer_k_cache.shape[:2]
+    flat = indexer_k_cache.view(num_blocks, -1)
     value_bytes = entries_per_block * head_dim
     scale_bytes = entries_per_block * DSA_INDEX_SCALE_BYTES
     values = flat[:, :value_bytes].view(torch.float8_e4m3fn).view(
@@ -261,13 +261,13 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         return meta
 
     def _compute_scores(self, q: Tensor, q_s: Tensor,
-                        index_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+                        indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         """Compute dense index scores with DeepGEMM or the Triton fallback."""
         if meta.score_meta is not None:
             score_meta = meta.score_meta
             return _get_deep_gemm().fp8_paged_mqa_logits(
                 q[:, None],
-                index_cache,
+                indexer_k_cache,
                 q_s,
                 score_meta.context_lens,
                 score_meta.block_offsets,
@@ -277,8 +277,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
 
         if meta.is_decoding:
             _warn_triton_index_scoring()
-        k_cache, k_s_cache = _get_dsa_index_cache_views(
-            index_cache, q.size(-1))
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+            indexer_k_cache, q.size(-1))
         return fp8_index(q,
                          q_s,
                          k_cache,
@@ -308,16 +308,16 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                             descending=True)
 
     def _score_and_select(self, q: Tensor, q_s: Tensor,
-                          index_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
-        scores = self._compute_scores(q, q_s, index_cache, meta)
+                          indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+        scores = self._compute_scores(q, q_s, indexer_k_cache, meta)
         return self._select_topk(scores, meta)
 
     def forward(self, q: Tensor, k: Tensor, weights: Tensor,
-                index_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         assert q.dim() == 3
         assert k.dim() == 2
-        k_cache, k_s_cache = _get_dsa_index_cache_views(
-            index_cache, k.size(-1))
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+            indexer_k_cache, k.size(-1))
         q_shape = q.shape
         q = q.reshape(-1, q_shape[-1])
         q, q_s = quant_fp8(q, self.block_size, dtype=k_cache.dtype, trans_scale=True, scale_fmt=self.scale_fmt)
@@ -337,15 +337,15 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                   block_offsets=meta.block_offset,
                                   group_size=self.block_size,
                                   scale_fmt=self.scale_fmt)
-        return self._score_and_select(q, q_s, index_cache, meta)
+        return self._score_and_select(q, q_s, indexer_k_cache, meta)
 
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
-                      sin: Tensor, index_cache: Tensor, norm_eps: float, head_gate_scale: float,
+                      sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
                       rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
         """Prepare FP8 Q and write K cache without allocating rotated BF16
         Q/K."""
-        k_cache, k_s_cache = _get_dsa_index_cache_views(
-            index_cache, k.size(-1))
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+            indexer_k_cache, k.size(-1))
         q, q_s = prepare_dsa_indexer_q(q,
                                        weights,
                                        cos,
@@ -366,7 +366,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                     max_q_seqlen=meta.max_q_seqlen,
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
-        return self._score_and_select(q, q_s, index_cache, meta)
+        return self._score_and_select(q, q_s, indexer_k_cache, meta)
 
 
 class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):

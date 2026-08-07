@@ -3,14 +3,14 @@ from torch import Tensor, nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
-from lmdeploy.pytorch.consts import DSA_INDEX_CACHE_NAME
+from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 
-def get_dsa_index_cache(layer_idx: int) -> Tensor:
-    """Return the packed index cache owned by one DSA layer."""
+def get_dsa_indexer_k_cache(layer_idx: int) -> Tensor:
+    """Return the packed indexer-K cache owned by one DSA layer."""
     context = get_step_ctx_manager().current_context()
-    return context.block_caches.layer(DSA_INDEX_CACHE_NAME, layer_idx)
+    return context.block_caches.layer(DSA_INDEXER_K_CACHE_NAME, layer_idx)
 
 
 class IndexerTopKFP8(nn.Module):
@@ -26,7 +26,7 @@ class IndexerTopKFP8(nn.Module):
         q: Tensor,
         k: Tensor,
         weights: Tensor,
-        index_cache: Tensor,
+        indexer_k_cache: Tensor,
         attn_metadata: AttentionMetadata = None,
     ):
         """forward."""
@@ -34,7 +34,7 @@ class IndexerTopKFP8(nn.Module):
         ret = self.index_impl.forward(q,
                                       k,
                                       weights,
-                                      index_cache,
+                                      indexer_k_cache,
                                       meta=meta)
         return ret
 
@@ -46,7 +46,7 @@ class IndexerTopKFP8(nn.Module):
                       norm_bias: Tensor,
                       cos: Tensor,
                       sin: Tensor,
-                      index_cache: Tensor,
+                      indexer_k_cache: Tensor,
                       norm_eps: float,
                       head_gate_scale: float,
                       rope_interleaved: bool,
@@ -60,7 +60,7 @@ class IndexerTopKFP8(nn.Module):
                                              norm_bias,
                                              cos,
                                              sin,
-                                             index_cache,
+                                             indexer_k_cache,
                                              norm_eps=norm_eps,
                                              head_gate_scale=head_gate_scale,
                                              rope_interleaved=rope_interleaved,

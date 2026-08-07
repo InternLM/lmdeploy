@@ -3,7 +3,7 @@ import torch
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig
-from lmdeploy.pytorch.consts import DSA_INDEX_CACHE_NAME, dsa_packed_index_cache_shape
+from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME, dsa_packed_indexer_k_cache_shape
 
 from .deepseek_v2 import DeepseekV2ModelConfigBuilder
 
@@ -29,7 +29,7 @@ def _check_env_v32(device: str = 'cuda'):
 
 
 def _finalize_v32_cache_specs(model_config: ModelConfig, block_size: int):
-    """Give DeepGEMM a physically contiguous paged DSA index cache."""
+    """Give DeepGEMM a physically contiguous paged DSA indexer-K cache."""
     hf_config = model_config.hf_config
     indexer_types = getattr(hf_config, 'indexer_types', None)
     if model_config.num_layers == hf_config.num_hidden_layers and indexer_types:
@@ -42,9 +42,9 @@ def _finalize_v32_cache_specs(model_config: ModelConfig, block_size: int):
         layer_ids = list(range(model_config.num_layers))
     model_config.cache_shapes = []
     model_config.block_cache_specs = [
-        BlockCacheSpec(DSA_INDEX_CACHE_NAME,
+        BlockCacheSpec(DSA_INDEXER_K_CACHE_NAME,
                        layer_ids,
-                       dsa_packed_index_cache_shape(
+                       dsa_packed_indexer_k_cache_shape(
                            block_size, hf_config.index_head_dim),
                        torch.uint8)
     ]

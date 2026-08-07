@@ -24,7 +24,7 @@ from lmdeploy.pytorch.nn.linear import (
     build_merged_colwise_linear,
     build_o_proj,
 )
-from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_index_cache
+from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_indexer_k_cache
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -196,7 +196,7 @@ class Indexer(nn.Module):
                 qr: torch.Tensor,
                 freqs_cis: torch.Tensor,
                 attn_metadata: Any = None):
-        index_cache = get_dsa_index_cache(self.cache_layer_idx)
+        indexer_k_cache = get_dsa_indexer_k_cache(self.cache_layer_idx)
         q = self.wq_b(qr)
         q = q.unflatten(-1, (-1, self.head_dim))
         if self.use_fusion:
@@ -210,7 +210,7 @@ class Indexer(nn.Module):
                                                    self.k_norm.bias,
                                                    cos,
                                                    sin,
-                                                   index_cache,
+                                                   indexer_k_cache,
                                                    norm_eps=self.k_norm.eps,
                                                    head_gate_scale=self.n_heads**-0.5,
                                                    rope_interleaved=False,
@@ -239,7 +239,7 @@ class Indexer(nn.Module):
 
         weights = self.weights_proj(x) * self.n_heads**-0.5
 
-        return self.indexer_topk(q[0], k[:, 0], weights[0], index_cache, attn_metadata=attn_metadata)
+        return self.indexer_topk(q[0], k[:, 0], weights[0], indexer_k_cache, attn_metadata=attn_metadata)
 
 
 class DeepseekV32Attention(DeepseekV2Attention):
