@@ -9,6 +9,7 @@ import torch
 
 import lmdeploy.pytorch.engine.cache_engine.engine as cache_engine_module
 from lmdeploy.messages import QuantPolicy
+from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
 from lmdeploy.pytorch.config import BlockCacheSpec, CacheConfig, ModelConfig, StateCacheSpec
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -123,7 +124,6 @@ def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():
                                num_cpu_blocks=0,
                                num_gpu_blocks=0)
     model_config = _make_model_config(dtype=torch.bfloat16)
-
     allocation = CacheEngine.allocate_caches(num_blocks=3,
                                              model_config=model_config,
                                              cache_config=cache_config,
@@ -322,6 +322,40 @@ def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
     assert cache_engine.cpu_allocation is None
     assert cache_engine.full_cpu_cache is mem_pool
     assert CacheEngine.get_cache_block_size(cache_engine.cache_config, cache_engine.model_config) == mem_pool.numel()
+
+
+def test_dlinfer_backend_uses_native_block_and_state_allocations(monkeypatch):
+    monkeypatch.setattr(cache_engine_module, 'get_backend', lambda: DlinferOpsBackend)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    model_config = _make_model_config(dtype=torch.bfloat16)
+    state_shapes = [((2, 3), torch.float32), ((2, ), torch.float16)]
+
+    block_allocation = CacheEngine.allocate_caches(num_blocks=2,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+    state_allocation = StateCacheEngine.allocate_caches(
+        num_caches=3,
+        state_shapes=state_shapes,
+        device='cpu',
+    )
+
+    assert len(block_allocation.pools) == len(block_allocation.caches) == 2
+    assert [pool.entry_axis for pool in block_allocation.pools] == [1, 1]
+    assert [tuple(cache.shape) for cache in block_allocation.caches] == [
+        (4, 2, 64, 2, 8),
+        (4, 2, 64, 2, 8),
+    ]
+    assert len(state_allocation.pools) == len(state_allocation.caches) == 2
+    assert [pool.entry_axis for pool in state_allocation.pools] == [0, 0]
+    assert all(cache.is_contiguous() for cache in (*block_allocation.caches, *state_allocation.caches))
+    assert CacheEngine.get_cache_block_size(cache_config, model_config) == block_allocation.nbytes // 2
+    assert StateCacheEngine.get_cache_state_size(state_shapes) == state_allocation.nbytes // 3
 
 
 def test_cache_engine_swap_uses_each_pool_entry_axis(monkeypatch):
