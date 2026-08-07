@@ -171,8 +171,8 @@ class _FakeMPEngine(MPEngine):
         yield EngineOutput(ResponseType.CANCEL, [])
 
 
-@pytest.mark.parametrize('end_session', [False, True])
-def test_mp_cancel_during_stream_startup(end_session):
+@pytest.mark.parametrize('mode', ['cancel', 'cancel_end', 'stream_cancel'])
+def test_mp_cancel_during_stream_startup(mode):
 
     async def _test():
         engine = _FakeMPEngine()
@@ -181,18 +181,27 @@ def test_mp_cancel_during_stream_startup(end_session):
         stream_task = asyncio.create_task(stream.__anext__())
         await asyncio.wait_for(engine.started.wait(), timeout=1)
 
+        if mode == 'stream_cancel':
+            stream_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await stream_task
+
         assert await instance.async_cancel(7) == ResponseType.SUCCESS
-        end_task = asyncio.create_task(instance.async_end(7)) if end_session else None
+        state = engine.session_states[7]
+        end_task = asyncio.create_task(instance.async_end(7)) if mode == 'cancel_end' else None
         await asyncio.sleep(0)
         assert engine.calls == []
         if end_task is not None:
             assert not end_task.done()
 
         engine.allow_init.set()
-        output = await asyncio.wait_for(stream_task, timeout=1)
-        assert output.status == ResponseType.CANCEL
+        if mode != 'stream_cancel':
+            output = await asyncio.wait_for(stream_task, timeout=1)
+            assert output.status == ResponseType.CANCEL
         if end_task is not None:
             assert await asyncio.wait_for(end_task, timeout=1) == ResponseType.SUCCESS
+        elif state.cleanup_task is not None:
+            await asyncio.wait_for(state.cleanup_task, timeout=1)
         else:
             for _ in range(10):
                 if engine.calls:
@@ -200,10 +209,12 @@ def test_mp_cancel_during_stream_startup(end_session):
                 await asyncio.sleep(0)
 
         expected = [('instance_async_cancel', (7, ))]
-        if end_session:
+        if mode == 'cancel_end':
             expected.append(('instance_async_end', (7, )))
         assert engine.calls == expected
         await stream.aclose()
+        assert 7 not in engine.session_states
+        assert 7 not in engine.pending_cancel_sessions
 
     asyncio.run(_test())
 
