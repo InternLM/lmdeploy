@@ -89,6 +89,7 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
     dst.epilogue      = epilogue;
     dst.has_bias_     = has_bias_;
     dst.is_grouped_   = is_grouped_;
+    dst.prepared_     = prepared_;
     dst.k_desc        = k_desc;
     dst.q_desc        = q_desc;
 }
@@ -100,6 +101,10 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
 void LinearWeight::prepare()
 {
     if (!weight) {
+        return;
+    }
+
+    if (prepared_) {
         return;
     }
 
@@ -119,6 +124,7 @@ void LinearWeight::prepare()
         if (weight.dtype() == data_type) {
             k_desc.type = data_type;
         }
+        prepared_ = true;
         return;
     }
 
@@ -302,6 +308,8 @@ void LinearWeight::prepare()
             q_desc = qd;
         }
     }
+
+    prepared_ = true;
 }
 
 TM_MODULE_REGISTER(LinearWeight, core::LinearConfig);
