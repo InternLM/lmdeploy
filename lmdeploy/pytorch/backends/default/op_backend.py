@@ -81,6 +81,12 @@ class DefaultOpsBackend(OpsBackend):
             head_size,
         )
 
+    @classmethod
+    def get_cache_backend(cls):
+        """Get the default cache backend provider."""
+        from .cache import DefaultCacheBackend
+        return DefaultCacheBackend
+
     @staticmethod
     def init():
         pass

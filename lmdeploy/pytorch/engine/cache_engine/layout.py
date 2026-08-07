@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Default physical cache allocation and owning-pool metadata."""
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
@@ -39,66 +38,82 @@ class CacheAllocation:
         return sum(pool.nbytes for pool in self.pools)
 
 
-def allocate_packed_block_caches(resources: Sequence[CacheResource],
-                                 num_layers: int,
-                                 num_blocks: int,
-                                 device: torch.device | str) -> CacheAllocation:
-    """Pack all block-cache resources behind layer and block axes."""
-    pool_size = sum(resource.desc.aligned_size for resource in resources)
-    pool_tensor = torch.zeros((num_layers, num_blocks, pool_size), dtype=torch.uint8, device=device)
+@dataclass(frozen=True)
+class PackedBlockCacheLayout:
+    """Pack uniform-layer block resources into one owning pool."""
 
-    caches = []
-    offset = 0
-    for resource in resources:
-        desc = resource.desc
-        cache = pool_tensor[:, :, offset:offset + desc.size].view(desc.dtype)
-        cache = cache.view((num_layers, num_blocks, *desc.shape))
-        caches.append(cache)
-        offset += desc.aligned_size
+    resources: tuple[CacheResource, ...]
+    num_layers: int
 
-    return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=1), ), caches=tuple(caches))
+    def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
+        """Realize the layout for a block count and device."""
+        pool_size = sum(resource.desc.aligned_size for resource in self.resources)
+        pool_tensor = torch.zeros((self.num_layers, num_blocks, pool_size), dtype=torch.uint8, device=device)
 
+        caches = []
+        offset = 0
+        for resource in self.resources:
+            desc = resource.desc
+            cache = pool_tensor[:, :, offset:offset + desc.size].view(desc.dtype)
+            cache = cache.view((self.num_layers, num_blocks, *desc.shape))
+            caches.append(cache)
+            offset += desc.aligned_size
 
-def allocate_layer_row_block_caches(resources: Sequence[CacheResource],
-                                    num_blocks: int,
-                                    device: torch.device | str) -> CacheAllocation:
-    """Allocate one compact layer-row pool for each block resource."""
-    pools = []
-    caches = []
-    for resource in resources:
-        desc = resource.desc
-        pool_tensor = torch.zeros((resource.num_rows, num_blocks, desc.aligned_size),
-                                  dtype=torch.uint8,
-                                  device=device)
-        cache = pool_tensor[:, :, :desc.size].view(desc.dtype)
-        cache = cache.view((resource.num_rows, num_blocks, *desc.shape))
-        pools.append(CachePool(pool_tensor, entry_axis=1))
-        caches.append(cache)
-
-    return CacheAllocation(pools=tuple(pools), caches=tuple(caches))
+        return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=1), ), caches=tuple(caches))
 
 
-def allocate_packed_state_caches(resources: Sequence[CacheResource],
-                                 num_caches: int,
-                                 device: torch.device | str) -> CacheAllocation:
+@dataclass(frozen=True)
+class LayerRowBlockCacheLayout:
+    """Give every layer-scoped block resource its own compact-row pool."""
+
+    resources: tuple[CacheResource, ...]
+
+    def __post_init__(self):
+        if any(resource.layer_rows is None for resource in self.resources):
+            raise ValueError('Layer-row block layouts require explicit layer rows for every resource.')
+
+    def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
+        """Realize the layout for a block count and device."""
+        pools = []
+        caches = []
+        for resource in self.resources:
+            desc = resource.desc
+            pool_tensor = torch.zeros((resource.num_rows, num_blocks, desc.aligned_size),
+                                      dtype=torch.uint8,
+                                      device=device)
+            cache = pool_tensor[:, :, :desc.size].view(desc.dtype)
+            cache = cache.view((resource.num_rows, num_blocks, *desc.shape))
+            pools.append(CachePool(pool_tensor, entry_axis=1))
+            caches.append(cache)
+
+        return CacheAllocation(pools=tuple(pools), caches=tuple(caches))
+
+
+@dataclass(frozen=True)
+class PackedStateCacheLayout:
     """Pack state resources behind one state-slot entry axis."""
-    if len(resources) == 0 or num_caches == 0:
-        pool_tensor = torch.empty((0, 0), dtype=torch.uint8, device=device)
-        return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ), caches=())
 
-    pool_size = sum(resource.desc.aligned_size for resource in resources)
-    pool_tensor = torch.zeros((num_caches, pool_size), dtype=torch.uint8, device=device)
+    resources: tuple[CacheResource, ...]
 
-    caches = []
-    offset = 0
-    for resource in resources:
-        desc = resource.desc
-        cache = pool_tensor[:, offset:offset + desc.size].view(desc.dtype)
-        cache = cache.view((num_caches, *desc.shape))
-        if resource.layer_rows is not None:
-            dims = list(range(cache.dim()))
-            cache = cache.permute(1, 0, *dims[2:])
-        caches.append(cache)
-        offset += desc.aligned_size
+    def allocate(self, num_caches: int, device: torch.device | str) -> CacheAllocation:
+        """Realize the layout for a state-slot count and device."""
+        if len(self.resources) == 0 or num_caches == 0:
+            pool_tensor = torch.empty((0, 0), dtype=torch.uint8, device=device)
+            return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ), caches=())
 
-    return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ), caches=tuple(caches))
+        pool_size = sum(resource.desc.aligned_size for resource in self.resources)
+        pool_tensor = torch.zeros((num_caches, pool_size), dtype=torch.uint8, device=device)
+
+        caches = []
+        offset = 0
+        for resource in self.resources:
+            desc = resource.desc
+            cache = pool_tensor[:, offset:offset + desc.size].view(desc.dtype)
+            cache = cache.view((num_caches, *desc.shape))
+            if resource.layer_rows is not None:
+                dims = list(range(cache.dim()))
+                cache = cache.permute(1, 0, *dims[2:])
+            caches.append(cache)
+            offset += desc.aligned_size
+
+        return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ), caches=tuple(caches))

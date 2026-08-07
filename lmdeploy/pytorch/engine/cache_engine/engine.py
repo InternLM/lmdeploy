@@ -20,7 +20,6 @@ from lmdeploy.utils import get_logger
 
 from ....messages import QuantPolicy
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
-from .layout import allocate_layer_row_block_caches, allocate_packed_block_caches, allocate_packed_state_caches
 from .schema import (
     CacheDesc,
     CacheResource,
@@ -365,16 +364,15 @@ class CacheEngine:
         return tuple(resources)
 
     @classmethod
-    def _use_layer_row_block_caches(cls, model_config: ModelConfig):
-        """Whether named block caches can be allocated by declared layer
-        ids."""
+    def _uses_layer_scoped_block_caches(cls, model_config: ModelConfig):
+        """Whether model-facing named caches use declared layer rows."""
         return (model_config is not None and not model_config.use_standard_kv_cache
                 and len(model_config.block_cache_specs) > 0)
 
     @staticmethod
     def _get_block_cache_layer_maps(model_config: ModelConfig) -> dict[str, dict[int, int]]:
         """Build global-layer-id to local-row maps for named block caches."""
-        if not CacheEngine._use_layer_row_block_caches(model_config):
+        if not CacheEngine._uses_layer_scoped_block_caches(model_config):
             return {}
         resources = build_block_cache_resources(model_config.block_cache_specs)
         return layer_maps_from_resources(resources)
@@ -415,13 +413,9 @@ class CacheEngine:
         num_blocks *= kernel_blocks_per_kv
 
         resources = cls._get_cache_resources(model_config, cache_config, world_size)
-        if cls._use_layer_row_block_caches(model_config):
-            allocation = allocate_layer_row_block_caches(resources, num_blocks=num_blocks, device=device)
-        else:
-            allocation = allocate_packed_block_caches(resources,
-                                                      num_layers=num_layers,
-                                                      num_blocks=num_blocks,
-                                                      device=device)
+        cache_backend = get_backend().get_cache_backend()
+        layout = cache_backend.build_block_layout(resources, num_layers=num_layers)
+        allocation = layout.allocate(num_blocks=num_blocks, device=device)
         mem_pools = [pool.tensor for pool in allocation.pools]
         mem_pool = mem_pools[0] if len(mem_pools) == 1 else mem_pools
         return mem_pool, list(allocation.caches)
@@ -438,7 +432,7 @@ class CacheEngine:
             device='cuda',
         )
         self.full_gpu_cache = mem_pool
-        if self._use_layer_row_block_caches(self.model_config):
+        if self._uses_layer_scoped_block_caches(self.model_config):
             self.local_gpu_cache = []
         else:
             self.local_gpu_cache = list(zip(*caches))
@@ -458,7 +452,7 @@ class CacheEngine:
             device='cpu',
         )
         self.full_cpu_cache = mem_pool
-        if self._use_layer_row_block_caches(self.model_config):
+        if self._uses_layer_scoped_block_caches(self.model_config):
             self.local_cpu_cache = []
         else:
             self.local_cpu_cache = list(zip(*caches))
@@ -676,7 +670,9 @@ class StateCacheEngine:
         """Allocate cache implement."""
 
         resources = build_state_cache_resources(state_shapes, state_specs=state_specs)
-        allocation = allocate_packed_state_caches(resources, num_caches=num_caches, device=device)
+        cache_backend = get_backend().get_cache_backend()
+        layout = cache_backend.build_state_layout(resources)
+        allocation = layout.allocate(num_caches=num_caches, device=device)
         assert len(allocation.pools) == 1
         return allocation.pools[0].tensor, list(allocation.caches)
 

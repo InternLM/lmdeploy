@@ -2,12 +2,14 @@
 import pytest
 import torch
 
+from lmdeploy.pytorch.backends.default import DefaultOpsBackend
+from lmdeploy.pytorch.backends.default.cache import DefaultCacheBackend
 from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.engine.cache_engine.layout import (
     CachePool,
-    allocate_layer_row_block_caches,
-    allocate_packed_block_caches,
-    allocate_packed_state_caches,
+    LayerRowBlockCacheLayout,
+    PackedBlockCacheLayout,
+    PackedStateCacheLayout,
 )
 from lmdeploy.pytorch.engine.cache_engine.schema import (
     CacheDesc,
@@ -32,7 +34,8 @@ def test_packed_block_allocation_owns_one_block_axis_pool():
         CacheResource('second', CacheDesc(shape=[2], dtype=torch.float16, alignment=8)),
     )
 
-    allocation = allocate_packed_block_caches(resources, num_layers=2, num_blocks=3, device='cpu')
+    layout = PackedBlockCacheLayout(resources, num_layers=2)
+    allocation = layout.allocate(num_blocks=3, device='cpu')
 
     assert len(allocation.pools) == 1
     assert allocation.pools[0].entry_axis == 1
@@ -53,7 +56,8 @@ def test_layer_row_block_allocation_owns_one_pool_per_resource():
                       layer_rows=LayerRowMap.build('second', [7])),
     )
 
-    allocation = allocate_layer_row_block_caches(resources, num_blocks=3, device='cpu')
+    layout = LayerRowBlockCacheLayout(resources)
+    allocation = layout.allocate(num_blocks=3, device='cpu')
 
     assert [pool.entry_axis for pool in allocation.pools] == [1, 1]
     assert [tuple(pool.tensor.shape) for pool in allocation.pools] == [(2, 3, 16), (1, 3, 8)]
@@ -71,7 +75,8 @@ def test_packed_state_allocation_owns_state_slot_axis():
         ],
     )
 
-    allocation = allocate_packed_state_caches(resources, num_caches=4, device='cpu')
+    layout = PackedStateCacheLayout(resources)
+    allocation = layout.allocate(num_caches=4, device='cpu')
 
     assert allocation.pools[0].entry_axis == 0
     assert tuple(allocation.pools[0].tensor.shape) == (4, 80)
@@ -81,9 +86,35 @@ def test_packed_state_allocation_owns_state_slot_axis():
 
 
 def test_empty_state_allocation_keeps_one_empty_owning_pool():
-    allocation = allocate_packed_state_caches((), num_caches=4, device='cpu')
+    allocation = PackedStateCacheLayout(()).allocate(num_caches=4, device='cpu')
 
     assert len(allocation.pools) == 1
     assert allocation.pools[0].entry_axis == 0
     assert tuple(allocation.pools[0].tensor.shape) == (0, 0)
     assert allocation.caches == ()
+
+
+def test_layer_row_block_layout_rejects_resources_without_layer_rows():
+    resources = (CacheResource('plain', CacheDesc(shape=[3], dtype=torch.float32)), )
+
+    with pytest.raises(ValueError, match='explicit layer rows'):
+        LayerRowBlockCacheLayout(resources)
+
+
+def test_default_cache_backend_selects_layout_from_resource_membership():
+    plain_resources = (CacheResource('plain', CacheDesc(shape=[3], dtype=torch.float32)), )
+    layer_resources = (
+        CacheResource('layered',
+                      CacheDesc(shape=[3], dtype=torch.float32),
+                      layer_rows=LayerRowMap.build('layered', [1, 9])),
+    )
+
+    cache_backend = DefaultOpsBackend.get_cache_backend()
+    block_layout = cache_backend.build_block_layout(plain_resources, num_layers=4)
+    layer_layout = cache_backend.build_block_layout(layer_resources, num_layers=4)
+    state_layout = cache_backend.build_state_layout(plain_resources)
+
+    assert cache_backend is DefaultCacheBackend
+    assert isinstance(block_layout, PackedBlockCacheLayout)
+    assert isinstance(layer_layout, LayerRowBlockCacheLayout)
+    assert isinstance(state_layout, PackedStateCacheLayout)
