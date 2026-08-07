@@ -362,7 +362,8 @@ class FusedLogitsProcessor:
         for i, processor in self.guided_processors.items():
             if self.guided_decoding_manager.is_terminated(processor):
                 continue
-            self.guided_decoding_manager.accept_token(processor, cpu_result[i])
+            token = cpu_result[i]
+            self.guided_decoding_manager.accept_token(processor, int(token))
 
     async def accept_guided_tokens(self, next_token_ids: torch.Tensor):
         if self.guided_decoding_manager and self.guided_processors:
