@@ -20,8 +20,10 @@ from lmdeploy.utils import get_logger
 
 from ....messages import QuantPolicy
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
+from .layout import allocate_layer_row_block_caches, allocate_packed_block_caches, allocate_packed_state_caches
 from .schema import (
     CacheDesc,
+    CacheResource,
     build_block_cache_resources,
     build_state_cache_resources,
     layer_maps_from_resources,
@@ -336,44 +338,34 @@ class CacheEngine:
         return [key_scale_zero_desc, val_scale_zero_desc]
 
     @classmethod
-    def _get_cache_desc_names(cls, model_config: ModelConfig, cache_config: CacheConfig, world_size: int):
-        """Return list of (desc, name) for all caches that will be allocated.
-
-        This must stay in sync with allocate_caches().
-        """
-        names = []
+    def _get_cache_resources(cls, model_config: ModelConfig, cache_config: CacheConfig,
+                             world_size: int) -> tuple[CacheResource, ...]:
+        """Build the ordered resources consumed by the physical layout."""
+        resources = []
         use_std = model_config.use_standard_kv_cache
 
         if use_std:
             k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
             v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
             quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
-            names.append((k_cache_desc, 'k_cache'))
-            names.append((v_cache_desc, 'v_cache'))
+            resources.append(CacheResource(name='k_cache', desc=k_cache_desc))
+            resources.append(CacheResource(name='v_cache', desc=v_cache_desc))
             for idx, desc in enumerate(quant_cache_descs):
-                names.append((desc, f'quant_{idx}'))
-        else:
-            k_cache_desc = None
-            v_cache_desc = None
-            quant_cache_descs = []
-
-        block_size = cache_config.kernel_block_size
+                resources.append(CacheResource(name=f'quant_{idx}', desc=desc))
 
         # named block cache specs (shape without block_size, same as cache_shapes)
         if len(model_config.block_cache_specs) > 0:
-            for resource in build_block_cache_resources(model_config.block_cache_specs):
-                names.append((resource.desc, resource.name))
+            resources.extend(build_block_cache_resources(model_config.block_cache_specs))
         else:
             # legacy anonymous cache_shapes (shape without block_size)
-            if len(model_config.cache_shapes) > 0:
-                for idx, (shape, dtype) in enumerate(model_config.cache_shapes):
-                    custom_shape = (block_size, *shape)
-                    names.append((CacheDesc(shape=custom_shape, dtype=dtype), f'custom_{idx}'))
+            custom_descs = cls.get_custom_cache_descs(model_config, cache_config)
+            for idx, desc in enumerate(custom_descs):
+                resources.append(CacheResource(name=f'custom_{idx}', desc=desc))
 
-        return names
+        return tuple(resources)
 
     @classmethod
-    def _use_layer_packed_block_caches(cls, model_config: ModelConfig):
+    def _use_layer_row_block_caches(cls, model_config: ModelConfig):
         """Whether named block caches can be allocated by declared layer
         ids."""
         return (model_config is not None and not model_config.use_standard_kv_cache
@@ -382,26 +374,10 @@ class CacheEngine:
     @staticmethod
     def _get_block_cache_layer_maps(model_config: ModelConfig) -> dict[str, dict[int, int]]:
         """Build global-layer-id to local-row maps for named block caches."""
-        if not CacheEngine._use_layer_packed_block_caches(model_config):
+        if not CacheEngine._use_layer_row_block_caches(model_config):
             return {}
         resources = build_block_cache_resources(model_config.block_cache_specs)
         return layer_maps_from_resources(resources)
-
-    @classmethod
-    def _allocate_layer_packed_block_caches(cls, num_blocks: int, model_config: ModelConfig, device: str):
-        """Allocate named block caches by their declared layer ids."""
-        mem_pools = []
-        caches = []
-        resources = build_block_cache_resources(model_config.block_cache_specs)
-        for resource in resources:
-            desc = resource.desc
-            mem_pool = torch.zeros((resource.num_rows, num_blocks, desc.aligned_size),
-                                   dtype=torch.uint8,
-                                   device=device)
-            cache = mem_pool[:, :, :desc.size].view(desc.dtype).view((resource.num_rows, num_blocks, *desc.shape))
-            mem_pools.append(mem_pool)
-            caches.append(cache)
-        return mem_pools, caches
 
     @classmethod
     def get_custom_cache_descs(cls, model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
@@ -438,38 +414,17 @@ class CacheEngine:
         kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
         num_blocks *= kernel_blocks_per_kv
 
-        use_std = model_config.use_standard_kv_cache
-
-        if cls._use_layer_packed_block_caches(model_config):
-            return cls._allocate_layer_packed_block_caches(num_blocks, model_config, device)
-
-        # get all descs
-        cache_descs = []
-        if use_std:
-            k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
-            v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
-            quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
-            cache_descs += [k_cache_desc, v_cache_desc] + quant_cache_descs
-
-        custom_cache_descs = cls.get_custom_cache_descs(model_config, cache_config)
-        cache_descs += custom_cache_descs
-
-        # get mempool size
-        mem_pool_size = 0
-        for desc in cache_descs:
-            mem_pool_size += desc.aligned_size
-
-        # create pool
-        mem_pool = torch.zeros((num_layers, num_blocks, mem_pool_size), dtype=torch.uint8, device=device)
-
-        # slice caches
-        caches = []
-        remain_pool = mem_pool
-        for desc in cache_descs:
-            cache = remain_pool[:, :, :desc.size].view(desc.dtype).view((num_layers, num_blocks, *desc.shape))
-            remain_pool = remain_pool[:, :, desc.aligned_size:]
-            caches.append(cache)
-        return mem_pool, caches
+        resources = cls._get_cache_resources(model_config, cache_config, world_size)
+        if cls._use_layer_row_block_caches(model_config):
+            allocation = allocate_layer_row_block_caches(resources, num_blocks=num_blocks, device=device)
+        else:
+            allocation = allocate_packed_block_caches(resources,
+                                                      num_layers=num_layers,
+                                                      num_blocks=num_blocks,
+                                                      device=device)
+        mem_pools = [pool.tensor for pool in allocation.pools]
+        mem_pool = mem_pools[0] if len(mem_pools) == 1 else mem_pools
+        return mem_pool, list(allocation.caches)
 
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
@@ -483,12 +438,12 @@ class CacheEngine:
             device='cuda',
         )
         self.full_gpu_cache = mem_pool
-        if self._use_layer_packed_block_caches(self.model_config):
+        if self._use_layer_row_block_caches(self.model_config):
             self.local_gpu_cache = []
         else:
             self.local_gpu_cache = list(zip(*caches))
-        self._cache_names = [name for _, name in self._get_cache_desc_names(
-            self.model_config, self.cache_config, self.world_size)]
+        resources = self._get_cache_resources(self.model_config, self.cache_config, self.world_size)
+        self._cache_names = [resource.name for resource in resources]
         self._block_cache_layer_maps = self._get_block_cache_layer_maps(self.model_config)
         self._cache_list = caches
         return self.local_gpu_cache
@@ -503,7 +458,7 @@ class CacheEngine:
             device='cpu',
         )
         self.full_cpu_cache = mem_pool
-        if self._use_layer_packed_block_caches(self.model_config):
+        if self._use_layer_row_block_caches(self.model_config):
             self.local_cpu_cache = []
         else:
             self.local_cpu_cache = list(zip(*caches))
@@ -720,33 +675,10 @@ class StateCacheEngine:
                         state_specs: list[StateCacheSpec] | None = None):
         """Allocate cache implement."""
 
-        state_specs = state_specs or []
-        if (len(state_shapes) == 0 and len(state_specs) == 0) or num_caches == 0:
-            return torch.empty((0, 0), dtype=torch.uint8, device=device), []
-
         resources = build_state_cache_resources(state_shapes, state_specs=state_specs)
-        cache_descs = [resource.desc for resource in resources]
-
-        # get mempool size
-        mem_pool_size = 0
-        for desc in cache_descs:
-            mem_pool_size += desc.aligned_size
-
-        # create pool
-        mem_pool = torch.zeros((num_caches, mem_pool_size), dtype=torch.uint8, device=device)
-
-        # slice caches
-        caches = []
-        remain_pool = mem_pool
-        for resource in resources:
-            desc = resource.desc
-            cache = remain_pool[:, :desc.size].view(desc.dtype).view((num_caches, *desc.shape))
-            if resource.layer_rows is not None:
-                dims = list(range(cache.dim()))
-                cache = cache.permute(1, 0, *dims[2:])
-            remain_pool = remain_pool[:, desc.aligned_size:]
-            caches.append(cache)
-        return mem_pool, caches
+        allocation = allocate_packed_state_caches(resources, num_caches=num_caches, device=device)
+        assert len(allocation.pools) == 1
+        return allocation.pools[0].tensor, list(allocation.caches)
 
     @staticmethod
     def _get_state_cache_layer_maps(state_specs: list[StateCacheSpec]) -> dict[str, dict[int, int]]:
