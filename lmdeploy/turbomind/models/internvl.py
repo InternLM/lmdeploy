@@ -189,9 +189,8 @@ class InternVitVisionModel(VisionModel):
         return _tm.multimodal.InternVitInput(items)
 
     def model(self, pfx):
-        self._build_vision_model(pfx + 'model.vision_tower', pfx + 'model.multi_modal_projector')
-
-    def _build_vision_model(self, vision_pfx, projector_pfx):
+        vision_pfx = pfx + 'model.vision_tower'
+        projector_pfx = pfx + 'model.multi_modal_projector'
         cfg = self._make_root_cfg()
         root = self._restore_dtype(VisionModelBuilder(
             cfg, self._ctx, root_handles=self._root_handles, tp=self._model_tp))
