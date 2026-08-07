@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import numpy as np
@@ -323,6 +324,80 @@ def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
     assert CacheEngine.get_cache_block_size(cache_engine.cache_config, cache_engine.model_config) == mem_pool.numel()
 
 
+def test_cache_engine_swap_uses_each_pool_entry_axis(monkeypatch):
+    cpu_first = torch.arange(6).view(3, 2)
+    cpu_second = torch.arange(12).view(2, 3, 2)
+    gpu_first = torch.zeros((4, 2), dtype=cpu_first.dtype)
+    gpu_second = torch.zeros((2, 4, 2), dtype=cpu_second.dtype)
+
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cpu_allocation = CacheAllocation(
+        pools=(CachePool(cpu_first, entry_axis=0), CachePool(cpu_second, entry_axis=1)),
+        caches=(),
+    )
+    cache_engine.gpu_allocation = CacheAllocation(
+        pools=(CachePool(gpu_first, entry_axis=0), CachePool(gpu_second, entry_axis=1)),
+        caches=(),
+    )
+    cache_engine._cpu_cache_list = []
+    cache_engine._gpu_cache_list = []
+    cache_engine._build_swap_pairs()
+    cache_engine.cache_stream = object()
+    recorded_streams = []
+    cache_engine.events = SimpleNamespace(record=lambda stream: recorded_streams.append(stream))
+    monkeypatch.setattr(torch.cuda, 'stream', lambda stream: nullcontext())
+
+    cache_engine.swap_in({0: 2, 2: 1})
+
+    assert torch.equal(gpu_first[2], cpu_first[0])
+    assert torch.equal(gpu_first[1], cpu_first[2])
+    assert torch.equal(gpu_second[:, 2], cpu_second[:, 0])
+    assert torch.equal(gpu_second[:, 1], cpu_second[:, 2])
+
+    gpu_first[3].fill_(21)
+    gpu_second[:, 3].fill_(22)
+    cache_engine.swap_out({3: 1})
+
+    assert torch.equal(cpu_first[1], gpu_first[3])
+    assert torch.equal(cpu_second[:, 1], gpu_second[:, 3])
+    assert recorded_streams == [cache_engine.cache_stream, cache_engine.cache_stream]
+
+
+def test_cache_engine_legacy_swap_uses_typed_block_views(monkeypatch):
+    cpu_cache = torch.arange(12).view(2, 3, 2)
+    gpu_cache = torch.zeros((2, 4, 2), dtype=cpu_cache.dtype)
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cpu_allocation = None
+    cache_engine.gpu_allocation = None
+    cache_engine._cpu_cache_list = [cpu_cache]
+    cache_engine._gpu_cache_list = [gpu_cache]
+    cache_engine._build_swap_pairs()
+    cache_engine.cache_stream = object()
+    cache_engine.events = SimpleNamespace(record=lambda stream: None)
+    monkeypatch.setattr(torch.cuda, 'stream', lambda stream: nullcontext())
+
+    cache_engine.swap_in({1: 3})
+
+    assert torch.equal(gpu_cache[:, 3], cpu_cache[:, 1])
+
+
+def test_cache_engine_rejects_incompatible_swap_entry_axes():
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cpu_allocation = CacheAllocation(
+        pools=(CachePool(torch.empty((3, 2)), entry_axis=0), ),
+        caches=(),
+    )
+    cache_engine.gpu_allocation = CacheAllocation(
+        pools=(CachePool(torch.empty((2, 4)), entry_axis=1), ),
+        caches=(),
+    )
+    cache_engine._cpu_cache_list = []
+    cache_engine._gpu_cache_list = []
+
+    with pytest.raises(RuntimeError, match='entry axes differ'):
+        cache_engine._build_swap_pairs()
+
+
 def test_layered_state_cache_specs_do_not_require_total_layer_count():
     state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 9])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
@@ -361,24 +436,41 @@ def test_state_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
     assert cache_engine.allocation is None
     assert cache_engine.mem_pool is mem_pool
     assert cache_engine.state_caches is caches
+    assert cache_engine._state_entries[0][0] is caches[0]
+    assert cache_engine._state_entries[0][1] == 0
+
+    caches[0].fill_(1)
+    cache_engine.init_caches(torch.tensor([1]), torch.tensor([True]))
+    assert torch.count_nonzero(caches[0][1]) == 0
+    caches[0][0].fill_(3)
+    cache_engine.copy_caches(0, 1)
+    assert torch.equal(caches[0][1], caches[0][0])
+
     assert StateCacheEngine.get_cache_state_size(cache_config.states_shapes) == mem_pool.numel()
 
 
-def test_state_cache_engine_rejects_multi_pool_layout_before_operations_are_migrated(monkeypatch):
-    allocation = CacheAllocation(
-        pools=(
-            CachePool(torch.empty((2, 1), dtype=torch.uint8), entry_axis=0),
-            CachePool(torch.empty((2, 1), dtype=torch.uint8), entry_axis=0),
-        ),
-        caches=(),
+def _make_multi_pool_state_allocation(num_caches: int, device: torch.device | str = 'cpu'):
+    first = torch.zeros((num_caches, 2), dtype=torch.float32, device=device)
+    second = torch.zeros((3, num_caches, 2), dtype=torch.float16, device=device)
+    return CacheAllocation(
+        pools=(CachePool(first, entry_axis=0), CachePool(second, entry_axis=1)),
+        caches=(first, second),
     )
-    layout = SimpleNamespace(allocate=lambda **kwargs: allocation)
+
+
+def test_state_cache_engine_accepts_multi_pool_layout(monkeypatch):
+    layout = SimpleNamespace(
+        allocate=lambda num_caches, device: _make_multi_pool_state_allocation(num_caches, device),
+    )
     cache_backend = SimpleNamespace(build_state_layout=lambda resources: layout)
     ops_backend = SimpleNamespace(get_cache_backend=lambda: cache_backend)
     monkeypatch.setattr(cache_engine_module, 'get_backend', lambda: ops_backend)
 
-    with pytest.raises(RuntimeError, match='requires one owning pool'):
-        StateCacheEngine.allocate_caches(num_caches=2, state_shapes=[], device='cpu')
+    allocation = StateCacheEngine.allocate_caches(num_caches=2, state_shapes=[], device='cpu')
+
+    assert [pool.entry_axis for pool in allocation.pools] == [0, 1]
+    assert allocation.nbytes == 2 * (2 * 4 + 3 * 2 * 2)
+    assert StateCacheEngine.get_cache_state_size([]) == 2 * 4 + 3 * 2 * 2
 
 
 def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
@@ -459,7 +551,54 @@ def _make_state_cache_engine(num_caches: int = 4):
         device='cpu',
     )
     cache_engine.mem_pool, cache_engine._state_caches = cache_engine.allocation
+    cache_engine._state_entries = StateCacheEngine._build_state_entries(cache_engine.allocation,
+                                                                         cache_engine._state_caches)
     return cache_engine
+
+
+def _make_multi_pool_state_cache_engine(num_caches: int = 4):
+    cache_engine = object.__new__(StateCacheEngine)
+    cache_engine.cache_config = CacheConfig(max_batches=1,
+                                            block_size=64,
+                                            num_cpu_blocks=0,
+                                            num_gpu_blocks=0,
+                                            num_state_caches=num_caches,
+                                            states_shapes=[])
+    cache_engine.allocation = _make_multi_pool_state_allocation(num_caches)
+    cache_engine.mem_pool, cache_engine._state_caches = cache_engine.allocation
+    cache_engine._state_entries = StateCacheEngine._build_state_entries(cache_engine.allocation,
+                                                                         cache_engine._state_caches)
+    return cache_engine
+
+
+def test_state_cache_engine_init_caches_uses_each_pool_entry_axis():
+    cache_engine = _make_multi_pool_state_cache_engine()
+    first, second = cache_engine.state_caches
+    first.fill_(1)
+    second.fill_(1)
+
+    cache_engine.init_caches(torch.tensor([1, 3]), torch.tensor([True, False]))
+
+    assert torch.count_nonzero(first[1]) == 0
+    assert torch.count_nonzero(second[:, 1]) == 0
+    assert torch.all(first[3] == 1)
+    assert torch.all(second[:, 3] == 1)
+
+
+def test_state_cache_engine_copy_caches_uses_each_pool_entry_axis():
+    cache_engine = _make_multi_pool_state_cache_engine()
+    first, second = cache_engine.state_caches
+    first[0].fill_(3)
+    first[1].fill_(5)
+    second[:, 0].fill_(7)
+    second[:, 1].fill_(9)
+
+    cache_engine.copy_caches((1, 0), (3, 2))
+
+    assert torch.equal(first[2], first[0])
+    assert torch.equal(first[3], first[1])
+    assert torch.equal(second[:, 2], second[:, 0])
+    assert torch.equal(second[:, 3], second[:, 1])
 
 
 def test_state_cache_engine_copy_caches_copies_all_state_views():

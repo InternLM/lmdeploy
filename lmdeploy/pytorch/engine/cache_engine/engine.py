@@ -185,6 +185,7 @@ class CacheEngine:
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
+        self._build_swap_pairs()
 
         self.migration_backend_impl: MigrationBackendImpl | None = None
 
@@ -441,6 +442,7 @@ class CacheEngine:
         )
         self.gpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_gpu_cache = mem_pool
+        self._gpu_cache_list = caches
         if self._uses_layer_scoped_block_caches(self.model_config):
             self.local_gpu_cache = []
         else:
@@ -448,7 +450,7 @@ class CacheEngine:
         resources = self._get_cache_resources(self.model_config, self.cache_config, self.world_size)
         self._cache_names = [resource.name for resource in resources]
         self._block_cache_layer_maps = self._get_block_cache_layer_maps(self.model_config)
-        self._cache_list = caches
+        self._cache_list = self._gpu_cache_list
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
@@ -462,6 +464,7 @@ class CacheEngine:
         )
         self.cpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_cpu_cache = mem_pool
+        self._cpu_cache_list = caches
         if self._uses_layer_scoped_block_caches(self.model_config):
             self.local_cpu_cache = []
         else:
@@ -520,30 +523,66 @@ class CacheEngine:
         """Return memory size for one or many allocation pools."""
         return sum(pool.numel() * pool.element_size() for pool in CacheEngine._as_mem_pools(mem_pool))
 
+    def _build_swap_pairs(self):
+        """Resolve compatible CPU-to-device cache entries once at build
+        time."""
+        cpu_allocation = self.cpu_allocation
+        gpu_allocation = self.gpu_allocation
+        if (cpu_allocation is None) != (gpu_allocation is None):
+            raise RuntimeError('CPU and device caches must use the same allocation contract.')
+
+        if cpu_allocation is not None:
+            cpu_entries = [(pool.tensor, pool.entry_axis) for pool in cpu_allocation.pools]
+            gpu_entries = [(pool.tensor, pool.entry_axis) for pool in gpu_allocation.pools]
+        else:
+            # Existing dlinfer patches return raw owning envelopes whose axes do
+            # not describe cache blocks. Their typed resource views retain the
+            # legacy [layer, block, ...] contract, so use those views directly.
+            cpu_entries = [(cache, 1) for cache in self._cpu_cache_list]
+            gpu_entries = [(cache, 1) for cache in self._gpu_cache_list]
+
+        if len(cpu_entries) != len(gpu_entries):
+            raise RuntimeError('CPU and device cache layouts must contain the same number of entries.')
+
+        swap_in_pairs = []
+        for idx, ((cpu_cache, cpu_axis), (gpu_cache, gpu_axis)) in enumerate(zip(cpu_entries, gpu_entries)):
+            if cpu_axis != gpu_axis:
+                raise RuntimeError(f'CPU and device cache entry axes differ for pool {idx}.')
+            if cpu_cache.dtype != gpu_cache.dtype:
+                raise RuntimeError(f'CPU and device cache dtypes differ for pool {idx}.')
+            cpu_payload_shape = cpu_cache.shape[:cpu_axis] + cpu_cache.shape[cpu_axis + 1:]
+            gpu_payload_shape = gpu_cache.shape[:gpu_axis] + gpu_cache.shape[gpu_axis + 1:]
+            if cpu_payload_shape != gpu_payload_shape:
+                raise RuntimeError(f'CPU and device cache payload shapes differ for pool {idx}.')
+            swap_in_pairs.append((cpu_cache, gpu_cache, cpu_axis))
+
+        self._swap_in_pairs = tuple(swap_in_pairs)
+        self._swap_out_pairs = tuple((dst, src, axis) for src, dst, axis in swap_in_pairs)
+
     @torch.inference_mode()
-    def _swap(self, src: torch.Tensor | list[torch.Tensor], dst: torch.Tensor | list[torch.Tensor],
+    def _swap(self, cache_pairs: tuple[tuple[torch.Tensor, torch.Tensor, int], ...],
               src_to_dst: dict[int, int]):
         """Move caches from src memory to dst memory.
 
         Args:
-            src (list[KVCache]): Source cache.
-            dst (list[KVCache]): Destination cache.
+            cache_pairs: Source cache, destination cache, and entry axis.
             src_to_dst (dict[int, int]): Map between src and dst.
         """
-        src = self._as_mem_pools(src)
-        dst = self._as_mem_pools(dst)
+        if not cache_pairs or not src_to_dst:
+            return
+
         BLOCKS_PER_COPY = 2
         num_copy = len(src_to_dst)
         src_idx, dst_idx = list(zip(*src_to_dst.items()))
-        src_idx = torch.tensor(src_idx, device=src[0].device)
-        dst_idx = torch.tensor(dst_idx, device=dst[0].device)
+        src_idx = torch.tensor(src_idx, device=cache_pairs[0][0].device)
+        dst_idx = torch.tensor(dst_idx, device=cache_pairs[0][1].device)
         with torch.cuda.stream(self.cache_stream):
-            for scache, dcache in zip(src, dst):
+            for scache, dcache, entry_axis in cache_pairs:
                 for idx in range(0, num_copy, BLOCKS_PER_COPY):
                     sidx = src_idx[idx:idx + BLOCKS_PER_COPY]
                     didx = dst_idx[idx:idx + BLOCKS_PER_COPY]
-                    sdata = scache[:, sidx]
-                    dcache.index_copy_(1, didx, sdata.to(dcache.device))
+                    sdata = scache.index_select(entry_axis, sidx)
+                    dcache.index_copy_(entry_axis, didx, sdata.to(dcache.device))
             self.events.record(stream=self.cache_stream)
 
     def swap_in(self, src_to_dst: dict[int, int]) -> None:
@@ -552,7 +591,7 @@ class CacheEngine:
         Args:
             src_to_dst (dict[int, int]): Map between src and dst.
         """
-        self._swap(self.full_cpu_cache, self.full_gpu_cache, src_to_dst)
+        self._swap(self._swap_in_pairs, src_to_dst)
 
     def swap_out(self, src_to_dst: dict[int, int]) -> None:
         """Move cache from Device to Host.
@@ -560,7 +599,7 @@ class CacheEngine:
         Args:
             src_to_dst (dict[int, int]): Map between src and dst.
         """
-        self._swap(self.full_gpu_cache, self.full_cpu_cache, src_to_dst)
+        self._swap(self._swap_out_pairs, src_to_dst)
 
     @classmethod
     def get_cache_block_size(cls, cache_config: CacheConfig, model_config: ModelConfig, world_size: int = 1) -> int:
@@ -676,6 +715,7 @@ class StateCacheEngine:
             allocate_kwargs['state_specs'] = state_specs
         result = self.allocate_caches(**allocate_kwargs)
         self.allocation, self.mem_pool, self._state_caches = _unpack_cache_allocation(result)
+        self._state_entries = self._build_state_entries(self.allocation, self._state_caches)
 
     @staticmethod
     def allocate_caches(num_caches: int,
@@ -687,10 +727,19 @@ class StateCacheEngine:
         resources = build_state_cache_resources(state_shapes, state_specs=state_specs)
         cache_backend = get_backend().get_cache_backend()
         layout = cache_backend.build_state_layout(resources)
-        allocation = layout.allocate(num_caches=num_caches, device=device)
-        if len(allocation.pools) != 1:
-            raise RuntimeError('StateCacheEngine requires one owning pool until state operations are allocation-aware.')
-        return allocation
+        return layout.allocate(num_caches=num_caches, device=device)
+
+    @staticmethod
+    def _build_state_entries(allocation: CacheAllocation | None,
+                             state_caches: Sequence[torch.Tensor]) -> tuple[tuple[torch.Tensor, int], ...]:
+        """Resolve tensors and state-slot axes used by runtime operations."""
+        if allocation is not None:
+            return tuple((pool.tensor, pool.entry_axis) for pool in allocation.pools)
+
+        # The pinned dlinfer tuple contract allocates every state resource as a
+        # contiguous [state_slot, ...] tensor. Keep this explicit compatibility
+        # path separate from native owning-pool metadata.
+        return tuple((cache, 0) for cache in state_caches)
 
     @staticmethod
     def _get_state_cache_layer_maps(state_specs: list[StateCacheSpec]) -> dict[str, dict[int, int]]:
@@ -754,8 +803,10 @@ class StateCacheEngine:
         # get mask of all caches so we can perform inplace mask fill
         cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
         cache_masks.index_copy_(0, idx, mask)
-        reshaped_mask = cache_masks.view((-1, ) + (1, ) * (self.mem_pool.dim() - 1))
-        self.mem_pool.masked_fill_(reshaped_mask, 0)
+        for state_cache, entry_axis in self._state_entries:
+            mask_shape = [1] * state_cache.dim()
+            mask_shape[entry_axis] = num_caches
+            state_cache.masked_fill_(cache_masks.view(mask_shape), 0)
 
     @staticmethod
     def _index_list(idx: int | Sequence[int]):
@@ -818,7 +869,7 @@ class StateCacheEngine:
             raise ValueError('src_idx and dst_idx must have the same number of elements.')
         if len(src_list) == 0:
             return
-        num_caches = self.mem_pool.size(0)
+        num_caches = self.cache_config.num_state_caches
         self._validate_index_bounds(src_list, num_caches)
         self._validate_index_bounds(dst_list, num_caches)
         dst_set = set(dst_list)
@@ -827,8 +878,9 @@ class StateCacheEngine:
         if not set(src_list).isdisjoint(dst_set):
             raise ValueError('src_idx and dst_idx must not overlap for stream-ordered state copies.')
 
-        for src, dst, length in self._copy_ranges(src_list, dst_list):
-            if length == 1:
-                self.mem_pool[dst].copy_(self.mem_pool[src], non_blocking=True)
-            else:
-                self.mem_pool[dst:dst + length].copy_(self.mem_pool[src:src + length], non_blocking=True)
+        copy_ranges = tuple(self._copy_ranges(src_list, dst_list))
+        for state_cache, entry_axis in self._state_entries:
+            for src, dst, length in copy_ranges:
+                src_cache = state_cache.narrow(entry_axis, src, length)
+                dst_cache = state_cache.narrow(entry_axis, dst, length)
+                dst_cache.copy_(src_cache, non_blocking=True)
