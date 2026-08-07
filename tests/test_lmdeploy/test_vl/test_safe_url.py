@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from lmdeploy.vl.media.connection import _is_safe_url, _load_http_url
+from lmdeploy.vl.media.connection import _is_safe_url, _load_data_url, _load_http_url
 
 
 @pytest.mark.parametrize(
@@ -177,3 +177,25 @@ def test_load_http_url_blocks_unsafe_url_after_redirect(mock_safe, mock_get):
                        allowed_media_domains=['example.com', '127.0.0.1'])
 
     assert mock_get.call_count == 1
+
+
+@pytest.mark.parametrize(
+    'url',
+    [
+        'data:image/png',  # missing comma + payload
+        'data:,',  # comma present but empty payload
+        'data:image/png;base64',  # missing comma + payload
+    ])
+def test_load_data_url_rejects_malformed(url):
+    media_io = MagicMock()
+    url_spec = urlparse(url)
+    with pytest.raises(ValueError, match='Malformed data URL'):
+        _load_data_url(url_spec, media_io)
+
+
+def test_load_data_url_loads_well_formed_base64():
+    media_io = MagicMock()
+    media_io.load_base64.return_value = 'loaded'
+    url_spec = urlparse('data:image/jpeg;base64,XXXX')
+    assert _load_data_url(url_spec, media_io) == 'loaded'
+    media_io.load_base64.assert_called_once_with('image/jpeg', 'XXXX')
