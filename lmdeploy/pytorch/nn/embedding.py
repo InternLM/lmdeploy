@@ -88,8 +88,8 @@ class ParallelEmbedding(nn.Module):
 
         loaded_weight = loaded_weight.narrow(0, self.start_index, shard_size)
         loaded_weight = loaded_weight.to(param.device)
-        param.data.zero_()
         param[:loaded_weight.shape[0]].data.copy_(loaded_weight)
+        param[loaded_weight.shape[0]:].data.fill_(0)
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
