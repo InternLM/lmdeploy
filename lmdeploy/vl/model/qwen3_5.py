@@ -12,9 +12,10 @@ from lmdeploy.vl.model.utils import disable_logging
 logger = get_logger('lmdeploy')
 
 _INTERN_S2_ARCHS = [
+    'InternS2MobiusForConditionalGeneration',
+    'InternS2MobiusForCausalLM',
     'InternS2PreviewForConditionalGeneration',
     'InternS2PreviewForCausalLM',
-    'InternS2MobiusForConditionalGeneration',
 ]
 
 
@@ -165,6 +166,8 @@ class Qwen3_5Model(Qwen3VLModel):
                                              no_split_module_classes=[
                                                 'Qwen3_5VisionBlock',
                                                 'Qwen3_5MoeVisionBlock',
+                                                'InternS2MobiusDecoderLayer',
+                                                'InternS2MobiusVisionBlock',
                                                 'InternS2PreviewDecoderLayer',
                                                 'InternS2PreviewVisionBlock',
                                             ],
