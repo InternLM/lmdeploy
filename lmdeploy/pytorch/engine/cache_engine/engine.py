@@ -20,8 +20,8 @@ from lmdeploy.pytorch.disagg.messages import (
 )
 from lmdeploy.utils import get_logger
 
-from ...messages import QuantPolicy
-from ..config import CacheConfig, ModelConfig, StateCacheSpec
+from ....messages import QuantPolicy
+from ...config import CacheConfig, ModelConfig, StateCacheSpec
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
 
