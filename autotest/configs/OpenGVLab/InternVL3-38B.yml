@@ -1,7 +1,9 @@
-# HF model id: Qwen/Qwen3-32B
+# HF model id: OpenGVLab/InternVL3-38B
 
 a100:
-- model_type: chat
+- model_type:
+  - chat
+  - vl
   engine_config:
     tp: 2
   backends:
@@ -14,7 +16,6 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
   interface:
     pytorch:
       suites:
@@ -30,14 +31,10 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-  quantization:
-    turbomind:
-    - awq
-    - kvint8
-    pytorch:
-    - kvint8
 h:
-- model_type: chat
+- model_type:
+  - chat
+  - vl
   engine_config:
     tp: 2
   backends:
@@ -50,7 +47,6 @@ h:
     - nccl
   test_coverage:
   - func
-  - quantization
   interface:
     pytorch:
       suites:
@@ -66,21 +62,3 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-  quantization:
-    turbomind:
-    - awq
-    - kvint8
-    pytorch:
-    - kvint8
-ascend:
-- model_type: chat
-  engine_config:
-    tp: 4
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - benchmark
-  - func
-  - prefix_cache

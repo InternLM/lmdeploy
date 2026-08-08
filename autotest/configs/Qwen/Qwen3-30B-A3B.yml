@@ -20,6 +20,23 @@ a100:
   - func
   - longtext_benchmark
   - prefix_cache
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - experts
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: null
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8
@@ -47,6 +64,23 @@ h:
   - func
   - longtext_benchmark
   - prefix_cache
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - experts
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: null
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8
