@@ -49,6 +49,27 @@ def _mmengine_lazy_allow_lazyattr_call():
         cls.__call__ = orig
 
 
+def _sanitize_cfg_for_dump(cfg):
+    """Drop non-serializable top-level values that break ``Config.dump()``.
+
+    Lazy-import configs may bind real modules (e.g. ``copy``, ``os``) after
+    ``LazyAttr`` is forced callable; dumping them yields invalid Python like
+    ``copy=<module 'copy' ...>``, and opencompass then fails with KeyError
+    ``datasets`` (or a SyntaxError) when reloading the temp config.
+    """
+    import types
+
+    cfg_dict = getattr(cfg, '_cfg_dict', None)
+    if cfg_dict is None:
+        return
+    for key in list(cfg_dict.keys()):
+        value = cfg_dict[key]
+        if isinstance(value, types.ModuleType):
+            cfg_dict.pop(key, None)
+        elif key in ('read_base', 'ds', 'split', 'i', 'x', 'item', 'tmp'):
+            cfg_dict.pop(key, None)
+
+
 def _sync_ruler_tokenizer_model(cfg, model_path):
     tokenizer = os.environ.get('TOKENIZER_MODEL', model_path)
     if not getattr(cfg, 'datasets', None):
@@ -68,6 +89,18 @@ def _should_skip_num_workers_override(eval_config_name: str, case_name: str) -> 
     if _is_fp8_case(case_name):
         return True
     return False
+
+
+def _dataset_size_cache_path(eval_path: str, eval_config_name: str) -> str:
+    """Cache path for ``NumWorkerPartitioner`` dataset sizes.
+
+    Uses the parent of ``eval_path`` / ``REPORT_DIR`` so suites under the same
+    evaluation report root share one ``dataset_size_*.json``.
+    """
+    report_dir = (eval_path or os.environ.get('REPORT_DIR') or '.').rstrip('/') or '.'
+    root = os.path.dirname(report_dir) or '.'
+    dataset_type = (eval_config_name or os.environ.get('CHAT_TYPE') or 'default').rstrip('/')
+    return f'{root}/dataset_size_{dataset_type}.json'
 
 
 def write_to_summary(case_name, result, msg, metrics, result_dir):
@@ -272,6 +305,12 @@ def eval_test(model_path,
                     cfg.infer['partitioner']['num_worker'] = extra_config.get(
                         'max-num-workers', 8)
 
+                # Persist dataset-size cache under eval_path (opencompass NumWorkerPartitioner).
+                cfg.infer['partitioner']['dataset_size_path'] = _dataset_size_cache_path(
+                    eval_path, eval_config_name)
+                print(f'dataset_size_path={cfg.infer["partitioner"]["dataset_size_path"]}')
+
+                _sanitize_cfg_for_dump(cfg)
                 cfg.dump(temp_config_path)
                 print(f'Modified config saved to: {temp_config_path}')
             elif test_type == 'eval':
@@ -314,6 +353,7 @@ def eval_test(model_path,
 
                 _sync_ruler_tokenizer_model(cfg, model_path)
 
+                _sanitize_cfg_for_dump(cfg)
                 cfg.dump(temp_config_path)
                 print(f'Modified config for eval stage saved to: {temp_config_path}')
 
