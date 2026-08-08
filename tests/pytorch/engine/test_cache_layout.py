@@ -21,6 +21,7 @@ from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
 from lmdeploy.pytorch.engine.cache_engine.schema import (
     CacheDesc,
     CacheResource,
+    CacheTensorContract,
     LayerRowMap,
     build_state_cache_resources,
 )
@@ -176,6 +177,18 @@ def test_default_cache_backend_selects_layout_from_resource_membership():
     assert isinstance(block_layout, PackedBlockCacheLayout)
     assert isinstance(layer_layout, LayerRowBlockCacheLayout)
     assert isinstance(state_layout, PackedStateCacheLayout)
+
+
+def test_default_cache_backend_rejects_unimplemented_contiguous_contract():
+    contiguous = CacheResource(
+        'index',
+        CacheDesc(shape=[3], dtype=torch.float32),
+        layer_rows=LayerRowMap.build('index', [1]),
+        tensor_contract=CacheTensorContract(per_layer_contiguous=True),
+    )
+
+    with pytest.raises(ValueError, match='per-layer contiguous'):
+        DefaultCacheBackend.build_block_layout((contiguous, ), num_layers=2)
 
 
 def test_dlinfer_block_layout_owns_contiguous_resource_tensors():

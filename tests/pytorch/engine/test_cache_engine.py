@@ -16,7 +16,13 @@ from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, NamedCacheView, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool
 from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
-from lmdeploy.pytorch.engine.cache_engine.schema import CacheDesc, CacheResource
+from lmdeploy.pytorch.engine.cache_engine.schema import (
+    BlockCacheGeometry,
+    BlockCacheRequest,
+    CacheDesc,
+    CacheResource,
+    ScopedBlockCacheRequest,
+)
 
 
 def _make_model_config(**kwargs):
@@ -94,6 +100,33 @@ def test_fp8_sparse_mla_cache_layout():
     assert v_desc.dtype == torch.float8_e4m3fn
 
 
+def test_retained_plan_uses_finalized_sparse_mla_dtype():
+    model_config = ModelConfig(hidden_size=6144,
+                               num_layers=2,
+                               num_attention_heads=64,
+                               num_key_value_heads=1,
+                               bos_token_id=None,
+                               eos_token_id=[1],
+                               head_dim=576,
+                               k_head_dim=576,
+                               v_head_dim=0,
+                               dtype=torch.bfloat16,
+                               use_flash_mla=True,
+                               mla_kv_cache_dtype='bfloat16',
+                               mla_index_topk=2048)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               quant_policy=QuantPolicy.FP8)
+
+    plan = CacheEngine.build_cache_plan(model_config, cache_config, world_size=1)
+
+    assert model_config.mla_kv_cache_dtype == 'fp8_ds_mla'
+    assert plan.resources[0].desc.dtype == torch.float8_e4m3fn
+
+
 @pytest.mark.parametrize('quant_policy',
                          [QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT])
 def test_sparse_mla_rejects_other_cache_policies(quant_policy):
@@ -117,6 +150,95 @@ def test_allocate_caches_requires_block_size_divisible_by_kernel_block_size():
                                     cache_config=cache_config,
                                     world_size=1,
                                     device='meta')
+
+
+def test_build_cache_plan_collects_requests_from_built_model_provider():
+    model_config = _make_model_config(use_standard_kv_cache=False,
+                                      block_cache_specs=[
+                                          BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
+                                      ])
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=128,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    geometries = []
+
+    def request_provider(geometry: BlockCacheGeometry):
+        geometries.append(geometry)
+        request = BlockCacheRequest('operator_cache', (64, 5), torch.float16)
+        return [
+            ScopedBlockCacheRequest(request, layer_id=3),
+            ScopedBlockCacheRequest(request, layer_id=1),
+        ]
+
+    plan = CacheEngine.build_cache_plan(model_config,
+                                        cache_config,
+                                        world_size=1,
+                                        request_provider=request_provider)
+
+    assert geometries == [BlockCacheGeometry(block_size=128, kernel_block_size=64)]
+    assert plan.cache_names == ('operator_cache', )
+    assert plan.layer_maps == {'operator_cache': {3: 0, 1: 1}}
+    assert plan.kernel_blocks_per_logical_block == 2
+
+
+def test_empty_built_model_provider_is_authoritative_for_custom_caches():
+    model_config = _make_model_config(use_standard_kv_cache=False,
+                                      block_cache_specs=[
+                                          BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
+                                      ])
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+
+    plan = CacheEngine.build_cache_plan(model_config,
+                                        cache_config,
+                                        world_size=1,
+                                        request_provider=lambda geometry: ())
+
+    assert plan.cache_names == ()
+
+
+def test_built_model_provider_rejects_patched_allocator(monkeypatch):
+    model_config = _make_model_config(use_standard_kv_cache=False)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+
+    @classmethod
+    def legacy_allocate(cls, **kwargs):
+        raise AssertionError('the patched allocator must not be called')
+
+    monkeypatch.setattr(CacheEngine, 'allocate_caches', legacy_allocate)
+
+    with pytest.raises(RuntimeError, match='providers require the native'):
+        CacheEngine.build_cache_plan(model_config,
+                                     cache_config,
+                                     world_size=1,
+                                     request_provider=lambda geometry: ())
+
+
+def test_build_cache_plan_rejects_provider_requests_before_mixed_access_lands():
+    model_config = _make_model_config(use_standard_kv_cache=True)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    request = BlockCacheRequest('operator_cache', (64, 5), torch.float16)
+
+    with pytest.raises(ValueError, match='cannot coexist with standard KV'):
+        CacheEngine.build_cache_plan(
+            model_config,
+            cache_config,
+            world_size=1,
+            request_provider=lambda geometry: [ScopedBlockCacheRequest(request, layer_id=1)],
+        )
 
 
 def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():

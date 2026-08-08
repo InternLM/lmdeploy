@@ -82,6 +82,7 @@ class MemDecodeAgent:
         self.model_config = memdecode_config.memory_model_config
         self.cache_config = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
         self.model = None
         self.fusion = None
@@ -147,6 +148,24 @@ class MemDecodeAgent:
                                                     backend_config=self.backend_config,
                                                     device=self.device)
 
+    def build_cache_plan(self, cache_config: CacheConfig) -> int:
+        """Build and retain the rank-local memory-model cache plan."""
+        with self.memory_context():
+            tp = get_dist_manager().current_context().dist_config.attn_tp
+            request_provider = getattr(self.model, 'get_block_cache_requests', None)
+            self.block_cache_plan = CacheEngine.build_cache_plan(
+                self.model_config,
+                cache_config,
+                tp,
+                request_provider=request_provider,
+            )
+            return CacheEngine.get_cache_block_size(
+                cache_config,
+                self.model_config,
+                tp,
+                block_cache_plan=self.block_cache_plan,
+            )
+
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         with self.memory_context():
@@ -160,6 +179,7 @@ class MemDecodeAgent:
                 tp_rank=dist_ctx.attn_tp_group.rank,
                 world_size=tp,
                 cache_stream=cache_stream,
+                block_cache_plan=self.block_cache_plan,
             )
             if len(self.model_config.states_shapes) > 0:
                 state_cache_config = replace(
@@ -223,6 +243,7 @@ class MemDecodeAgent:
         """Release memory model resources."""
         self.model = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
 
 

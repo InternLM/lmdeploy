@@ -115,6 +115,52 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
     assert events == ['build_step_inputs', 'reset_spec']
 
 
+def test_model_agent_builds_and_retains_worker_local_cache_plans():
+    from lmdeploy.pytorch.config import CacheConfig, ModelConfig
+    from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest, ScopedBlockCacheRequest
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    request = BlockCacheRequest('operator_cache', (64, 3), torch.float16)
+
+    class _PatchedModel:
+
+        @staticmethod
+        def get_block_cache_requests(geometry):
+            assert geometry.block_size == 128
+            assert geometry.kernel_block_size == 64
+            return [
+                ScopedBlockCacheRequest(request, layer_id=3),
+                ScopedBlockCacheRequest(request, layer_id=1),
+            ]
+
+    model_config = ModelConfig(hidden_size=16,
+                               num_layers=4,
+                               num_attention_heads=2,
+                               num_key_value_heads=2,
+                               bos_token_id=1,
+                               eos_token_id=[2],
+                               head_dim=8,
+                               use_standard_kv_cache=False)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=128,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.all_context = nullcontext
+    agent.dist_config = SimpleNamespace(attn_tp=1)
+    agent.patched_model = _PatchedModel()
+    agent.model_config = model_config
+    agent.spec_agent = SimpleNamespace(build_cache_plan=lambda config: 128)
+    agent.memdecode_agent = SimpleNamespace(build_cache_plan=lambda config: 64)
+
+    sizes = agent.build_cache_plans(cache_config, spec_cache_config=object())
+
+    assert sizes == (2048, 128, 64)
+    assert agent.block_cache_plan.cache_names == ('operator_cache', )
+    assert agent.block_cache_plan.layer_maps == {'operator_cache': {3: 0, 1: 1}}
+
+
 def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext

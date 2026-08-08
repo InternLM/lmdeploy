@@ -8,9 +8,10 @@ from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
-from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
+from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _WorkerCachePlanSizes
+from lmdeploy.pytorch.engine.executor.uni_executor import UniExecutor
 
 
 class _RecordingExecutor(ExecutorBase):
@@ -91,6 +92,11 @@ def test_get_num_gpu_blocks_with_spec_cache():
 def test_get_num_gpu_blocks_rejects_empty_cache_block():
     with pytest.raises(RuntimeError, match='No enough gpu memory for kv cache.'):
         ExecutorBase._get_num_gpu_blocks(available_mem=4096, cache_block_size=0)
+
+
+def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
+    with pytest.raises(ValueError, match='same worker ranks'):
+        ExecutorBase._get_min_num_gpu_blocks([4096, 4096], [256])
 
 
 def test_sync_spec_cache_block_size_updates_kernel_block_size():
@@ -216,74 +222,36 @@ def test_executor_disables_prefix_cache_with_pd_role():
     assert not cache_config.enable_prefix_caching
 
 
-def test_get_rank_cache_block_sizes_only_charges_spec_rank():
-    executor = object.__new__(ExecutorBase)
-    executor.dist_config = SimpleNamespace(attn_tp=2)
+def test_get_rank_cache_block_sizes_uses_worker_local_plans():
+    plans = [
+        _WorkerCachePlanSizes(target=256, spec=128),
+        _WorkerCachePlanSizes(target=256),
+        _WorkerCachePlanSizes(target=192, spec=96, memory=64),
+    ]
 
-    cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
+    cache_block_sizes = ExecutorBase._get_rank_cache_block_sizes(plans)
 
-    assert cache_block_sizes == [384, 256, 384, 256]
-
-
-def test_get_rank_cache_block_sizes_charges_all_ranks_when_spec_tp_matches_target():
-    executor = object.__new__(ExecutorBase)
-    executor.dist_config = SimpleNamespace(attn_tp=4)
-    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
-
-    cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
-
-    assert cache_block_sizes == [384, 384, 384, 384]
+    assert cache_block_sizes == [384, 256, 352]
 
 
-def test_get_cache_block_sizes_uses_spec_tp(monkeypatch):
-    executor = object.__new__(ExecutorBase)
-    executor.dist_config = SimpleNamespace(attn_tp=4)
-    executor.cache_config = object()
-    executor.model_config = object()
-    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
-    executor.misc_config = SimpleNamespace(memdecode_config=None)
+def test_uni_executor_prepares_named_worker_cache_plan_sizes():
+    executor = object.__new__(UniExecutor)
+    cache_config = object()
     spec_cache_config = object()
-    spec_model_config = object()
-    world_sizes = []
-
-    def fake_get_cache_block_size(cache_config, model_config, world_size):
-        world_sizes.append(world_size)
-        return 256 if model_config is executor.model_config else 128
-
-    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
-
-    cache_block_size = executor._get_cache_block_sizes(spec_cache_config, spec_model_config)
-
-    assert cache_block_size == _CacheBlockSize(target=256, spec=128)
-    assert world_sizes == [4, 4]
-
-
-def test_get_cache_block_sizes_includes_nested_memdecode_memory_model(monkeypatch):
-    executor = object.__new__(ExecutorBase)
-    memory_model_config = object()
-    executor.dist_config = SimpleNamespace(attn_tp=8)
-    executor.cache_config = object()
-    executor.model_config = object()
-    executor.misc_config = SimpleNamespace(
-        memdecode_config=SimpleNamespace(memory_model_config=memory_model_config))
-    executor.specdecode_config = None
     calls = []
 
-    def fake_get_cache_block_size(cache_config, model_config, world_size):
-        calls.append((cache_config, model_config, world_size))
-        if model_config is memory_model_config:
-            return 64
-        return 256
+    def build_cache_plans(received_cache_config, received_spec_cache_config):
+        calls.append((received_cache_config, received_spec_cache_config))
+        return 256, 128, 64
 
-    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
+    executor.model_agent = SimpleNamespace(build_cache_plans=build_cache_plans)
 
-    cache_block_size = executor._get_cache_block_sizes(None, None)
+    cache_block_sizes = executor._prepare_worker_cache_plans(cache_config, spec_cache_config)
 
-    assert cache_block_size == _CacheBlockSize(target=256, memory=64)
-    assert calls == [
-        (executor.cache_config, executor.model_config, 8),
-        (executor.cache_config, memory_model_config, 8),
+    assert cache_block_sizes == [
+        _WorkerCachePlanSizes(target=256, spec=128, memory=64),
     ]
+    assert calls == [(cache_config, spec_cache_config)]
 
 
 def test_validate_memdecode_configs_rejects_specdecode():
@@ -317,7 +285,11 @@ def test_update_num_gpu_blocks_can_be_limited_by_non_spec_rank():
                                         cache_max_entry_count=1.0)
     spec_cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
 
-    executor._update_num_gpu_blocks([2048, 768], _CacheBlockSize(target=256, spec=256), spec_cache_config)
+    cache_block_sizes = [
+        _WorkerCachePlanSizes(target=256, spec=256),
+        _WorkerCachePlanSizes(target=256),
+    ]
+    executor._update_num_gpu_blocks([2048, 768], cache_block_sizes, spec_cache_config)
 
     assert executor.cache_config.num_gpu_blocks == 3
     assert spec_cache_config.num_gpu_blocks == 3

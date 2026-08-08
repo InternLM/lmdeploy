@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from operator import index as as_index
 
 import torch
@@ -23,9 +23,12 @@ from ...config import CacheConfig, ModelConfig, StateCacheSpec
 from .layout import CacheAllocation
 from .plan import BlockCachePlan
 from .schema import (
+    BlockCacheGeometry,
     CacheDesc,
     CacheResource,
+    ScopedBlockCacheRequest,
     build_block_cache_resources,
+    build_block_cache_resources_from_requests,
     build_state_cache_resources,
     layer_maps_from_resources,
 )
@@ -152,6 +155,7 @@ class CacheEngine:
         tp_rank: int = 0,
         world_size: int = 1,
         cache_stream: torch.cuda.Stream = None,
+        block_cache_plan: BlockCachePlan | None = None,
     ) -> None:
         self.world_size = world_size
         self.rank = rank
@@ -183,7 +187,9 @@ class CacheEngine:
         if quant_desc is not None:
             logger.info('Using %s.', quant_desc)
 
-        self.block_cache_plan = self.build_cache_plan(model_config, cache_config, world_size)
+        if block_cache_plan is None:
+            block_cache_plan = self.build_cache_plan(model_config, cache_config, world_size)
+        self.block_cache_plan = block_cache_plan
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -351,8 +357,12 @@ class CacheEngine:
         return [key_scale_zero_desc, val_scale_zero_desc]
 
     @classmethod
-    def _get_cache_resources(cls, model_config: ModelConfig, cache_config: CacheConfig,
-                             world_size: int) -> tuple[CacheResource, ...]:
+    def _get_cache_resources(cls,
+                             model_config: ModelConfig,
+                             cache_config: CacheConfig,
+                             world_size: int,
+                             block_requests: Sequence[ScopedBlockCacheRequest]
+                             | None = None) -> tuple[CacheResource, ...]:
         """Build the ordered resources consumed by the physical layout."""
         resources = []
         use_std = model_config.use_standard_kv_cache
@@ -366,8 +376,13 @@ class CacheEngine:
             for idx, desc in enumerate(quant_cache_descs):
                 resources.append(CacheResource(name=f'quant_{idx}', desc=desc))
 
+        if block_requests is not None:
+            if use_std and len(block_requests) > 0:
+                raise ValueError('Operator block cache requests cannot coexist with standard KV until mixed cache '
+                                 'access metadata is implemented.')
+            resources.extend(build_block_cache_resources_from_requests(block_requests))
         # named block cache specs (shape without block_size, same as cache_shapes)
-        if len(model_config.block_cache_specs) > 0:
+        elif len(model_config.block_cache_specs) > 0:
             resources.extend(build_block_cache_resources(model_config.block_cache_specs))
         else:
             # legacy anonymous cache_shapes (shape without block_size)
@@ -375,6 +390,9 @@ class CacheEngine:
             for idx, desc in enumerate(custom_descs):
                 resources.append(CacheResource(name=f'custom_{idx}', desc=desc))
 
+        names = [resource.name for resource in resources]
+        if len(names) != len(set(names)):
+            raise ValueError('Block cache resource names must be unique after provider and fallback collection.')
         return tuple(resources)
 
     @classmethod
@@ -409,27 +427,32 @@ class CacheEngine:
         return descs
 
     @classmethod
-    def build_cache_plan(cls, model_config: ModelConfig, cache_config: CacheConfig,
-                         world_size: int) -> BlockCachePlan:
+    def build_cache_plan(
+        cls,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        world_size: int,
+        request_provider: Callable[[BlockCacheGeometry], Sequence[ScopedBlockCacheRequest]] | None = None,
+    ) -> BlockCachePlan:
         """Finalize block geometry, resources, and backend layout."""
-        if cache_config.block_size < cache_config.kernel_block_size:
-            raise ValueError(
-                f'block_size {cache_config.block_size} must be greater than or equal to '
-                f'kernel_block_size {cache_config.kernel_block_size}.')
-        if cache_config.block_size % cache_config.kernel_block_size != 0:
-            raise ValueError(
-                f'block_size {cache_config.block_size} must be divisible by '
-                f'kernel_block_size {cache_config.kernel_block_size}.')
-
+        geometry = BlockCacheGeometry(block_size=cache_config.block_size,
+                                      kernel_block_size=cache_config.kernel_block_size)
+        _update_mla_kv_cache_dtype(model_config, cache_config)
+        block_requests = None
+        if request_provider is not None:
+            allocator = cls.allocate_caches
+            allocator_func = getattr(allocator, '__func__', allocator)
+            if allocator_func is not _NATIVE_BLOCK_ALLOCATOR:
+                raise RuntimeError('Built-model cache providers require the native CacheEngine allocator.')
+            block_requests = tuple(request_provider(geometry))
         num_layers = model_config.num_layers
-        kernel_blocks_per_logical_block = cache_config.block_size // cache_config.kernel_block_size
-        resources = cls._get_cache_resources(model_config, cache_config, world_size)
+        resources = cls._get_cache_resources(model_config, cache_config, world_size, block_requests=block_requests)
         cache_backend = get_backend().get_cache_backend()
         layout = cache_backend.build_block_layout(resources, num_layers=num_layers)
         return BlockCachePlan(
             resources=resources,
             layout=layout,
-            kernel_blocks_per_logical_block=kernel_blocks_per_logical_block,
+            kernel_blocks_per_logical_block=geometry.kernel_blocks_per_logical_block,
         )
 
     @classmethod
@@ -632,7 +655,11 @@ class CacheEngine:
         self._swap(self._swap_out_pairs, src_to_dst)
 
     @classmethod
-    def get_cache_block_size(cls, cache_config: CacheConfig, model_config: ModelConfig, world_size: int = 1) -> int:
+    def get_cache_block_size(cls,
+                             cache_config: CacheConfig,
+                             model_config: ModelConfig,
+                             world_size: int = 1,
+                             block_cache_plan: BlockCachePlan | None = None) -> int:
         """Get the required cache size of the model.
 
         Args:
@@ -642,13 +669,18 @@ class CacheEngine:
         Return:
             int: Required memory size in bytes.
         """
-        # Resolve the layout before sizing; CUDA graphs reuse the updated model config.
-        _update_mla_kv_cache_dtype(model_config, cache_config)
         allocator = cls.allocate_caches
         allocator_func = getattr(allocator, '__func__', allocator)
         if allocator_func is _NATIVE_BLOCK_ALLOCATOR:
-            return cls.build_cache_plan(model_config, cache_config, world_size).logical_block_nbytes
+            if block_cache_plan is None:
+                # Preserve direct sizing callers that validate cache policy
+                # without constructing complete model/cache configs.
+                _update_mla_kv_cache_dtype(model_config, cache_config)
+                block_cache_plan = cls.build_cache_plan(model_config, cache_config, world_size)
+            return block_cache_plan.logical_block_nbytes
 
+        # Existing patched allocators derive their layout from ModelConfig.
+        _update_mla_kv_cache_dtype(model_config, cache_config)
         result = allocator(
             num_blocks=1,
             model_config=model_config,

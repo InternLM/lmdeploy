@@ -331,6 +331,7 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
         self.profiler: AgentProfiler = None
         try:
@@ -1197,6 +1198,31 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
 
+    def build_cache_plans(self, cache_config: CacheConfig,
+                          spec_cache_config: CacheConfig | None = None) -> tuple[int, int, int]:
+        """Build worker-local plans and return target/spec/memory block
+        bytes."""
+        with self.all_context():
+            tp = self.dist_config.attn_tp
+            request_provider = getattr(self.patched_model, 'get_block_cache_requests', None)
+            self.block_cache_plan = CacheEngine.build_cache_plan(
+                self.model_config,
+                cache_config,
+                tp,
+                request_provider=request_provider,
+            )
+            target_nbytes = CacheEngine.get_cache_block_size(
+                cache_config,
+                self.model_config,
+                tp,
+                block_cache_plan=self.block_cache_plan,
+            )
+            spec_nbytes = self.spec_agent.build_cache_plan(spec_cache_config)
+            memory_nbytes = 0
+            if self.memdecode_agent is not None:
+                memory_nbytes = self.memdecode_agent.build_cache_plan(cache_config)
+            return target_nbytes, spec_nbytes, memory_nbytes
+
     def build_graph_runner(self):
         """Build graph runner."""
         with self.all_context():
@@ -1222,7 +1248,8 @@ class BaseModelAgent:
                                             rank=self.rank,
                                             tp_rank=dist_ctx.attn_tp_group.rank,
                                             world_size=tp,
-                                            cache_stream=self.cache_stream)
+                                            cache_stream=self.cache_stream,
+                                            block_cache_plan=self.block_cache_plan)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
@@ -1551,5 +1578,6 @@ class BaseModelAgent:
             self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
         torch.cuda.empty_cache()

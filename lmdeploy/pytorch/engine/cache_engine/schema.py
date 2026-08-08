@@ -3,7 +3,7 @@
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from operator import index as as_index
 
 import torch
@@ -27,6 +27,74 @@ class CacheDesc:
         self.numel = math.prod(self.shape)
         self.size = self.numel * self.dtype.itemsize
         self.aligned_size = round_up(self.size, self.alignment)
+
+
+@dataclass(frozen=True)
+class BlockCacheGeometry:
+    """Finalized logical and physical block sizes passed to providers."""
+
+    block_size: int
+    kernel_block_size: int
+
+    def __post_init__(self):
+        if self.block_size <= 0:
+            raise ValueError('block_size must be positive.')
+        if self.kernel_block_size <= 0:
+            raise ValueError('kernel_block_size must be positive.')
+        if self.block_size < self.kernel_block_size:
+            raise ValueError(
+                f'block_size {self.block_size} must be greater than or equal to '
+                f'kernel_block_size {self.kernel_block_size}.')
+        if self.block_size % self.kernel_block_size != 0:
+            raise ValueError(
+                f'block_size {self.block_size} must be divisible by '
+                f'kernel_block_size {self.kernel_block_size}.')
+
+    @property
+    def kernel_blocks_per_logical_block(self) -> int:
+        """Return physical kernel blocks in one scheduler block."""
+        return self.block_size // self.kernel_block_size
+
+
+@dataclass(frozen=True)
+class CacheTensorContract:
+    """Kernel-visible tensor requirements declared by a built operator."""
+
+    per_layer_contiguous: bool = False
+
+
+@dataclass(frozen=True)
+class BlockCacheRequest:
+    """Describe one block-cache payload requested by a built operator."""
+
+    name: str
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    alignment: int = 256
+    tensor_contract: CacheTensorContract = field(default_factory=CacheTensorContract)
+
+    def __post_init__(self):
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError('Block cache request name must not be empty.')
+        alignment = as_index(self.alignment)
+        shape = tuple(as_index(dim) for dim in self.shape)
+        if alignment <= 0:
+            raise ValueError(f'{self.name} alignment must be positive.')
+        if any(dim < 0 for dim in shape):
+            raise ValueError(f'{self.name} shape dimensions must be non-negative.')
+        object.__setattr__(self, 'alignment', alignment)
+        object.__setattr__(self, 'shape', shape)
+
+
+@dataclass(frozen=True)
+class ScopedBlockCacheRequest:
+    """Bind one operator request to a model-owned layer scope.
+
+    ``None`` is reserved for a future whole-model scope.
+    """
+
+    request: BlockCacheRequest
+    layer_id: int | None
 
 
 def _normalize_cache_layer_ids(cache_name: str, layer_ids: Sequence[int]) -> list[int]:
@@ -75,6 +143,7 @@ class CacheResource:
     name: str
     desc: CacheDesc
     layer_rows: LayerRowMap | None = None
+    tensor_contract: CacheTensorContract = field(default_factory=CacheTensorContract)
 
     @property
     def layer_map(self) -> dict[int, int] | None:
@@ -105,6 +174,53 @@ def build_block_cache_resources(block_specs: Sequence[BlockCacheSpec]) -> tuple[
         layer_rows = LayerRowMap.build(spec.name, spec.layer_ids)
         desc = CacheDesc(shape=spec.shape, dtype=spec.dtype, alignment=spec.alignment)
         resources.append(CacheResource(name=spec.name, desc=desc, layer_rows=layer_rows))
+    return tuple(resources)
+
+
+def build_block_cache_resources_from_requests(
+        scoped_requests: Sequence[ScopedBlockCacheRequest]) -> tuple[CacheResource, ...]:
+    """Aggregate built-operator requests into ordered cache resources."""
+    requests_by_scope: dict[tuple[str, int], BlockCacheRequest] = {}
+    request_by_name: dict[str, BlockCacheRequest] = {}
+    layer_ids_by_name: dict[str, list[int]] = {}
+
+    for scoped_request in scoped_requests:
+        request = scoped_request.request
+        layer_id = scoped_request.layer_id
+        if layer_id is None:
+            raise ValueError('Global block cache requests are not supported yet.')
+        layer_id = as_index(layer_id)
+        if layer_id < 0:
+            raise ValueError(f'{request.name} layer id {layer_id} must be non-negative.')
+
+        scope = (request.name, layer_id)
+        existing = requests_by_scope.get(scope)
+        if existing is not None:
+            if existing != request:
+                raise ValueError(f'Conflicting block cache requests for {request.name} at layer {layer_id}.')
+            continue
+
+        existing = request_by_name.get(request.name)
+        if existing is not None and existing != request:
+            raise ValueError(f'Heterogeneous block cache request segments for {request.name} are not supported yet.')
+
+        if request.name not in layer_ids_by_name:
+            layer_ids_by_name[request.name] = [layer_id]
+            request_by_name[request.name] = request
+        else:
+            layer_ids_by_name[request.name].append(layer_id)
+        requests_by_scope[scope] = request
+
+    resources = []
+    for name, request in request_by_name.items():
+        layer_ids = layer_ids_by_name[name]
+        layer_rows = LayerRowMap.build(name, layer_ids)
+        desc = CacheDesc(shape=list(request.shape), dtype=request.dtype, alignment=request.alignment)
+        resources.append(
+            CacheResource(name=name,
+                          desc=desc,
+                          layer_rows=layer_rows,
+                          tensor_contract=request.tensor_contract))
     return tuple(resources)
 
 

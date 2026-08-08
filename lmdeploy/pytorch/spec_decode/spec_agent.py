@@ -219,6 +219,27 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                              backend_config=self.backend_config,
                                                              device=self.device)
 
+    def build_cache_plan(self, cache_config: CacheConfig | None) -> int:
+        """Build and retain the rank-local draft cache plan."""
+        if cache_config is None:
+            self.block_cache_plan = None
+            return 0
+        with self.draft_context():
+            draft_tp = self.draft_dist_ctx.dist_config.attn_tp
+            request_provider = getattr(self.proposer.model, 'get_block_cache_requests', None)
+            self.block_cache_plan = CacheEngine.build_cache_plan(
+                self.model_config,
+                cache_config,
+                draft_tp,
+                request_provider=request_provider,
+            )
+            return CacheEngine.get_cache_block_size(
+                cache_config,
+                self.model_config,
+                draft_tp,
+                block_cache_plan=self.block_cache_plan,
+            )
+
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         if self.cache_config is not None:
@@ -229,7 +250,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                 rank=0 if draft_tp == 1 else self.dist_ctx.rank,
                                                 tp_rank=self.draft_dist_ctx.attn_tp_group.rank,
                                                 world_size=draft_tp,
-                                                cache_stream=cache_stream)
+                                                cache_stream=cache_stream,
+                                                block_cache_plan=self.block_cache_plan)
 
     def _build_dp_meta_from_main(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
         """Build DP meta for draft inputs after MTP input shifting."""

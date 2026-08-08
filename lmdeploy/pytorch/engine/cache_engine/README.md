@@ -5,10 +5,11 @@ layouts, owning allocations, and the runtime lifecycle of block and state
 caches. It keeps the model-facing cache views separate from the tensors that
 own their storage.
 
-Cache construction is a staged process. Model and cache declarations describe
-the required payloads, the active backend selects a physical layout, and the
-cache engine realizes that layout on the device and host before serving
-requests.
+Cache construction is a staged process. A built model describes the cache
+payloads required by its selected operator implementations, the active backend
+selects a physical layout, and the cache engine realizes that layout on the
+device and host before serving requests. Model configuration declarations
+remain as a compatibility fallback for models without a provider.
 
 ## Recommended Reading Order
 
@@ -32,9 +33,13 @@ owning storage and cache-entry axes.
 ## Construction Model
 
 ```text
-ModelConfig / CacheConfig declarations
+Built worker-local model
         |
-        v
+        +-- provider present --> get_block_cache_requests(geometry) --+
+        |                                                          |
+        `-- provider absent ---> ModelConfig declarations ----------+
+                                                                   |
+                                                                   v
 CacheResource[]
   - name
   - payload shape and dtype
@@ -50,7 +55,7 @@ BlockCachePlan
   - selected physical layout
   - logical-to-kernel block geometry
         |
-        +-- meta allocation --> bytes per logical block
+        +-- meta allocation --> worker-local bytes per logical block
         |
         +-- device allocation --> CacheAllocation
         |
@@ -68,6 +73,12 @@ CacheEngine
 `BlockCachePlan` is a finalized build-time recipe, not a runtime allocation.
 It owns no tensors, streams, or events. One runtime `CacheEngine` retains one
 plan and realizes it for both device and host storage.
+
+Each model worker builds and retains its own target, speculative, and memory
+model plans after block geometry is finalized and before cache sizing. Only
+their byte counts cross the executor RPC boundary. This keeps backend-selected
+operator requirements and physical layouts local to the worker that will
+allocate and consume them.
 
 State caches currently follow the same schema, backend-layout, and allocation
 contracts but are allocated directly by `StateCacheEngine`; they do not yet
@@ -115,11 +126,28 @@ model has one uniform `num_layers` concept.
 resource's compact row. Resources without an explicit `LayerRowMap` retain the
 legacy direct layer-index behavior.
 
-The current declaration source is `ModelConfig`: standard KV fields,
-`block_cache_specs`, `state_cache_specs`, and legacy anonymous shapes are
-normalized into `CacheResource` objects. Collection from built cache-using
-operators is a planned replacement for model-config-owned declarations; it is
-not implemented by this package yet.
+The preferred declaration source is the optional
+`get_block_cache_requests(geometry)` method on the built top-level model. The
+model explicitly binds requests from its selected cache-using operators to
+stable layer IDs; the cache engine does not infer scope from module names or a
+uniform model-wide layer count. A request describes one physical kernel-block
+payload and may include a kernel-visible tensor contract such as per-layer
+contiguity.
+
+If the method is absent, standard KV fields, `block_cache_specs`, and legacy
+anonymous `cache_shapes` in `ModelConfig` are normalized through the existing
+compatibility path. Once present, the provider is authoritative for custom
+block resources, including when it returns no requests. State-cache discovery
+still uses `state_cache_specs` and `states_shapes`.
+
+The initial provider boundary deliberately accepts only homogeneous,
+layer-scoped named resources. It rejects global scope, heterogeneous segments
+under one name, and provider resources mixed with standard KV until their
+access metadata and layouts have explicit owners. The default backend also
+rejects per-layer-contiguous requests until its dedicated layout lands;
+dlinfer's resource-contiguous layout already satisfies that contract. Provider
+requests require the native allocator and cannot use the temporary external
+dlinfer allocator monkey patch.
 
 ## Plan, Layout, and Allocation
 
@@ -233,6 +261,8 @@ local allocation semantics.
 
 - Resource names and order are stable from schema construction through typed
   allocation views.
+- Provider collection happens once from the built worker-local model after
+  logical/kernel block geometry is finalized and before sizing.
 - Layer membership is explicit; unrelated resources need not share a global
   layer count or the same layer ids.
 - Native device and host runtime allocations reuse one retained block-cache
@@ -254,6 +284,7 @@ local allocation semantics.
 
 | Change                                                             | Primary owner                                                  |
 | ------------------------------------------------------------------ | -------------------------------------------------------------- |
+| Operator cache payload or tensor requirement                       | Built operator plus the enclosing model's scoped provider      |
 | Payload size, alignment, resource names, or layer membership       | [`schema.py`](./schema.py)                                     |
 | Logical/kernel block conversion or finalized block access metadata | [`plan.py`](./plan.py)                                         |
 | Default owning-pool arrangement or allocation metadata             | [`layout.py`](./layout.py)                                     |
@@ -279,7 +310,12 @@ Tests follow the package ownership boundaries:
   owning pools, physical layouts, backend selection, dlinfer contiguity, and
   block plans.
 - [`test_cache_engine.py`](../../../../tests/pytorch/engine/test_cache_engine.py):
-  runtime ownership, compatibility views, swaps, sizing, and state operations.
+  provider precedence, runtime ownership, compatibility views, swaps, sizing,
+  and state operations.
+- [`test_executor_base.py`](../../../../tests/pytorch/engine/test_executor_base.py)
+  and
+  [`test_model_agent.py`](../../../../tests/pytorch/engine/test_model_agent.py):
+  worker-local plan collection, byte-count aggregation, and plan retention.
 
 Run the focused suite with:
 
@@ -287,5 +323,7 @@ Run the focused suite with:
 python -m pytest -q \
   tests/pytorch/engine/test_cache_schema.py \
   tests/pytorch/engine/test_cache_layout.py \
-  tests/pytorch/engine/test_cache_engine.py
+  tests/pytorch/engine/test_cache_engine.py \
+  tests/pytorch/engine/test_executor_base.py \
+  tests/pytorch/engine/test_model_agent.py
 ```
