@@ -167,7 +167,11 @@ def quant_fp8(A: Tensor,
     num_groups = K // group_size
     out = torch.empty_like(A, dtype=dtype)
     if trans_scale:
-        scales = A.new_empty(num_groups, M, dtype=torch.float32).T
+        # Keep M logically contiguous while padding the physical K-block pitch
+        # to the 16-byte alignment required by Hopper TMA descriptors.
+        scale_alignment = 16 // torch.float32.itemsize
+        aligned_m = triton.cdiv(M, scale_alignment) * scale_alignment
+        scales = torch.empty_strided((M, num_groups), (1, aligned_m), dtype=torch.float32, device=A.device)
     else:
         scales = A.new_empty(M, num_groups, dtype=torch.float32)
     return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
