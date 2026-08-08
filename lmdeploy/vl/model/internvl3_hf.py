@@ -1,14 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import torch
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoProcessor
+from transformers import AutoConfig, AutoProcessor
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
-from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.internvl import VISION_MODELS, InternVLVisionModel
-from lmdeploy.vl.model.utils import disable_logging
-
-logger = get_logger('lmdeploy')
 
 
 class InternVLImagesKwargs(ImagesKwargs, total=False):
@@ -35,6 +30,7 @@ class InternVL3VisionModel(InternVLVisionModel):
     """Internvl3 vision model."""
 
     _arch = ['InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration']
+    _turbomind_native_vision = True
 
     def __init__(self,
                  model_path: str,
@@ -55,33 +51,8 @@ class InternVL3VisionModel(InternVLVisionModel):
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
 
     def build_model(self, trust_remote_code: bool = False):
-        """Build the vision part of a VLM model when backend is turbomind, or
-        load the whole VLM model when `self.with_llm==True`"""
-        from accelerate import init_empty_weights
-        with init_empty_weights():
-            if self.arch == 'InternVLForConditionalGeneration':
-                model = AutoModel.from_config(self.hf_config, trust_remote_code=trust_remote_code)
-                if not self.with_llm:
-                    del model.language_model
-            elif self.arch == 'InternS1ForConditionalGeneration':
-                model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=trust_remote_code)
-                if not self.with_llm:
-                    del model.model.language_model
-            else:
-                raise ValueError(f'unsupported model arch {self.arch}')
-
-        model.half()
-        from accelerate import load_checkpoint_and_dispatch
-        with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         checkpoint=self.model_path,
-                                         device_map='auto' if not self.with_llm else {'': 'cpu'},
-                                         max_memory=self.max_memory,
-                                         no_split_module_classes=['InternVLVisionLayer', 'InternS1VisionLayer'],
-                                         dtype=torch.half)
-        # We need eval mode to freeze the weights in model, thus,
-        # avoid randomness in inference.
-        self.model = model.eval()
+        """InternVL3 does not support quantization."""
+        raise NotImplementedError('Quantization is not supported for InternVL3VisionModel.')
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
@@ -107,42 +78,10 @@ class InternVL3VisionModel(InternVLVisionModel):
             cur_num_patches = image_num_patches[idx]
             pixel_values = image_pixel_values[cum_num_patches:cum_num_patches + cur_num_patches, ...]
             cum_num_patches += cur_num_patches
-            data = dict(pixel_values=pixel_values,
+            data = dict(pixel_values=pixel_values.to(self.mm_feature_dtype),
                         image_tokens=self.image_tokens_per_patch * cur_num_patches,
                         image_token_id=self.image_token_id)
             outputs.append(data)
 
         messages.append(dict(role='preprocess', content=outputs))
-        return messages
-
-    @torch.no_grad()
-    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
-        """Extract image feature. ONLY implement it when the backend is
-        turbomind engine.
-
-        Args:
-            messages(list[dict]): the outputs of `preprocess`
-            max_batch_size(int): the max batch size when forwarding vision
-                model
-        Return:
-            the message list with forwarding results included
-        """
-        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
-        inputs = inputs[0]
-        assert all(x.get('pixel_values') is not None for x in inputs)
-        outputs = []
-        for idx in range(0, len(inputs), max_batch_size):
-            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
-            split = [x.shape[0] for x in pixel_values]
-            pixel_values = torch.cat(pixel_values, dim=0)
-            pixel_values = pixel_values.to(self.model.device, dtype=torch.float16)
-            logger.info(f'vision forward shape: {pixel_values.shape}')
-            feats = self.model.get_image_features(
-                pixel_values,
-                vision_feature_layer=self.hf_config.vision_feature_layer,
-                vision_feature_select_strategy=self.hf_config.vision_feature_select_strategy,
-            )
-            feats = torch.split(feats, split, dim=0)
-            outputs.extend([x.reshape(-1, x.shape[-1]) for x in feats])
-        messages.append(dict(role='forward', content=outputs))
         return messages

@@ -97,8 +97,9 @@ struct AttentionData {
 
     Buffer_<float> rope_base;
 
-    Tensor_<int> mrope_position_ids;
+    Buffer_<int> mrope_position_ids;
     Buffer_<int> mrope_position_delta;
+    Buffer_<int> mrope_position_offsets;
     Buffer_<int> mrope_length;
 
     // borrowed from env
@@ -182,10 +183,8 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
         rope_base_buf_ = {bsz + 1, kCPUpinned};
     }
     if (rope_param_.mrope_mode != MropeMode::kNone) {
-        // CPU-pinned staging buffers for the legacy r.inputs mrope path; per-phase device
-        // tensors are allocated below. (W1 also borrows env tensors from the vision encoder.)
-        mrope_position_delta_buf_ = {bsz, kCPUpinned};
-        mrope_length_buf_         = {bsz, kCPUpinned};
+        mrope_default_buf_ = Buffer_<int>{std::max(bsz, 3), kDEVICE};
+        Clear(mrope_default_buf_);
     }
     const int max_blocks = bsz * cdiv(engine.session_len, engine_param_.cache_block_seq_len);
     for (int i = 0; i < phases; ++i) {
@@ -194,11 +193,6 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
         d->block_ptrs_offsets = {bsz + 1, kDEVICE};
         if (rope_param_.type == RopeType::kDynamic) {
             d->rope_base = empty_like(rope_base_buf_, kDEVICE);
-        }
-        if (rope_param_.mrope_mode != MropeMode::kNone) {
-            d->mrope_position_ids   = {{bsz, engine.session_len, 3}, kDEVICE};
-            d->mrope_position_delta = empty_like(mrope_position_delta_buf_, kDEVICE);
-            d->mrope_length         = empty_like(mrope_length_buf_, kDEVICE);
         }
     }
 
@@ -344,39 +338,26 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         copy(rope_base_buf_, bsz, d.rope_base);
     }
     else if (rope_param_.mrope_mode != MropeMode::kNone) {
-        if (env.try_("mrope_length")) {
-            // The C++ qwen3.5-vit encoder already built the mrope tensors in FastRoPE's
-            // exact (slot-indexed) layout during its kSetup, which runs before this layer's
-            // Setup in the same pass. Borrow them with no copy; they live on the encoder's
-            // per-phase Data (worst-case allocated) so the non-owning views stay valid
-            // through forward.
-            d.mrope_length         = env.at("mrope_length").buffer().borrow();
-            d.mrope_position_delta = env.at("mrope_position_delta").buffer().borrow();
-            d.mrope_position_ids   = env.at("mrope_position_ids").borrow();
+        auto* mrope_length           = env.try_("mrope_length");
+        auto* mrope_position_delta   = env.try_("mrope_position_delta");
+        auto* mrope_position_offsets = env.try_("mrope_position_offsets");
+        auto* mrope_position_ids     = env.try_("mrope_position_ids");
+        if (mrope_length || mrope_position_delta || mrope_position_offsets || mrope_position_ids) {
+            TM_CHECK(mrope_length) << "MRoPE requires native vision-produced mrope_length";
+            TM_CHECK(mrope_position_delta) << "MRoPE requires native vision-produced mrope_position_delta";
+            TM_CHECK(mrope_position_offsets) << "MRoPE requires native vision-produced mrope_position_offsets";
+            TM_CHECK(mrope_position_ids) << "MRoPE requires native vision-produced mrope_position_ids";
+
+            d.mrope_length           = mrope_length->buffer().borrow();
+            d.mrope_position_delta   = mrope_position_delta->buffer().borrow();
+            d.mrope_position_offsets = mrope_position_offsets->buffer().borrow();
+            d.mrope_position_ids     = mrope_position_ids->buffer().borrow();
         }
         else {
-            // Legacy r.inputs mrope path (Python preprocessor); `d.mrope_*` allocated at setup.
-            const auto stride = d.mrope_position_ids.stride(0);
-            for (int i = 0; i < rc.size(); ++i) {
-                auto& c = *rc[i];
-                auto& r = *c.req;
-                if (auto pos_ids = r.inputs.try_("mrope_position_ids")) {
-                    int length                   = pos_ids->shape(0);
-                    mrope_length_buf_[i]         = length;
-                    mrope_position_delta_buf_[i] = *r.inputs.at("mrope_position_delta").data<int>();
-                    if (auto o = Interval{0, length}
-                                 & Interval{c.history_len + c.inflight_input_len, Interval::Size{c.input_len}}) {
-                        copy(pos_ids->data<int>() + o.begin() * 3,
-                             (int)o.size() * 3,
-                             d.mrope_position_ids.data() + i * stride + o.begin() * 3);
-                    }
-                }
-                else {
-                    mrope_length_buf_[i] = mrope_position_delta_buf_[i] = 0;
-                }
-            }
-            copy(mrope_length_buf_, rc.size(), d.mrope_length);
-            copy(mrope_position_delta_buf_, rc.size(), d.mrope_position_delta);
+            d.mrope_length           = mrope_default_buf_.borrow();
+            d.mrope_position_delta   = mrope_default_buf_.borrow();
+            d.mrope_position_offsets = mrope_default_buf_.borrow();
+            d.mrope_position_ids     = mrope_default_buf_.borrow();
         }
     }
 }
@@ -583,11 +564,10 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.rope_param.base = d.rope_base.data() + offset;
         }
         if (rope_param_.mrope_mode != MropeMode::kNone) {
-            params.rope_param.mrope.position_delta = d.mrope_position_delta.data() + offset;
-            params.rope_param.mrope.length         = d.mrope_length.data() + offset;
-            params.rope_param.mrope.stride         = d.mrope_position_ids.stride(0);
-            params.rope_param.mrope.position_ids =
-                d.mrope_position_ids.data() + offset * params.rope_param.mrope.stride;
+            params.rope_param.mrope.position_delta   = d.mrope_position_delta.data() + offset;
+            params.rope_param.mrope.position_offsets = d.mrope_position_offsets.data() + offset;
+            params.rope_param.mrope.length           = d.mrope_length.data() + offset;
+            params.rope_param.mrope.position_ids     = d.mrope_position_ids.data();
         }
 
         // logn attn

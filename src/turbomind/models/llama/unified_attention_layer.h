@@ -112,8 +112,7 @@ private:
     Tensor         tmp_attn_;
 
     Buffer_<float> rope_base_buf_;
-    Buffer_<int>   mrope_position_delta_buf_;
-    Buffer_<int>   mrope_length_buf_;
+    Buffer_<int>   mrope_default_buf_;
 
     CpPostContext cp_fn_ctx_;  // context parallel
 };
