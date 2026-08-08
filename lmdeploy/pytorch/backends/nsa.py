@@ -20,14 +20,13 @@ class NSAIndexMeta:
 class BaseNSAIndexFP8(ABC):
 
     @abstractmethod
-    def forward(self, q: Tensor, k: Tensor, weights: Tensor, k_cache: Tensor, k_s_cache: Tensor,
-                meta: NSAIndexMeta) -> Tensor:
+    def forward(self, q: Tensor, k: Tensor, weights: Tensor, indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         """forward."""
         raise NotImplementedError('Not implemented.')
 
     @abstractmethod
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
-                      sin: Tensor, k_cache: Tensor, k_s_cache: Tensor, norm_eps: float, head_gate_scale: float,
+                      sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
                       rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
         """Forward with fused DSA indexer preparation."""
         raise NotImplementedError('Not implemented.')

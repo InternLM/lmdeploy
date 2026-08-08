@@ -41,6 +41,8 @@ def draft_model_forward(
             cache_config=cache_engine.cache_config,
             kv_caches=kv_caches,
         )
+        if cache_engine is not None:
+            context.block_caches = cache_engine.block_caches
         with ctx_mgr.context(context):
             model_metas = None
             model_metas = model.update_model_metas(

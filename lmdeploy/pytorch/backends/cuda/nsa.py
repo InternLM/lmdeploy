@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 
+import torch
 from torch import Tensor
 
+from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
@@ -10,6 +12,25 @@ from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_ind
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 
 from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta
+
+
+def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor, head_dim: int) -> tuple[Tensor, Tensor]:
+    """Return FP8 K and FP32 scale views of a packed DSA indexer-K cache."""
+    if indexer_k_cache.dtype != torch.uint8:
+        raise TypeError(f'Packed DSA indexer-K cache must be uint8, got {indexer_k_cache.dtype}.')
+    if indexer_k_cache.dim() != 4 or indexer_k_cache.size(2) != 1:
+        raise ValueError('Packed DSA indexer-K cache must have shape [num_blocks, entries, 1, head_dim + 4].')
+    if indexer_k_cache.size(-1) != head_dim + DSA_INDEX_SCALE_BYTES:
+        raise ValueError(f'Packed DSA indexer-K cache last dim must be {head_dim + DSA_INDEX_SCALE_BYTES}, '
+                         f'got {indexer_k_cache.size(-1)}.')
+
+    num_blocks, entries_per_block = indexer_k_cache.shape[:2]
+    flat = indexer_k_cache.view(num_blocks, -1)
+    value_bytes = entries_per_block * head_dim
+    scale_bytes = entries_per_block * DSA_INDEX_SCALE_BYTES
+    values = flat[:, :value_bytes].view(torch.float8_e4m3fn).view(num_blocks, entries_per_block, head_dim)
+    scales = flat[:, value_bytes:value_bytes + scale_bytes].view(torch.float32).view(num_blocks, entries_per_block, 1)
+    return values, scales
 
 
 @functools.lru_cache
@@ -67,10 +88,11 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                            sorted=False)
         return bitonic_topk(scores, q_seqlens, indexer_kv_seqlens, self.topk, fill=self.fill, descending=True)
 
-    def forward(self, q: Tensor, k: Tensor, weights: Tensor, k_cache: Tensor, k_s_cache: Tensor,
+    def forward(self, q: Tensor, k: Tensor, weights: Tensor, indexer_k_cache: Tensor,
                 meta: NSAIndexMeta) -> Tensor:
         assert q.dim() == 3
         assert k.dim() == 2
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(indexer_k_cache, k.size(-1))
         q_shape = q.shape
         q = q.reshape(-1, q_shape[-1])
         q, q_s = quant_fp8(q, self.block_size, dtype=k_cache.dtype, trans_scale=True, scale_fmt=self.scale_fmt)
@@ -93,10 +115,11 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         return self._forward_index(q, q_s, k_cache, k_s_cache, meta)
 
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
-                      sin: Tensor, k_cache: Tensor, k_s_cache: Tensor, norm_eps: float, head_gate_scale: float,
+                      sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
                       rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
         """Prepare FP8 Q and write K cache without allocating rotated BF16
         Q/K."""
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(indexer_k_cache, k.size(-1))
         q, q_s = prepare_dsa_indexer_q(q,
                                        weights,
                                        cos,
