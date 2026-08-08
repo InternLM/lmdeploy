@@ -2,20 +2,11 @@
 """Finalized block-cache geometry, access metadata, and layout."""
 
 from dataclasses import dataclass
-from typing import Protocol
 
 import torch
 
-from .layout import CacheAllocation
+from .layout import BlockCacheLayout, CacheAllocation
 from .schema import CacheResource, layer_maps_from_resources
-
-
-class BlockCacheLayout(Protocol):
-    """Physical block-cache layout selected by a backend."""
-
-    def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
-        """Realize physical kernel blocks on one device."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -41,9 +32,10 @@ class BlockCachePlan:
         return layer_maps_from_resources(self.resources)
 
     @property
-    def uses_layer_rows(self) -> bool:
-        """Whether every model-facing resource uses compact layer rows."""
-        return len(self.resources) > 0 and all(resource.layer_rows is not None for resource in self.resources)
+    def legacy_cache_indices(self) -> tuple[int, ...]:
+        """Return resources exposed through the legacy per-layer cache
+        tuple."""
+        return tuple(index for index, resource in enumerate(self.resources) if resource.layer_rows is None)
 
     def allocate(self, num_logical_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Realize a logical block count through the selected physical

@@ -9,7 +9,6 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheRequest,
     CacheDesc,
     CacheResource,
-    CacheTensorContract,
     LayerRowMap,
     ScopedBlockCacheRequest,
     build_block_cache_resources,
@@ -89,8 +88,7 @@ def test_build_block_cache_resources_normalizes_specs_in_declared_order():
 
 
 def test_build_block_cache_resources_aggregates_scoped_operator_requests():
-    contiguous = CacheTensorContract(per_layer_contiguous=True)
-    request = BlockCacheRequest('index', (64, 1, 132), torch.uint8, tensor_contract=contiguous)
+    request = BlockCacheRequest('index', (64, 1, 132), torch.uint8, per_layer_contiguous=True)
     resources = build_block_cache_resources_from_requests([
         ScopedBlockCacheRequest(request, layer_id=9),
         ScopedBlockCacheRequest(request, layer_id=1),
@@ -101,7 +99,7 @@ def test_build_block_cache_resources_aggregates_scoped_operator_requests():
     assert resources[0].name == 'index'
     assert resources[0].desc.shape == [64, 1, 132]
     assert resources[0].layer_map == {9: 0, 1: 1}
-    assert resources[0].tensor_contract is contiguous
+    assert resources[0].per_layer_contiguous
 
 
 def test_block_cache_request_normalizes_integer_like_shape_and_alignment():

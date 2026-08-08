@@ -3,7 +3,7 @@
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from operator import index as as_index
 
 import torch
@@ -57,13 +57,6 @@ class BlockCacheGeometry:
 
 
 @dataclass(frozen=True)
-class CacheTensorContract:
-    """Kernel-visible tensor requirements declared by a built operator."""
-
-    per_layer_contiguous: bool = False
-
-
-@dataclass(frozen=True)
 class BlockCacheRequest:
     """Describe one block-cache payload requested by a built operator."""
 
@@ -71,7 +64,7 @@ class BlockCacheRequest:
     shape: tuple[int, ...]
     dtype: torch.dtype
     alignment: int = 256
-    tensor_contract: CacheTensorContract = field(default_factory=CacheTensorContract)
+    per_layer_contiguous: bool = False
 
     def __post_init__(self):
         if not isinstance(self.name, str) or not self.name:
@@ -143,7 +136,7 @@ class CacheResource:
     name: str
     desc: CacheDesc
     layer_rows: LayerRowMap | None = None
-    tensor_contract: CacheTensorContract = field(default_factory=CacheTensorContract)
+    per_layer_contiguous: bool = False
 
     @property
     def layer_map(self) -> dict[int, int] | None:
@@ -220,7 +213,7 @@ def build_block_cache_resources_from_requests(
             CacheResource(name=name,
                           desc=desc,
                           layer_rows=layer_rows,
-                          tensor_contract=request.tensor_contract))
+                          per_layer_contiguous=request.per_layer_contiguous))
     return tuple(resources)
 
 

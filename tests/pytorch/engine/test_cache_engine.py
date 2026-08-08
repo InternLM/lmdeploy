@@ -223,22 +223,89 @@ def test_built_model_provider_rejects_patched_allocator(monkeypatch):
                                      request_provider=lambda geometry: ())
 
 
-def test_build_cache_plan_rejects_provider_requests_before_mixed_access_lands():
+def test_build_cache_plan_combines_standard_kv_and_operator_requests():
     model_config = _make_model_config(use_standard_kv_cache=True)
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                kernel_block_size=64,
                                num_cpu_blocks=0,
                                num_gpu_blocks=0)
-    request = BlockCacheRequest('operator_cache', (64, 5), torch.float16)
+    request = BlockCacheRequest(
+        'operator_cache',
+        (64, 5),
+        torch.float16,
+        per_layer_contiguous=True,
+    )
 
-    with pytest.raises(ValueError, match='cannot coexist with standard KV'):
-        CacheEngine.build_cache_plan(
-            model_config,
-            cache_config,
-            world_size=1,
-            request_provider=lambda geometry: [ScopedBlockCacheRequest(request, layer_id=1)],
-        )
+    plan = CacheEngine.build_cache_plan(
+        model_config,
+        cache_config,
+        world_size=1,
+        request_provider=lambda geometry: [
+            ScopedBlockCacheRequest(request, layer_id=1),
+            ScopedBlockCacheRequest(request, layer_id=3),
+        ],
+    )
+    allocation = plan.allocate(num_logical_blocks=2, device='cpu')
+
+    assert plan.cache_names == ('k_cache', 'v_cache', 'operator_cache')
+    assert plan.legacy_cache_indices == (0, 1)
+    assert plan.layer_maps == {'operator_cache': {1: 0, 3: 1}}
+    assert len(allocation.pools) == 2
+    assert allocation.caches[2].is_contiguous()
+    assert allocation.caches[2][0].is_contiguous()
+
+
+def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
+    model_config = _make_model_config(use_standard_kv_cache=True)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=2,
+                               num_gpu_blocks=2)
+    request = BlockCacheRequest(
+        'operator_cache',
+        (64, 5),
+        torch.float16,
+        per_layer_contiguous=True,
+    )
+    plan = CacheEngine.build_cache_plan(
+        model_config,
+        cache_config,
+        world_size=1,
+        request_provider=lambda geometry: [
+            ScopedBlockCacheRequest(request, layer_id=1),
+            ScopedBlockCacheRequest(request, layer_id=3),
+        ],
+    )
+
+    class CpuLayout:
+
+        def allocate(self, num_blocks, device):
+            return plan.layout.allocate(num_blocks, device='cpu')
+
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cache_config = cache_config
+    cache_engine.model_config = model_config
+    cache_engine.world_size = 1
+    cache_engine.block_cache_plan = BlockCachePlan(resources=plan.resources,
+                                                   layout=CpuLayout(),
+                                                   kernel_blocks_per_logical_block=1)
+
+    layer_caches = cache_engine.allocate_gpu_cache()
+    cache_engine.allocate_cpu_cache()
+    cache_engine._build_swap_pairs()
+
+    assert len(layer_caches) == model_config.num_layers
+    assert all(len(layer_cache) == 2 for layer_cache in layer_caches)
+    assert torch.equal(layer_caches[0][0], cache_engine._gpu_cache_list[0][0])
+    assert torch.equal(layer_caches[0][1], cache_engine._gpu_cache_list[1][0])
+    assert len(cache_engine.gpu_allocation.pools) == 2
+    assert len(cache_engine._swap_in_pairs) == 2
+    assert all(entry_axis == 1 for _, _, entry_axis in cache_engine._swap_in_pairs)
+    assert cache_engine.block_caches['operator_cache'].is_contiguous()
+    assert torch.equal(cache_engine.block_caches.layer('operator_cache', 3),
+                       cache_engine._gpu_cache_list[2][1])
 
 
 def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():

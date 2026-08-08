@@ -377,9 +377,6 @@ class CacheEngine:
                 resources.append(CacheResource(name=f'quant_{idx}', desc=desc))
 
         if block_requests is not None:
-            if use_std and len(block_requests) > 0:
-                raise ValueError('Operator block cache requests cannot coexist with standard KV until mixed cache '
-                                 'access metadata is implemented.')
             resources.extend(build_block_cache_resources_from_requests(block_requests))
         # named block cache specs (shape without block_size, same as cache_shapes)
         elif len(model_config.block_cache_specs) > 0:
@@ -478,6 +475,16 @@ class CacheEngine:
             device=device,
         )
 
+    def _build_legacy_layer_cache(self, caches: Sequence[torch.Tensor]):
+        """Build the compatibility tuple without scoped named resources."""
+        plan = getattr(self, 'block_cache_plan', None)
+        if plan is not None:
+            caches = [caches[index] for index in plan.legacy_cache_indices]
+            return list(zip(*caches)) if caches else []
+        if self._uses_layer_scoped_block_caches(self.model_config):
+            return []
+        return list(zip(*caches))
+
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
         # Non-CUDA device integrations patch the canonical "cuda" device path
@@ -489,13 +496,8 @@ class CacheEngine:
         self.gpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_gpu_cache = mem_pool
         self._gpu_cache_list = caches
+        self.local_gpu_cache = self._build_legacy_layer_cache(caches)
         plan = getattr(self, 'block_cache_plan', None)
-        uses_layer_rows = plan.uses_layer_rows if plan is not None else self._uses_layer_scoped_block_caches(
-            self.model_config)
-        if uses_layer_rows:
-            self.local_gpu_cache = []
-        else:
-            self.local_gpu_cache = list(zip(*caches))
         if plan is None:
             resources = self._get_cache_resources(self.model_config, self.cache_config, self.world_size)
             self._cache_names = [resource.name for resource in resources]
@@ -515,13 +517,7 @@ class CacheEngine:
         self.cpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_cpu_cache = mem_pool
         self._cpu_cache_list = caches
-        plan = getattr(self, 'block_cache_plan', None)
-        uses_layer_rows = plan.uses_layer_rows if plan is not None else self._uses_layer_scoped_block_caches(
-            self.model_config)
-        if uses_layer_rows:
-            self.local_cpu_cache = []
-        else:
-            self.local_cpu_cache = list(zip(*caches))
+        self.local_cpu_cache = self._build_legacy_layer_cache(caches)
         return self.local_cpu_cache
 
     @property

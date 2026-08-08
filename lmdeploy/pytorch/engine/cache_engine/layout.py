@@ -2,10 +2,19 @@
 """Default physical cache allocation and owning-pool metadata."""
 
 from dataclasses import dataclass
+from typing import Protocol
 
 import torch
 
 from .schema import CacheResource
+
+
+class BlockCacheLayout(Protocol):
+    """Realize a physical block-cache allocation."""
+
+    def allocate(self, num_blocks: int, device: torch.device | str) -> 'CacheAllocation':
+        """Allocate physical kernel blocks on one device."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -103,6 +112,42 @@ class LayerRowBlockCacheLayout:
             caches.append(cache)
 
         return CacheAllocation(pools=tuple(pools), caches=tuple(caches))
+
+
+@dataclass(frozen=True)
+class ContiguousBlockCacheLayout:
+    """Give every resource an independent contiguous typed tensor."""
+
+    resources: tuple[CacheResource, ...]
+    num_layers: int
+
+    def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
+        """Allocate contiguous resource tensors for one block count."""
+        pools = []
+        caches = []
+        for resource in self.resources:
+            num_rows = self.num_layers if resource.layer_rows is None else resource.num_rows
+            cache = torch.zeros((num_rows, num_blocks, *resource.desc.shape),
+                                dtype=resource.desc.dtype,
+                                device=device)
+            pools.append(CachePool(cache, entry_axis=1))
+            caches.append(cache)
+
+        return CacheAllocation(pools=tuple(pools), caches=tuple(caches))
+
+
+@dataclass(frozen=True)
+class CompositeBlockCacheLayout:
+    """Combine ordered child layouts into one allocation."""
+
+    layouts: tuple[BlockCacheLayout, ...]
+
+    def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
+        """Allocate child layouts and preserve their resource order."""
+        allocations = [layout.allocate(num_blocks, device) for layout in self.layouts]
+        pools = tuple(pool for allocation in allocations for pool in allocation.pools)
+        caches = tuple(cache for allocation in allocations for cache in allocation.caches)
+        return CacheAllocation(pools=pools, caches=caches)
 
 
 @dataclass(frozen=True)

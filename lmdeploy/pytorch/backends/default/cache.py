@@ -1,6 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from ...engine.cache_engine.layout import LayerRowBlockCacheLayout, PackedBlockCacheLayout, PackedStateCacheLayout
+from itertools import groupby
+
+from ...engine.cache_engine.layout import (
+    CompositeBlockCacheLayout,
+    ContiguousBlockCacheLayout,
+    LayerRowBlockCacheLayout,
+    PackedBlockCacheLayout,
+    PackedStateCacheLayout,
+)
 from ..cache import CacheBackend
 
 
@@ -11,12 +19,30 @@ class DefaultCacheBackend(CacheBackend):
     def build_block_layout(cls, resources, num_layers: int):
         """Select the default block-cache packing."""
         resources = tuple(resources)
-        layered = [resource.layer_rows is not None for resource in resources]
-        if any(resource.tensor_contract.per_layer_contiguous for resource in resources):
-            raise ValueError('The default cache backend does not yet support per-layer contiguous cache contracts.')
-        if len(resources) > 0 and all(layered):
-            return LayerRowBlockCacheLayout(resources)
-        return PackedBlockCacheLayout(resources, num_layers=num_layers)
+        if not resources:
+            return PackedBlockCacheLayout(resources, num_layers=num_layers)
+
+        def layout_kind(resource):
+            if resource.per_layer_contiguous:
+                return 'contiguous'
+            if resource.layer_rows is not None:
+                return 'layer_rows'
+            return 'packed'
+
+        layouts = []
+        for kind, group in groupby(resources, key=layout_kind):
+            group = tuple(group)
+            if kind == 'contiguous':
+                layout = ContiguousBlockCacheLayout(group, num_layers=num_layers)
+            elif kind == 'layer_rows':
+                layout = LayerRowBlockCacheLayout(group)
+            else:
+                layout = PackedBlockCacheLayout(group, num_layers=num_layers)
+            layouts.append(layout)
+
+        if len(layouts) == 1:
+            return layouts[0]
+        return CompositeBlockCacheLayout(tuple(layouts))
 
     @classmethod
     def build_state_layout(cls, resources):

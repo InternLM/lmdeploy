@@ -13,6 +13,8 @@ from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
 from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.engine.cache_engine.layout import (
     CachePool,
+    CompositeBlockCacheLayout,
+    ContiguousBlockCacheLayout,
     LayerRowBlockCacheLayout,
     PackedBlockCacheLayout,
     PackedStateCacheLayout,
@@ -21,7 +23,6 @@ from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
 from lmdeploy.pytorch.engine.cache_engine.schema import (
     CacheDesc,
     CacheResource,
-    CacheTensorContract,
     LayerRowMap,
     build_state_cache_resources,
 )
@@ -72,7 +73,7 @@ def test_block_cache_plan_owns_geometry_layout_and_access_metadata():
             7: 0,
         },
     }
-    assert plan.uses_layer_rows
+    assert plan.legacy_cache_indices == ()
     assert block_nbytes == 2 * 2 * 16 + 1 * 2 * 8
 
 
@@ -179,16 +180,33 @@ def test_default_cache_backend_selects_layout_from_resource_membership():
     assert isinstance(state_layout, PackedStateCacheLayout)
 
 
-def test_default_cache_backend_rejects_unimplemented_contiguous_contract():
-    contiguous = CacheResource(
-        'index',
-        CacheDesc(shape=[3], dtype=torch.float32),
-        layer_rows=LayerRowMap.build('index', [1]),
-        tensor_contract=CacheTensorContract(per_layer_contiguous=True),
+def test_default_composite_layout_packs_plain_and_isolates_contiguous_resources():
+    resources = (
+        CacheResource('first', CacheDesc(shape=[3], dtype=torch.float32, alignment=16)),
+        CacheResource('second', CacheDesc(shape=[2], dtype=torch.float16, alignment=8)),
+        CacheResource(
+            'index',
+            CacheDesc(shape=[5], dtype=torch.float16),
+            layer_rows=LayerRowMap.build('index', [1, 3]),
+            per_layer_contiguous=True,
+        ),
     )
 
-    with pytest.raises(ValueError, match='per-layer contiguous'):
-        DefaultCacheBackend.build_block_layout((contiguous, ), num_layers=2)
+    layout = DefaultCacheBackend.build_block_layout(resources, num_layers=4)
+    allocation = layout.allocate(num_blocks=3, device='cpu')
+    meta_allocation = layout.allocate(num_blocks=3, device='meta')
+
+    assert isinstance(layout, CompositeBlockCacheLayout)
+    assert [type(child) for child in layout.layouts] == [PackedBlockCacheLayout, ContiguousBlockCacheLayout]
+    assert [pool.entry_axis for pool in allocation.pools] == [1, 1]
+    assert [tuple(pool.tensor.shape) for pool in allocation.pools] == [(4, 3, 24), (2, 3, 5)]
+    assert [tuple(cache.shape) for cache in allocation.caches] == [(4, 3, 3), (4, 3, 2), (2, 3, 5)]
+    assert allocation.caches[2] is allocation.pools[1].tensor
+    assert allocation.caches[2].is_contiguous()
+    assert allocation.caches[2][0].is_contiguous()
+    assert [allocation.caches[index].storage_offset() for index in (0, 1)] == [0, 8]
+    assert all(torch.count_nonzero(pool.tensor) == 0 for pool in allocation.pools)
+    assert allocation.nbytes == meta_allocation.nbytes == 4 * 3 * 24 + 2 * 3 * 5 * 2
 
 
 def test_dlinfer_block_layout_owns_contiguous_resource_tensors():
