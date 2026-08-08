@@ -17,6 +17,7 @@ from lmdeploy.pytorch.engine.cache_engine.layout import (
     PackedBlockCacheLayout,
     PackedStateCacheLayout,
 )
+from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
 from lmdeploy.pytorch.engine.cache_engine.schema import (
     CacheDesc,
     CacheResource,
@@ -32,6 +33,53 @@ def test_cache_pool_validates_and_counts_owning_storage():
     assert pool.nbytes == tensor.numel()
     with pytest.raises(ValueError, match='entry_axis'):
         CachePool(tensor=tensor, entry_axis=3)
+
+
+def test_block_cache_plan_owns_geometry_layout_and_access_metadata():
+    resources = (
+        CacheResource('first',
+                      CacheDesc(shape=[3], dtype=torch.float32, alignment=16),
+                      layer_rows=LayerRowMap.build('first', [1, 9])),
+        CacheResource('second',
+                      CacheDesc(shape=[2], dtype=torch.float16, alignment=8),
+                      layer_rows=LayerRowMap.build('second', [7])),
+    )
+    allocations = []
+
+    class RecordingLayout:
+
+        def allocate(self, num_blocks, device):
+            allocations.append((num_blocks, str(device)))
+            return LayerRowBlockCacheLayout(resources).allocate(num_blocks, device)
+
+    plan = BlockCachePlan(resources=resources,
+                          layout=RecordingLayout(),
+                          kernel_blocks_per_logical_block=2)
+
+    allocation = plan.allocate(num_logical_blocks=3, device='cpu')
+    block_nbytes = plan.logical_block_nbytes
+
+    assert allocations == [(6, 'cpu'), (2, 'meta')]
+    assert [tuple(cache.shape) for cache in allocation.caches] == [(2, 6, 3), (1, 6, 2)]
+    assert plan.cache_names == ('first', 'second')
+    assert plan.layer_maps == {
+        'first': {
+            1: 0,
+            9: 1,
+        },
+        'second': {
+            7: 0,
+        },
+    }
+    assert plan.uses_layer_rows
+    assert block_nbytes == 2 * 2 * 16 + 1 * 2 * 8
+
+
+def test_block_cache_plan_rejects_invalid_geometry():
+    layout = PackedBlockCacheLayout((), num_layers=2)
+
+    with pytest.raises(ValueError, match='kernel blocks per logical block'):
+        BlockCachePlan(resources=(), layout=layout, kernel_blocks_per_logical_block=0)
 
 
 def test_packed_block_allocation_owns_one_block_axis_pool():

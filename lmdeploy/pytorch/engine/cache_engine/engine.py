@@ -21,6 +21,7 @@ from lmdeploy.utils import get_logger
 from ....messages import QuantPolicy
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
 from .layout import CacheAllocation
+from .plan import BlockCachePlan
 from .schema import (
     CacheDesc,
     CacheResource,
@@ -181,6 +182,8 @@ class CacheEngine:
         quant_desc = _describe_kv_cache_quant_policy(cache_config.quant_policy)
         if quant_desc is not None:
             logger.info('Using %s.', quant_desc)
+
+        self.block_cache_plan = self.build_cache_plan(model_config, cache_config, world_size)
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -406,10 +409,9 @@ class CacheEngine:
         return descs
 
     @classmethod
-    def allocate_caches(cls, num_blocks: int, model_config: ModelConfig, cache_config: CacheConfig, world_size: int,
-                        device: str) -> CacheAllocation:
-        """Allocate caches."""
-
+    def build_cache_plan(cls, model_config: ModelConfig, cache_config: CacheConfig,
+                         world_size: int) -> BlockCachePlan:
+        """Finalize block geometry, resources, and backend layout."""
         if cache_config.block_size < cache_config.kernel_block_size:
             raise ValueError(
                 f'block_size {cache_config.block_size} must be greater than or equal to '
@@ -420,52 +422,80 @@ class CacheEngine:
                 f'kernel_block_size {cache_config.kernel_block_size}.')
 
         num_layers = model_config.num_layers
-        kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
-        num_blocks *= kernel_blocks_per_kv
-
+        kernel_blocks_per_logical_block = cache_config.block_size // cache_config.kernel_block_size
         resources = cls._get_cache_resources(model_config, cache_config, world_size)
         cache_backend = get_backend().get_cache_backend()
         layout = cache_backend.build_block_layout(resources, num_layers=num_layers)
-        allocation = layout.allocate(num_blocks=num_blocks, device=device)
-        return allocation
+        return BlockCachePlan(
+            resources=resources,
+            layout=layout,
+            kernel_blocks_per_logical_block=kernel_blocks_per_logical_block,
+        )
+
+    @classmethod
+    def allocate_caches(cls, num_blocks: int, model_config: ModelConfig, cache_config: CacheConfig, world_size: int,
+                        device: str) -> CacheAllocation:
+        """Compatibility facade that builds and realizes one cache plan."""
+        plan = cls.build_cache_plan(model_config, cache_config, world_size)
+        return plan.allocate(num_logical_blocks=num_blocks, device=device)
+
+    def _allocate_runtime_caches(self, num_blocks: int, device: str):
+        """Realize the retained plan or use a legacy patched allocator."""
+        plan = getattr(self, 'block_cache_plan', None)
+        allocator = self.allocate_caches
+        class_allocator = type(self).allocate_caches
+        allocator_func = getattr(class_allocator, '__func__', class_allocator)
+        if plan is not None and allocator_func is _NATIVE_BLOCK_ALLOCATOR:
+            return plan.allocate(num_logical_blocks=num_blocks, device=device)
+        return allocator(
+            num_blocks=num_blocks,
+            model_config=self.model_config,
+            cache_config=self.cache_config,
+            world_size=self.world_size,
+            device=device,
+        )
 
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
-        result = self.allocate_caches(
+        result = self._allocate_runtime_caches(
             num_blocks=self.num_gpu_blocks,
-            model_config=self.model_config,
-            cache_config=self.cache_config,
-            world_size=self.world_size,
             device='cuda',
         )
         self.gpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_gpu_cache = mem_pool
         self._gpu_cache_list = caches
-        if self._uses_layer_scoped_block_caches(self.model_config):
+        plan = getattr(self, 'block_cache_plan', None)
+        uses_layer_rows = plan.uses_layer_rows if plan is not None else self._uses_layer_scoped_block_caches(
+            self.model_config)
+        if uses_layer_rows:
             self.local_gpu_cache = []
         else:
             self.local_gpu_cache = list(zip(*caches))
-        resources = self._get_cache_resources(self.model_config, self.cache_config, self.world_size)
-        self._cache_names = [resource.name for resource in resources]
-        self._block_cache_layer_maps = self._get_block_cache_layer_maps(self.model_config)
+        if plan is None:
+            resources = self._get_cache_resources(self.model_config, self.cache_config, self.world_size)
+            self._cache_names = [resource.name for resource in resources]
+            self._block_cache_layer_maps = self._get_block_cache_layer_maps(self.model_config)
+        else:
+            self._cache_names = list(plan.cache_names)
+            self._block_cache_layer_maps = plan.layer_maps
         self._cache_list = self._gpu_cache_list
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
         """Allocate caches on Host."""
-        result = self.allocate_caches(
+        result = self._allocate_runtime_caches(
             num_blocks=self.num_cpu_blocks,
-            model_config=self.model_config,
-            cache_config=self.cache_config,
-            world_size=self.world_size,
             device='cpu',
         )
         self.cpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
         self.full_cpu_cache = mem_pool
         self._cpu_cache_list = caches
-        if self._uses_layer_scoped_block_caches(self.model_config):
+        plan = getattr(self, 'block_cache_plan', None)
+        uses_layer_rows = plan.uses_layer_rows if plan is not None else self._uses_layer_scoped_block_caches(
+            self.model_config)
+        if uses_layer_rows:
             self.local_cpu_cache = []
         else:
             self.local_cpu_cache = list(zip(*caches))
@@ -614,7 +644,12 @@ class CacheEngine:
         """
         # Resolve the layout before sizing; CUDA graphs reuse the updated model config.
         _update_mla_kv_cache_dtype(model_config, cache_config)
-        result = cls.allocate_caches(
+        allocator = cls.allocate_caches
+        allocator_func = getattr(allocator, '__func__', allocator)
+        if allocator_func is _NATIVE_BLOCK_ALLOCATOR:
+            return cls.build_cache_plan(model_config, cache_config, world_size).logical_block_nbytes
+
+        result = allocator(
             num_blocks=1,
             model_config=model_config,
             cache_config=cache_config,
@@ -692,6 +727,12 @@ class CacheEngine:
             ))
 
     """ Metheds for PD Disaggregation End. """
+
+
+# Existing dlinfer releases replace this class method after importing LMDeploy.
+# Keep its original function identity so runtime and sizing can retain that
+# compatibility path until the external feature check is deployed.
+_NATIVE_BLOCK_ALLOCATOR = CacheEngine.allocate_caches.__func__
 
 
 class StateCacheEngine:

@@ -15,6 +15,8 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, NamedCacheView, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool
+from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
+from lmdeploy.pytorch.engine.cache_engine.schema import CacheDesc, CacheResource
 
 
 def _make_model_config(**kwargs):
@@ -299,6 +301,46 @@ def test_cache_engine_retains_cpu_allocation_owner():
     assert cache_engine.full_cpu_cache is cache_engine.cpu_allocation.pools[0].tensor
 
 
+def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations(monkeypatch):
+    resources = (CacheResource('only', CacheDesc(shape=[3], dtype=torch.float32)), )
+    allocations = []
+
+    class RecordingLayout:
+
+        def allocate(self, num_blocks, device):
+            allocations.append((num_blocks, device))
+            cache = torch.zeros((4, num_blocks, 3), dtype=torch.float32)
+            return CacheAllocation(pools=(CachePool(cache, entry_axis=1), ), caches=(cache, ))
+
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cache_config = CacheConfig(max_batches=1,
+                                            block_size=128,
+                                            kernel_block_size=64,
+                                            num_cpu_blocks=3,
+                                            num_gpu_blocks=3)
+    cache_engine.model_config = _make_model_config(dtype=torch.bfloat16)
+    cache_engine.world_size = 1
+    cache_engine.block_cache_plan = BlockCachePlan(resources=resources,
+                                                   layout=RecordingLayout(),
+                                                   kernel_blocks_per_logical_block=2)
+
+    def unexpected_compatibility_allocation(**kwargs):
+        raise AssertionError('retained plans must not rebuild cache resources or layouts')
+
+    monkeypatch.setattr(cache_engine, 'allocate_caches', unexpected_compatibility_allocation)
+
+    gpu_cache = cache_engine.allocate_gpu_cache()
+    cpu_cache = cache_engine.allocate_cpu_cache()
+
+    assert allocations == [(6, 'cuda'), (6, 'cpu')]
+    assert cache_engine._cache_names == ['only']
+    assert cache_engine._block_cache_layer_maps == {}
+    assert len(gpu_cache) == len(cpu_cache) == 4
+    assert all(len(layer_cache) == 1 for layer_cache in (*gpu_cache, *cpu_cache))
+    assert torch.equal(gpu_cache[0][0], cache_engine._gpu_cache_list[0][0])
+    assert torch.equal(cpu_cache[0][0], cache_engine._cpu_cache_list[0][0])
+
+
 def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
     mem_pool = torch.empty((2, 1, 8), dtype=torch.uint8)
     caches = [torch.empty((2, 1, 1)), torch.empty((2, 1, 1))]
@@ -316,6 +358,15 @@ def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
                                             num_gpu_blocks=0)
     cache_engine.model_config = _make_model_config(dtype=torch.bfloat16)
     cache_engine.world_size = 1
+    resources = (CacheResource('native', CacheDesc(shape=[1], dtype=torch.float32)), )
+
+    def unexpected_native_allocation(**kwargs):
+        raise AssertionError('patched allocators must remain active')
+
+    native_layout = SimpleNamespace(allocate=unexpected_native_allocation)
+    cache_engine.block_cache_plan = BlockCachePlan(resources=resources,
+                                                   layout=native_layout,
+                                                   kernel_blocks_per_logical_block=1)
 
     cache_engine.allocate_cpu_cache()
 
