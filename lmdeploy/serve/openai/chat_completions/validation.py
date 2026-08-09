@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
+# Upper bound for `n` (number of choices). Each choice is a separate
+# engine.generate() call on the fan-out path, so cap to protect resources.
+_MAX_FANOUT_N = 128
+
 
 def check_request(request: ChatCompletionRequest, server_context) -> str:
     engine_config = server_context.engine_config
@@ -37,12 +41,21 @@ def check_request(request: ChatCompletionRequest, server_context) -> str:
     # check sampling settings
     if request.n <= 0:
         return f'The n {request.n!r} must be a positive int.'
+    # n > 1 is implemented as server-side fan-out (N independent engine
+    # generate() calls). Cap it to prevent unbounded resource use.
+    if request.n > _MAX_FANOUT_N:
+        return (f'The n {request.n!r} exceeds the maximum supported '
+                f'choices ({_MAX_FANOUT_N}).')
     if request.top_p is not None and not (0 < request.top_p <= 1):
         return f'The top_p {request.top_p!r} must be in (0, 1].'
     if request.top_k is not None and request.top_k < 0:
         return f'The top_k {request.top_k!r} cannot be a negative integer.'
     if request.temperature is not None and not (0 <= request.temperature <= 2):
         return f'The temperature {request.temperature!r} must be in [0, 2]'
+    # seed validation: per-choice seeds are derived as `seed + i` for n > 1,
+    # so a negative seed could collide with engine internals; reject it.
+    if request.seed is not None and request.seed < 0:
+        return f'The seed {request.seed!r} must be a non-negative int.'
 
     # Validate input_ids and image_data constraints.
     # messages has higher priority. input_ids and image_data are only used when

@@ -1,10 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+import asyncio
 import json
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
+from copy import deepcopy
+from dataclasses import dataclass, field
 from http import HTTPStatus
 
 import shortuuid
@@ -40,6 +43,273 @@ from .logprobs import _create_chat_completion_logprobs, _create_output_token_log
 from .validation import check_request
 
 logger = get_logger('lmdeploy')
+
+
+@dataclass
+class _FanoutResult:
+    """Per-choice aggregated output of one fan-out generator.
+
+    The handler post-processes these (parser, logprobs, tool calls) to build
+    the final ``ChatCompletionResponseChoice`` list. Carrying the raw collected
+    state keeps ``_fanout_generate_collect`` a pure, engine-agnostic helper
+    that can be unit-tested with fake generators.
+    """
+    index: int
+    final_res: object
+    text: str
+    token_ids: list = field(default_factory=list)
+    logprobs: list = field(default_factory=list)
+    cache_block_ids: list = field(default_factory=list)
+    remote_token_ids: list = field(default_factory=list)
+
+
+class _ClientDisconnected(Exception):
+    """Raised inside fan-out consumption when the client disconnects."""
+
+
+async def _fanout_generate_collect(
+    generators: list[tuple[int, AsyncGenerator]],
+    prompt_tokens: int | None = None,
+    *,
+    disconnect_check: Callable[[], Awaitable[bool]] | None = None,
+) -> tuple[list[_FanoutResult], dict[str, int]]:
+    """Consume N independent engine generators concurrently and aggregate usage.
+
+    Each generator is treated as a black box yielding ``GenOut``-like objects;
+    the fan-out is therefore engine-agnostic and works for both pytorch and
+    turbomind. If any generator raises, the whole request fails (OpenAI-style:
+    a single n>1 request is all-or-nothing). ``completion_tokens`` is the sum
+    across choices; ``prompt_tokens`` is counted once (taken from
+    ``prompt_tokens`` if provided, else from the first choice's
+    ``input_token_len`` since all choices share the same prompt).
+
+    Args:
+        generators: list of ``(index, async_generator)`` pairs.
+        prompt_tokens: explicit prompt token count; if ``None`` it is derived
+            from the first result's ``input_token_len``.
+        disconnect_check: optional async callback returning ``True`` when the
+            client has disconnected; the generator is then closed and
+            ``_ClientDisconnected`` is raised.
+
+    Returns:
+        ``(results, usage)`` where ``results`` is a list of ``_FanoutResult``
+        ordered by index, and ``usage`` is a dict with ``prompt_tokens``,
+        ``completion_tokens`` and ``cached_tokens``.
+    """
+    if not generators:
+        return [], {
+            'prompt_tokens': prompt_tokens or 0,
+            'completion_tokens': 0,
+            'cached_tokens': 0,
+        }
+
+    async def _consume(index: int, gen: AsyncGenerator) -> _FanoutResult:
+        final_res = None
+        text = ''
+        token_ids: list = []
+        logprobs: list = []
+        cache_block_ids: list = []
+        remote_token_ids: list = []
+        async for res in gen:
+            if disconnect_check is not None and await disconnect_check():
+                await gen.aclose()
+                raise _ClientDisconnected(
+                    f'client disconnected during fan-out choice {index}')
+            final_res = res
+            text += res.response
+            if res.token_ids:
+                token_ids.extend(res.token_ids)
+            if res.logprobs:
+                logprobs.extend(res.logprobs)
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
+        if final_res is None:
+            raise RuntimeError(
+                f'fan-out choice {index} produced no output')
+        return _FanoutResult(
+            index=index,
+            final_res=final_res,
+            text=text,
+            token_ids=token_ids,
+            logprobs=logprobs,
+            cache_block_ids=cache_block_ids,
+            remote_token_ids=remote_token_ids,
+        )
+
+    results = await asyncio.gather(
+        *[_consume(idx, gen) for idx, gen in generators])
+    results.sort(key=lambda r: r.index)
+    total_completion = sum(r.final_res.generate_token_len for r in results)
+    total_cached = sum(getattr(r.final_res, 'cached_tokens', 0) for r in results)
+    resolved_prompt = (prompt_tokens if prompt_tokens is not None
+                       else results[0].final_res.input_token_len)
+    usage = {
+        'prompt_tokens': resolved_prompt,
+        'completion_tokens': total_completion,
+        'cached_tokens': total_cached,
+    }
+    return results, usage
+
+
+async def _fanout_generate_stream(
+    generators: list[tuple[int, AsyncGenerator]],
+    parsers: list,
+    request: ChatCompletionRequest,
+    request_id: str,
+    created_time: int,
+    model_name: str,
+    tokenizer: str,
+    include_usage: bool,
+) -> AsyncGenerator[str, None]:
+    """Interleave N fan-out generators into a single SSE stream.
+
+    Each choice is processed with its own stateful ``response_parser`` (parsers
+    hold incremental tag-buffering state). Deltas are emitted as they arrive
+    from any generator, each tagged with its choice ``index``. After all
+    choices finish, a final aggregated usage chunk is emitted (when
+    ``include_usage``), followed by ``[DONE]``. Errors propagate to the whole
+    request.
+    """
+    n = len(generators)
+    queue: asyncio.Queue = asyncio.Queue()
+    _DONE = 'done'
+    _DELTA = 'delta'
+    _ERROR = 'error'
+
+    async def consume(index: int, gen: AsyncGenerator, parser) -> None:
+        streaming_tools = False
+        final_usage: UsageInfo | None = None
+        try:
+            async for res in gen:
+                logprobs = None
+                output_token_logprobs = None
+                if request.logprobs and res.logprobs:
+                    logprobs = _create_chat_completion_logprobs(
+                        tokenizer, res.token_ids, res.logprobs)
+                if request.return_logprob:
+                    output_token_logprobs = _create_output_token_logprobs(
+                        res.token_ids, res.logprobs)
+                if res.finish_reason and include_usage:
+                    final_usage = UsageInfo.build(
+                        prompt_tokens=res.input_token_len,
+                        completion_tokens=res.generate_token_len,
+                        cached_tokens=res.cached_tokens,
+                    )
+                delta_token_ids = (res.token_ids
+                                   if res.token_ids is not None else [])
+                stream_deltas = parser.stream_chunk(res.response,
+                                                    delta_token_ids)
+                if not stream_deltas:
+                    if res.finish_reason is None and not delta_token_ids:
+                        continue
+                    stream_deltas = [(DeltaMessage(role='assistant',
+                                                   content=''), False)]
+                should_validate_complete = (
+                    res.finish_reason in ('stop', 'length') and
+                    (request.return_token_ids
+                     or request.return_routed_experts))
+                if should_validate_complete and not parser.validate_complete():
+                    res.finish_reason = 'parse_error'
+                for delta_index, (delta_message,
+                                  tool_emitted) in enumerate(stream_deltas):
+                    if tool_emitted:
+                        streaming_tools = True
+                    is_last_delta = delta_index == len(stream_deltas) - 1
+                    finish_reason = res.finish_reason if is_last_delta else None
+                    chunk_logprobs = logprobs if is_last_delta else None
+                    chunk_output_token_logprobs = (output_token_logprobs
+                                                   if is_last_delta else None)
+                    if (request.tool_choice != 'none'
+                            and parser.tool_parser is not None):
+                        if finish_reason == 'stop' and streaming_tools is True:
+                            finish_reason = 'tool_calls'
+                    routed_experts = (res.routed_experts
+                                      if finish_reason is not None else None)
+                    stream_output_ids = delta_token_ids if (
+                        request.return_token_ids
+                        and is_last_delta) else None
+                    choice_data = ChatCompletionResponseStreamChoice(
+                        index=index,
+                        delta=delta_message,
+                        finish_reason=finish_reason,
+                        logprobs=chunk_logprobs,
+                        output_token_logprobs=chunk_output_token_logprobs,
+                        output_ids=stream_output_ids,
+                        routed_experts=routed_experts,
+                    )
+                    choice_data = maybe_filter_parallel_tool_calls(
+                        choice_data, request)
+                    response = ChatCompletionStreamResponse(
+                        id=request_id,
+                        created=created_time,
+                        model=model_name,
+                        choices=[choice_data],
+                        usage=None,
+                    )
+                    response_dict = response.model_dump(mode='json',
+                                                        exclude_none=True)
+                    if include_usage:
+                        response_dict['usage'] = None
+                    if res.cache_block_ids is not None and is_last_delta:
+                        response_dict['cache_block_ids'] = res.cache_block_ids
+                        response_dict['remote_token_ids'] = res.token_ids
+                    await queue.put((_DELTA, response_dict))
+            await queue.put((_DONE, index, final_usage))
+        except Exception as e:  # noqa: BLE001
+            await queue.put((_ERROR, e))
+            raise
+
+    tasks = [
+        asyncio.create_task(consume(idx, gen, parsers[idx]))
+        for idx, gen in generators
+    ]
+    pending_usages: dict[int, UsageInfo] = {}
+    done_count = 0
+    try:
+        while done_count < n:
+            item = await queue.get()
+            kind = item[0]
+            if kind == _DELTA:
+                yield f'data: {json.dumps(item[1])}\n\n'
+            elif kind == _DONE:
+                done_count += 1
+                _, idx, final_usage = item
+                if final_usage is not None:
+                    pending_usages[idx] = final_usage
+            elif kind == _ERROR:
+                raise item[1]
+        if include_usage and pending_usages:
+            prompt_tokens = next(iter(
+                pending_usages.values())).prompt_tokens
+            completion_tokens = sum(
+                u.completion_tokens for u in pending_usages.values())
+            cached_tokens = sum(
+                (u.prompt_tokens_details.cached_tokens
+                 if u.prompt_tokens_details is not None else 0)
+                for u in pending_usages.values())
+            agg_usage = UsageInfo.build(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_tokens=cached_tokens,
+            )
+            usage_resp = ChatCompletionStreamResponse(
+                id=request_id,
+                created=created_time,
+                model=model_name,
+                choices=[],
+                usage=agg_usage,
+            )
+            yield f'data: {usage_resp.model_dump_json(exclude_none=True)}\n\n'
+        yield 'data: [DONE]\n\n'
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        for t in tasks:
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 def register(router: APIRouter, server_context) -> None:
@@ -231,27 +501,174 @@ def register(router: APIRouter, server_context) -> None:
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.'
                 )
 
-        session = server_context.create_session(request.session_id)
-        try:
-            preprocessed = await server_context.async_engine.preprocess(
-                request.messages,
-                session,
-                gen_config=gen_config,
-                tools=request.tools,
-                reasoning_effort=request.reasoning_effort,
-                do_preprocess=do_preprocess,
-                adapter_name=adapter_name,
-                chat_template_kwargs=chat_template_kwargs or None,
-                input_ids=resolved_input_ids,
-                media_io_kwargs=request.media_io_kwargs,
-                mm_processor_kwargs=request.mm_processor_kwargs)
-        except RequestError as error:
-            return create_request_error_response(error)
-        result_generator = server_context.async_engine.generate(
-            preprocessed,
-            stream_response=True)  # always use stream to enable batching
         include_usage = bool(request.stream_options
                              and request.stream_options.include_usage)
+
+        # ------------------------------------------------------------------
+        # n > 1: server-side fan-out.
+        # A single n>1 request becomes N independent engine.generate() calls
+        # with distinct random seeds, collated into N choices. This is
+        # engine-agnostic handler-layer logic, so both pytorch and turbomind
+        # are covered without per-engine changes: each inner generate() still
+        # runs with n=1 (the engine-level n>1 fallback warning in
+        # async_engine.py is intentionally kept). n==1 keeps the original
+        # single-generator fast path below (no overhead).
+        # ------------------------------------------------------------------
+        if request.n and request.n > 1:
+            n_choices = request.n
+            # The single session created earlier is unused on the fan-out
+            # path (each choice gets its own session below); release it.
+            server_context.session_manager.remove(session)
+            fanout_sessions = [
+                server_context.create_session(request.session_id)
+                for _ in range(n_choices)
+            ]
+            fanout_parsers = [parser_cls(request) for _ in range(n_choices)]
+            fanout_generators: list[tuple[int, AsyncGenerator]] = []
+            for i in range(n_choices):
+                sub_gen_config = deepcopy(gen_config)
+                # Per-choice seed: derive seed+i when request.seed is set, else
+                # leave None so the engine randomizes each choice independently
+                # (handled in AsyncEngine._determine_gen_config).
+                sub_gen_config.random_seed = ((request.seed + i)
+                                              if request.seed is not None
+                                              else None)
+                gen = server_context.async_engine.generate(
+                    request.messages,
+                    fanout_sessions[i],
+                    gen_config=sub_gen_config,
+                    tools=request.tools,
+                    reasoning_effort=request.reasoning_effort,
+                    stream_response=True,  # always stream to enable batching
+                    do_preprocess=do_preprocess,
+                    adapter_name=adapter_name,
+                    chat_template_kwargs=chat_template_kwargs or None,
+                    input_ids=resolved_input_ids,
+                    media_io_kwargs=request.media_io_kwargs,
+                    mm_processor_kwargs=request.mm_processor_kwargs,
+                )
+                fanout_generators.append((i, gen))
+
+            gen_list = [g for _, g in fanout_generators]
+
+            # Streaming fan-out: interleave deltas from all N generators.
+            if request.stream:
+                stream_gen = _fanout_generate_stream(
+                    fanout_generators,
+                    fanout_parsers,
+                    request,
+                    request_id,
+                    created_time,
+                    model_name,
+                    tokenizer,
+                    include_usage,
+                )
+                stream_generator = with_request_cleanup(
+                    stream_gen, gen_list, fanout_sessions,
+                    server_context.session_manager)
+                return StreamingResponse(stream_generator,
+                                         media_type='text/event-stream')
+
+            # Non-streaming fan-out: consume all N generators concurrently.
+            async def _fanout_nonstream():
+                try:
+                    results, usage_dict = await _fanout_generate_collect(
+                        fanout_generators,
+                        prompt_tokens=None,
+                        disconnect_check=raw_request.is_disconnected,
+                    )
+                except _ClientDisconnected:
+                    for s in fanout_sessions:
+                        await s.async_abort()
+                    return create_error_response(
+                        HTTPStatus.BAD_REQUEST, 'Client disconnected')
+
+                choices = []
+                for res in results:
+                    sub_parser = fanout_parsers[res.index]
+                    tool_calls = None
+                    reasoning_content = None
+                    try:
+                        raw_text = res.text
+                        text, tool_calls, reasoning_content = \
+                            sub_parser.parse_complete(
+                                res.text, res.token_ids)
+                        should_validate_complete = (
+                            res.final_res.finish_reason in ('stop', 'length')
+                            and (request.return_token_ids
+                                 or request.return_routed_experts))
+                        if should_validate_complete and not \
+                                sub_parser.validate_complete(raw_text):
+                            res.final_res.finish_reason = 'parse_error'
+                        if isinstance(tool_calls, list) and len(tool_calls):
+                            if res.final_res.finish_reason == 'stop':
+                                res.final_res.finish_reason = 'tool_calls'
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(
+                            f'Failed to parse {res.text}. Exception: {e}.')
+                        return create_error_response(
+                            HTTPStatus.BAD_REQUEST,
+                            'Failed to parse fc related info to json format!')
+
+                    message = ChatMessage(
+                        role='assistant',
+                        content=text,
+                        tool_calls=tool_calls,
+                        reasoning_content=reasoning_content,
+                    )
+                    choice_logprobs = None
+                    if request.logprobs and len(res.logprobs):
+                        choice_logprobs = _create_chat_completion_logprobs(
+                            tokenizer, res.token_ids, res.logprobs)
+                    choice_output_token_logprobs = None
+                    if request.return_logprob and len(res.logprobs):
+                        choice_output_token_logprobs = \
+                            _create_output_token_logprobs(
+                                res.token_ids, res.logprobs)
+                    choice_data = ChatCompletionResponseChoice(
+                        index=res.index,
+                        message=message,
+                        logprobs=choice_logprobs,
+                        output_token_logprobs=choice_output_token_logprobs,
+                        finish_reason=res.final_res.finish_reason,
+                        output_ids=(res.token_ids
+                                    if request.return_token_ids else None),
+                        routed_experts=(res.final_res.routed_experts
+                                        if request.return_routed_experts
+                                        else None),
+                    )
+                    choice_data = maybe_filter_parallel_tool_calls(
+                        choice_data, request)
+                    choices.append(choice_data)
+
+                usage = UsageInfo.build(
+                    prompt_tokens=usage_dict['prompt_tokens'],
+                    completion_tokens=usage_dict['completion_tokens'],
+                    cached_tokens=usage_dict['cached_tokens'],
+                )
+                return ChatCompletionResponse(
+                    id=request_id,
+                    created=created_time,
+                    model=model_name,
+                    choices=choices,
+                    usage=usage,
+                ).model_dump()
+
+            return await _fanout_nonstream()
+
+        result_generator = server_context.async_engine.generate(
+            request.messages,
+            session,
+            gen_config=gen_config,
+            tools=request.tools,
+            reasoning_effort=request.reasoning_effort,
+            stream_response=True,  # always use stream to enable batching
+            do_preprocess=do_preprocess,
+            adapter_name=adapter_name,
+            chat_template_kwargs=chat_template_kwargs or None,
+            input_ids=resolved_input_ids,
+            media_io_kwargs=request.media_io_kwargs,
+            mm_processor_kwargs=request.mm_processor_kwargs)
 
         def create_stream_response_json(
                 index: int,
