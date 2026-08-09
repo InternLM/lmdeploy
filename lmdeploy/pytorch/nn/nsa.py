@@ -51,7 +51,10 @@ class IndexerTopKFP8(nn.Module):
         if self._block_cache_row is None:
             raise RuntimeError('The DSA indexer block-cache row has not been bound.')
         context = get_step_ctx_manager().current_context()
-        return context.block_caches[DSA_INDEXER_K_CACHE_NAME][self._block_cache_row]
+        block_caches = context.block_caches
+        if hasattr(block_caches, 'row'):
+            return block_caches.row(DSA_INDEXER_K_CACHE_NAME, self._block_cache_row)
+        return block_caches[DSA_INDEXER_K_CACHE_NAME][self._block_cache_row]
 
     @staticmethod
     def _get_max_q_seqlen(q: Tensor,

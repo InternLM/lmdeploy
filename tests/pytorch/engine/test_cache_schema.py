@@ -94,6 +94,7 @@ def test_build_block_cache_resources_counts_operator_request_rows():
     assert resources[0].name == 'index'
     assert resources[0].desc.shape == [64, 1, 132]
     assert resources[0].layer_map is None
+    assert resources[0].consumer_rows == (0, 1, 2)
     assert resources[0].num_rows == 3
     assert resources[0].per_row_contiguous
 
@@ -105,12 +106,15 @@ def test_block_cache_request_normalizes_integer_like_shape_and_alignment():
     assert request.alignment == 128
 
 
-def test_build_block_cache_resources_rejects_provider_conflicts():
+def test_build_block_cache_resources_segments_heterogeneous_requests():
     first = BlockCacheRequest('index', (64, 128), torch.uint8)
     second = BlockCacheRequest('index', (64, 256), torch.uint8)
 
-    with pytest.raises(ValueError, match='Heterogeneous block cache requests'):
-        build_block_cache_resources_from_requests([first, second])
+    resources = build_block_cache_resources_from_requests([first, second, first])
+
+    assert [resource.name for resource in resources] == ['index', 'index']
+    assert [resource.desc.shape for resource in resources] == [[64, 128], [64, 256]]
+    assert [resource.consumer_rows for resource in resources] == [(0, 2), (1, )]
 
 
 def test_build_state_cache_resources_prefers_named_specs_and_keeps_legacy_bridge():

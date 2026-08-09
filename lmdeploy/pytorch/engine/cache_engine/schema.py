@@ -126,23 +126,28 @@ class CacheResource:
     name: str
     desc: CacheDesc
     layer_rows: LayerRowMap | None = None
-    row_count: int | None = None
+    consumer_rows: tuple[int, ...] | None = None
     per_row_contiguous: bool = False
 
     def __post_init__(self):
-        if self.row_count is None:
+        if self.consumer_rows is None:
             return
-        row_count = as_index(self.row_count)
-        if row_count <= 0:
-            raise ValueError(f'{self.name} row_count must be positive.')
         if self.layer_rows is not None:
-            raise ValueError(f'{self.name} cannot define both row_count and layer_rows.')
-        object.__setattr__(self, 'row_count', row_count)
+            raise ValueError(f'{self.name} cannot define both consumer_rows and layer_rows.')
+
+        consumer_rows = tuple(as_index(row) for row in self.consumer_rows)
+        if not consumer_rows:
+            raise ValueError(f'{self.name} consumer_rows must not be empty.')
+        if any(row < 0 for row in consumer_rows):
+            raise ValueError(f'{self.name} consumer rows must be non-negative.')
+        if len(consumer_rows) != len(set(consumer_rows)):
+            raise ValueError(f'{self.name} consumer rows must be unique within one resource.')
+        object.__setattr__(self, 'consumer_rows', consumer_rows)
 
     @property
     def has_rows(self) -> bool:
         """Whether the resource has an explicit compact-row axis."""
-        return self.row_count is not None or self.layer_rows is not None
+        return self.consumer_rows is not None or self.layer_rows is not None
 
     @property
     def layer_map(self) -> dict[int, int] | None:
@@ -154,8 +159,8 @@ class CacheResource:
     @property
     def num_rows(self) -> int:
         """Return compact rows for operator- or layer-scoped resources."""
-        if self.row_count is not None:
-            return self.row_count
+        if self.consumer_rows is not None:
+            return len(self.consumer_rows)
         assert self.layer_rows is not None
         return self.layer_rows.num_rows
 
@@ -180,27 +185,22 @@ def build_block_cache_resources(block_specs: Sequence[BlockCacheSpec]) -> tuple[
 
 def build_block_cache_resources_from_requests(
         requests: Sequence[BlockCacheRequest]) -> tuple[CacheResource, ...]:
-    """Aggregate one request occurrence per built cache consumer."""
-    request_by_name: dict[str, BlockCacheRequest] = {}
-    row_counts: dict[str, int] = {}
+    """Group equal contracts while retaining each consumer's logical row."""
+    rows_by_request: dict[BlockCacheRequest, list[int]] = {}
+    next_row_by_name: dict[str, int] = {}
 
     for request in requests:
-        existing = request_by_name.get(request.name)
-        if existing is not None and existing != request:
-            raise ValueError(f'Heterogeneous block cache requests for {request.name} are not supported yet.')
-
-        if request.name not in request_by_name:
-            request_by_name[request.name] = request
-            row_counts[request.name] = 0
-        row_counts[request.name] += 1
+        row = next_row_by_name.get(request.name, 0)
+        next_row_by_name[request.name] = row + 1
+        rows_by_request.setdefault(request, []).append(row)
 
     resources = []
-    for name, request in request_by_name.items():
+    for request, consumer_rows in rows_by_request.items():
         desc = CacheDesc(shape=list(request.shape), dtype=request.dtype, alignment=request.alignment)
         resources.append(
-            CacheResource(name=name,
+            CacheResource(name=request.name,
                           desc=desc,
-                          row_count=row_counts[name],
+                          consumer_rows=tuple(consumer_rows),
                           per_row_contiguous=request.per_row_contiguous))
     return tuple(resources)
 

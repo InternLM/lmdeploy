@@ -64,15 +64,6 @@ def test_block_cache_plan_owns_geometry_layout_and_access_metadata():
     assert allocations == [(6, 'cpu'), (2, 'meta')]
     assert [tuple(cache.shape) for cache in allocation.caches] == [(2, 6, 3), (1, 6, 2)]
     assert plan.cache_names == ('first', 'second')
-    assert plan.layer_maps == {
-        'first': {
-            1: 0,
-            9: 1,
-        },
-        'second': {
-            7: 0,
-        },
-    }
     assert plan.legacy_cache_indices == ()
     assert block_nbytes == 2 * 2 * 16 + 1 * 2 * 8
 
@@ -82,6 +73,31 @@ def test_block_cache_plan_rejects_invalid_geometry():
 
     with pytest.raises(ValueError, match='kernel blocks per logical block'):
         BlockCachePlan(resources=(), layout=layout, kernel_blocks_per_logical_block=0)
+
+
+def test_block_cache_plan_validates_segmented_consumer_rows():
+    first = CacheResource('index', CacheDesc(shape=[3], dtype=torch.float32), consumer_rows=(0, 2))
+    second = CacheResource('index', CacheDesc(shape=[5], dtype=torch.float32), consumer_rows=(1, ))
+    resources = (first, second)
+
+    plan = BlockCachePlan(resources=resources,
+                          layout=RowBlockCacheLayout(resources),
+                          kernel_blocks_per_logical_block=1)
+
+    assert plan.cache_names == ('index', 'index')
+    with pytest.raises(ValueError, match='row 0 belongs to multiple resources'):
+        duplicate = (
+            CacheResource('index', CacheDesc(shape=[3], dtype=torch.float32), consumer_rows=(0, )),
+            CacheResource('index', CacheDesc(shape=[5], dtype=torch.float32), consumer_rows=(0, )),
+        )
+        BlockCachePlan(resources=duplicate,
+                       layout=RowBlockCacheLayout(duplicate),
+                       kernel_blocks_per_logical_block=1)
+    with pytest.raises(ValueError, match='contiguous from zero'):
+        missing = (CacheResource('index', CacheDesc(shape=[3], dtype=torch.float32), consumer_rows=(1, )), )
+        BlockCachePlan(resources=missing,
+                       layout=RowBlockCacheLayout(missing),
+                       kernel_blocks_per_logical_block=1)
 
 
 def test_packed_block_allocation_owns_one_block_axis_pool():
@@ -187,7 +203,7 @@ def test_default_composite_layout_packs_plain_and_isolates_contiguous_resources(
         CacheResource(
             'index',
             CacheDesc(shape=[5], dtype=torch.float16),
-            row_count=2,
+            consumer_rows=(0, 1),
             per_row_contiguous=True,
         ),
     )

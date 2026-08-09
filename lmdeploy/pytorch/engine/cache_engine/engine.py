@@ -48,34 +48,95 @@ def _unpack_cache_allocation(result):
 
 
 class NamedCacheView(Mapping[str, torch.Tensor]):
-    """Dict-like named cache view with optional layer-scoped rows."""
+    """Resolve named cache tensors and their consumer/layer rows."""
 
     def __init__(self, caches: dict[str, torch.Tensor], layer_maps: dict[str, dict[int, int]] | None = None):
-        self._caches = caches
-        self._layer_maps = layer_maps or {}
+        self._segments = {
+            name: (cache, )
+            for name, cache in caches.items()
+        }
+        self._consumer_locations = {}
+        self._layer_locations = {
+            name: {
+                layer_id: (0, row)
+                for layer_id, row in layer_map.items()
+            }
+            for name, layer_map in (layer_maps or {}).items()
+        }
+
+    @classmethod
+    def from_resources(cls, resources: Sequence[CacheResource], caches: Sequence[torch.Tensor]):
+        """Build segmented row lookup from normalized resources."""
+        if len(resources) != len(caches):
+            raise ValueError('Cache resources and tensors must have the same length.')
+
+        view = cls({})
+        segments = {}
+        consumer_locations = {}
+        layer_locations = {}
+        for resource, cache in zip(resources, caches):
+            resource_segments = segments.setdefault(resource.name, [])
+            segment = len(resource_segments)
+            resource_segments.append(cache)
+
+            if resource.consumer_rows is not None:
+                locations = consumer_locations.setdefault(resource.name, {})
+                for local_row, consumer_row in enumerate(resource.consumer_rows):
+                    locations[consumer_row] = (segment, local_row)
+            elif resource.layer_rows is not None:
+                locations = layer_locations.setdefault(resource.name, {})
+                for layer_id, local_row in resource.layer_rows.row_by_layer.items():
+                    locations[layer_id] = (segment, local_row)
+
+        view._segments = {
+            name: tuple(resource_segments)
+            for name, resource_segments in segments.items()
+        }
+        view._consumer_locations = {
+            name: tuple(locations[row] for row in range(len(locations)))
+            for name, locations in consumer_locations.items()
+        }
+        view._layer_locations = layer_locations
+        return view
 
     def __getitem__(self, name: str):
-        return self._caches[name]
+        segments = self._segments[name]
+        if len(segments) != 1:
+            accessor = 'row' if name in self._consumer_locations else 'layer'
+            raise RuntimeError(
+                f'Cache {name} has multiple physical segments; use block_caches.{accessor}(...) to select one row.')
+        return segments[0]
 
     def __contains__(self, name: str):
-        return name in self._caches
+        return name in self._segments
 
     def __iter__(self):
-        return iter(self._caches)
+        return iter(self._segments)
 
     def __len__(self):
-        return len(self._caches)
+        return len(self._segments)
+
+    def row(self, name: str, consumer_row: int):
+        """Return the physical cache row bound to one built consumer."""
+        locations = self._consumer_locations.get(name)
+        if locations is None:
+            return self[name][consumer_row]
+        consumer_row = as_index(consumer_row)
+        if consumer_row < 0 or consumer_row >= len(locations):
+            raise RuntimeError(f'Consumer row {consumer_row} does not own cache {name}.')
+        segment, local_row = locations[consumer_row]
+        return self._segments[name][segment][local_row]
 
     def layer(self, name: str, layer_id: int):
         """Return a named cache row for a global layer id."""
-        layer_map = self._layer_maps.get(name)
-        cache_row = layer_id
-        if layer_map is not None:
-            try:
-                cache_row = layer_map[layer_id]
-            except KeyError as e:
-                raise RuntimeError(f'Layer {layer_id} does not own cache {name}.') from e
-        return self._caches[name][cache_row]
+        locations = self._layer_locations.get(name)
+        if locations is None:
+            return self[name][layer_id]
+        try:
+            segment, local_row = locations[layer_id]
+        except KeyError as e:
+            raise RuntimeError(f'Layer {layer_id} does not own cache {name}.') from e
+        return self._segments[name][segment][local_row]
 
 
 def _get_kv_cache_dtype(model_config: ModelConfig):
@@ -386,9 +447,6 @@ class CacheEngine:
             for idx, desc in enumerate(custom_descs):
                 resources.append(CacheResource(name=f'custom_{idx}', desc=desc))
 
-        names = [resource.name for resource in resources]
-        if len(names) != len(set(names)):
-            raise ValueError('Block cache resource names must be unique after request and fallback collection.')
         return tuple(resources)
 
     @classmethod
@@ -503,11 +561,14 @@ class CacheEngine:
         if plan is None:
             resources = self._get_cache_resources(self.model_config, self.cache_config, self.world_size)
             self._cache_names = [resource.name for resource in resources]
+            self._cache_resources = None
             self._block_cache_layer_maps = self._get_block_cache_layer_maps(self.model_config)
         else:
             self._cache_names = list(plan.cache_names)
-            self._block_cache_layer_maps = plan.layer_maps
+            self._cache_resources = plan.resources
+            self._block_cache_layer_maps = {}
         self._cache_list = self._gpu_cache_list
+        self._block_caches = self._build_block_cache_view()
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
@@ -522,11 +583,13 @@ class CacheEngine:
         self.local_cpu_cache = self._build_legacy_layer_cache(caches)
         return self.local_cpu_cache
 
-    @property
-    def block_caches(self) -> Mapping[str, torch.Tensor]:
-        """Return all caches (including k/v and custom) by name."""
+    def _build_block_cache_view(self) -> Mapping[str, torch.Tensor]:
+        """Build the model-facing view once for this device allocation."""
         if not hasattr(self, '_cache_names') or not hasattr(self, '_cache_list'):
             return {}
+        resources = getattr(self, '_cache_resources', None)
+        if resources is not None and any(resource.has_rows for resource in resources):
+            return NamedCacheView.from_resources(resources, self._cache_list)
         caches = {
             name: cache
             for name, cache in zip(self._cache_names, self._cache_list)
@@ -535,6 +598,13 @@ class CacheEngine:
         if not layer_maps:
             return caches
         return NamedCacheView(caches, layer_maps)
+
+    @property
+    def block_caches(self) -> Mapping[str, torch.Tensor]:
+        """Return all caches (including k/v and custom) by name."""
+        if hasattr(self, '_block_caches'):
+            return self._block_caches
+        return self._build_block_cache_view()
 
     @staticmethod
     def get_custom_cache_shape_impl(num_layers: int, num_blocks: int, block_size: int, shape: list[int]):

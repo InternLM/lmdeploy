@@ -175,8 +175,7 @@ def test_build_cache_plan_collects_built_operator_requests():
 
     assert geometries == [BlockCacheGeometry(block_size=128, kernel_block_size=64)]
     assert plan.cache_names == ('operator_cache', )
-    assert plan.layer_maps == {}
-    assert plan.resources[0].row_count == 2
+    assert plan.resources[0].consumer_rows == (0, 1)
     assert plan.kernel_blocks_per_logical_block == 2
 
 
@@ -263,10 +262,25 @@ def test_build_cache_plan_combines_standard_kv_and_operator_requests():
 
     assert plan.cache_names == ('k_cache', 'v_cache', 'operator_cache')
     assert plan.legacy_cache_indices == (0, 1)
-    assert plan.layer_maps == {}
     assert len(allocation.pools) == 2
     assert allocation.caches[2].is_contiguous()
     assert allocation.caches[2][0].is_contiguous()
+
+
+def test_operator_cache_requests_cannot_shadow_standard_cache_names():
+    model_config = _make_model_config(use_standard_kv_cache=True)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    request = BlockCacheRequest('k_cache', (64, 5), torch.float16)
+
+    with pytest.raises(ValueError, match='cannot mix plain and consumer resources'):
+        CacheEngine.build_cache_plan(model_config,
+                                     cache_config,
+                                     world_size=1,
+                                     request_collector=lambda geometry: [request])
 
 
 def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
@@ -313,8 +327,78 @@ def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
     assert len(cache_engine.gpu_allocation.pools) == 2
     assert len(cache_engine._swap_in_pairs) == 2
     assert all(entry_axis == 1 for _, _, entry_axis in cache_engine._swap_in_pairs)
+    assert isinstance(cache_engine.block_caches, NamedCacheView)
     assert cache_engine.block_caches['operator_cache'].is_contiguous()
     assert torch.equal(cache_engine.block_caches['operator_cache'][1], cache_engine._gpu_cache_list[2][1])
+    assert torch.equal(cache_engine.block_caches.row('operator_cache', 1), cache_engine._gpu_cache_list[2][1])
+
+
+def test_heterogeneous_operator_cache_rows_resolve_physical_segments():
+    model_config = _make_model_config(use_standard_kv_cache=False)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=2)
+    narrow = BlockCacheRequest('operator_cache', (64, 3), torch.float16)
+    wide = BlockCacheRequest('operator_cache', (64, 5), torch.float16, per_row_contiguous=True)
+    plan = CacheEngine.build_cache_plan(
+        model_config,
+        cache_config,
+        world_size=1,
+        request_collector=lambda geometry: [narrow, wide, narrow],
+    )
+
+    class CpuLayout:
+
+        def allocate(self, num_blocks, device):
+            return plan.layout.allocate(num_blocks, device='cpu')
+
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.cache_config = cache_config
+    cache_engine.model_config = model_config
+    cache_engine.world_size = 1
+    cache_engine.block_cache_plan = BlockCachePlan(resources=plan.resources,
+                                                   layout=CpuLayout(),
+                                                   kernel_blocks_per_logical_block=1)
+
+    assert cache_engine.allocate_gpu_cache() == []
+    block_caches = cache_engine.block_caches
+
+    assert [resource.consumer_rows for resource in plan.resources] == [(0, 2), (1, )]
+    assert len(cache_engine.gpu_allocation.pools) == 2
+    assert cache_engine._gpu_cache_list[1].is_contiguous()
+    assert torch.equal(block_caches.row('operator_cache', 0), cache_engine._gpu_cache_list[0][0])
+    assert torch.equal(block_caches.row('operator_cache', 1), cache_engine._gpu_cache_list[1][0])
+    assert torch.equal(block_caches.row('operator_cache', 2), cache_engine._gpu_cache_list[0][1])
+    with pytest.raises(RuntimeError, match='multiple physical segments'):
+        block_caches['operator_cache']
+    with pytest.raises(RuntimeError, match='Consumer row 3 does not own cache'):
+        block_caches.row('operator_cache', 3)
+
+
+def test_heterogeneous_config_cache_layers_resolve_physical_segments():
+    model_config = _make_model_config(
+        use_standard_kv_cache=False,
+        block_cache_specs=[
+            BlockCacheSpec('layer_cache', [0, 2], (64, 3), torch.float16),
+            BlockCacheSpec('layer_cache', [1], (64, 5), torch.float16),
+        ],
+    )
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=2)
+    plan = CacheEngine.build_cache_plan(model_config, cache_config, world_size=1)
+    allocation = plan.allocate(num_logical_blocks=2, device='cpu')
+    block_caches = NamedCacheView.from_resources(plan.resources, allocation.caches)
+
+    assert torch.equal(block_caches.layer('layer_cache', 0), allocation.caches[0][0])
+    assert torch.equal(block_caches.layer('layer_cache', 1), allocation.caches[1][0])
+    assert torch.equal(block_caches.layer('layer_cache', 2), allocation.caches[0][1])
+    with pytest.raises(RuntimeError, match='multiple physical segments'):
+        block_caches['layer_cache']
 
 
 def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():
@@ -773,6 +857,16 @@ def test_layer_scoped_cache_specs_reject_invalid_layer_ids():
                                     cache_config=cache_config,
                                     world_size=1,
                                     device='meta')
+
+    overlapping_segments = _make_model_config(
+        use_standard_kv_cache=False,
+        block_cache_specs=[
+            BlockCacheSpec('overlap', [1], (1, ), torch.float32),
+            BlockCacheSpec('overlap', [1, 2], (2, ), torch.float32),
+        ],
+    )
+    with pytest.raises(ValueError, match='row 1 belongs to multiple resources'):
+        CacheEngine.build_cache_plan(overlapping_segments, cache_config, world_size=1)
 
     negative_layer = [StateCacheSpec('bad', (1, ), torch.float32, layer_ids=[-1])]
     with pytest.raises(ValueError, match='non-negative'):

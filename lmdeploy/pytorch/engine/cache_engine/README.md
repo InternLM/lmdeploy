@@ -78,10 +78,13 @@ resources, even when it returns no requests.
 
 ### 2. Build one worker-local plan
 
-Schema construction validates requests and combines equal requests from built
-consumers into `CacheResource` objects with compact row counts. Legacy
-configuration-owned resources may still retain explicit layer-row maps. The
-active `CacheBackend` then selects physical layouts for the ordered resources.
+Schema construction validates requests and combines equal contracts from built
+consumers into `CacheResource` segments. Each segment records the stable
+consumer rows stored by its local tensor rows. For example, requests with
+contracts `A, B, A` become `A(consumer_rows=(0, 2))` and
+`B(consumer_rows=(1,))`. Legacy configuration-owned resources may instead
+retain explicit layer-row maps. The active `CacheBackend` then selects physical
+layouts for the ordered resources.
 
 `BlockCachePlan` retains:
 
@@ -93,9 +96,9 @@ It owns no tensors, streams, events, or movement policy. Plans never cross the
 executor RPC boundary; each worker returns only target/speculative/memory byte
 counts to the executor.
 
-Current operator-request limits are explicit: heterogeneous requests under one
-name and request collection through the old dlinfer allocator monkey patch are
-rejected at build time.
+Request collection through the old dlinfer allocator monkey patch remains
+rejected at build time because that compatibility path cannot consume a
+worker-local plan.
 
 ### 3. Realize allocations
 
@@ -146,9 +149,8 @@ The default backend groups consecutive resources by requirement:
 - compact-row resources that accept padded strides use the row layout;
 - resources with `per_row_contiguous=True` use the contiguous layout.
 
-Different resources may therefore use different layouts while sharing one
-plan and scheduler block count. Heterogeneous requirements under one resource
-name currently fail during request aggregation.
+Different resources and same-name physical segments may therefore use different
+layouts while sharing one plan and scheduler block count.
 
 ## Model-Facing Views
 
@@ -156,9 +158,14 @@ Two access forms coexist during migration:
 
 - `gpu_cache` / `cpu_cache` provide the legacy per-layer tuple used as
   `past_key_values`;
-- `block_caches[name][row]` resolves rows assigned to built operators;
+- `block_caches.row(name, consumer_row)` resolves the row assigned to a built
+  operator, even when that name spans different physical shapes;
 - `block_caches.layer(name, layer_id)` remains the compatibility lookup for
   configuration-owned layer maps.
+
+`block_caches[name]` still returns the complete tensor when a name has one
+physical segment. When a name is heterogeneous, direct lookup raises and asks
+the caller to select a consumer or layer row explicitly.
 
 `BlockCachePlan.legacy_cache_indices` determines which resources participate
 in legacy tuples. In a mixed allocation, adding a compact-row named resource

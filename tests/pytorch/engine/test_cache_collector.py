@@ -41,3 +41,19 @@ def test_collect_block_cache_requests_binds_rows_by_resource_name():
     assert requests == (index, scale, index)
     assert first.bindings == [('index', 0), ('scale', 0)]
     assert second.bindings == [('index', 1)]
+
+
+def test_collect_block_cache_requests_keeps_rows_stable_across_contracts():
+    geometry = BlockCacheGeometry(block_size=64, kernel_block_size=64)
+    narrow = BlockCacheRequest('index', (64, 8), torch.float16)
+    wide = BlockCacheRequest('index', (64, 16), torch.float16)
+    consumers = [_CacheRequester(narrow), _CacheRequester(wide), _CacheRequester(narrow)]
+
+    requests = collect_block_cache_requests(nn.ModuleList(consumers), geometry)
+
+    assert requests == (narrow, wide, narrow)
+    assert [consumer.bindings for consumer in consumers] == [
+        [('index', 0)],
+        [('index', 1)],
+        [('index', 2)],
+    ]
