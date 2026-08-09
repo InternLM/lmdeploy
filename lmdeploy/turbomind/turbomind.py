@@ -18,6 +18,7 @@ import torch
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
+from lmdeploy.serve.openai.chat_completions.guided import _to_xgr_structural_tag
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
@@ -739,6 +740,11 @@ class TurboMindInstance:
                     decode_grammar = gen_config.response_format[decode_grammar_type]
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = '{"type" : "object", "additionalProperties": true}'
+                elif decode_grammar_type == 'structural_tag':
+                    # structural_tag payload dict (lmdeploy-internal extension);
+                    # the actual compile is handled in the dispatch below.
+                    decode_grammar = gen_config.response_format.get(
+                        'structural_tag', gen_config.response_format)
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
@@ -749,9 +755,19 @@ class TurboMindInstance:
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = str(decode_grammar)
                     grammar = compiler.compile_json_schema(decode_grammar)
+                elif decode_grammar_type == 'structural_tag':
+                    if not hasattr(compiler, 'compile_structural_tag'):
+                        raise ValueError(
+                            'structural_tag response_format is not supported by the '
+                            'bundled turbomind _xgrammar binding, which only exposes '
+                            'compile_json_schema/compile_regex. Upgrade the _xgrammar '
+                            'C++ binding to enable structural_tag on turbomind.')
+                    grammar = compiler.compile_structural_tag(
+                        _to_xgr_structural_tag(decode_grammar))
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema", "json_object"]'
+                                   '["json_schema", "regex_schema", "json_object", ' \
+                                   '"structural_tag"]'
 
                 self.model_inst.set_grammar(grammar)
             except ValueError as e:

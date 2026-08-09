@@ -7,6 +7,10 @@ import torch
 import xgrammar as xgr
 from transformers import PreTrainedTokenizerBase
 
+from lmdeploy.serve.openai.chat_completions.guided import (
+    _to_xgr_structural_tag,
+)
+
 logger = logging.getLogger('lmdeploy')
 
 
@@ -30,30 +34,73 @@ class GuidedDecodingManager:
         self.vocab_size = vocab_size
         self.processors: dict[int, dict[int, xgr.GrammarMatcher]] = {}
 
+    @staticmethod
+    def _extract_schema(response_format: dict) -> tuple[Any, str]:
+        """Extract ``(schema, schema_type)`` from a response_format dict.
+
+        ``schema`` is normalized to the form expected by ``_compile``: a JSON
+        schema string for ``json_schema``/``json_object``, a regex string for
+        ``regex_schema``, and the structural_tag payload dict for
+        ``structural_tag``.
+        """
+        schema_type = response_format['type']
+        if schema_type == 'json_schema':
+            schema = response_format['json_schema']
+            if isinstance(schema, dict):
+                for key in ['json_schema', 'schema']:
+                    if key in schema:
+                        val = schema[key]
+                        schema = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
+
+            if not isinstance(schema, str):
+                raise ValueError(f'Cannot parse schema {schema}. The schema must be '
+                                 'either a dictionary or a string that contains the'
+                                 ' JSON Schema specification')
+        elif schema_type == 'regex_schema':
+            schema = response_format.get('regex_schema', '')
+        elif schema_type == 'json_object':
+            schema = '{"type" : "object", "additionalProperties": true}'
+        elif schema_type == 'structural_tag':
+            # structural_tag payload dict; defaults to the whole response_format
+            # if the 'structural_tag' key is absent.
+            schema = response_format.get('structural_tag', response_format)
+        else:
+            raise ValueError(f'unsupported format type: {schema_type}')
+        return schema, schema_type
+
+    def _compile(self, schema: Any, schema_type: str) -> xgr.CompiledGrammar:
+        """Compile an already-extracted schema into a CompiledGrammar."""
+        if schema_type == 'json_schema':
+            if isinstance(schema, str):
+                schema = json.loads(schema)
+
+            assert isinstance(schema, dict)
+            return self.compiler.compile_json_schema(schema)
+        elif schema_type == 'regex_schema':
+            return self.compiler.compile_regex(schema)
+        elif schema_type == 'json_object':
+            return self.compiler.compile_json_schema(schema)
+        elif schema_type == 'structural_tag':
+            return self.compiler.compile_structural_tag(_to_xgr_structural_tag(schema))
+        else:
+            raise ValueError(f'Do not support schema type {schema_type}')
+
+    def _compile_response_format(self, response_format: dict) -> xgr.CompiledGrammar:
+        """Compile a full response_format dict into a CompiledGrammar.
+
+        Single compile entrypoint covering all supported types
+        (``json_schema``/``regex_schema``/``json_object``/``structural_tag``).
+        Used by ``get_processor`` and exposed for unit testing.
+        """
+        schema, schema_type = self._extract_schema(response_format)
+        return self._compile(schema, schema_type)
+
     def get_processors(self, session_ctx: list[dict[str, Any]],
                        response_formats: tuple[dict]) -> dict[int, xgr.GrammarMatcher]:
         processors = {}
         for i, _format in enumerate(response_formats):
             if isinstance(_format, dict) and _format.get('type', 'text') != 'text':
-                schema_type = _format['type']
-                if schema_type == 'json_schema':
-                    schema = _format['json_schema']
-                    if isinstance(schema, dict):
-                        for key in ['json_schema', 'schema']:
-                            if key in schema:
-                                val = schema[key]
-                                schema = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
-
-                    if not isinstance(schema, str):
-                        raise ValueError(f'Cannot parse schema {schema}. The schema must be '
-                                         'either a dictionary or a string that contains the'
-                                         ' JSON Schema specification')
-                elif schema_type == 'regex_schema':
-                    schema = _format.get('regex_schema', '')
-                elif schema_type == 'json_object':
-                    schema = '{"type" : "object", "additionalProperties": true}'
-                else:
-                    raise ValueError(f'unsupported format type: {schema_type}')
+                schema, schema_type = self._extract_schema(_format)
 
                 session_id = session_ctx[i]['session_id']
                 seq_id = session_ctx[i]['seq_id']
@@ -62,25 +109,14 @@ class GuidedDecodingManager:
 
         return processors
 
-    def get_processor(self, session_id: int, seq_id: int, schema: str, type: str) -> xgr.GrammarMatcher:
+    def get_processor(self, session_id: int, seq_id: int, schema: Any, type: str) -> xgr.GrammarMatcher:
         if session_id in self.processors:
             session_dict = self.processors[session_id]
             if seq_id in session_dict:
                 processor = session_dict[seq_id]
                 return processor
 
-        if type == 'json_schema':
-            if isinstance(schema, str):
-                schema = json.loads(schema)
-
-            assert isinstance(schema, dict)
-            compiled = self.compiler.compile_json_schema(schema)
-        elif type == 'regex_schema':
-            compiled = self.compiler.compile_regex(schema)
-        elif type == 'json_object':
-            compiled = self.compiler.compile_json_schema(schema)
-        else:
-            assert False, f'Do not support schema type {type}'
+        compiled = self._compile(schema, type)
 
         processor = xgr.GrammarMatcher(compiled)
         self.processors.setdefault(session_id, {})[seq_id] = processor
