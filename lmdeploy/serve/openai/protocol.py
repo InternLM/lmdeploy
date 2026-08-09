@@ -56,21 +56,49 @@ class PromptTokensDetails(BaseModel):
     cached_tokens: int = 0
 
 
+class CompletionTokensDetails(BaseModel):
+    """Completion token usage details.
+
+    Mirrors the OpenAI ``completion_tokens_details`` object. ``reasoning_tokens``
+    counts tokens generated as part of the model's reasoning process. The
+    remaining fields are reserved OpenAI slots for future use and default to
+    ``None`` (not populated by lmdeploy today).
+    """
+
+    reasoning_tokens: int = 0
+    accepted_prediction_tokens: int | None = None
+    rejected_prediction_tokens: int | None = None
+    audio_tokens: int | None = None
+
+
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: int | None = 0
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
     @classmethod
-    def build(cls, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> 'UsageInfo':
-        """Build OpenAI-compatible usage with prefix-cache details."""
+    def build(cls,
+              prompt_tokens: int,
+              completion_tokens: int,
+              cached_tokens: int = 0,
+              reasoning_tokens: int | None = None) -> 'UsageInfo':
+        """Build OpenAI-compatible usage with prefix-cache details.
+
+        ``reasoning_tokens`` is only populated when the engine exposes a
+        reasoning token count; otherwise ``completion_tokens_details`` is left
+        ``None`` to match the OpenAI shape (omitted when empty).
+        """
+        completion_tokens_details = (CompletionTokensDetails(
+            reasoning_tokens=reasoning_tokens) if reasoning_tokens is not None else None)
         return cls(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+            completion_tokens_details=completion_tokens_details,
         )
 
 
@@ -303,6 +331,9 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[ChatCompletionResponseChoice]
     usage: UsageInfo
+    # OpenAI shape placeholder. Request-side tier scheduling is not implemented;
+    # the response reports ``None`` until scheduling is added.
+    service_tier: str | None = None
 
 
 class DeltaFunctionCall(BaseModel):

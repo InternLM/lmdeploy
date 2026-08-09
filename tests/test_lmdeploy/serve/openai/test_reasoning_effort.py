@@ -35,7 +35,8 @@ def test_reasoning_effort_invalid_rejected():
 
 
 def test_reasoning_effort_forwarded_to_template_kwargs():
-    """response_parser should forward ALL non-None values, not just high/max."""
+    """response_parser should forward ALL non-None values, not just
+    high/max."""
     req = ChatCompletionRequest(model='m',
                                 messages=[{
                                     'role': 'user',

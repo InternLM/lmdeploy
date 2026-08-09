@@ -301,6 +301,8 @@ def register(router: APIRouter, server_context) -> None:
                         prompt_tokens=res.input_token_len,
                         completion_tokens=res.generate_token_len,
                         cached_tokens=res.cached_tokens,
+                        # The engine does not currently expose a reasoning token
+                        # count, so completion_tokens_details is left None.
                     )
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 stream_deltas = response_parser.stream_chunk(
@@ -453,6 +455,8 @@ def register(router: APIRouter, server_context) -> None:
             prompt_tokens=final_res.input_token_len,
             completion_tokens=final_res.generate_token_len,
             cached_tokens=final_res.cached_tokens,
+            # The engine does not currently expose a reasoning token count, so
+            # completion_tokens_details (incl. reasoning_tokens) is left None.
         )
         response = ChatCompletionResponse(
             id=request_id,
