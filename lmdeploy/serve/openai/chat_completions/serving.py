@@ -34,7 +34,7 @@ from lmdeploy.serve.openai.protocol import (
     UsageInfo,
 )
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
-from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
+from lmdeploy.serve.utils.request_cleanup import cleanup_result_generators, with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -73,7 +73,8 @@ async def _fanout_generate_collect(
     *,
     disconnect_check: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[list[_FanoutResult], dict[str, int]]:
-    """Consume N independent engine generators concurrently and aggregate usage.
+    """Consume N independent engine generators concurrently and aggregate
+    usage.
 
     Each generator is treated as a black box yielding ``GenOut``-like objects;
     the fan-out is therefore engine-agnostic and works for both pytorch and
@@ -110,19 +111,19 @@ async def _fanout_generate_collect(
         logprobs: list = []
         cache_block_ids: list = []
         remote_token_ids: list = []
-        async for res in gen:
-            if disconnect_check is not None and await disconnect_check():
-                await gen.aclose()
-                raise _ClientDisconnected(
-                    f'client disconnected during fan-out choice {index}')
-            final_res = res
-            text += res.response
-            if res.token_ids:
-                token_ids.extend(res.token_ids)
-            if res.logprobs:
-                logprobs.extend(res.logprobs)
-            cache_block_ids.append(res.cache_block_ids)
-            remote_token_ids.append(res.token_ids)
+        async with aclosing(gen):
+            async for res in gen:
+                if disconnect_check is not None and await disconnect_check():
+                    raise _ClientDisconnected(
+                        f'client disconnected during fan-out choice {index}')
+                final_res = res
+                text += res.response
+                if res.token_ids:
+                    token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    logprobs.extend(res.logprobs)
+                cache_block_ids.append(res.cache_block_ids)
+                remote_token_ids.append(res.token_ids)
         if final_res is None:
             raise RuntimeError(
                 f'fan-out choice {index} produced no output')
@@ -136,8 +137,28 @@ async def _fanout_generate_collect(
             remote_token_ids=remote_token_ids,
         )
 
-    results = await asyncio.gather(
-        *[_consume(idx, gen) for idx, gen in generators])
+    # Run all _consume coroutines as explicit Tasks so that on first exception
+    # we can cancel the still-running siblings and close their engine
+    # generators. asyncio.gather(return_exceptions=False) does NOT cancel
+    # sibling coroutines on error — they would keep producing and hold engine
+    # resources open after the request has already failed.
+    tasks = [
+        asyncio.ensure_future(_consume(idx, gen))
+        for idx, gen in generators
+    ]
+    try:
+        results = await asyncio.gather(*tasks)
+    except BaseException:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        # Await cancellations to ensure generators are closed before propagating.
+        for t in tasks:
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+        raise
     results.sort(key=lambda r: r.index)
     total_completion = sum(r.final_res.generate_token_len for r in results)
     total_cached = sum(getattr(r.final_res, 'cached_tokens', 0) for r in results)
@@ -519,8 +540,14 @@ def register(router: APIRouter, server_context) -> None:
             # The single session created earlier is unused on the fan-out
             # path (each choice gets its own session below); release it.
             server_context.session_manager.remove(session)
+            # Sub-sessions are internal: always auto-generate distinct ids
+            # (passing None) rather than reusing request.session_id. Reusing an
+            # explicit user session_id N times would collide in
+            # SessionManager.map_user_session_id on the 2nd call. Auto-gen
+            # avoids both the collision and any user-facing ambiguity about
+            # which choice owns the user-visible session id.
             fanout_sessions = [
-                server_context.create_session(request.session_id)
+                server_context.create_session(None)
                 for _ in range(n_choices)
             ]
             fanout_parsers = [parser_cls(request) for _ in range(n_choices)]
@@ -571,88 +598,116 @@ def register(router: APIRouter, server_context) -> None:
 
             # Non-streaming fan-out: consume all N generators concurrently.
             async def _fanout_nonstream():
+                # Mirror the n==1 non-streaming path: ensure engine generators
+                # are closed and fanout sessions removed on EVERY exit path
+                # (success, parse-error, disconnect, generator-error). Without
+                # this, every non-streaming n>1 request would leak N sessions.
                 try:
-                    results, usage_dict = await _fanout_generate_collect(
-                        fanout_generators,
-                        prompt_tokens=None,
-                        disconnect_check=raw_request.is_disconnected,
-                    )
-                except _ClientDisconnected:
-                    for s in fanout_sessions:
-                        await s.async_abort()
-                    return create_error_response(
-                        HTTPStatus.BAD_REQUEST, 'Client disconnected')
-
-                choices = []
-                for res in results:
-                    sub_parser = fanout_parsers[res.index]
-                    tool_calls = None
-                    reasoning_content = None
                     try:
-                        raw_text = res.text
-                        text, tool_calls, reasoning_content = \
-                            sub_parser.parse_complete(
-                                res.text, res.token_ids)
-                        should_validate_complete = (
-                            res.final_res.finish_reason in ('stop', 'length')
-                            and (request.return_token_ids
-                                 or request.return_routed_experts))
-                        if should_validate_complete and not \
-                                sub_parser.validate_complete(raw_text):
-                            res.final_res.finish_reason = 'parse_error'
-                        if isinstance(tool_calls, list) and len(tool_calls):
-                            if res.final_res.finish_reason == 'stop':
-                                res.final_res.finish_reason = 'tool_calls'
-                    except Exception as e:  # noqa: BLE001
-                        logger.error(
-                            f'Failed to parse {res.text}. Exception: {e}.')
+                        results, usage_dict = await _fanout_generate_collect(
+                            fanout_generators,
+                            prompt_tokens=None,
+                            disconnect_check=raw_request.is_disconnected,
+                        )
+                    except _ClientDisconnected:
+                        for s in fanout_sessions:
+                            await s.async_abort()
                         return create_error_response(
-                            HTTPStatus.BAD_REQUEST,
-                            'Failed to parse fc related info to json format!')
+                            HTTPStatus.BAD_REQUEST, 'Client disconnected')
 
-                    message = ChatMessage(
-                        role='assistant',
-                        content=text,
-                        tool_calls=tool_calls,
-                        reasoning_content=reasoning_content,
-                    )
-                    choice_logprobs = None
-                    if request.logprobs and len(res.logprobs):
-                        choice_logprobs = _create_chat_completion_logprobs(
-                            tokenizer, res.token_ids, res.logprobs)
-                    choice_output_token_logprobs = None
-                    if request.return_logprob and len(res.logprobs):
-                        choice_output_token_logprobs = \
-                            _create_output_token_logprobs(
-                                res.token_ids, res.logprobs)
-                    choice_data = ChatCompletionResponseChoice(
-                        index=res.index,
-                        message=message,
-                        logprobs=choice_logprobs,
-                        output_token_logprobs=choice_output_token_logprobs,
-                        finish_reason=res.final_res.finish_reason,
-                        output_ids=(res.token_ids
-                                    if request.return_token_ids else None),
-                        routed_experts=(res.final_res.routed_experts
-                                        if request.return_routed_experts
+                    choices = []
+                    for res in results:
+                        sub_parser = fanout_parsers[res.index]
+                        tool_calls = None
+                        reasoning_content = None
+                        try:
+                            raw_text = res.text
+                            text, tool_calls, reasoning_content = \
+                                sub_parser.parse_complete(
+                                    res.text, res.token_ids)
+                            should_validate_complete = (
+                                res.final_res.finish_reason in ('stop',
+                                                                 'length')
+                                and (request.return_token_ids
+                                     or request.return_routed_experts))
+                            if should_validate_complete and not \
+                                    sub_parser.validate_complete(raw_text):
+                                res.final_res.finish_reason = 'parse_error'
+                            if isinstance(tool_calls, list) and len(tool_calls):
+                                if res.final_res.finish_reason == 'stop':
+                                    res.final_res.finish_reason = 'tool_calls'
+                        except Exception as e:  # noqa: BLE001
+                            logger.error(
+                                f'Failed to parse {res.text}. '
+                                f'Exception: {e}.')
+                            return create_error_response(
+                                HTTPStatus.BAD_REQUEST,
+                                'Failed to parse fc related info to '
+                                'json format!')
+
+                        message = ChatMessage(
+                            role='assistant',
+                            content=text,
+                            tool_calls=tool_calls,
+                            reasoning_content=reasoning_content,
+                        )
+                        choice_logprobs = None
+                        if request.logprobs and len(res.logprobs):
+                            choice_logprobs = _create_chat_completion_logprobs(
+                                tokenizer, res.token_ids, res.logprobs)
+                        choice_output_token_logprobs = None
+                        if request.return_logprob and len(res.logprobs):
+                            choice_output_token_logprobs = \
+                                _create_output_token_logprobs(
+                                    res.token_ids, res.logprobs)
+                        choice_data = ChatCompletionResponseChoice(
+                            index=res.index,
+                            message=message,
+                            logprobs=choice_logprobs,
+                            output_token_logprobs=choice_output_token_logprobs,
+                            finish_reason=res.final_res.finish_reason,
+                            output_ids=(res.token_ids
+                                        if request.return_token_ids
                                         else None),
-                    )
-                    choice_data = maybe_filter_parallel_tool_calls(
-                        choice_data, request)
-                    choices.append(choice_data)
+                            routed_experts=(res.final_res.routed_experts
+                                            if request.return_routed_experts
+                                            else None),
+                        )
+                        choice_data = maybe_filter_parallel_tool_calls(
+                            choice_data, request)
+                        choices.append(choice_data)
 
-                usage = UsageInfo.build(
-                    prompt_tokens=usage_dict['prompt_tokens'],
-                    completion_tokens=usage_dict['completion_tokens'],
-                    cached_tokens=usage_dict['cached_tokens'],
-                )
-                return ChatCompletionResponse(
-                    id=request_id,
-                    created=created_time,
-                    model=model_name,
-                    choices=choices,
-                    usage=usage,
-                ).model_dump()
+                    usage = UsageInfo.build(
+                        prompt_tokens=usage_dict['prompt_tokens'],
+                        completion_tokens=usage_dict['completion_tokens'],
+                        cached_tokens=usage_dict['cached_tokens'],
+                    )
+                    response = ChatCompletionResponse(
+                        id=request_id,
+                        created=created_time,
+                        model=model_name,
+                        choices=choices,
+                        usage=usage,
+                    ).model_dump()
+
+                    # Disaggregation cache metadata (mirrors n==1 path). For
+                    # fan-out the per-choice block-id lists are flattened: the
+                    # first choice's first block id and the last choice's last
+                    # remote token ids, matching the n==1 single-block shape.
+                    if with_cache and results:
+                        first = results[0]
+                        last = results[-1]
+                        response['cache_block_ids'] = (
+                            first.cache_block_ids[0]
+                            if first.cache_block_ids else None)
+                        response['remote_token_ids'] = [
+                            last.remote_token_ids[-1]
+                        ] if last.remote_token_ids else []
+                    return response
+                finally:
+                    await cleanup_result_generators(
+                        gen_list, fanout_sessions,
+                        server_context.session_manager)
 
             return await _fanout_nonstream()
 

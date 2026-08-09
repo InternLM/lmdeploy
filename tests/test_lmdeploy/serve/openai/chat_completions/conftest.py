@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lmdeploy.serve.openai.endpoints.chat_completions import register
+from lmdeploy.serve.openai.chat_completions import register
 from lmdeploy.serve.openai.protocol import DeltaMessage
 
 
@@ -74,15 +74,51 @@ class PassthroughResponseParser:
 
 
 class FakeSessionManager:
+    """Mimics the real SessionManager's id/mapping semantics closely enough
+    to surface fan-out session bugs: explicit user_session_ids are mapped
+    one-to-one and a duplicate raises (like map_user_session_id), while
+    None/-1 auto-generates a fresh internal id."""
 
     def __init__(self):
         self.removed = []
-        self._ids = set()
+        self.sessions = {}
+        self.user_session_id_map = {}
+        self._next_id = 0
+
+    def map_user_session_id(self, user_session_id):
+        if user_session_id in self.user_session_id_map:
+            raise ValueError(
+                f'User session id {user_session_id} already exists')
+        session_id = self._next_id
+        self._next_id += 1
+        self.user_session_id_map[user_session_id] = session_id
+        return session_id
+
+    def get(self, session_id=None, create_if_not_exists=True, **kwargs):
+        if not create_if_not_exists:
+            return self.sessions.get(session_id, None)
+        if session_id is None:
+            session_id = self._next_id
+            self._next_id += 1
+        if session_id in self.sessions:
+            return self.sessions[session_id]
+        session = FakeSession(session_id)
+        self.sessions[session_id] = session
+        return session
 
     def has(self, session_id):
-        return session_id in self._ids
+        return session_id in self.sessions
 
     def remove(self, session):
+        if session is None:
+            return
+        session_id = (session if isinstance(session, int)
+                      else session.session_id)
+        self.sessions.pop(session_id, None)
+        # also drop any user mapping pointing at this session_id
+        for uid, sid in list(self.user_session_id_map.items()):
+            if sid == session_id:
+                self.user_session_id_map.pop(uid, None)
         self.removed.append(session)
 
 
@@ -112,8 +148,17 @@ class FakeServerContext:
     def session_manager(self):
         return self.async_engine.session_mgr
 
-    def create_session(self, session_id):
-        return FakeSession(session_id)
+    def create_session(self, user_session_id):
+        # Mirror ServerContext.create_session: None/-1 auto-generates; an
+        # explicit id maps one-to-one and collides on a second use.
+        if user_session_id is None or user_session_id == -1:
+            session = self.session_manager.get()
+        else:
+            session_id = self.session_manager.map_user_session_id(
+                user_session_id)
+            session = self.session_manager.get(session_id)
+        session.epoch = 0
+        return session
 
 
 class FakeRawRequest:
