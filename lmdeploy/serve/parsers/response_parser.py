@@ -274,7 +274,7 @@ class BaseResponseParser(ResponseParser):
             else:
                 logger.warning(
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.')
-        if request.reasoning_effort in ('high', 'max'):
+        if request.reasoning_effort is not None:
             chat_template_kwargs.setdefault('reasoning_effort', request.reasoning_effort)
         return chat_template_kwargs
 
