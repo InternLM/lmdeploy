@@ -23,6 +23,12 @@ class CudaOpsBackend(DefaultOpsBackend):
         return 'cuda'
 
     @classmethod
+    def get_cache_backend(cls):
+        """Get CUDA cache layouts and local primitives."""
+        from .cache import CudaCacheBackend
+        return CudaCacheBackend
+
+    @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get cuda layer builder."""
         if layer_type == OpType.PagedAttention:

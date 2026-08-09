@@ -117,6 +117,20 @@ Every pool records its cache-entry axis. This allows swap and later block-copy
 operations to handle one or many pools without assuming a tensor rank or
 memory order.
 
+### Local logical-block copy
+
+`CacheEngine.copy_logical_blocks()` accepts a device tensor with shape
+`[2, num_pairs]` containing physical block-table offsets at scheduler-block
+granularity. The retained plan supplies the scheduler-block to kernel-page
+ratio, while `CacheAllocation` supplies every owning pool and its entry axis.
+
+The active `CacheBackend` builds the physical copy primitive once from that
+stable allocation. CUDA copies contiguous pools with Triton; other backends
+inherit the bounded tensor fallback unless they provide a more suitable local
+primitive. CacheEngine validates only plan metadata on the hot path. The caller
+owns source/destination relationship validation and keeps block lifetimes safe
+until the stream-ordered copy completes.
+
 ## Layout Selection and Composition
 
 An atomic layout implements one physical storage policy:
@@ -235,9 +249,7 @@ a complete decision or lifecycle.
 
 ```bash
 python -m pytest -q \
-  tests/pytorch/engine/test_cache_schema.py \
-  tests/pytorch/engine/test_cache_layout.py \
-  tests/pytorch/engine/test_cache_engine.py \
+  tests/pytorch/engine/test_cache_engine \
   tests/pytorch/engine/test_executor_base.py \
   tests/pytorch/engine/test_model_agent.py
 ```

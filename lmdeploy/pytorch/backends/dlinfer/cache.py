@@ -7,7 +7,7 @@ import torch
 
 from ...engine.cache_engine.layout import CacheAllocation, CachePool
 from ...engine.cache_engine.schema import CacheResource
-from ..cache import CacheBackend
+from ..default.cache import DefaultCacheBackend
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ class DlinferStateCacheLayout:
         return CacheAllocation(pools=tuple(pools), caches=tuple(caches))
 
 
-class DlinferCacheBackend(CacheBackend):
+class DlinferCacheBackend(DefaultCacheBackend):
     """Build native dlinfer cache layouts.
 
     The presence of this provider is the feature-detection boundary for dlinfer versions that can skip their legacy

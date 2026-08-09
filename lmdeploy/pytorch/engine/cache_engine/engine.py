@@ -256,6 +256,7 @@ class CacheEngine:
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
         self._build_swap_pairs()
+        self._build_block_copy()
 
         self.migration_backend_impl: MigrationBackendImpl | None = None
 
@@ -678,6 +679,46 @@ class CacheEngine:
 
         self._swap_in_pairs = tuple(swap_in_pairs)
         self._swap_out_pairs = tuple((dst, src, axis) for src, dst, axis in swap_in_pairs)
+
+    def _build_block_copy(self):
+        """Build local logical-block copy from the device allocation."""
+        self._block_copy = None
+        allocation = getattr(self, 'gpu_allocation', None)
+        if allocation is None:
+            return
+
+        pages_per_block = self.block_cache_plan.kernel_blocks_per_logical_block
+        cache_backend = get_backend().get_cache_backend()
+        self._block_copy = cache_backend.build_block_copy(
+            allocation,
+            num_logical_blocks=self.num_gpu_blocks,
+            pages_per_block=pages_per_block,
+        )
+
+    @torch.inference_mode()
+    def copy_logical_blocks(self, copy_plan: torch.Tensor) -> None:
+        """Copy complete scheduler-sized blocks on the current stream.
+
+        ``copy_plan`` contains physical block-table offsets with shape
+        ``[2, num_pairs]``. The host-side plan owner validates relationships
+        and lifetimes before dispatch; this device path never reads index
+        values back to the host.
+        """
+        if not isinstance(copy_plan, torch.Tensor):
+            raise TypeError('copy_plan must be a torch.Tensor.')
+        if copy_plan.dim() != 2 or copy_plan.size(0) != 2:
+            raise ValueError('copy_plan must have shape [2, num_pairs].')
+        if copy_plan.dtype != torch.long:
+            raise TypeError('copy_plan must use torch.long indices.')
+
+        block_copy = getattr(self, '_block_copy', None)
+        if block_copy is None:
+            raise RuntimeError('Logical block copy requires a native cache allocation.')
+        if copy_plan.device != block_copy.device:
+            raise ValueError('copy_plan must be on the block-cache allocation device.')
+        if copy_plan.size(1) == 0:
+            return
+        block_copy.copy(copy_plan[0], copy_plan[1])
 
     @torch.inference_mode()
     def _swap(self, cache_pairs: tuple[tuple[torch.Tensor, torch.Tensor, int], ...],
