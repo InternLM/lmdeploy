@@ -1,8 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from torch import Tensor
+
+if TYPE_CHECKING:
+    from ..engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 
 
 @dataclass
@@ -18,6 +24,11 @@ class NSAIndexMeta:
 
 
 class BaseNSAIndexFP8(ABC):
+
+    @abstractmethod
+    def get_block_cache_request(self, geometry: BlockCacheGeometry, head_dim: int) -> BlockCacheRequest:
+        """Describe the selected implementation's indexer-K cache."""
+        raise NotImplementedError('Not implemented.')
 
     @abstractmethod
     def forward(self, q: Tensor, k: Tensor, weights: Tensor, indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:

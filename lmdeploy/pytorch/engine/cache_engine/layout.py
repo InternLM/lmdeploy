@@ -88,14 +88,14 @@ class PackedBlockCacheLayout:
 
 
 @dataclass(frozen=True)
-class LayerRowBlockCacheLayout:
-    """Give every layer-scoped block resource its own compact-row pool."""
+class RowBlockCacheLayout:
+    """Give every row-scoped block resource its own compact-row pool."""
 
     resources: tuple[CacheResource, ...]
 
     def __post_init__(self):
-        if any(resource.layer_rows is None for resource in self.resources):
-            raise ValueError('Layer-row block layouts require explicit layer rows for every resource.')
+        if any(not resource.has_rows for resource in self.resources):
+            raise ValueError('Row block layouts require explicit rows for every resource.')
 
     def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Realize the layout for a block count and device."""
@@ -126,7 +126,7 @@ class ContiguousBlockCacheLayout:
         pools = []
         caches = []
         for resource in self.resources:
-            num_rows = self.num_layers if resource.layer_rows is None else resource.num_rows
+            num_rows = resource.num_rows if resource.has_rows else self.num_layers
             cache = torch.zeros((num_rows, num_blocks, *resource.desc.shape),
                                 dtype=resource.desc.dtype,
                                 device=device)

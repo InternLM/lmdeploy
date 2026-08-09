@@ -35,7 +35,7 @@ class BlockCachePlan:
     def legacy_cache_indices(self) -> tuple[int, ...]:
         """Return resources exposed through the legacy per-layer cache
         tuple."""
-        return tuple(index for index, resource in enumerate(self.resources) if resource.layer_rows is None)
+        return tuple(index for index, resource in enumerate(self.resources) if not resource.has_rows)
 
     def allocate(self, num_logical_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Realize a logical block count through the selected physical

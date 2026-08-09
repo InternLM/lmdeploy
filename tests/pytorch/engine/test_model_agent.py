@@ -117,21 +117,27 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
 
 def test_model_agent_builds_and_retains_worker_local_cache_plans():
     from lmdeploy.pytorch.config import CacheConfig, ModelConfig
-    from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest, ScopedBlockCacheRequest
+    from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     request = BlockCacheRequest('operator_cache', (64, 3), torch.float16)
 
-    class _PatchedModel:
+    class _CacheRequester(torch.nn.Module):
 
-        @staticmethod
-        def get_block_cache_requests(geometry):
+        def get_block_cache_requests(self, geometry):
             assert geometry.block_size == 128
             assert geometry.kernel_block_size == 64
-            return [
-                ScopedBlockCacheRequest(request, layer_id=3),
-                ScopedBlockCacheRequest(request, layer_id=1),
-            ]
+            return (request, )
+
+        def bind_block_cache_row(self, name, row):
+            assert name == 'operator_cache'
+            self.cache_row = row
+
+    class _PatchedModel(torch.nn.Module):
+
+        def __init__(self):
+            super().__init__()
+            self.requesters = torch.nn.ModuleList([_CacheRequester(), _CacheRequester()])
 
     model_config = ModelConfig(hidden_size=16,
                                num_layers=4,
@@ -158,7 +164,9 @@ def test_model_agent_builds_and_retains_worker_local_cache_plans():
 
     assert sizes == (2048, 128, 64)
     assert agent.block_cache_plan.cache_names == ('operator_cache', )
-    assert agent.block_cache_plan.layer_maps == {'operator_cache': {3: 0, 1: 1}}
+    assert agent.block_cache_plan.resources[0].row_count == 2
+    assert [requester.cache_row for requester in agent.patched_model.requesters] == [0, 1]
+    assert agent.block_cache_plan.layer_maps == {}
 
 
 def test_build_spec_agent_allows_guided_spec_followers_without_proposer():

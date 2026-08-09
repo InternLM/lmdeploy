@@ -26,7 +26,7 @@ class DlinferBlockCacheLayout:
         pools = []
         caches = []
         for resource in self.resources:
-            num_rows = self.num_layers if resource.layer_rows is None else resource.num_rows
+            num_rows = resource.num_rows if resource.has_rows else self.num_layers
             cache = torch.zeros((num_rows, num_blocks, *resource.desc.shape),
                                 dtype=resource.desc.dtype,
                                 device=device)

@@ -21,7 +21,6 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheRequest,
     CacheDesc,
     CacheResource,
-    ScopedBlockCacheRequest,
 )
 
 
@@ -152,7 +151,7 @@ def test_allocate_caches_requires_block_size_divisible_by_kernel_block_size():
                                     device='meta')
 
 
-def test_build_cache_plan_collects_requests_from_built_model_provider():
+def test_build_cache_plan_collects_built_operator_requests():
     model_config = _make_model_config(use_standard_kv_cache=False,
                                       block_cache_specs=[
                                           BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
@@ -164,26 +163,24 @@ def test_build_cache_plan_collects_requests_from_built_model_provider():
                                num_gpu_blocks=0)
     geometries = []
 
-    def request_provider(geometry: BlockCacheGeometry):
+    def request_collector(geometry: BlockCacheGeometry):
         geometries.append(geometry)
         request = BlockCacheRequest('operator_cache', (64, 5), torch.float16)
-        return [
-            ScopedBlockCacheRequest(request, layer_id=3),
-            ScopedBlockCacheRequest(request, layer_id=1),
-        ]
+        return [request, request]
 
     plan = CacheEngine.build_cache_plan(model_config,
                                         cache_config,
                                         world_size=1,
-                                        request_provider=request_provider)
+                                        request_collector=request_collector)
 
     assert geometries == [BlockCacheGeometry(block_size=128, kernel_block_size=64)]
     assert plan.cache_names == ('operator_cache', )
-    assert plan.layer_maps == {'operator_cache': {3: 0, 1: 1}}
+    assert plan.layer_maps == {}
+    assert plan.resources[0].row_count == 2
     assert plan.kernel_blocks_per_logical_block == 2
 
 
-def test_empty_built_model_provider_is_authoritative_for_custom_caches():
+def test_empty_built_operator_requests_are_authoritative_for_custom_caches():
     model_config = _make_model_config(use_standard_kv_cache=False,
                                       block_cache_specs=[
                                           BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
@@ -197,12 +194,31 @@ def test_empty_built_model_provider_is_authoritative_for_custom_caches():
     plan = CacheEngine.build_cache_plan(model_config,
                                         cache_config,
                                         world_size=1,
-                                        request_provider=lambda geometry: ())
+                                        request_collector=lambda geometry: ())
 
     assert plan.cache_names == ()
 
 
-def test_built_model_provider_rejects_patched_allocator(monkeypatch):
+def test_absent_built_operator_requester_uses_config_fallback():
+    model_config = _make_model_config(use_standard_kv_cache=False,
+                                      block_cache_specs=[
+                                          BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
+                                      ])
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+
+    plan = CacheEngine.build_cache_plan(model_config,
+                                        cache_config,
+                                        world_size=1,
+                                        request_collector=lambda geometry: None)
+
+    assert plan.cache_names == ('fallback', )
+
+
+def test_built_operator_request_collection_rejects_patched_allocator(monkeypatch):
     model_config = _make_model_config(use_standard_kv_cache=False)
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
@@ -216,11 +232,11 @@ def test_built_model_provider_rejects_patched_allocator(monkeypatch):
 
     monkeypatch.setattr(CacheEngine, 'allocate_caches', legacy_allocate)
 
-    with pytest.raises(RuntimeError, match='providers require the native'):
+    with pytest.raises(RuntimeError, match='request collection requires the native'):
         CacheEngine.build_cache_plan(model_config,
                                      cache_config,
                                      world_size=1,
-                                     request_provider=lambda geometry: ())
+                                     request_collector=lambda geometry: ())
 
 
 def test_build_cache_plan_combines_standard_kv_and_operator_requests():
@@ -234,23 +250,20 @@ def test_build_cache_plan_combines_standard_kv_and_operator_requests():
         'operator_cache',
         (64, 5),
         torch.float16,
-        per_layer_contiguous=True,
+        per_row_contiguous=True,
     )
 
     plan = CacheEngine.build_cache_plan(
         model_config,
         cache_config,
         world_size=1,
-        request_provider=lambda geometry: [
-            ScopedBlockCacheRequest(request, layer_id=1),
-            ScopedBlockCacheRequest(request, layer_id=3),
-        ],
+        request_collector=lambda geometry: [request, request],
     )
     allocation = plan.allocate(num_logical_blocks=2, device='cpu')
 
     assert plan.cache_names == ('k_cache', 'v_cache', 'operator_cache')
     assert plan.legacy_cache_indices == (0, 1)
-    assert plan.layer_maps == {'operator_cache': {1: 0, 3: 1}}
+    assert plan.layer_maps == {}
     assert len(allocation.pools) == 2
     assert allocation.caches[2].is_contiguous()
     assert allocation.caches[2][0].is_contiguous()
@@ -267,16 +280,13 @@ def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
         'operator_cache',
         (64, 5),
         torch.float16,
-        per_layer_contiguous=True,
+        per_row_contiguous=True,
     )
     plan = CacheEngine.build_cache_plan(
         model_config,
         cache_config,
         world_size=1,
-        request_provider=lambda geometry: [
-            ScopedBlockCacheRequest(request, layer_id=1),
-            ScopedBlockCacheRequest(request, layer_id=3),
-        ],
+        request_collector=lambda geometry: [request, request],
     )
 
     class CpuLayout:
@@ -304,8 +314,7 @@ def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
     assert len(cache_engine._swap_in_pairs) == 2
     assert all(entry_axis == 1 for _, _, entry_axis in cache_engine._swap_in_pairs)
     assert cache_engine.block_caches['operator_cache'].is_contiguous()
-    assert torch.equal(cache_engine.block_caches.layer('operator_cache', 3),
-                       cache_engine._gpu_cache_list[2][1])
+    assert torch.equal(cache_engine.block_caches['operator_cache'][1], cache_engine._gpu_cache_list[2][1])
 
 
 def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():

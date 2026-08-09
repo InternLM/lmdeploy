@@ -10,7 +10,6 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     CacheDesc,
     CacheResource,
     LayerRowMap,
-    ScopedBlockCacheRequest,
     build_block_cache_resources,
     build_block_cache_resources_from_requests,
     build_state_cache_resources,
@@ -87,19 +86,16 @@ def test_build_block_cache_resources_normalizes_specs_in_declared_order():
     assert resources[1].desc.alignment == 128
 
 
-def test_build_block_cache_resources_aggregates_scoped_operator_requests():
-    request = BlockCacheRequest('index', (64, 1, 132), torch.uint8, per_layer_contiguous=True)
-    resources = build_block_cache_resources_from_requests([
-        ScopedBlockCacheRequest(request, layer_id=9),
-        ScopedBlockCacheRequest(request, layer_id=1),
-        ScopedBlockCacheRequest(request, layer_id=9),
-    ])
+def test_build_block_cache_resources_counts_operator_request_rows():
+    request = BlockCacheRequest('index', (64, 1, 132), torch.uint8, per_row_contiguous=True)
+    resources = build_block_cache_resources_from_requests([request, request, request])
 
     assert len(resources) == 1
     assert resources[0].name == 'index'
     assert resources[0].desc.shape == [64, 1, 132]
-    assert resources[0].layer_map == {9: 0, 1: 1}
-    assert resources[0].per_layer_contiguous
+    assert resources[0].layer_map is None
+    assert resources[0].num_rows == 3
+    assert resources[0].per_row_contiguous
 
 
 def test_block_cache_request_normalizes_integer_like_shape_and_alignment():
@@ -113,26 +109,8 @@ def test_build_block_cache_resources_rejects_provider_conflicts():
     first = BlockCacheRequest('index', (64, 128), torch.uint8)
     second = BlockCacheRequest('index', (64, 256), torch.uint8)
 
-    with pytest.raises(ValueError, match='Conflicting block cache requests'):
-        build_block_cache_resources_from_requests([
-            ScopedBlockCacheRequest(first, layer_id=3),
-            ScopedBlockCacheRequest(second, layer_id=3),
-        ])
-
-    with pytest.raises(ValueError, match='Heterogeneous block cache request segments'):
-        build_block_cache_resources_from_requests([
-            ScopedBlockCacheRequest(first, layer_id=3),
-            ScopedBlockCacheRequest(second, layer_id=7),
-        ])
-
-
-def test_build_block_cache_resources_rejects_unimplemented_global_scope():
-    request = BlockCacheRequest('shared', (8, ), torch.float32)
-
-    with pytest.raises(ValueError, match='Global block cache requests are not supported yet'):
-        build_block_cache_resources_from_requests([
-            ScopedBlockCacheRequest(request, layer_id=None),
-        ])
+    with pytest.raises(ValueError, match='Heterogeneous block cache requests'):
+        build_block_cache_resources_from_requests([first, second])
 
 
 def test_build_state_cache_resources_prefers_named_specs_and_keeps_legacy_bridge():

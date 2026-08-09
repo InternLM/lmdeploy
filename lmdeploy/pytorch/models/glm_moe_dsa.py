@@ -10,7 +10,7 @@ from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
-from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, get_dsa_indexer_k_cache, update_nsa_indexer_kv_seqlens
+from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8, update_nsa_indexer_kv_seqlens
 
 from .deepseek_v2 import DeepseekV2MoE
 from .deepseek_v32 import (
@@ -97,8 +97,6 @@ class GlmMoeDsaIndexer(nn.Module):
         super().__init__()
         quant_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
-        # MTP layer ids follow the backbone; their cache rows start from zero.
-        self.cache_layer_idx = layer_idx % config.num_hidden_layers
         self.dim = config.hidden_size
         self.n_heads = config.index_n_heads
         self.head_dim = config.index_head_dim
@@ -137,7 +135,11 @@ class GlmMoeDsaIndexer(nn.Module):
         self.k_norm = LayerNorm(self.head_dim, device=device)
         self.softmax_scale = self.head_dim**-0.5
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
-        self.indexer_topk = IndexerTopKFP8(self.index_topk, self.softmax_scale, block_size=128, fill=-1)
+        self.indexer_topk = IndexerTopKFP8(self.index_topk,
+                                           self.softmax_scale,
+                                           self.head_dim,
+                                           block_size=128,
+                                           fill=-1)
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
@@ -160,7 +162,6 @@ class GlmMoeDsaIndexer(nn.Module):
         freqs_cis: tuple[torch.Tensor, torch.Tensor],
         attn_metadata: Any = None,
     ):
-        indexer_k_cache = get_dsa_indexer_k_cache(self.cache_layer_idx)
         q = self.wq_b(qr).unflatten(-1, (-1, self.head_dim))
         if self.use_fusion:
             kw = self.wk_weights_proj(x)
@@ -173,7 +174,6 @@ class GlmMoeDsaIndexer(nn.Module):
                                                    self.k_norm.bias,
                                                    cos,
                                                    sin,
-                                                   indexer_k_cache,
                                                    norm_eps=self.k_norm.eps,
                                                    head_gate_scale=self.n_heads**-0.5,
                                                    rope_interleaved=self.rope_interleave,
@@ -189,7 +189,6 @@ class GlmMoeDsaIndexer(nn.Module):
         return self.indexer_topk(q[0],
                                  k[:, 0],
                                  weights[0],
-                                 indexer_k_cache,
                                  attn_metadata=attn_metadata)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -16,6 +17,7 @@ from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
+from ..engine.cache_engine.collector import collect_block_cache_requests
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from ..engine.model_agent.agent import BatchedLogProbs
 from ..model_inputs import DPMeta, ModelInputs
@@ -226,12 +228,12 @@ class SpecModelAgent(BaseSpecModelAgent):
             return 0
         with self.draft_context():
             draft_tp = self.draft_dist_ctx.dist_config.attn_tp
-            request_provider = getattr(self.proposer.model, 'get_block_cache_requests', None)
+            request_collector = partial(collect_block_cache_requests, self.proposer.model)
             self.block_cache_plan = CacheEngine.build_cache_plan(
                 self.model_config,
                 cache_config,
                 draft_tp,
-                request_provider=request_provider,
+                request_collector=request_collector,
             )
             return CacheEngine.get_cache_block_size(
                 cache_config,

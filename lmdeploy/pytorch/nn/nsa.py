@@ -9,12 +9,6 @@ from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 
-def get_dsa_indexer_k_cache(layer_idx: int) -> Tensor:
-    """Return the packed indexer-K cache owned by one DSA layer."""
-    context = get_step_ctx_manager().current_context()
-    return context.block_caches.layer(DSA_INDEXER_K_CACHE_NAME, layer_idx)
-
-
 def update_nsa_indexer_kv_seqlens(num_tokens: int, attn_metadata: AttentionMetadata) -> None:
     """Prepare per-query causal KV lengths once for all indexer layers."""
     q_seqlens = attn_metadata.q_seqlens
@@ -34,11 +28,30 @@ def update_nsa_indexer_kv_seqlens(num_tokens: int, attn_metadata: AttentionMetad
 
 class IndexerTopKFP8(nn.Module):
 
-    def __init__(self, topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1):
+    def __init__(self, topk: int, softmax_scale: float, head_dim: int, block_size: int = 128, fill: int = -1):
         super().__init__()
         backend = get_backend()
         index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
         self.index_impl = index_builder.build(topk, softmax_scale, block_size, fill)
+        self.head_dim = head_dim
+        self._block_cache_row: int | None = None
+
+    def get_block_cache_requests(self, geometry):
+        """Return the selected implementation's cache requirements."""
+        request = self.index_impl.get_block_cache_request(geometry, self.head_dim)
+        return (request, )
+
+    def bind_block_cache_row(self, name: str, row: int):
+        """Retain the compact row assigned to this built indexer."""
+        if name != DSA_INDEXER_K_CACHE_NAME:
+            raise ValueError(f'Unexpected DSA indexer cache name: {name}.')
+        self._block_cache_row = row
+
+    def _get_block_cache(self) -> Tensor:
+        if self._block_cache_row is None:
+            raise RuntimeError('The DSA indexer block-cache row has not been bound.')
+        context = get_step_ctx_manager().current_context()
+        return context.block_caches[DSA_INDEXER_K_CACHE_NAME][self._block_cache_row]
 
     @staticmethod
     def _get_max_q_seqlen(q: Tensor,
@@ -86,10 +99,10 @@ class IndexerTopKFP8(nn.Module):
         q: Tensor,
         k: Tensor,
         weights: Tensor,
-        indexer_k_cache: Tensor,
         attn_metadata: AttentionMetadata = None,
     ):
         """forward."""
+        indexer_k_cache = self._get_block_cache()
         meta = self._build_meta(q, attn_metadata)
         ret = self.index_impl.forward(q, k, weights, indexer_k_cache, meta=meta)
         return ret
@@ -102,12 +115,12 @@ class IndexerTopKFP8(nn.Module):
                       norm_bias: Tensor,
                       cos: Tensor,
                       sin: Tensor,
-                      indexer_k_cache: Tensor,
                       norm_eps: float,
                       head_gate_scale: float,
                       rope_interleaved: bool,
                       attn_metadata: AttentionMetadata = None):
         """Forward with fused DSA indexer preparation."""
+        indexer_k_cache = self._get_block_cache()
         meta = self._build_meta(q, attn_metadata)
         return self.index_impl.forward_fused(q,
                                              k,

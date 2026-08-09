@@ -15,9 +15,9 @@ from lmdeploy.pytorch.engine.cache_engine.layout import (
     CachePool,
     CompositeBlockCacheLayout,
     ContiguousBlockCacheLayout,
-    LayerRowBlockCacheLayout,
     PackedBlockCacheLayout,
     PackedStateCacheLayout,
+    RowBlockCacheLayout,
 )
 from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
 from lmdeploy.pytorch.engine.cache_engine.schema import (
@@ -52,7 +52,7 @@ def test_block_cache_plan_owns_geometry_layout_and_access_metadata():
 
         def allocate(self, num_blocks, device):
             allocations.append((num_blocks, str(device)))
-            return LayerRowBlockCacheLayout(resources).allocate(num_blocks, device)
+            return RowBlockCacheLayout(resources).allocate(num_blocks, device)
 
     plan = BlockCachePlan(resources=resources,
                           layout=RecordingLayout(),
@@ -116,7 +116,7 @@ def test_layer_row_block_allocation_owns_one_pool_per_resource():
                       layer_rows=LayerRowMap.build('second', [7])),
     )
 
-    layout = LayerRowBlockCacheLayout(resources)
+    layout = RowBlockCacheLayout(resources)
     allocation = layout.allocate(num_blocks=3, device='cpu')
 
     assert [pool.entry_axis for pool in allocation.pools] == [1, 1]
@@ -154,11 +154,11 @@ def test_empty_state_allocation_keeps_one_empty_owning_pool():
     assert allocation.caches == ()
 
 
-def test_layer_row_block_layout_rejects_resources_without_layer_rows():
+def test_row_block_layout_rejects_resources_without_rows():
     resources = (CacheResource('plain', CacheDesc(shape=[3], dtype=torch.float32)), )
 
-    with pytest.raises(ValueError, match='explicit layer rows'):
-        LayerRowBlockCacheLayout(resources)
+    with pytest.raises(ValueError, match='explicit rows'):
+        RowBlockCacheLayout(resources)
 
 
 def test_default_cache_backend_selects_layout_from_resource_membership():
@@ -176,7 +176,7 @@ def test_default_cache_backend_selects_layout_from_resource_membership():
 
     assert cache_backend is DefaultCacheBackend
     assert isinstance(block_layout, PackedBlockCacheLayout)
-    assert isinstance(layer_layout, LayerRowBlockCacheLayout)
+    assert isinstance(layer_layout, RowBlockCacheLayout)
     assert isinstance(state_layout, PackedStateCacheLayout)
 
 
@@ -187,8 +187,8 @@ def test_default_composite_layout_packs_plain_and_isolates_contiguous_resources(
         CacheResource(
             'index',
             CacheDesc(shape=[5], dtype=torch.float16),
-            layer_rows=LayerRowMap.build('index', [1, 3]),
-            per_layer_contiguous=True,
+            row_count=2,
+            per_row_contiguous=True,
         ),
     )
 

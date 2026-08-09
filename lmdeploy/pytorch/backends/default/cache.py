@@ -5,9 +5,9 @@ from itertools import groupby
 from ...engine.cache_engine.layout import (
     CompositeBlockCacheLayout,
     ContiguousBlockCacheLayout,
-    LayerRowBlockCacheLayout,
     PackedBlockCacheLayout,
     PackedStateCacheLayout,
+    RowBlockCacheLayout,
 )
 from ..cache import CacheBackend
 
@@ -23,10 +23,10 @@ class DefaultCacheBackend(CacheBackend):
             return PackedBlockCacheLayout(resources, num_layers=num_layers)
 
         def layout_kind(resource):
-            if resource.per_layer_contiguous:
+            if resource.per_row_contiguous:
                 return 'contiguous'
-            if resource.layer_rows is not None:
-                return 'layer_rows'
+            if resource.has_rows:
+                return 'rows'
             return 'packed'
 
         layouts = []
@@ -34,8 +34,8 @@ class DefaultCacheBackend(CacheBackend):
             group = tuple(group)
             if kind == 'contiguous':
                 layout = ContiguousBlockCacheLayout(group, num_layers=num_layers)
-            elif kind == 'layer_rows':
-                layout = LayerRowBlockCacheLayout(group)
+            elif kind == 'rows':
+                layout = RowBlockCacheLayout(group)
             else:
                 layout = PackedBlockCacheLayout(group, num_layers=num_layers)
             layouts.append(layout)

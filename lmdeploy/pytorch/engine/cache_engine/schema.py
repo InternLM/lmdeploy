@@ -31,7 +31,8 @@ class CacheDesc:
 
 @dataclass(frozen=True)
 class BlockCacheGeometry:
-    """Finalized logical and physical block sizes passed to providers."""
+    """Finalized logical and physical block sizes passed to request
+    collection."""
 
     block_size: int
     kernel_block_size: int
@@ -64,7 +65,7 @@ class BlockCacheRequest:
     shape: tuple[int, ...]
     dtype: torch.dtype
     alignment: int = 256
-    per_layer_contiguous: bool = False
+    per_row_contiguous: bool = False
 
     def __post_init__(self):
         if not isinstance(self.name, str) or not self.name:
@@ -77,17 +78,6 @@ class BlockCacheRequest:
             raise ValueError(f'{self.name} shape dimensions must be non-negative.')
         object.__setattr__(self, 'alignment', alignment)
         object.__setattr__(self, 'shape', shape)
-
-
-@dataclass(frozen=True)
-class ScopedBlockCacheRequest:
-    """Bind one operator request to a model-owned layer scope.
-
-    ``None`` is reserved for a future whole-model scope.
-    """
-
-    request: BlockCacheRequest
-    layer_id: int | None
 
 
 def _normalize_cache_layer_ids(cache_name: str, layer_ids: Sequence[int]) -> list[int]:
@@ -131,12 +121,28 @@ class LayerRowMap:
 
 @dataclass(frozen=True)
 class CacheResource:
-    """Pair one named cache payload with its optional layer rows."""
+    """Pair one named cache payload with its optional compact rows."""
 
     name: str
     desc: CacheDesc
     layer_rows: LayerRowMap | None = None
-    per_layer_contiguous: bool = False
+    row_count: int | None = None
+    per_row_contiguous: bool = False
+
+    def __post_init__(self):
+        if self.row_count is None:
+            return
+        row_count = as_index(self.row_count)
+        if row_count <= 0:
+            raise ValueError(f'{self.name} row_count must be positive.')
+        if self.layer_rows is not None:
+            raise ValueError(f'{self.name} cannot define both row_count and layer_rows.')
+        object.__setattr__(self, 'row_count', row_count)
+
+    @property
+    def has_rows(self) -> bool:
+        """Whether the resource has an explicit compact-row axis."""
+        return self.row_count is not None or self.layer_rows is not None
 
     @property
     def layer_map(self) -> dict[int, int] | None:
@@ -147,7 +153,9 @@ class CacheResource:
 
     @property
     def num_rows(self) -> int:
-        """Return compact layer rows for layered resources."""
+        """Return compact rows for operator- or layer-scoped resources."""
+        if self.row_count is not None:
+            return self.row_count
         assert self.layer_rows is not None
         return self.layer_rows.num_rows
 
@@ -171,49 +179,29 @@ def build_block_cache_resources(block_specs: Sequence[BlockCacheSpec]) -> tuple[
 
 
 def build_block_cache_resources_from_requests(
-        scoped_requests: Sequence[ScopedBlockCacheRequest]) -> tuple[CacheResource, ...]:
-    """Aggregate built-operator requests into ordered cache resources."""
-    requests_by_scope: dict[tuple[str, int], BlockCacheRequest] = {}
+        requests: Sequence[BlockCacheRequest]) -> tuple[CacheResource, ...]:
+    """Aggregate one request occurrence per built cache consumer."""
     request_by_name: dict[str, BlockCacheRequest] = {}
-    layer_ids_by_name: dict[str, list[int]] = {}
+    row_counts: dict[str, int] = {}
 
-    for scoped_request in scoped_requests:
-        request = scoped_request.request
-        layer_id = scoped_request.layer_id
-        if layer_id is None:
-            raise ValueError('Global block cache requests are not supported yet.')
-        layer_id = as_index(layer_id)
-        if layer_id < 0:
-            raise ValueError(f'{request.name} layer id {layer_id} must be non-negative.')
-
-        scope = (request.name, layer_id)
-        existing = requests_by_scope.get(scope)
-        if existing is not None:
-            if existing != request:
-                raise ValueError(f'Conflicting block cache requests for {request.name} at layer {layer_id}.')
-            continue
-
+    for request in requests:
         existing = request_by_name.get(request.name)
         if existing is not None and existing != request:
-            raise ValueError(f'Heterogeneous block cache request segments for {request.name} are not supported yet.')
+            raise ValueError(f'Heterogeneous block cache requests for {request.name} are not supported yet.')
 
-        if request.name not in layer_ids_by_name:
-            layer_ids_by_name[request.name] = [layer_id]
+        if request.name not in request_by_name:
             request_by_name[request.name] = request
-        else:
-            layer_ids_by_name[request.name].append(layer_id)
-        requests_by_scope[scope] = request
+            row_counts[request.name] = 0
+        row_counts[request.name] += 1
 
     resources = []
     for name, request in request_by_name.items():
-        layer_ids = layer_ids_by_name[name]
-        layer_rows = LayerRowMap.build(name, layer_ids)
         desc = CacheDesc(shape=list(request.shape), dtype=request.dtype, alignment=request.alignment)
         resources.append(
             CacheResource(name=name,
                           desc=desc,
-                          layer_rows=layer_rows,
-                          per_layer_contiguous=request.per_layer_contiguous))
+                          row_count=row_counts[name],
+                          per_row_contiguous=request.per_row_contiguous))
     return tuple(resources)
 
 

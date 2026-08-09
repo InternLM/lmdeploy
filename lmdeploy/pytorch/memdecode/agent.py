@@ -3,6 +3,7 @@ import asyncio
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import replace
+from functools import partial
 
 import torch
 
@@ -10,6 +11,7 @@ from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MemDecodeConfig, ModelConfig
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
 from lmdeploy.pytorch.memdecode.fusion import MemDecodeFusion
 from lmdeploy.pytorch.model_inputs import ModelInputs, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, build_patched_model, update_custom_module_map
@@ -152,12 +154,12 @@ class MemDecodeAgent:
         """Build and retain the rank-local memory-model cache plan."""
         with self.memory_context():
             tp = get_dist_manager().current_context().dist_config.attn_tp
-            request_provider = getattr(self.model, 'get_block_cache_requests', None)
+            request_collector = partial(collect_block_cache_requests, self.model)
             self.block_cache_plan = CacheEngine.build_cache_plan(
                 self.model_config,
                 cache_config,
                 tp,
-                request_provider=request_provider,
+                request_collector=request_collector,
             )
             return CacheEngine.get_cache_block_size(
                 cache_config,

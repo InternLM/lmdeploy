@@ -29,16 +29,15 @@ events. It does not decide operator payloads or backend packing.
 
 The remaining types support one of those three stages:
 
-| Supporting type           | Why it exists                                                     |
-| ------------------------- | ----------------------------------------------------------------- |
-| `ScopedBlockCacheRequest` | Lets the model bind an operator request to a stable layer ID      |
-| `CacheResource`           | Normalized, validated request data retained inside the plan       |
-| `BlockCacheLayout`        | Backend-selected allocation strategy retained inside the plan     |
-| `CachePool`               | One owning tensor and the axis representing movable cache entries |
+| Supporting type    | Why it exists                                                     |
+| ------------------ | ----------------------------------------------------------------- |
+| `CacheResource`    | Normalized, validated request data retained inside the plan       |
+| `BlockCacheLayout` | Backend-selected allocation strategy retained inside the plan     |
+| `CachePool`        | One owning tensor and the axis representing movable cache entries |
 
-These supporting types are not additional runtime managers. Requests and
-scoped requests are temporary build inputs; resources and layout are immutable
-plan details; pools belong to one allocation.
+These supporting types are not additional runtime managers. Requests are
+temporary build inputs; resources and layout are immutable plan details; pools
+belong to one allocation.
 
 ## Construction Pipeline
 
@@ -51,32 +50,38 @@ BlockCacheRequest(
     name='index_cache',
     shape=(kernel_block_size, num_heads, head_dim),
     dtype=dtype,
-    per_layer_contiguous=True,
+    per_row_contiguous=True,
 )
 ```
 
-The operator knows its payload and kernel-visible requirements, but not the
-model's complete layer topology. The enclosing model binds each request:
+The operator knows its payload and kernel-visible requirements. A generic
+worker-local collector walks the built model's operator modules, collects
+their `get_block_cache_requests(geometry)` results, and calls
+`bind_block_cache_row(name, row)` on each consumer. It uses built module
+instances and registration order; it does not infer layer IDs from module
+names or require a model-specific collector. Collection happens independently
+on every target, speculative, and memory-model worker after logical/kernel
+block geometry is finalized.
 
-```python
-ScopedBlockCacheRequest(request, layer_id=7)
-```
+The DSA indexer is the first production cache-requesting operator on this
+path. Its selected backend implementation requests one packed
+`dsa_indexer_k` byte tensor with a per-row contiguity requirement. Every built
+indexer receives its compact row and retrieves that named row at runtime.
+Target and MTP model classes contain no cache-discovery code, and model
+configuration no longer describes separate anonymous K and scale cache
+tensors.
 
-The optional built-model `get_block_cache_requests(geometry)` method collects
-those scoped requests. Collection happens independently on every target,
-speculative, and memory-model worker after logical/kernel block geometry is
-finalized.
-
-Models without a provider retain the compatibility path through standard K/V
-configuration, `block_cache_specs`, and anonymous `cache_shapes`. A present
-provider is authoritative for custom block resources, even when it returns no
-requests.
+Models without a cache-requesting operator retain the compatibility path
+through standard K/V configuration, `block_cache_specs`, and anonymous
+`cache_shapes`. A discovered requester is authoritative for custom block
+resources, even when it returns no requests.
 
 ### 2. Build one worker-local plan
 
-The collector validates requests and combines equal requests from different
-layers into `CacheResource` objects with compact layer-row maps. The active
-`CacheBackend` then selects physical layouts for the ordered resources.
+Schema construction validates requests and combines equal requests from built
+consumers into `CacheResource` objects with compact row counts. Legacy
+configuration-owned resources may still retain explicit layer-row maps. The
+active `CacheBackend` then selects physical layouts for the ordered resources.
 
 `BlockCachePlan` retains:
 
@@ -88,9 +93,9 @@ It owns no tensors, streams, events, or movement policy. Plans never cross the
 executor RPC boundary; each worker returns only target/speculative/memory byte
 counts to the executor.
 
-Current provider limits are explicit: global requests, heterogeneous segments
-under one name, and providers used through the old dlinfer allocator monkey
-patch are rejected at build time.
+Current operator-request limits are explicit: heterogeneous requests under one
+name and request collection through the old dlinfer allocator monkey patch are
+rejected at build time.
 
 ### 3. Realize allocations
 
@@ -116,7 +121,7 @@ An atomic layout implements one physical storage policy:
 | Layout                       | Storage policy                                                    |
 | ---------------------------- | ----------------------------------------------------------------- |
 | `PackedBlockCacheLayout`     | Pack compatible full-layer resources into one byte pool           |
-| `LayerRowBlockCacheLayout`   | Give layer-scoped resources compact padded byte pools             |
+| `RowBlockCacheLayout`        | Give compact-row resources independent padded byte pools          |
 | `ContiguousBlockCacheLayout` | Give every resource an independent contiguous typed tensor        |
 | `PackedStateCacheLayout`     | Pack resources behind one state-slot axis                         |
 | dlinfer block/state layouts  | Use dlinfer's backend-specific contiguous resource representation |
@@ -137,13 +142,13 @@ BlockCachePlan
 
 The default backend groups consecutive resources by requirement:
 
-- unscoped resources that accept strides use the packed layout;
-- layer-scoped resources that accept padded strides use the layer-row layout;
-- resources with `per_layer_contiguous=True` use the contiguous layout.
+- full-model resources that accept strides use the packed layout;
+- compact-row resources that accept padded strides use the row layout;
+- resources with `per_row_contiguous=True` use the contiguous layout.
 
 Different resources may therefore use different layouts while sharing one
-plan and scheduler block count. Conflicting requirements for the same resource
-and layer fail during request aggregation.
+plan and scheduler block count. Heterogeneous requirements under one resource
+name currently fail during request aggregation.
 
 ## Model-Facing Views
 
@@ -151,12 +156,13 @@ Two access forms coexist during migration:
 
 - `gpu_cache` / `cpu_cache` provide the legacy per-layer tuple used as
   `past_key_values`;
-- `block_caches` provides named access, and
-  `block_caches.layer(name, layer_id)` resolves compact layer rows.
+- `block_caches[name][row]` resolves rows assigned to built operators;
+- `block_caches.layer(name, layer_id)` remains the compatibility lookup for
+  configuration-owned layer maps.
 
 `BlockCachePlan.legacy_cache_indices` determines which resources participate
-in legacy tuples. In a mixed allocation, adding a scoped named resource does
-not change standard K/V tuple ordering.
+in legacy tuples. In a mixed allocation, adding a compact-row named resource
+does not change standard K/V tuple ordering.
 
 These views do not own memory. The corresponding `CacheAllocation` must remain
 alive.
@@ -198,17 +204,20 @@ The package temporarily preserves:
 - anonymous cache/state shapes and model-config named specifications;
 - `gpu_cache`, `cpu_cache`, `full_gpu_cache`, and `full_cpu_cache`.
 
-Native providers require the retained-plan allocator path. PD migration still
-rejects unsupported multi-pool layouts before registering memory.
+Native operator request collection requires the retained-plan allocator path.
+PD migration still rejects unsupported multi-pool layouts before registering
+memory.
 
 ## Code Reading Order
 
-1. [`schema.py`](./schema.py): requests, normalized resources, and layer rows.
-2. [`plan.py`](./plan.py): the retained worker-local allocation recipe.
-3. [`layout.py`](./layout.py): atomic/composite layouts, pools, and allocations.
-4. [`backends/default/cache.py`](../../backends/default/cache.py): default
+1. [`collector.py`](./collector.py): built-operator request collection and row
+   binding.
+2. [`schema.py`](./schema.py): requests, normalized resources, and layer rows.
+3. [`plan.py`](./plan.py): the retained worker-local allocation recipe.
+4. [`layout.py`](./layout.py): atomic/composite layouts, pools, and allocations.
+5. [`backends/default/cache.py`](../../backends/default/cache.py): default
    resource-to-layout selection.
-5. [`engine.py`](./engine.py): allocation lifetime, model views, and movement.
+6. [`engine.py`](./engine.py): allocation lifetime, model views, and movement.
 
 Backend-specific layouts remain with their backend, for example
 [`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py). Avoid adding a

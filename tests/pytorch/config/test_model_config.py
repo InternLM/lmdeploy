@@ -6,7 +6,6 @@ import torch
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
-from lmdeploy.pytorch.configurations.deepseek_v32 import _finalize_v32_cache_specs
 
 
 def _make_model_config(num_attention_heads=32, num_key_value_heads=8, dist_config=None):
@@ -86,25 +85,6 @@ def test_get_num_qkv_head_by_tp_requires_divisible_heads():
 
     with pytest.raises(AssertionError):
         model_config.get_num_qkv_head_by_tp()
-
-
-def test_deepseek_v32_model_config_builds_packed_index_cache():
-    model_config = _make_model_config()
-    model_config.num_layers = 4
-    model_config.hf_config = SimpleNamespace(num_hidden_layers=4,
-                                             index_head_dim=128,
-                                             indexer_types=['full', 'shared', 'full', 'shared'])
-    model_config.cache_shapes = [((128, ), torch.float8_e4m3fn), ((1, ), torch.float32)]
-
-    _finalize_v32_cache_specs(model_config, block_size=64)
-
-    assert model_config.cache_shapes == []
-    assert len(model_config.block_cache_specs) == 1
-    spec = model_config.block_cache_specs[0]
-    assert spec.name == 'dsa_indexer_k'
-    assert spec.layer_ids == [0, 2]
-    assert spec.shape == (64, 1, 132)
-    assert spec.dtype == torch.uint8
 
 
 @pytest.mark.parametrize(('block_size', 'kernel_block_size', 'expected_block_size'), [

@@ -4,7 +4,12 @@ import functools
 import torch
 from torch import Tensor
 
-from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
+from lmdeploy.pytorch.consts import (
+    DSA_INDEX_SCALE_BYTES,
+    DSA_INDEXER_K_CACHE_NAME,
+    dsa_packed_indexer_k_cache_shape,
+)
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
@@ -58,6 +63,15 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         # TODO: configable scale fmt
         self.scale_fmt = 'ue8m0'
         self._sparse_index_topk = _get_sparse_index_topk(topk)
+
+    def get_block_cache_request(self, geometry: BlockCacheGeometry, head_dim: int) -> BlockCacheRequest:
+        """Request one DeepGEMM-compatible packed cache row per indexer."""
+        return BlockCacheRequest(
+            name=DSA_INDEXER_K_CACHE_NAME,
+            shape=dsa_packed_indexer_k_cache_shape(geometry.kernel_block_size, head_dim),
+            dtype=torch.uint8,
+            per_row_contiguous=True,
+        )
 
     def _forward_index(self, q: Tensor, q_s: Tensor, k_cache: Tensor, k_s_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         cu_seqlen_q = meta.cu_seqlen_q

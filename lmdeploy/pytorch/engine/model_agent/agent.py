@@ -5,6 +5,7 @@ from collections import deque
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
+from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any
@@ -21,6 +22,7 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
@@ -1204,12 +1206,12 @@ class BaseModelAgent:
         bytes."""
         with self.all_context():
             tp = self.dist_config.attn_tp
-            request_provider = getattr(self.patched_model, 'get_block_cache_requests', None)
+            request_collector = partial(collect_block_cache_requests, self.patched_model)
             self.block_cache_plan = CacheEngine.build_cache_plan(
                 self.model_config,
                 cache_config,
                 tp,
-                request_provider=request_provider,
+                request_collector=request_collector,
             )
             target_nbytes = CacheEngine.get_cache_block_size(
                 cache_config,

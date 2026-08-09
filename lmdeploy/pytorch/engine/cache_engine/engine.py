@@ -24,9 +24,9 @@ from .layout import CacheAllocation
 from .plan import BlockCachePlan
 from .schema import (
     BlockCacheGeometry,
+    BlockCacheRequest,
     CacheDesc,
     CacheResource,
-    ScopedBlockCacheRequest,
     build_block_cache_resources,
     build_block_cache_resources_from_requests,
     build_state_cache_resources,
@@ -361,8 +361,7 @@ class CacheEngine:
                              model_config: ModelConfig,
                              cache_config: CacheConfig,
                              world_size: int,
-                             block_requests: Sequence[ScopedBlockCacheRequest]
-                             | None = None) -> tuple[CacheResource, ...]:
+                             block_requests: Sequence[BlockCacheRequest] | None = None) -> tuple[CacheResource, ...]:
         """Build the ordered resources consumed by the physical layout."""
         resources = []
         use_std = model_config.use_standard_kv_cache
@@ -389,7 +388,7 @@ class CacheEngine:
 
         names = [resource.name for resource in resources]
         if len(names) != len(set(names)):
-            raise ValueError('Block cache resource names must be unique after provider and fallback collection.')
+            raise ValueError('Block cache resource names must be unique after request and fallback collection.')
         return tuple(resources)
 
     @classmethod
@@ -429,19 +428,22 @@ class CacheEngine:
         model_config: ModelConfig,
         cache_config: CacheConfig,
         world_size: int,
-        request_provider: Callable[[BlockCacheGeometry], Sequence[ScopedBlockCacheRequest]] | None = None,
+        request_collector: Callable[[BlockCacheGeometry], Sequence[BlockCacheRequest] | None] | None = None,
     ) -> BlockCachePlan:
         """Finalize block geometry, resources, and backend layout."""
         geometry = BlockCacheGeometry(block_size=cache_config.block_size,
                                       kernel_block_size=cache_config.kernel_block_size)
         _update_mla_kv_cache_dtype(model_config, cache_config)
         block_requests = None
-        if request_provider is not None:
-            allocator = cls.allocate_caches
-            allocator_func = getattr(allocator, '__func__', allocator)
-            if allocator_func is not _NATIVE_BLOCK_ALLOCATOR:
-                raise RuntimeError('Built-model cache providers require the native CacheEngine allocator.')
-            block_requests = tuple(request_provider(geometry))
+        if request_collector is not None:
+            collected_requests = request_collector(geometry)
+            if collected_requests is not None:
+                allocator = cls.allocate_caches
+                allocator_func = getattr(allocator, '__func__', allocator)
+                if allocator_func is not _NATIVE_BLOCK_ALLOCATOR:
+                    raise RuntimeError(
+                        'Built-operator cache request collection requires the native CacheEngine allocator.')
+                block_requests = tuple(collected_requests)
         num_layers = model_config.num_layers
         resources = cls._get_cache_resources(model_config, cache_config, world_size, block_requests=block_requests)
         cache_backend = get_backend().get_cache_backend()
@@ -522,8 +524,7 @@ class CacheEngine:
 
     @property
     def block_caches(self) -> Mapping[str, torch.Tensor]:
-        """Return all caches (including k/v and custom) as a dict keyed by
-        name."""
+        """Return all caches (including k/v and custom) by name."""
         if not hasattr(self, '_cache_names') or not hasattr(self, '_cache_list'):
             return {}
         caches = {
