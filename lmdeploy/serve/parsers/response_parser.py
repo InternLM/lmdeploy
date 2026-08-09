@@ -300,6 +300,62 @@ def build_strict_tool_response_format(
     }
 
 
+def build_required_response_format(
+    tools: list[dict[str, Any]] | None,
+    open_tag: str | None,
+    close_tag: str | None,
+    allowed_names: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Build a FORCED structural_tag response_format for tool_choice='required'
+    (Task 4b).
+
+    The model MUST emit at least one conforming tool call (``at_least_one=True``)
+    -- unlike 'auto'+strict, free text alone is rejected. All tools (or the
+    ``allowed_names`` subset, for ``AllowedToolChoice``) are combined into a
+    single tag with a oneOf union schema.
+
+    Returns ``None`` if the tool parser exposes no begin/end tags (degraded:
+    falls back to unconstrained decoding). Raises ``ValueError`` if ``tools``
+    is empty or the allowed subset is empty (required needs at least one tool).
+    """
+    if not tools:
+        raise ValueError("tool_choice 'required' requires tools")
+    selected = tools
+    if allowed_names is not None:
+        selected = [
+            t for t in tools
+            if (t.get('function', t).get('name')) in allowed_names
+        ]
+        if not selected:
+            raise ValueError(
+                "tool_choice 'required' requires tools, but none of the allowed "
+                f'tools {sorted(allowed_names)} are present in request.tools')
+    if not open_tag or not close_tag:
+        return None
+    schema = _union_tool_schema(selected)
+    # Native triggered_tags form with at_least_one=True forces a tool call.
+    return {
+        'type': 'structural_tag',
+        'structural_tag': {
+            'type': 'structural_tag',
+            'format': {
+                'type': 'triggered_tags',
+                'triggers': [open_tag],
+                'tags': [{
+                    'type': 'tag',
+                    'begin': open_tag,
+                    'end': close_tag,
+                    'content': {
+                        'type': 'json_schema',
+                        'json_schema': schema,
+                    },
+                }],
+                'at_least_one': True,
+            },
+        },
+    }
+
+
 class ResponseParser:
     @classmethod
     def set_parsers(
@@ -550,16 +606,50 @@ class BaseResponseParser(ResponseParser):
         return _DEFAULT_TOOL_OPEN_TAG, _DEFAULT_TOOL_CLOSE_TAG
 
     @classmethod
+    def _parser_tags_or_none(cls) -> tuple[str | None, str | None]:
+        """Return the active tool parser's REAL ``(open_tag, close_tag)``, or
+        ``(None, None)`` when no tool parser is configured / it exposes no
+        usable tag pair.
+
+        Unlike ``_parser_tags`` (which falls back to a default tag pair), this
+        returns ``None`` tags so callers can SKIP forced decoding instead of
+        constraining the model to tags it never emits. Forced decoding
+        (``tool_choice='required'``, Task 4b) MUST use the model's actual
+        tool-call delimiters; fabricating default tags when no parser is
+        configured would be worse than no constraint (the grammar would reject
+        every real tool call the model produces). At runtime ``check_request``
+        rejects tool requests without a configured tool parser, so the
+        no-parser case here only arises in tests / direct ``dump_tools`` calls.
+        """
+        tcls = cls.tool_parser_cls
+        if tcls is None:
+            return None, None
+        try:
+            open_tag = tcls.get_tool_open_tag()
+            close_tag = tcls.get_tool_close_tag()
+            if open_tag and close_tag:
+                return open_tag, close_tag
+        except NotImplementedError:
+            pass
+        return None, None
+
+    @classmethod
     def dump_tools(cls, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Dump tools to a list of dicts to fit jinja chat template.
 
-        Under ``tool_choice='auto'``, tools with ``function.strict == True``
-        additionally get an OPTIONAL ``structural_tag`` ``response_format``
-        injected (Task 4): the model may emit free text OR a conforming tool
-        call whose arguments follow the tool's JSON schema. The
-        ``response_format`` dict is consumed by the engine-side guided-decoding
-        path (Task 7). Existing behavior for ``auto``/``none``/named tool
-        choices without strict tools is unchanged.
+        Also injects a ``structural_tag`` ``response_format`` dict (consumed by
+        the engine-side guided-decoding path from Task 7) when:
+
+        * ``tool_choice == 'required'`` (Task 4b): forces at least one
+          conforming tool call over all (or the allowed-subset of) tools.
+        * ``tool_choice == 'auto'`` and some tool has ``function.strict == True``
+          (Task 4): optionally constrains the strict tools' arguments (the tool
+          call remains optional under ``auto``).
+        * ``AllowedToolChoice`` with ``mode == 'required'`` (Task 4b): same as
+          ``required`` but limited to the allowed subset.
+
+        Existing behavior for ``auto``/``none``/named tool choices without
+        strict tools is unchanged.
         """
         from lmdeploy.serve.openai.protocol import AllowedToolChoice
 
@@ -582,22 +672,52 @@ class BaseResponseParser(ResponseParser):
 
             tools = [item.function.model_dump() for item in request.tools
                      if item.function.name in allowed_names]
-            return request.model_copy(update={'tools': tools})
+            updates: dict = {'tools': tools}
+            if request.tool_choice.allowed_tools.mode == 'required':
+                # Forced decoding MUST use the model's real tool-call
+                # delimiters; skip (leave response_format unset) when no usable
+                # parser tags are available rather than fabricate default tags.
+                open_tag, close_tag = cls._parser_tags_or_none()
+                rf = build_required_response_format(
+                    tools, open_tag, close_tag, allowed_names=allowed_names)
+                if rf is not None:
+                    updates['response_format'] = rf
+            return request.model_copy(update=updates)
 
         if not request.tools:
             return request.model_copy(update={'tools': None})
 
         if not isinstance(request.tool_choice, str):
+            # Named tool choice: dump the single named tool for the template.
+            # (Forced decoding for the named tool is out of scope for Task 4b,
+            # which targets ``tool_choice='required'`` and AllowedToolChoice
+            # ``mode='required'``; named choice keeps its existing behavior.)
             tools = [
                 item.function.model_dump() for item in request.tools
                 if item.function.name == request.tool_choice.function.name
             ]
-        else:
+            return request.model_copy(update={'tools': tools})
+
+        if request.tool_choice == 'required':
+            # Task 4b: force at least one conforming tool call over all tools.
+            # Forced decoding MUST use the model's real tool-call delimiters;
+            # skip (leave response_format unset) when no usable parser tags are
+            # available rather than fabricate default tags the model never emits.
             tools = [item.function.model_dump() for item in request.tools]
+            open_tag, close_tag = cls._parser_tags_or_none()
+            rf = build_required_response_format(tools, open_tag, close_tag)
+            updates = {'tools': tools}
+            if rf is not None:
+                updates['response_format'] = rf
+            return request.model_copy(update=updates)
+
+        # tool_choice == 'auto' (or 'none'): dump tools for the template. Under
+        # 'auto', strict tools additionally get an optional structural_tag
+        # constraint (Task 4). 'none' is unaffected (tools are still dumped for
+        # the template but no response_format is injected).
+        tools = [item.function.model_dump() for item in request.tools]
         updates = {'tools': tools}
-        # Task 4: under 'auto', strict tools get an optional structural_tag
-        # constraint. 'none' and named tool choices are unaffected here.
-        if request.tool_choice == 'auto':
+        if request.tool_choice != 'none':
             open_tag, close_tag = cls._parser_tags()
             rf = build_strict_tool_response_format(tools, open_tag, close_tag)
             if rf is not None:
