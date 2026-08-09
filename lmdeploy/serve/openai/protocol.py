@@ -79,6 +79,11 @@ class Function(BaseModel):
     description: str | None = Field(default=None, examples=[None])
     name: str
     parameters: dict[str, Any] | None = None
+    # When True (and a tool parser exposes begin/end tags), the tool's JSON
+    # schema is translated into a structural_tag response_format so generated
+    # tool-call arguments conform to the schema. Aligns with OpenAI's strict
+    # mode and vLLM's enforced strict tool calling.
+    strict: bool | None = None
 
 
 class Tool(BaseModel):
@@ -122,7 +127,9 @@ class JsonSchema(BaseModel):
     # `schema` is a reserved field in Pydantic BaseModel
     # use alias since pydantic does not support the OpenAI key `schema`
     json_schema: dict[str, Any] | None = Field(default=None, alias='schema', examples=[None])
-    # strict is not used
+    # When True, the json_schema is enforced with structural-tag constrained
+    # decoding (read by the engine-side guided-decoding path; see
+    # ``response_parser.build_strict_tool_response_format``).
     strict: bool | None = False
     model_config = ConfigDict(serialize_by_alias=True)
 

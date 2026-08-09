@@ -129,7 +129,12 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
     updates: dict = {}
 
     fmt = request.response_format
-    if fmt is not None and fmt.type != 'text':
+    if isinstance(fmt, dict):
+        # Already a dict (e.g. a structural_tag response_format injected by
+        # ``dump_tools`` for strict/required tool calling). Pass it through
+        # unchanged so it reaches gen_config.response_format as a dict.
+        updates['response_format'] = fmt
+    elif fmt is not None and fmt.type != 'text':
         updates['response_format'] = fmt.model_dump()
     elif fmt is not None and fmt.type == 'text':
         updates['response_format'] = None
@@ -152,6 +157,147 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
         request = request.model_copy(update=updates)
 
     return request
+
+
+
+# ---------------------------------------------------------------------------
+# structural_tag response_format builders (Task 4 / Task 4b)
+#
+# These helpers turn one or more OpenAI tool definitions into a
+# ``{'type': 'structural_tag', 'structural_tag': ...}`` response_format dict
+# that the engine-side guided-decoding path (Task 7) compiles via
+# ``guided._to_xgr_structural_tag``. The dict shape consumed by both engines is:
+#
+#   * single-tag:  {'type':'structural_tag', 'structural_tag':
+#                     {'begin': <open_tag>, 'end': <close_tag>,
+#                      'schema': <json_schema>}}
+#   * multi-tag:   {'type':'structural_tag', 'structural_tag':
+#                     {'tags': [{'begin','end','schema'}, ...]}}
+#   * native:      {'type':'structural_tag', 'structural_tag':
+#                     {'type':'structural_tag', 'format': {...}}}
+#
+# We never call xgrammar directly here; the engines own compilation. This module
+# only produces the dict. The open/close tags come from the active tool parser
+# (``ToolParser.get_tool_open_tag()`` / ``get_tool_close_tag()``), which are the
+# delimiters the model actually emits around a tool-call JSON payload.
+#
+# The wrapped JSON schema is the FULL tool-call object
+# ``{"name": <const>, "arguments": <parameters>}`` (matching what the JSON tool
+# parsers parse between the tags), so constrained decoding forces both the
+# correct tool name and conforming arguments.
+# ---------------------------------------------------------------------------
+
+# Fallback open/close tags used when no tool parser is configured (e.g. in unit
+# tests, or before ``set_parsers`` ran). At runtime ``check_request`` rejects
+# tool requests without a configured tool parser, so this only affects tests /
+# direct ``dump_tools`` calls without a configured parser. They match the qwen3
+# tool parser tags, a common de-facto JSON-tool-call delimiter pair.
+_DEFAULT_TOOL_OPEN_TAG = '<tool_call>'
+_DEFAULT_TOOL_CLOSE_TAG = '</tool_call>'
+
+
+def _tool_call_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    """Build the JSON schema for a single tool-call payload.
+
+    The model emits ``{"name": <tool_name>, "arguments": <args>}`` between the
+    tool-parser's begin/end tags (this is what the JSON tool parsers parse).
+    Constrain the whole object: ``name`` is a ``const`` of the function name and
+    ``arguments`` follows the tool's ``parameters`` JSON schema. If the tool has
+    no ``parameters``, the arguments are unconstrained JSON.
+    """
+    function = tool.get('function', tool)
+    name = function.get('name')
+    parameters = function.get('parameters') or {'type': 'object'}
+    return {
+        'type': 'object',
+        'properties': {
+            'name': {'const': name},
+            'arguments': parameters,
+        },
+        'required': ['name', 'arguments'],
+        'additionalProperties': False,
+    }
+
+
+def _tool_schema_to_structural_tag(
+    tool: dict[str, Any],
+    open_tag: str | None,
+    close_tag: str | None,
+) -> dict[str, Any] | None:
+    """Wrap a single tool's JSON schema in a structural_tag single-tag payload.
+
+    Returns the lmdeploy single-tag payload dict
+    ``{'begin': open_tag, 'end': close_tag, 'schema': <json_schema>}``, or
+    ``None`` if ``open_tag``/``close_tag`` are missing (some tool parsers, e.g.
+    llama3, have no close tag, so a JSON span cannot be delimited).
+    """
+    if not open_tag or not close_tag:
+        return None
+    return {
+        'begin': open_tag,
+        'end': close_tag,
+        'schema': _tool_call_schema(tool),
+    }
+
+
+def _union_tool_schema(tools: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a oneOf JSON schema over multiple tool-call payloads.
+
+    Used when several tools share the same open/close tags: the model picks one
+    tool by emitting its ``name`` const, with the matching ``arguments`` schema.
+    """
+    if len(tools) == 1:
+        return _tool_call_schema(tools[0])
+    return {'oneOf': [_tool_call_schema(t) for t in tools]}
+
+
+def _strict_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Return the subset of ``tools`` whose ``function.strict`` is True."""
+    if not tools:
+        return []
+    out = []
+    for tool in tools:
+        function = tool.get('function', tool)
+        if function.get('strict') is True:
+            out.append(tool)
+    return out
+
+
+def build_strict_tool_response_format(
+    tools: list[dict[str, Any]] | None,
+    open_tag: str | None,
+    close_tag: str | None,
+) -> dict[str, Any] | None:
+    """Build a structural_tag response_format for strict tools (Task 4).
+
+    Only tools with ``function.strict == True`` are constrained. Under
+    ``tool_choice='auto'`` the constraint is OPTIONAL: the structural_tag uses
+    the ``triggered_tags`` (multi-tag) form with ``at_least_one=False`` so the
+    model may emit free text OR a conforming tool call (the tag is triggered
+    only when the model emits ``open_tag``).
+
+    Returns ``None`` when there are no strict tools or the tool parser exposes
+    no begin/end tags (strict is then a no-op, preserving existing behavior).
+    """
+    strict = _strict_tools(tools)
+    if not strict:
+        return None
+    if not open_tag or not close_tag:
+        return None
+    schema = _union_tool_schema(strict)
+    # triggered_tags (multi-tag shape) => at_least_one defaults to False, which
+    # makes the tool call optional under 'auto'. ``_to_xgr_structural_tag`` maps
+    # the {'tags': [...]} shape to TriggeredTagsFormat.
+    return {
+        'type': 'structural_tag',
+        'structural_tag': {
+            'tags': [{
+                'begin': open_tag,
+                'end': close_tag,
+                'schema': schema,
+            }],
+        },
+    }
 
 
 class ResponseParser:
@@ -383,9 +529,38 @@ class BaseResponseParser(ResponseParser):
             deltas.append((DeltaMessage(role='assistant', content=''), False))
         return deltas
 
-    @staticmethod
-    def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
-        """Dump tools to a list of dicts to fit jinja chat template."""
+    @classmethod
+    def _parser_tags(cls) -> tuple[str | None, str | None]:
+        """Return the active tool parser's (open_tag, close_tag).
+
+        Falls back to a default JSON-tool-call tag pair when no tool parser is
+        configured (e.g. unit tests calling ``dump_tools`` directly). At runtime
+        ``check_request`` rejects tool requests without a configured tool parser,
+        so the fallback only affects tests / direct calls.
+        """
+        tcls = cls.tool_parser_cls
+        if tcls is not None:
+            try:
+                open_tag = tcls.get_tool_open_tag()
+                close_tag = tcls.get_tool_close_tag()
+                if open_tag and close_tag:
+                    return open_tag, close_tag
+            except NotImplementedError:
+                pass
+        return _DEFAULT_TOOL_OPEN_TAG, _DEFAULT_TOOL_CLOSE_TAG
+
+    @classmethod
+    def dump_tools(cls, request: ChatCompletionRequest) -> ChatCompletionRequest:
+        """Dump tools to a list of dicts to fit jinja chat template.
+
+        Under ``tool_choice='auto'``, tools with ``function.strict == True``
+        additionally get an OPTIONAL ``structural_tag`` ``response_format``
+        injected (Task 4): the model may emit free text OR a conforming tool
+        call whose arguments follow the tool's JSON schema. The
+        ``response_format`` dict is consumed by the engine-side guided-decoding
+        path (Task 7). Existing behavior for ``auto``/``none``/named tool
+        choices without strict tools is unchanged.
+        """
         from lmdeploy.serve.openai.protocol import AllowedToolChoice
 
         if isinstance(request.tool_choice, AllowedToolChoice):
@@ -405,7 +580,8 @@ class BaseResponseParser(ResponseParser):
             if missing:
                 raise ValueError(f'Allowed tool(s) not found in request.tools: {missing}')
 
-            tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
+            tools = [item.function.model_dump() for item in request.tools
+                     if item.function.name in allowed_names]
             return request.model_copy(update={'tools': tools})
 
         if not request.tools:
@@ -418,7 +594,15 @@ class BaseResponseParser(ResponseParser):
             ]
         else:
             tools = [item.function.model_dump() for item in request.tools]
-        return request.model_copy(update={'tools': tools})
+        updates = {'tools': tools}
+        # Task 4: under 'auto', strict tools get an optional structural_tag
+        # constraint. 'none' and named tool choices are unaffected here.
+        if request.tool_choice == 'auto':
+            open_tag, close_tag = cls._parser_tags()
+            rf = build_strict_tool_response_format(tools, open_tag, close_tag)
+            if rf is not None:
+                updates['response_format'] = rf
+        return request.model_copy(update=updates)
 
     def _consume_plain(self) -> tuple[str | None, bool]:
         """Consume buffered text while in plain mode.

@@ -182,6 +182,7 @@ class TestGptOssResponseParser:
                     },
                 },
                 'description': None,
+                'strict': None,
             },
         }]
 
