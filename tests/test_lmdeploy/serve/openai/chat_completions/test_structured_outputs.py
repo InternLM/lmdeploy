@@ -11,7 +11,7 @@ test root is ``tests/test_lmdeploy/serve/openai/``.
 """
 import xgrammar as xgr
 
-from lmdeploy.serve.openai.endpoints.chat_completions.guided import compile_choice
+from lmdeploy.serve.openai.chat_completions.guided import compile_choice
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     StructuredOutputs,
@@ -77,7 +77,7 @@ def test_pytorch_compiles_choice_branch():
 def test_serving_merges_structured_outputs_choice_into_response_format():
     """serving.py merges structured_outputs into gen_config.response_format,
     taking precedence over response_format."""
-    from lmdeploy.serve.openai.endpoints.chat_completions import serving
+    from lmdeploy.serve.openai.chat_completions import serving
 
     req = ChatCompletionRequest(
         model='m',
@@ -90,7 +90,7 @@ def test_serving_merges_structured_outputs_choice_into_response_format():
 
 
 def test_serving_merges_structured_outputs_grammar_into_response_format():
-    from lmdeploy.serve.openai.endpoints.chat_completions import serving
+    from lmdeploy.serve.openai.chat_completions import serving
 
     req = ChatCompletionRequest(
         model='m',
@@ -102,7 +102,7 @@ def test_serving_merges_structured_outputs_grammar_into_response_format():
 
 
 def test_serving_structured_outputs_none_returns_none():
-    from lmdeploy.serve.openai.endpoints.chat_completions import serving
+    from lmdeploy.serve.openai.chat_completions import serving
 
     req = ChatCompletionRequest(
         model='m',

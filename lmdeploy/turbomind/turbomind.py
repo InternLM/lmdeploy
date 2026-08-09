@@ -758,13 +758,17 @@ class TurboMindInstance:
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
-                    grammar = compiler.compile_json_schema(decode_grammar)
+                    grammar = compiler.compile_json_schema(
+                        decode_grammar,
+                        any_whitespace=gen_config.response_format.get('any_whitespace', True))
                 elif decode_grammar_type == 'regex_schema':
                     decode_grammar = str(decode_grammar)
                     grammar = compiler.compile_regex(decode_grammar)
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = str(decode_grammar)
-                    grammar = compiler.compile_json_schema(decode_grammar)
+                    grammar = compiler.compile_json_schema(
+                        decode_grammar,
+                        any_whitespace=gen_config.response_format.get('any_whitespace', True))
                 elif decode_grammar_type == 'structural_tag':
                     if not hasattr(compiler, 'compile_structural_tag'):
                         raise ValueError(

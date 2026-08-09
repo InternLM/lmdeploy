@@ -15,6 +15,19 @@ from lmdeploy.serve.openai.chat_completions.guided import (
 logger = logging.getLogger('lmdeploy')
 
 
+def _compile_json_schema_opts(compiler: xgr.GrammarCompiler, schema: Any,
+                              any_whitespace: bool = True) -> xgr.CompiledGrammar:
+    """Thin wrapper around ``compiler.compile_json_schema`` that forwards the
+    ``any_whitespace`` flag. Exposed at module level so the threading can be
+    unit-tested without constructing a full ``GuidedDecodingManager``.
+
+    ``any_whitespace=True`` (xgrammar default) allows arbitrary whitespace
+    between JSON tokens; ``False`` disables it (used when the request sets
+    ``structured_outputs.disable_any_whitespace``).
+    """
+    return compiler.compile_json_schema(schema, any_whitespace=any_whitespace)
+
+
 class GuidedDecodingManager:
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None):
@@ -76,18 +89,24 @@ class GuidedDecodingManager:
             raise ValueError(f'unsupported format type: {schema_type}')
         return schema, schema_type
 
-    def _compile(self, schema: Any, schema_type: str) -> xgr.CompiledGrammar:
-        """Compile an already-extracted schema into a CompiledGrammar."""
+    def _compile(self, schema: Any, schema_type: str,
+                 any_whitespace: bool = True) -> xgr.CompiledGrammar:
+        """Compile an already-extracted schema into a CompiledGrammar.
+
+        ``any_whitespace`` is forwarded to ``compile_json_schema`` for the
+        ``json_schema``/``json_object`` branches (xgrammar default ``True``);
+        it is ignored by the other branches.
+        """
         if schema_type == 'json_schema':
             if isinstance(schema, str):
                 schema = json.loads(schema)
 
             assert isinstance(schema, dict)
-            return self.compiler.compile_json_schema(schema)
+            return _compile_json_schema_opts(self.compiler, schema, any_whitespace)
         elif schema_type == 'regex_schema':
             return self.compiler.compile_regex(schema)
         elif schema_type == 'json_object':
-            return self.compiler.compile_json_schema(schema)
+            return _compile_json_schema_opts(self.compiler, schema, any_whitespace)
         elif schema_type == 'structural_tag':
             return self.compiler.compile_structural_tag(_to_xgr_structural_tag(schema))
         elif schema_type == 'grammar':
@@ -101,11 +120,15 @@ class GuidedDecodingManager:
         """Compile a full response_format dict into a CompiledGrammar.
 
         Single compile entrypoint covering all supported types
-        (``json_schema``/``regex_schema``/``json_object``/``structural_tag``).
-        Used by ``get_processor`` and exposed for unit testing.
+        (``json_schema``/``regex_schema``/``json_object``/``structural_tag``/
+        ``grammar``/``choice``). Used by ``get_processor`` and exposed for
+        unit testing. Threads the optional ``any_whitespace`` flag
+        (set by ``structured_outputs.disable_any_whitespace``) to the
+        JSON-schema compile path.
         """
         schema, schema_type = self._extract_schema(response_format)
-        return self._compile(schema, schema_type)
+        any_whitespace = response_format.get('any_whitespace', True)
+        return self._compile(schema, schema_type, any_whitespace=any_whitespace)
 
     def get_processors(self, session_ctx: list[dict[str, Any]],
                        response_formats: tuple[dict]) -> dict[int, xgr.GrammarMatcher]:
@@ -113,22 +136,25 @@ class GuidedDecodingManager:
         for i, _format in enumerate(response_formats):
             if isinstance(_format, dict) and _format.get('type', 'text') != 'text':
                 schema, schema_type = self._extract_schema(_format)
+                any_whitespace = _format.get('any_whitespace', True)
 
                 session_id = session_ctx[i]['session_id']
                 seq_id = session_ctx[i]['seq_id']
 
-                processors[i] = self.get_processor(session_id, seq_id, schema, schema_type)
+                processors[i] = self.get_processor(session_id, seq_id, schema, schema_type,
+                                                   any_whitespace=any_whitespace)
 
         return processors
 
-    def get_processor(self, session_id: int, seq_id: int, schema: Any, type: str) -> xgr.GrammarMatcher:
+    def get_processor(self, session_id: int, seq_id: int, schema: Any, type: str,
+                      any_whitespace: bool = True) -> xgr.GrammarMatcher:
         if session_id in self.processors:
             session_dict = self.processors[session_id]
             if seq_id in session_dict:
                 processor = session_dict[seq_id]
                 return processor
 
-        compiled = self._compile(schema, type)
+        compiled = self._compile(schema, type, any_whitespace=any_whitespace)
 
         processor = xgr.GrammarMatcher(compiled)
         self.processors.setdefault(session_id, {})[seq_id] = processor

@@ -619,4 +619,3 @@ class AbortRequest(BaseModel):
     abort_message: str | None = None
     # The session ID to abort. If `abort_all` is True, this field is ignored.
     session_id: int | None = -1
-
