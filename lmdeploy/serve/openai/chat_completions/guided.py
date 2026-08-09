@@ -38,6 +38,7 @@ xgrammar 0.2.3 API notes (verified):
 from typing import Any
 
 import xgrammar as xgr
+from pydantic import ValidationError
 
 
 def _to_xgr_structural_tag(payload: Any) -> xgr.StructuralTag:
@@ -64,19 +65,31 @@ def _to_xgr_structural_tag(payload: Any) -> xgr.StructuralTag:
             f'structural_tag payload must be a dict or xgr.StructuralTag, '
             f'got {type(payload).__name__}')
 
-    # Already in xgrammar's native format.
+    # Already in xgrammar's native format.  Forward only the ``type``/``format``
+    # keys xgrammar expects so extra payload keys don't raise pydantic's
+    # ``ValidationError`` (which would propagate uncaught past the engines'
+    # ``except ValueError``).  Convert any validation error into ``ValueError``
+    # for the same reason.
     if 'format' in payload:
-        return xgr.StructuralTag(**payload)
+        native = {'type': payload.get('type', 'structural_tag'),
+                  'format': payload['format']}
+        try:
+            return xgr.StructuralTag(**native)
+        except ValidationError as e:
+            raise ValueError(f'Invalid structural_tag payload: {e}') from e
 
     # lmdeploy single-tag shape: {begin, end, schema}.
     if 'begin' in payload and 'end' in payload:
         schema = payload.get('schema', {})
-        return xgr.StructuralTag(format={
-            'type': 'tag',
-            'begin': payload['begin'],
-            'end': payload['end'],
-            'content': {'type': 'json_schema', 'json_schema': schema},
-        })
+        try:
+            return xgr.StructuralTag(format={
+                'type': 'tag',
+                'begin': payload['begin'],
+                'end': payload['end'],
+                'content': {'type': 'json_schema', 'json_schema': schema},
+            })
+        except ValidationError as e:
+            raise ValueError(f'Invalid structural_tag payload: {e}') from e
 
     # lmdeploy multi-tag shape: {tags: [{begin, end, schema}, ...]}.
     if 'tags' in payload:
@@ -91,11 +104,14 @@ def _to_xgr_structural_tag(payload: Any) -> xgr.StructuralTag:
                     'json_schema': item.get('schema', {}),
                 },
             })
-        return xgr.StructuralTag(format={
-            'type': 'triggered_tags',
-            'triggers': [t['begin'] for t in tag_formats],
-            'tags': tag_formats,
-        })
+        try:
+            return xgr.StructuralTag(format={
+                'type': 'triggered_tags',
+                'triggers': [t['begin'] for t in tag_formats],
+                'tags': tag_formats,
+            })
+        except ValidationError as e:
+            raise ValueError(f'Invalid structural_tag payload: {e}') from e
 
     raise ValueError(f'Unrecognized structural_tag payload: {payload!r}')
 
@@ -116,16 +132,31 @@ def compile_structural_tag_payload(payload: Any) -> xgr.Grammar:
     return xgr.Grammar.from_structural_tag(_to_xgr_structural_tag(payload))
 
 
+def _const_string_grammar(value: str) -> xgr.Grammar:
+    """Build an uncompiled ``xgr.Grammar`` matching the literal string
+    ``value``.
+
+    Uses xgrammar's ``ConstStringFormat`` (via ``Grammar.from_structural_tag``)
+    so the value is treated as opaque bytes — no EBNF escaping is needed and
+    no character in ``value`` (``"`` , ``\\``, ``|`` …) can break out of the
+    literal or inject grammar.
+    """
+    return xgr.Grammar.from_structural_tag(xgr.StructuralTag(
+        format={'type': 'const_string', 'value': value}))
+
+
 def compile_choice(options: list[str]) -> xgr.Grammar:
     """Build an alternation grammar matching exactly one of ``options``.
 
-    ``options`` is a list of literal strings, e.g. ``["yes", "no"]`` produces
-    an EBNF grammar ``root ::= "yes" | "no"``.  The returned ``Grammar`` is
-    uncompiled; engines compile it with their own ``GrammarCompiler``::
+    ``options`` is a list of literal strings, e.g. ``["yes", "no"]``.  Each
+    option is compiled to a const-string grammar and the results are combined
+    with ``xgr.Grammar.union``, so option strings are treated as opaque
+    literals — a ``"`` or ``\\`` in an option cannot break out of the literal
+    (no EBNF injection / lexer crash).  The returned ``Grammar`` is uncompiled;
+    engines compile it with their own ``GrammarCompiler``::
 
         compiled = compiler.compile_grammar(compile_choice(["yes", "no"]))
     """
     if not options:
         raise ValueError('compile_choice requires at least one option')
-    parts = ' | '.join(f'"{opt}"' for opt in options)
-    return xgr.Grammar.from_ebnf(f'root ::= {parts}')
+    return xgr.Grammar.union(*[_const_string_grammar(opt) for opt in options])
