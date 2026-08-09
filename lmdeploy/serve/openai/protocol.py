@@ -139,6 +139,28 @@ ImageDataInputItem = str | dict
 ImageDataFormat = ImageDataInputItem | list[ImageDataInputItem]
 
 
+class StructuredOutputs(BaseModel):
+    """Structured-outputs request extension (lmdeploy extension, vLLM-aligned).
+
+    A lightweight alternative to ``response_format`` for guided decoding:
+
+    - ``choice``: constrain the output to exactly one of a fixed set of literal
+      strings. Compiled to an xgrammar const-string alternation grammar via
+      :func:`guided.compile_choice` (no EBNF escaping).
+    - ``grammar``: constrain the output to an EBNF grammar string (xgrammar
+      ``compile_grammar``).
+    - ``disable_any_whitespace``: when ``True``, JSON-schema compilation is
+      invoked with ``any_whitespace=False`` (see Task 9). Only takes effect on
+      the JSON-schema compile path; ``choice``/``grammar`` are unaffected.
+
+    When ``structured_outputs`` is set on a request it takes precedence over
+    ``response_format`` (both are merged into ``gen_config.response_format``).
+    """
+    choice: list[str] | None = None
+    grammar: str | None = None
+    disable_any_whitespace: bool = False
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
@@ -174,6 +196,7 @@ class ChatCompletionRequest(BaseModel):
     user: str | None = None
     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
+    structured_outputs: StructuredOutputs | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
     do_preprocess: bool | None = True
     repetition_penalty: float | None = None
@@ -596,3 +619,4 @@ class AbortRequest(BaseModel):
     abort_message: str | None = None
     # The session ID to abort. If `abort_all` is True, this field is ignored.
     session_id: int | None = -1
+

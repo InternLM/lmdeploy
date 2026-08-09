@@ -36,6 +36,37 @@ from .validation import check_request
 logger = get_logger('lmdeploy')
 
 
+def _structured_outputs_to_response_format(request: ChatCompletionRequest) -> dict | None:
+    """Convert ``request.structured_outputs`` into a ``response_format`` dict.
+
+    Returns ``None`` when ``structured_outputs`` is unset/empty. Otherwise
+    produces a dict the engines' compile paths recognize:
+
+    - ``choice``  -> ``{'type': 'choice', 'choice': [...]}``
+    - ``grammar`` -> ``{'type': 'grammar', 'grammar': '<ebnf str>'}``
+
+    ``choice`` wins over ``grammar`` when both are set. When
+    ``disable_any_whitespace`` is set, an ``any_whitespace=False`` flag is added
+    for the JSON-schema compile path (takes effect only when the dict resolves
+    to a JSON-schema type; ``choice``/``grammar`` are unaffected — see Task 9).
+    ``structured_outputs`` takes precedence over ``response_format`` (the caller
+    overwrites ``gen_config.response_format`` with this dict).
+    """
+    so = request.structured_outputs
+    if so is None:
+        return None
+    rf: dict | None = None
+    if so.choice is not None:
+        rf = {'type': 'choice', 'choice': list(so.choice)}
+    elif so.grammar is not None:
+        rf = {'type': 'grammar', 'grammar': so.grammar}
+    else:
+        return None
+    if so.disable_any_whitespace:
+        rf['any_whitespace'] = False
+    return rf
+
+
 def register(router: APIRouter, server_context) -> None:
 
     @router.post('/v1/chat/completions',
@@ -211,6 +242,12 @@ def register(router: APIRouter, server_context) -> None:
             with_cache=with_cache,
             preserve_cache=preserve_cache,
         )
+
+        # structured_outputs takes precedence over response_format: when set,
+        # overwrite gen_config.response_format with the equivalent dict.
+        so_rf = _structured_outputs_to_response_format(request)
+        if so_rf is not None:
+            gen_config.response_format = so_rf
 
         # text completion for string input or input_ids
         do_preprocess = (False if isinstance(request.messages, str)

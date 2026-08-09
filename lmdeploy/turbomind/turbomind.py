@@ -18,7 +18,10 @@ import torch
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
-from lmdeploy.serve.openai.chat_completions.guided import _to_xgr_structural_tag
+from lmdeploy.serve.openai.chat_completions.guided import (
+    _to_xgr_structural_tag,
+    compile_choice,
+)
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
@@ -745,6 +748,13 @@ class TurboMindInstance:
                     # the actual compile is handled in the dispatch below.
                     decode_grammar = gen_config.response_format.get(
                         'structural_tag', gen_config.response_format)
+                elif decode_grammar_type == 'grammar':
+                    # EBNF grammar string; compiled via compile_grammar below.
+                    decode_grammar = gen_config.response_format['grammar']
+                elif decode_grammar_type == 'choice':
+                    # list of literal option strings; compiled to a const-string
+                    # alternation grammar via guided.compile_choice below.
+                    decode_grammar = gen_config.response_format['choice']
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
@@ -764,10 +774,26 @@ class TurboMindInstance:
                             'C++ binding to enable structural_tag on turbomind.')
                     grammar = compiler.compile_structural_tag(
                         _to_xgr_structural_tag(decode_grammar))
+                elif decode_grammar_type == 'grammar':
+                    if not hasattr(compiler, 'compile_grammar'):
+                        raise ValueError(
+                            'grammar response_format is not supported by the '
+                            'bundled turbomind _xgrammar binding, which only exposes '
+                            'compile_json_schema/compile_regex. Upgrade the _xgrammar '
+                            'C++ binding to enable grammar on turbomind.')
+                    grammar = compiler.compile_grammar(decode_grammar)
+                elif decode_grammar_type == 'choice':
+                    if not hasattr(compiler, 'compile_grammar'):
+                        raise ValueError(
+                            'choice response_format is not supported by the '
+                            'bundled turbomind _xgrammar binding, which only exposes '
+                            'compile_json_schema/compile_regex. Upgrade the _xgrammar '
+                            'C++ binding to enable choice on turbomind.')
+                    grammar = compiler.compile_grammar(compile_choice(decode_grammar))
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
                                    '["json_schema", "regex_schema", "json_object", ' \
-                                   '"structural_tag"]'
+                                   '"structural_tag", "grammar", "choice"]'
 
                 self.model_inst.set_grammar(grammar)
             except ValueError as e:

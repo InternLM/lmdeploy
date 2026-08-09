@@ -9,6 +9,7 @@ from transformers import PreTrainedTokenizerBase
 
 from lmdeploy.serve.openai.chat_completions.guided import (
     _to_xgr_structural_tag,
+    compile_choice,
 )
 
 logger = logging.getLogger('lmdeploy')
@@ -64,6 +65,13 @@ class GuidedDecodingManager:
             # structural_tag payload dict; defaults to the whole response_format
             # if the 'structural_tag' key is absent.
             schema = response_format.get('structural_tag', response_format)
+        elif schema_type == 'grammar':
+            # EBNF grammar string compiled via compile_grammar.
+            schema = response_format['grammar']
+        elif schema_type == 'choice':
+            # list of literal option strings; compiled to a const-string
+            # alternation grammar via guided.compile_choice.
+            schema = response_format['choice']
         else:
             raise ValueError(f'unsupported format type: {schema_type}')
         return schema, schema_type
@@ -82,6 +90,10 @@ class GuidedDecodingManager:
             return self.compiler.compile_json_schema(schema)
         elif schema_type == 'structural_tag':
             return self.compiler.compile_structural_tag(_to_xgr_structural_tag(schema))
+        elif schema_type == 'grammar':
+            return self.compiler.compile_grammar(schema)
+        elif schema_type == 'choice':
+            return self.compiler.compile_grammar(compile_choice(schema))
         else:
             raise ValueError(f'Do not support schema type {schema_type}')
 
