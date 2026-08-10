@@ -7,7 +7,7 @@ from typing import TypeAlias
 
 import torch
 
-from .schema import CacheResource
+from .schema import CacheTensorSpec
 
 _CacheRowLocation: TypeAlias = tuple[int, int]
 """Physical cache tensor index and row within that tensor."""
@@ -31,27 +31,27 @@ class NamedCacheView(Mapping[str, torch.Tensor]):
         }
 
     @classmethod
-    def from_resources(cls, resources: Sequence[CacheResource], caches: Sequence[torch.Tensor]):
-        """Build row lookup across normalized resource tensors."""
-        if len(resources) != len(caches):
-            raise ValueError('Cache resources and tensors must have the same length.')
+    def from_specs(cls, tensor_specs: Sequence[CacheTensorSpec], caches: Sequence[torch.Tensor]):
+        """Build row lookup across planned cache tensors."""
+        if len(tensor_specs) != len(caches):
+            raise ValueError('Cache tensor specs and tensors must have the same length.')
 
         view = cls({})
         cache_tensors: dict[str, list[torch.Tensor]] = {}
         consumer_row_locations: dict[str, dict[int, _CacheRowLocation]] = {}
         layer_row_locations: dict[str, dict[int, _CacheRowLocation]] = {}
-        for resource, cache in zip(resources, caches):
-            tensors = cache_tensors.setdefault(resource.name, [])
+        for spec, cache in zip(tensor_specs, caches):
+            tensors = cache_tensors.setdefault(spec.name, [])
             tensor_idx = len(tensors)
             tensors.append(cache)
 
-            if resource.consumer_rows is not None:
-                locations = consumer_row_locations.setdefault(resource.name, {})
-                for local_row, consumer_row in enumerate(resource.consumer_rows):
+            if spec.consumer_rows is not None:
+                locations = consumer_row_locations.setdefault(spec.name, {})
+                for local_row, consumer_row in enumerate(spec.consumer_rows):
                     locations[consumer_row] = (tensor_idx, local_row)
-            elif resource.layer_rows is not None:
-                locations = layer_row_locations.setdefault(resource.name, {})
-                for layer_id, local_row in resource.layer_rows.row_by_layer.items():
+            elif spec.layer_rows is not None:
+                locations = layer_row_locations.setdefault(spec.name, {})
+                for layer_id, local_row in spec.layer_rows.row_by_layer.items():
                     locations[layer_id] = (tensor_idx, local_row)
 
         view._cache_tensors = {

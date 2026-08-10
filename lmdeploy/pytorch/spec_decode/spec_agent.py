@@ -235,7 +235,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                 draft_tp,
                 request_collector=request_collector,
             )
-            return CacheEngine.get_cache_block_size(
+            return CacheEngine.get_logical_block_nbytes(
                 cache_config,
                 self.model_config,
                 draft_tp,

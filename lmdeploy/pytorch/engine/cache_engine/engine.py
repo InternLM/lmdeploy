@@ -2,7 +2,6 @@
 # modify from: https://github.com/vllm-project/vllm
 import json
 from collections.abc import Callable, Mapping, Sequence
-from operator import index as as_index
 
 import torch
 
@@ -22,8 +21,8 @@ from lmdeploy.pytorch.disagg.messages import (
 from lmdeploy.utils import get_logger
 
 from ....messages import QuantPolicy
-from ...config import CacheConfig, ModelConfig, StateCacheSpec
-from .layout import CacheAllocation, CachePool
+from ...config import CacheConfig, ModelConfig
+from .layout import CacheAllocation, CachePool, _unpack_cache_allocation
 from .migration import (
     build_cache_pool_assignments,
     describe_cache_pools,
@@ -35,26 +34,16 @@ from .schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
     CacheDesc,
-    CacheResource,
-    build_block_cache_resources,
-    build_block_cache_resources_from_requests,
-    build_state_cache_resources,
-    layer_maps_from_resources,
+    CacheTensorSpec,
+    build_block_cache_tensor_specs,
+    build_block_cache_tensor_specs_from_requests,
+    layer_maps_from_specs,
 )
 from .view import NamedCacheView
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
 
 logger = get_logger('lmdeploy')
-
-
-def _unpack_cache_allocation(result):
-    """Adapt a native allocation or the pinned external tuple contract."""
-    if isinstance(result, CacheAllocation):
-        mem_pool, caches = result.as_legacy()
-        return result, mem_pool, caches
-    mem_pool, caches = result
-    return None, mem_pool, caches
 
 
 def _get_kv_cache_dtype(model_config: ModelConfig):
@@ -114,7 +103,7 @@ MLA_FP8_HEAD_DIM = 656
 
 
 class CacheEngine:
-    """Host and Device memory maintainer.
+    """Own block-cache allocations and runtime movement.
 
     Args:
         cache_config (CacheConfig): config of the cache information.
@@ -143,7 +132,7 @@ class CacheEngine:
         self.model_config = model_config
         _update_mla_kv_cache_dtype(model_config, cache_config)
 
-        self.block_size = cache_config.kernel_block_size
+        self.kernel_block_size = cache_config.kernel_block_size
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = _get_kv_cache_dtype(self.model_config)
 
@@ -186,19 +175,19 @@ class CacheEngine:
         self.cache_stream = cache_stream or torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
-        self.events = torch.cuda.Event()
+        self.swap_event = torch.cuda.Event()
 
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
     @property
     def cpu_cache(self):
-        """Gpu cache."""
+        """CPU cache tensors in legacy model order."""
         return self.local_cpu_cache
 
     @property
     def gpu_cache(self):
-        """Gpu cache."""
+        """Device cache tensors in legacy model order."""
         return self.local_gpu_cache
 
     @property
@@ -339,36 +328,37 @@ class CacheEngine:
         return [key_scale_zero_desc, val_scale_zero_desc]
 
     @classmethod
-    def _get_cache_resources(cls,
-                             model_config: ModelConfig,
-                             cache_config: CacheConfig,
-                             world_size: int,
-                             block_requests: Sequence[BlockCacheRequest] | None = None) -> tuple[CacheResource, ...]:
-        """Build the ordered resources consumed by the physical layout."""
-        resources = []
+    def _get_cache_tensor_specs(
+            cls,
+            model_config: ModelConfig,
+            cache_config: CacheConfig,
+            world_size: int,
+            block_requests: Sequence[BlockCacheRequest] | None = None) -> tuple[CacheTensorSpec, ...]:
+        """Build the ordered tensor specs consumed by the physical layout."""
+        tensor_specs = []
         use_std = model_config.use_standard_kv_cache
 
         if use_std:
             k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
             v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
             quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
-            resources.append(CacheResource(name='k_cache', desc=k_cache_desc))
-            resources.append(CacheResource(name='v_cache', desc=v_cache_desc))
+            tensor_specs.append(CacheTensorSpec(name='k_cache', desc=k_cache_desc))
+            tensor_specs.append(CacheTensorSpec(name='v_cache', desc=v_cache_desc))
             for idx, desc in enumerate(quant_cache_descs):
-                resources.append(CacheResource(name=f'quant_{idx}', desc=desc))
+                tensor_specs.append(CacheTensorSpec(name=f'quant_{idx}', desc=desc))
 
         if block_requests is not None:
-            resources.extend(build_block_cache_resources_from_requests(block_requests))
+            tensor_specs.extend(build_block_cache_tensor_specs_from_requests(block_requests))
         # named block cache specs (shape without block_size, same as cache_shapes)
         elif len(model_config.block_cache_specs) > 0:
-            resources.extend(build_block_cache_resources(model_config.block_cache_specs))
+            tensor_specs.extend(build_block_cache_tensor_specs(model_config.block_cache_specs))
         else:
             # legacy anonymous cache_shapes (shape without block_size)
             custom_descs = cls.get_custom_cache_descs(model_config, cache_config)
             for idx, desc in enumerate(custom_descs):
-                resources.append(CacheResource(name=f'custom_{idx}', desc=desc))
+                tensor_specs.append(CacheTensorSpec(name=f'custom_{idx}', desc=desc))
 
-        return tuple(resources)
+        return tuple(tensor_specs)
 
     @classmethod
     def _uses_layer_scoped_block_caches(cls, model_config: ModelConfig):
@@ -377,12 +367,12 @@ class CacheEngine:
                 and len(model_config.block_cache_specs) > 0)
 
     @staticmethod
-    def _get_block_cache_layer_maps(model_config: ModelConfig) -> dict[str, dict[int, int]]:
+    def _get_block_rows_by_layer(model_config: ModelConfig) -> dict[str, dict[int, int]]:
         """Build global-layer-id to local-row maps for named block caches."""
         if not CacheEngine._uses_layer_scoped_block_caches(model_config):
             return {}
-        resources = build_block_cache_resources(model_config.block_cache_specs)
-        return layer_maps_from_resources(resources)
+        tensor_specs = build_block_cache_tensor_specs(model_config.block_cache_specs)
+        return layer_maps_from_specs(tensor_specs)
 
     @classmethod
     def get_custom_cache_descs(cls, model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
@@ -391,8 +381,8 @@ class CacheEngine:
         block_size = cache_config.kernel_block_size
         # named block cache specs (shape without block_size, same convention as cache_shapes)
         if len(model_config.block_cache_specs) > 0:
-            for resource in build_block_cache_resources(model_config.block_cache_specs):
-                descs.append(resource.desc)
+            for spec in build_block_cache_tensor_specs(model_config.block_cache_specs):
+                descs.append(spec.desc)
             return descs
         # legacy cache_shapes
         if len(model_config.cache_shapes) > 0:
@@ -409,7 +399,7 @@ class CacheEngine:
         world_size: int,
         request_collector: Callable[[BlockCacheGeometry], Sequence[BlockCacheRequest] | None] | None = None,
     ) -> BlockCachePlan:
-        """Finalize block geometry, resources, and backend layout."""
+        """Finalize block geometry, tensor specs, and backend layout."""
         geometry = BlockCacheGeometry(block_size=cache_config.block_size,
                                       kernel_block_size=cache_config.kernel_block_size)
         _update_mla_kv_cache_dtype(model_config, cache_config)
@@ -424,11 +414,14 @@ class CacheEngine:
                         'Built-operator cache request collection requires the native CacheEngine allocator.')
                 block_requests = tuple(collected_requests)
         num_layers = model_config.num_layers
-        resources = cls._get_cache_resources(model_config, cache_config, world_size, block_requests=block_requests)
+        tensor_specs = cls._get_cache_tensor_specs(model_config,
+                                                   cache_config,
+                                                   world_size,
+                                                   block_requests=block_requests)
         cache_backend = get_backend().get_cache_backend()
-        layout = cache_backend.build_block_layout(resources, num_layers=num_layers)
+        layout = cache_backend.build_block_layout(tensor_specs, num_layers=num_layers)
         return BlockCachePlan(
-            resources=resources,
+            tensor_specs=tensor_specs,
             layout=layout,
             kernel_blocks_per_logical_block=geometry.kernel_blocks_per_logical_block,
         )
@@ -457,7 +450,7 @@ class CacheEngine:
         )
 
     def _build_legacy_layer_cache(self, caches: Sequence[torch.Tensor]):
-        """Build the compatibility tuple without scoped named resources."""
+        """Build the compatibility tuple without scoped named tensors."""
         plan = getattr(self, 'block_cache_plan', None)
         if plan is not None:
             caches = [caches[index] for index in plan.legacy_cache_indices]
@@ -482,15 +475,14 @@ class CacheEngine:
         self.local_gpu_cache = self._build_legacy_layer_cache(caches)
         plan = getattr(self, 'block_cache_plan', None)
         if plan is None:
-            resources = self._get_cache_resources(self.model_config, self.cache_config, self.world_size)
-            self._cache_names = [resource.name for resource in resources]
-            self._cache_resources = None
-            self._block_cache_layer_maps = self._get_block_cache_layer_maps(self.model_config)
+            tensor_specs = self._get_cache_tensor_specs(self.model_config, self.cache_config, self.world_size)
+            self._block_cache_names = [spec.name for spec in tensor_specs]
+            self._cache_tensor_specs = None
+            self._block_rows_by_layer = self._get_block_rows_by_layer(self.model_config)
         else:
-            self._cache_names = list(plan.cache_names)
-            self._cache_resources = plan.resources
-            self._block_cache_layer_maps = {}
-        self._cache_list = self._gpu_cache_list
+            self._block_cache_names = list(plan.cache_names)
+            self._cache_tensor_specs = plan.tensor_specs
+            self._block_rows_by_layer = {}
         self._block_caches = self._build_block_cache_view()
         return self.local_gpu_cache
 
@@ -509,19 +501,19 @@ class CacheEngine:
 
     def _build_block_cache_view(self) -> Mapping[str, torch.Tensor]:
         """Build the model-facing view once for this device allocation."""
-        if not hasattr(self, '_cache_names') or not hasattr(self, '_cache_list'):
+        if not hasattr(self, '_block_cache_names') or not hasattr(self, '_gpu_cache_list'):
             return {}
-        resources = getattr(self, '_cache_resources', None)
-        if resources is not None and any(resource.has_rows for resource in resources):
-            return NamedCacheView.from_resources(resources, self._cache_list)
+        tensor_specs = getattr(self, '_cache_tensor_specs', None)
+        if tensor_specs is not None and any(spec.has_rows for spec in tensor_specs):
+            return NamedCacheView.from_specs(tensor_specs, self._gpu_cache_list)
         caches = {
             name: cache
-            for name, cache in zip(self._cache_names, self._cache_list)
+            for name, cache in zip(self._block_cache_names, self._gpu_cache_list)
         }
-        layer_maps = getattr(self, '_block_cache_layer_maps', {})
-        if not layer_maps:
+        rows_by_layer = getattr(self, '_block_rows_by_layer', {})
+        if not rows_by_layer:
             return caches
-        return NamedCacheView(caches, layer_maps)
+        return NamedCacheView(caches, rows_by_layer)
 
     @property
     def block_caches(self) -> Mapping[str, torch.Tensor]:
@@ -548,7 +540,7 @@ class CacheEngine:
             custom_shape = self.get_custom_cache_shape_impl(
                 num_layers=num_layers,
                 num_blocks=self.num_gpu_blocks,
-                block_size=self.block_size,
+                block_size=self.kernel_block_size,
                 shape=shape,
             )
             custom_cache = self._allocate_single_custom_cache(shape=custom_shape, dtype=dtype, device=device)
@@ -574,7 +566,7 @@ class CacheEngine:
             gpu_entries = [(pool.tensor, pool.entry_axis) for pool in gpu_allocation.pools]
         else:
             # Existing dlinfer patches return raw owning envelopes whose axes do
-            # not describe cache blocks. Their typed resource views retain the
+            # not describe cache blocks. Their typed cache views retain the
             # legacy [layer, block, ...] contract, so use those views directly.
             cpu_entries = [(cache, 1) for cache in self._cpu_cache_list]
             gpu_entries = [(cache, 1) for cache in self._gpu_cache_list]
@@ -661,7 +653,7 @@ class CacheEngine:
                     didx = dst_idx[idx:idx + BLOCKS_PER_COPY]
                     sdata = scache.index_select(entry_axis, sidx)
                     dcache.index_copy_(entry_axis, didx, sdata.to(dcache.device))
-            self.events.record(stream=self.cache_stream)
+            self.swap_event.record(stream=self.cache_stream)
 
     def swap_in(self, src_to_dst: dict[int, int]) -> None:
         """Move cache from Host to Device.
@@ -680,20 +672,12 @@ class CacheEngine:
         self._swap(self._swap_out_pairs, src_to_dst)
 
     @classmethod
-    def get_cache_block_size(cls,
-                             cache_config: CacheConfig,
-                             model_config: ModelConfig,
-                             world_size: int = 1,
-                             block_cache_plan: BlockCachePlan | None = None) -> int:
-        """Get the required cache size of the model.
-
-        Args:
-            block_size (int): The token numbers of the block.
-            model_config (ModelConfig): The config of the model.
-
-        Return:
-            int: Required memory size in bytes.
-        """
+    def get_logical_block_nbytes(cls,
+                                 cache_config: CacheConfig,
+                                 model_config: ModelConfig,
+                                 world_size: int = 1,
+                                 block_cache_plan: BlockCachePlan | None = None) -> int:
+        """Return owning storage bytes required by one logical block."""
         allocator = cls.allocate_caches
         allocator_func = getattr(allocator, '__func__', allocator)
         if allocator_func is _NATIVE_BLOCK_ALLOCATOR:
@@ -801,197 +785,3 @@ class CacheEngine:
 # Keep its original function identity so runtime and sizing can retain that
 # compatibility path until the external feature check is deployed.
 _NATIVE_BLOCK_ALLOCATOR = CacheEngine.allocate_caches.__func__
-
-
-class StateCacheEngine:
-    """Cache engine for state cache."""
-
-    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig | None = None):
-        self.cache_config = cache_config
-        self.model_config = model_config
-        state_specs = None
-        if model_config is not None and len(model_config.state_cache_specs) > 0:
-            state_specs = model_config.state_cache_specs
-        resources = build_state_cache_resources(cache_config.states_shapes, state_specs=state_specs)
-        self._state_cache_names = [resource.name for resource in resources]
-        self._state_cache_layer_maps = layer_maps_from_resources(resources)
-        # Non-CUDA device integrations patch the canonical "cuda" device path
-        # before reaching this layer, so keep using it here.
-        allocate_kwargs = dict(num_caches=cache_config.num_state_caches,
-                               state_shapes=cache_config.states_shapes,
-                               device='cuda')
-        if state_specs is not None:
-            allocate_kwargs['state_specs'] = state_specs
-        result = self.allocate_caches(**allocate_kwargs)
-        self.allocation, self.mem_pool, self._state_caches = _unpack_cache_allocation(result)
-        # ``mem_pool`` remains a downstream facade; state operations use the
-        # resolved allocation entries below.
-        self._state_entries = self._build_state_entries(self.allocation, self._state_caches)
-
-    @staticmethod
-    def allocate_caches(num_caches: int,
-                        state_shapes: list[tuple[tuple[int], torch.dtype]],
-                        device: torch.device,
-                        state_specs: list[StateCacheSpec] | None = None) -> CacheAllocation:
-        """Allocate cache implement."""
-
-        resources = build_state_cache_resources(state_shapes, state_specs=state_specs)
-        cache_backend = get_backend().get_cache_backend()
-        layout = cache_backend.build_state_layout(resources)
-        return layout.allocate(num_caches=num_caches, device=device)
-
-    @staticmethod
-    def _build_state_entries(allocation: CacheAllocation | None,
-                             state_caches: Sequence[torch.Tensor]) -> tuple[tuple[torch.Tensor, int], ...]:
-        """Resolve tensors and state-slot axes used by runtime operations."""
-        if allocation is not None:
-            return tuple((pool.tensor, pool.entry_axis) for pool in allocation.pools)
-
-        # The pinned dlinfer tuple contract allocates every state resource as a
-        # contiguous [state_slot, ...] tensor. Keep this explicit compatibility
-        # path separate from native owning-pool metadata.
-        return tuple((cache, 0) for cache in state_caches)
-
-    @staticmethod
-    def _get_state_cache_layer_maps(state_specs: list[StateCacheSpec]) -> dict[str, dict[int, int]]:
-        """Build global-layer-id to local-row maps for named state caches."""
-        resources = build_state_cache_resources((), state_specs=state_specs)
-        return layer_maps_from_resources(resources)
-
-    @staticmethod
-    def get_cache_state_size(state_shapes: list[tuple[tuple[int], torch.dtype]],
-                             state_specs: list[StateCacheSpec] | None = None) -> int:
-        """Get the required cache size of the state cache.
-
-        Args:
-            state_shapes (list[tuple[tuple[int], torch.dtype]]): The shapes and dtypes of the states.
-
-        Return:
-            int: Required memory size in bytes.
-        """
-        allocate_kwargs = dict(num_caches=1, state_shapes=state_shapes, device='meta')
-        if state_specs is not None:
-            allocate_kwargs['state_specs'] = state_specs
-        result = StateCacheEngine.allocate_caches(**allocate_kwargs)
-        allocation, mem_pool, _ = _unpack_cache_allocation(result)
-        if allocation is not None:
-            return allocation.nbytes
-        return mem_pool.numel() * mem_pool.element_size()
-
-    @property
-    def state_caches(self):
-        """State caches."""
-        return self._state_caches
-
-    @property
-    def named_state_caches(self) -> Mapping[str, torch.Tensor]:
-        """State caches keyed by name."""
-        if not self._state_cache_names or not self._state_caches:
-            return {}
-        caches = {
-            name: cache
-            for name, cache in zip(self._state_cache_names, self._state_caches)
-        }
-        layer_maps = getattr(self, '_state_cache_layer_maps', {})
-        if not layer_maps:
-            return caches
-        return NamedCacheView(caches, layer_maps)
-
-    def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
-        """Initialize state caches.
-
-        idx: indices of caches to be initialized.
-        mask: mask to indicate which idx to be initialized.
-        """
-        if idx is None:
-            return
-
-        if len(self._state_caches) <= 0:
-            return
-
-        num_caches = self.cache_config.num_state_caches
-
-        # get mask of all caches so we can perform inplace mask fill
-        cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
-        cache_masks.index_copy_(0, idx, mask)
-        for state_cache, entry_axis in self._state_entries:
-            mask_shape = [1] * state_cache.dim()
-            mask_shape[entry_axis] = num_caches
-            state_cache.masked_fill_(cache_masks.view(mask_shape), 0)
-
-    @staticmethod
-    def _index_list(idx: int | Sequence[int]):
-        """Normalize host-side cache indices."""
-        if isinstance(idx, torch.Tensor):
-            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
-        if isinstance(idx, (str, bytes)):
-            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
-        try:
-            return [as_index(idx)]
-        except TypeError:
-            pass
-        if not isinstance(idx, Sequence):
-            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
-        if any(isinstance(item, torch.Tensor) for item in idx):
-            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
-        return [as_index(item) for item in idx]
-
-    @staticmethod
-    def _validate_index_bounds(indices: Sequence[int], num_caches: int):
-        """Check normalized cache indices are valid state slots."""
-        for idx in indices:
-            if idx < 0 or idx >= num_caches:
-                raise ValueError(f'State cache index {idx} is out of range [0, {num_caches}).')
-
-    @staticmethod
-    def _copy_ranges(src_list: list[int], dst_list: list[int]):
-        """Yield contiguous copy ranges as (src_start, dst_start, length)."""
-        pairs = sorted(zip(src_list, dst_list))
-        if len(pairs) == 0:
-            return
-        start_src = prev_src = pairs[0][0]
-        start_dst = prev_dst = pairs[0][1]
-        length = 1
-        for src, dst in pairs[1:]:
-            if src == prev_src + 1 and dst == prev_dst + 1:
-                prev_src = src
-                prev_dst = dst
-                length += 1
-                continue
-            yield start_src, start_dst, length
-            start_src = prev_src = src
-            start_dst = prev_dst = dst
-            length = 1
-        yield start_src, start_dst, length
-
-    def copy_caches(self, src_idx: int | Sequence[int], dst_idx: int | Sequence[int]):
-        """Copy state cache slots.
-
-        This is the low-level primitive needed by SSM prefix caching: a frozen
-        state checkpoint can be copied into a newly allocated runtime slot
-        before the next forward.
-        """
-        if len(self._state_caches) <= 0:
-            return
-
-        src_list = self._index_list(src_idx)
-        dst_list = self._index_list(dst_idx)
-        if len(src_list) != len(dst_list):
-            raise ValueError('src_idx and dst_idx must have the same number of elements.')
-        if len(src_list) == 0:
-            return
-        num_caches = self.cache_config.num_state_caches
-        self._validate_index_bounds(src_list, num_caches)
-        self._validate_index_bounds(dst_list, num_caches)
-        dst_set = set(dst_list)
-        if len(dst_set) != len(dst_list):
-            raise ValueError('dst_idx must not contain duplicate entries.')
-        if not set(src_list).isdisjoint(dst_set):
-            raise ValueError('src_idx and dst_idx must not overlap for stream-ordered state copies.')
-
-        copy_ranges = tuple(self._copy_ranges(src_list, dst_list))
-        for state_cache, entry_axis in self._state_entries:
-            for src, dst, length in copy_ranges:
-                src_cache = state_cache.narrow(entry_axis, src, length)
-                dst_cache = state_cache.narrow(entry_axis, dst, length)
-                dst_cache.copy_(src_cache, non_blocking=True)

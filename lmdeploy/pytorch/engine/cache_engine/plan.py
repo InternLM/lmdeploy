@@ -6,14 +6,14 @@ from dataclasses import dataclass
 import torch
 
 from .layout import BlockCacheLayout, CacheAllocation
-from .schema import CacheResource
+from .schema import CacheTensorSpec
 
 
 @dataclass(frozen=True)
 class BlockCachePlan:
     """Reuse one finalized block-cache layout across sizing and allocation."""
 
-    resources: tuple[CacheResource, ...]
+    tensor_specs: tuple[CacheTensorSpec, ...]
     layout: BlockCacheLayout
     kernel_blocks_per_logical_block: int
 
@@ -23,30 +23,30 @@ class BlockCachePlan:
 
         row_kind_by_name = {}
         row_ids_by_name = {}
-        for resource in self.resources:
-            if resource.consumer_rows is not None:
+        for spec in self.tensor_specs:
+            if spec.consumer_rows is not None:
                 row_kind = 'consumer'
-                row_ids = resource.consumer_rows
-            elif resource.layer_rows is not None:
+                row_ids = spec.consumer_rows
+            elif spec.layer_rows is not None:
                 row_kind = 'layer'
-                row_ids = resource.layer_rows.layer_ids
+                row_ids = spec.layer_rows.layer_ids
             else:
                 row_kind = 'plain'
                 row_ids = ()
 
-            existing_kind = row_kind_by_name.get(resource.name)
+            existing_kind = row_kind_by_name.get(spec.name)
             if existing_kind is not None:
                 if row_kind == 'plain' or existing_kind != row_kind:
                     raise ValueError(
-                        f'Block cache {resource.name} cannot mix {existing_kind} and {row_kind} resources.')
+                        f'Block cache {spec.name} cannot mix {existing_kind} and {row_kind} tensor specs.')
             else:
-                row_kind_by_name[resource.name] = row_kind
+                row_kind_by_name[spec.name] = row_kind
 
-            seen_rows = row_ids_by_name.setdefault(resource.name, set())
+            seen_rows = row_ids_by_name.setdefault(spec.name, set())
             overlap = seen_rows.intersection(row_ids)
             if overlap:
                 row = min(overlap)
-                raise ValueError(f'Block cache {resource.name} row {row} belongs to multiple resources.')
+                raise ValueError(f'Block cache {spec.name} row {row} belongs to multiple tensor specs.')
             seen_rows.update(row_ids)
 
         for name, row_kind in row_kind_by_name.items():
@@ -58,14 +58,13 @@ class BlockCachePlan:
 
     @property
     def cache_names(self) -> tuple[str, ...]:
-        """Return resource names in model-facing cache order."""
-        return tuple(resource.name for resource in self.resources)
+        """Return tensor names in model-facing cache order."""
+        return tuple(spec.name for spec in self.tensor_specs)
 
     @property
     def legacy_cache_indices(self) -> tuple[int, ...]:
-        """Return resources exposed through the legacy per-layer cache
-        tuple."""
-        return tuple(index for index, resource in enumerate(self.resources) if not resource.has_rows)
+        """Return tensors exposed through the legacy per-layer cache tuple."""
+        return tuple(index for index, spec in enumerate(self.tensor_specs) if not spec.has_rows)
 
     def allocate(self, num_logical_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Realize a logical block count through the selected physical

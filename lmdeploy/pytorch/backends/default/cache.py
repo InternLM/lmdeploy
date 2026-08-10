@@ -77,21 +77,21 @@ class DefaultCacheBackend(CacheBackend):
     """Build the default cache storage layouts."""
 
     @classmethod
-    def build_block_layout(cls, resources, num_layers: int):
+    def build_block_layout(cls, tensor_specs, num_layers: int):
         """Select the default block-cache packing."""
-        resources = tuple(resources)
-        if not resources:
-            return PackedBlockCacheLayout(resources, num_layers=num_layers)
+        tensor_specs = tuple(tensor_specs)
+        if not tensor_specs:
+            return PackedBlockCacheLayout(tensor_specs, num_layers=num_layers)
 
-        def layout_kind(resource):
-            if resource.per_row_contiguous:
+        def layout_kind(spec):
+            if spec.per_row_contiguous:
                 return 'contiguous'
-            if resource.has_rows:
+            if spec.has_rows:
                 return 'rows'
             return 'packed'
 
         layouts = []
-        for kind, group in groupby(resources, key=layout_kind):
+        for kind, group in groupby(tensor_specs, key=layout_kind):
             group = tuple(group)
             if kind == 'contiguous':
                 layout = ContiguousBlockCacheLayout(group, num_layers=num_layers)
@@ -106,9 +106,9 @@ class DefaultCacheBackend(CacheBackend):
         return CompositeBlockCacheLayout(tuple(layouts))
 
     @classmethod
-    def build_state_layout(cls, resources):
+    def build_state_layout(cls, tensor_specs):
         """Select the default packed state-cache layout."""
-        return PackedStateCacheLayout(tuple(resources))
+        return PackedStateCacheLayout(tuple(tensor_specs))
 
     @classmethod
     def build_block_copy(cls, allocation: CacheAllocation, num_logical_blocks: int,

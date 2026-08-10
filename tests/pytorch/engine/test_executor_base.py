@@ -308,7 +308,7 @@ def test_get_state_cache_mem_uses_prefix_cache_state_budget():
     mem = executor._get_state_cache_mem()
 
     expected_num_state_caches = 4 + 2 + 3
-    expected_mem = StateCacheEngine.get_cache_state_size(state_shapes) * expected_num_state_caches
+    expected_mem = StateCacheEngine.get_state_slot_nbytes(state_shapes) * expected_num_state_caches
     assert executor.cache_config.num_state_caches == expected_num_state_caches
     assert mem == expected_mem
 
@@ -328,7 +328,7 @@ def test_get_mem_state_cache_mem_uses_memory_model_state_specs():
 
     mem = executor._get_mem_state_cache_mem()
 
-    expected = StateCacheEngine.get_cache_state_size(state_shapes, state_specs=state_specs) * 2
+    expected = StateCacheEngine.get_state_slot_nbytes(state_shapes, state_specs=state_specs) * 2
     assert mem == expected
 
 

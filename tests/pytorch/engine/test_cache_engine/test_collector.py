@@ -28,7 +28,7 @@ def test_collect_block_cache_requests_distinguishes_absent_and_empty_requesters(
     assert collect_block_cache_requests(_CacheRequester(), geometry) == ()
 
 
-def test_collect_block_cache_requests_binds_rows_by_resource_name():
+def test_collect_block_cache_requests_binds_rows_by_cache_name():
     geometry = BlockCacheGeometry(block_size=64, kernel_block_size=64)
     index = BlockCacheRequest('index', (64, 8), torch.float16)
     scale = BlockCacheRequest('scale', (64, 1), torch.float32)

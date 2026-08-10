@@ -32,14 +32,14 @@ The remaining types support one of those three stages:
 
 | Supporting type    | Why it exists                                                     |
 | ------------------ | ----------------------------------------------------------------- |
-| `CacheResource`    | Normalized, validated request data retained inside the plan       |
+| `CacheTensorSpec`  | Non-owning tensor metadata retained inside the plan               |
 | `BlockCacheLayout` | Backend-selected allocation strategy retained inside the plan     |
 | `CachePool`        | One owning tensor and the axis representing movable cache entries |
 | `NamedCacheView`   | Read-only model-facing lookup across physical cache tensors       |
 
 These supporting types are not additional runtime managers. Requests are
-temporary build inputs; resources and layout are immutable plan details; pools
-belong to one allocation.
+temporary build inputs; tensor specs and layout are immutable plan details;
+pools belong to one allocation.
 
 ## Construction Pipeline
 
@@ -76,21 +76,21 @@ tensors.
 Models without a cache-requesting operator retain the compatibility path
 through standard K/V configuration, `block_cache_specs`, and anonymous
 `cache_shapes`. A discovered requester is authoritative for custom block
-resources, even when it returns no requests.
+caches, even when it returns no requests.
 
 ### 2. Build one worker-local plan
 
 Schema construction validates requests and combines equal contracts from built
-consumers into `CacheResource` segments. Each segment records the stable
-consumer rows stored by its local tensor rows. For example, requests with
-contracts `A, B, A` become `A(consumer_rows=(0, 2))` and
-`B(consumer_rows=(1,))`. Legacy configuration-owned resources may instead
-retain explicit layer-row maps. The active `CacheBackend` then selects physical
-layouts for the ordered resources.
+consumers into `CacheTensorSpec` objects. Each spec records the stable consumer
+rows stored by its future tensor. For example, requests with contracts
+`A, B, A` become `A(consumer_rows=(0, 2))` and `B(consumer_rows=(1,))`.
+Legacy configuration-owned specs may instead retain explicit layer-row maps.
+The active `CacheBackend` then selects physical layouts for the ordered tensor
+specs.
 
 `BlockCachePlan` retains:
 
-- ordered resources and model-facing access metadata;
+- ordered tensor specs and model-facing access metadata;
 - the selected physical layout;
 - logical-to-kernel block geometry.
 
@@ -111,8 +111,8 @@ allocation = plan.allocate(num_logical_blocks, device)
 ```
 
 `CacheAllocation.pools` own storage and drive byte accounting and movement.
-`CacheAllocation.caches` are typed views in the same order as
-`plan.resources`. Count bytes from pools, never from possibly overlapping
+`CacheAllocation.cache_tensors` are typed tensors in the same order as
+`plan.tensor_specs`. Count bytes from pools, never from possibly overlapping
 views.
 
 Every pool records its cache-entry axis. This allows swap and later block-copy
@@ -169,18 +169,18 @@ emit.
 
 An atomic layout implements one physical storage policy:
 
-| Layout                       | Storage policy                                                    |
-| ---------------------------- | ----------------------------------------------------------------- |
-| `PackedBlockCacheLayout`     | Pack compatible full-layer resources into one byte pool           |
-| `RowBlockCacheLayout`        | Give compact-row resources independent padded byte pools          |
-| `ContiguousBlockCacheLayout` | Give every resource an independent contiguous typed tensor        |
-| `PackedStateCacheLayout`     | Pack resources behind one state-slot axis                         |
-| dlinfer block/state layouts  | Use dlinfer's backend-specific contiguous resource representation |
+| Layout                       | Storage policy                                                  |
+| ---------------------------- | --------------------------------------------------------------- |
+| `PackedBlockCacheLayout`     | Pack compatible full-layer tensors into one byte pool           |
+| `RowBlockCacheLayout`        | Give compact-row tensors independent padded byte pools          |
+| `ContiguousBlockCacheLayout` | Give every tensor spec an independent contiguous typed tensor   |
+| `PackedStateCacheLayout`     | Pack tensors behind one state-slot axis                         |
+| dlinfer block/state layouts  | Use dlinfer's backend-specific contiguous tensor representation |
 
 `CompositeBlockCacheLayout` combines ordered atomic layouts. It allocates each
-child, concatenates their owning pools, and preserves child/resource view
-order. It contains no resource-selection policy; `DefaultCacheBackend` owns
-that decision.
+child, concatenates their owning pools, and preserves child/tensor view order.
+It contains no tensor-selection policy; `DefaultCacheBackend` owns that
+decision.
 
 For standard K/V plus a contiguous index cache, the selected plan is:
 
@@ -191,13 +191,13 @@ BlockCachePlan
     └── ContiguousBlockCacheLayout(index)  -> typed contiguous pool
 ```
 
-The default backend groups consecutive resources by requirement:
+The default backend groups consecutive tensor specs by requirement:
 
-- full-model resources that accept strides use the packed layout;
-- compact-row resources that accept padded strides use the row layout;
-- resources with `per_row_contiguous=True` use the contiguous layout.
+- full-model tensors that accept strides use the packed layout;
+- compact-row tensors that accept padded strides use the row layout;
+- specs with `per_row_contiguous=True` use the contiguous layout.
 
-Different resources and same-name physical segments may therefore use different
+Different tensor specs with the same semantic name may therefore use different
 layouts while sharing one plan and scheduler block count.
 
 ## Model-Facing Views
@@ -212,11 +212,11 @@ Two access forms coexist during migration:
   configuration-owned layer maps.
 
 `block_caches[name]` still returns the complete tensor when a name has one
-physical segment. When a name is heterogeneous, direct lookup raises and asks
+physical tensor. When a name is heterogeneous, direct lookup raises and asks
 the caller to select a consumer or layer row explicitly.
 
-`BlockCachePlan.legacy_cache_indices` determines which resources participate
-in legacy tuples. In a mixed allocation, adding a compact-row named resource
+`BlockCachePlan.legacy_cache_indices` determines which tensors participate in
+legacy tuples. In a mixed allocation, adding a compact-row named tensor
 does not change standard K/V tuple ordering.
 
 These views do not own memory. The corresponding `CacheAllocation` must remain
@@ -244,7 +244,7 @@ the cache stream.
 
 `StateCacheEngine` uses the same schema/layout/allocation primitives but has a
 different slot lifecycle and currently does not retain a plan. State
-initialization and copies operate on allocation-owned resources rather than an
+initialization and copies operate on allocation-owned pools rather than an
 assumed shared pool.
 
 Same-device block copy, CPU/accelerator swap, and PD/LMCache/Mooncake transfer
@@ -284,19 +284,20 @@ not provide per-pool entry-axis metadata.
 
 ## Code Reading Order
 
-1. [`collector.py`](./collector.py): built-operator request collection and row
-   binding.
-2. [`schema.py`](./schema.py): requests, normalized resources, and layer rows.
-3. [`plan.py`](./plan.py): the retained worker-local allocation recipe.
-4. [`layout.py`](./layout.py): atomic/composite layouts, pools, and allocations.
-5. [`migration.py`](./migration.py): PD pool metadata and byte-transfer planning.
-6. [`backends/default/cache.py`](../../backends/default/cache.py): default
-   resource-to-layout selection.
-7. [`view.py`](./view.py): named tensor, consumer-row, and layer-row lookup.
-8. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
-   payloads.
-9. [`engine.py`](./engine.py): allocation lifetime, view construction, and
-   movement.
+01. [`collector.py`](./collector.py): built-operator request collection and row
+    binding.
+02. [`schema.py`](./schema.py): requests, tensor specs, and layer rows.
+03. [`plan.py`](./plan.py): the retained worker-local allocation recipe.
+04. [`layout.py`](./layout.py): atomic/composite layouts, pools, and allocations.
+05. [`migration.py`](./migration.py): PD pool metadata and byte-transfer planning.
+06. [`backends/default/cache.py`](../../backends/default/cache.py): default
+    tensor-spec-to-layout selection.
+07. [`view.py`](./view.py): named tensor, consumer-row, and layer-row lookup.
+08. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
+    payloads.
+09. [`state.py`](./state.py): state allocation and state-slot transitions.
+10. [`engine.py`](./engine.py): block-cache allocation lifetime, view
+    construction, and movement.
 
 Backend-specific layouts remain with their backend, for example
 [`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py). Avoid adding a

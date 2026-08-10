@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import lmdeploy.pytorch.engine.cache_engine.engine as cache_engine_module
+import lmdeploy.pytorch.engine.cache_engine.state as state_cache_module
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
 from lmdeploy.pytorch.config import BlockCacheSpec, CacheConfig, ModelConfig
@@ -19,7 +20,7 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
     CacheDesc,
-    CacheResource,
+    CacheTensorSpec,
 )
 from lmdeploy.pytorch.engine.cache_engine.view import NamedCacheView
 
@@ -86,7 +87,7 @@ def test_fp8_sparse_mla_cache_layout():
                                num_cpu_blocks=0,
                                num_gpu_blocks=0,
                                quant_policy=QuantPolicy.FP8)
-    CacheEngine.get_cache_block_size(cache_config, model_config)
+    CacheEngine.get_logical_block_nbytes(cache_config, model_config)
 
     assert model_config.mla_kv_cache_dtype == 'fp8_ds_mla'
 
@@ -123,7 +124,7 @@ def test_retained_plan_uses_finalized_sparse_mla_dtype():
     plan = CacheEngine.build_cache_plan(model_config, cache_config, world_size=1)
 
     assert model_config.mla_kv_cache_dtype == 'fp8_ds_mla'
-    assert plan.resources[0].desc.dtype == torch.float8_e4m3fn
+    assert plan.tensor_specs[0].desc.dtype == torch.float8_e4m3fn
 
 
 @pytest.mark.parametrize('quant_policy',
@@ -133,7 +134,7 @@ def test_sparse_mla_rejects_other_cache_policies(quant_policy):
     cache_config = SimpleNamespace(quant_policy=quant_policy)
 
     with pytest.raises(ValueError, match='Sparse MLA does not support quant_policy'):
-        CacheEngine.get_cache_block_size(cache_config, model_config)
+        CacheEngine.get_logical_block_nbytes(cache_config, model_config)
 
 
 def test_allocate_caches_requires_block_size_divisible_by_kernel_block_size():
@@ -175,7 +176,7 @@ def test_build_cache_plan_collects_built_operator_requests():
 
     assert geometries == [BlockCacheGeometry(block_size=128, kernel_block_size=64)]
     assert plan.cache_names == ('operator_cache', )
-    assert plan.resources[0].consumer_rows == (0, 1)
+    assert plan.tensor_specs[0].consumer_rows == (0, 1)
     assert plan.kernel_blocks_per_logical_block == 2
 
 
@@ -263,8 +264,8 @@ def test_build_cache_plan_combines_standard_kv_and_operator_requests():
     assert plan.cache_names == ('k_cache', 'v_cache', 'operator_cache')
     assert plan.legacy_cache_indices == (0, 1)
     assert len(allocation.pools) == 2
-    assert allocation.caches[2].is_contiguous()
-    assert allocation.caches[2][0].is_contiguous()
+    assert allocation.cache_tensors[2].is_contiguous()
+    assert allocation.cache_tensors[2][0].is_contiguous()
 
 
 def test_operator_cache_requests_cannot_shadow_standard_cache_names():
@@ -276,14 +277,14 @@ def test_operator_cache_requests_cannot_shadow_standard_cache_names():
                                num_gpu_blocks=0)
     request = BlockCacheRequest('k_cache', (64, 5), torch.float16)
 
-    with pytest.raises(ValueError, match='cannot mix plain and consumer resources'):
+    with pytest.raises(ValueError, match='cannot mix plain and consumer tensor specs'):
         CacheEngine.build_cache_plan(model_config,
                                      cache_config,
                                      world_size=1,
                                      request_collector=lambda geometry: [request])
 
 
-def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
+def test_mixed_cache_plan_keeps_named_tensor_out_of_legacy_layer_tuples():
     model_config = _make_model_config(use_standard_kv_cache=True)
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
@@ -312,7 +313,7 @@ def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
     cache_engine.cache_config = cache_config
     cache_engine.model_config = model_config
     cache_engine.world_size = 1
-    cache_engine.block_cache_plan = BlockCachePlan(resources=plan.resources,
+    cache_engine.block_cache_plan = BlockCachePlan(tensor_specs=plan.tensor_specs,
                                                    layout=CpuLayout(),
                                                    kernel_blocks_per_logical_block=1)
 
@@ -358,14 +359,14 @@ def test_heterogeneous_operator_cache_rows_resolve_physical_tensors():
     cache_engine.cache_config = cache_config
     cache_engine.model_config = model_config
     cache_engine.world_size = 1
-    cache_engine.block_cache_plan = BlockCachePlan(resources=plan.resources,
+    cache_engine.block_cache_plan = BlockCachePlan(tensor_specs=plan.tensor_specs,
                                                    layout=CpuLayout(),
                                                    kernel_blocks_per_logical_block=1)
 
     assert cache_engine.allocate_gpu_cache() == []
     block_caches = cache_engine.block_caches
 
-    assert [resource.consumer_rows for resource in plan.resources] == [(0, 2), (1, )]
+    assert [spec.consumer_rows for spec in plan.tensor_specs] == [(0, 2), (1, )]
     assert len(cache_engine.gpu_allocation.pools) == 2
     assert cache_engine._gpu_cache_list[1].is_contiguous()
     assert torch.equal(block_caches.row('operator_cache', 0), cache_engine._gpu_cache_list[0][0])
@@ -392,11 +393,11 @@ def test_heterogeneous_config_cache_layers_resolve_physical_tensors():
                                num_gpu_blocks=2)
     plan = CacheEngine.build_cache_plan(model_config, cache_config, world_size=1)
     allocation = plan.allocate(num_logical_blocks=2, device='cpu')
-    block_caches = NamedCacheView.from_resources(plan.resources, allocation.caches)
+    block_caches = NamedCacheView.from_specs(plan.tensor_specs, allocation.cache_tensors)
 
-    assert torch.equal(block_caches.layer('layer_cache', 0), allocation.caches[0][0])
-    assert torch.equal(block_caches.layer('layer_cache', 1), allocation.caches[1][0])
-    assert torch.equal(block_caches.layer('layer_cache', 2), allocation.caches[0][1])
+    assert torch.equal(block_caches.layer('layer_cache', 0), allocation.cache_tensors[0][0])
+    assert torch.equal(block_caches.layer('layer_cache', 1), allocation.cache_tensors[1][0])
+    assert torch.equal(block_caches.layer('layer_cache', 2), allocation.cache_tensors[0][1])
     with pytest.raises(RuntimeError, match='multiple physical tensors'):
         block_caches['layer_cache']
 
@@ -427,11 +428,11 @@ def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():
     assert [cache.dtype for cache in caches] == [torch.bfloat16, torch.bfloat16]
     assert [cache.stride(1) for cache in caches] == [2048, 2048]
     assert [cache.storage_offset() for cache in caches] == [0, 1024]
-    assert CacheEngine.get_cache_block_size(cache_config, model_config) == mem_pool.numel() // 3
+    assert CacheEngine.get_logical_block_nbytes(cache_config, model_config) == mem_pool.numel() // 3
 
 
 @pytest.mark.parametrize(
-    ('quant_policy', 'resource_shapes', 'resource_dtypes', 'pool_bytes'),
+    ('quant_policy', 'cache_shapes', 'cache_dtypes', 'pool_bytes'),
     [
         (
             QuantPolicy.INT4,
@@ -453,7 +454,7 @@ def test_standard_cache_layout_preserves_pool_bytes_strides_and_tuple_order():
         ),
     ],
 )
-def test_quantized_cache_layout_preserves_resource_order(quant_policy, resource_shapes, resource_dtypes, pool_bytes):
+def test_quantized_cache_layout_preserves_tensor_order(quant_policy, cache_shapes, cache_dtypes, pool_bytes):
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                kernel_block_size=64,
@@ -469,9 +470,9 @@ def test_quantized_cache_layout_preserves_resource_order(quant_policy, resource_
                                                    device='cpu')
 
     assert tuple(mem_pool.shape) == (4, 2, pool_bytes)
-    assert [tuple(cache.shape[2:]) for cache in caches] == resource_shapes
-    assert [cache.dtype for cache in caches] == resource_dtypes
-    assert CacheEngine.get_cache_block_size(cache_config, model_config) == 4 * pool_bytes
+    assert [tuple(cache.shape[2:]) for cache in caches] == cache_shapes
+    assert [cache.dtype for cache in caches] == cache_dtypes
+    assert CacheEngine.get_logical_block_nbytes(cache_config, model_config) == 4 * pool_bytes
 
 
 def test_split_kernel_blocks_scale_physical_allocation_and_sizing():
@@ -490,7 +491,7 @@ def test_split_kernel_blocks_scale_physical_allocation_and_sizing():
 
     assert tuple(mem_pool.shape) == (4, 6, 4096)
     assert all(cache.shape[1] == 6 for cache in caches)
-    assert CacheEngine.get_cache_block_size(cache_config, model_config) == mem_pool.numel() // 3
+    assert CacheEngine.get_logical_block_nbytes(cache_config, model_config) == mem_pool.numel() // 3
 
 
 def test_legacy_custom_cache_layout_preserves_alignment_and_tuple_order():
@@ -517,7 +518,7 @@ def test_legacy_custom_cache_layout_preserves_alignment_and_tuple_order():
     ]
     assert [cache.dtype for cache in caches] == [torch.float32, torch.float16]
     assert [cache.storage_offset() for cache in caches] == [0, 384]
-    assert CacheEngine.get_cache_block_size(cache_config, model_config) == 4 * 1536
+    assert CacheEngine.get_logical_block_nbytes(cache_config, model_config) == 4 * 1536
 
 
 def test_pd_migration_rejects_split_kernel_blocks():
@@ -555,8 +556,8 @@ def test_named_block_cache_specs_do_not_require_total_layer_count():
 
     assert [tuple(pool.shape) for pool in mem_pool] == [(2, 3, 256), (1, 3, 512)]
     assert [tuple(cache.shape) for cache in caches] == [(2, 3, 40), (1, 3, 96)]
-    assert CacheEngine.get_cache_block_size(cache_config, model_config) == 1024
-    assert CacheEngine._get_block_cache_layer_maps(model_config) == {
+    assert CacheEngine.get_logical_block_nbytes(cache_config, model_config) == 1024
+    assert CacheEngine._get_block_rows_by_layer(model_config) == {
         'r4': {
             1: 0,
             9: 1,
@@ -584,7 +585,7 @@ def test_cache_engine_retains_cpu_allocation_owner():
 
 
 def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations(monkeypatch):
-    resources = (CacheResource('only', CacheDesc(shape=[3], dtype=torch.float32)), )
+    tensor_specs = (CacheTensorSpec('only', CacheDesc(shape=[3], dtype=torch.float32)), )
     allocations = []
 
     class RecordingLayout:
@@ -592,7 +593,7 @@ def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations(monkey
         def allocate(self, num_blocks, device):
             allocations.append((num_blocks, device))
             cache = torch.zeros((4, num_blocks, 3), dtype=torch.float32)
-            return CacheAllocation(pools=(CachePool(cache, entry_axis=1), ), caches=(cache, ))
+            return CacheAllocation(pools=(CachePool(cache, entry_axis=1), ), cache_tensors=(cache, ))
 
     cache_engine = object.__new__(CacheEngine)
     cache_engine.cache_config = CacheConfig(max_batches=1,
@@ -602,12 +603,12 @@ def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations(monkey
                                             num_gpu_blocks=3)
     cache_engine.model_config = _make_model_config(dtype=torch.bfloat16)
     cache_engine.world_size = 1
-    cache_engine.block_cache_plan = BlockCachePlan(resources=resources,
+    cache_engine.block_cache_plan = BlockCachePlan(tensor_specs=tensor_specs,
                                                    layout=RecordingLayout(),
                                                    kernel_blocks_per_logical_block=2)
 
     def unexpected_compatibility_allocation(**kwargs):
-        raise AssertionError('retained plans must not rebuild cache resources or layouts')
+        raise AssertionError('retained plans must not rebuild cache tensor specs or layouts')
 
     monkeypatch.setattr(cache_engine, 'allocate_caches', unexpected_compatibility_allocation)
 
@@ -618,8 +619,8 @@ def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations(monkey
     assert cache_engine._legacy_gpu_cache_pool is None
     assert cache_engine.full_gpu_cache is cache_engine.gpu_allocation.pools[0].tensor
     assert cache_engine.full_cpu_cache is cache_engine.cpu_allocation.pools[0].tensor
-    assert cache_engine._cache_names == ['only']
-    assert cache_engine._block_cache_layer_maps == {}
+    assert cache_engine._block_cache_names == ['only']
+    assert cache_engine._block_rows_by_layer == {}
     assert len(gpu_cache) == len(cpu_cache) == 4
     assert all(len(layer_cache) == 1 for layer_cache in (*gpu_cache, *cpu_cache))
     assert torch.equal(gpu_cache[0][0], cache_engine._gpu_cache_list[0][0])
@@ -643,13 +644,13 @@ def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
                                             num_gpu_blocks=0)
     cache_engine.model_config = _make_model_config(dtype=torch.bfloat16)
     cache_engine.world_size = 1
-    resources = (CacheResource('native', CacheDesc(shape=[1], dtype=torch.float32)), )
+    tensor_specs = (CacheTensorSpec('native', CacheDesc(shape=[1], dtype=torch.float32)), )
 
     def unexpected_native_allocation(**kwargs):
         raise AssertionError('patched allocators must remain active')
 
     native_layout = SimpleNamespace(allocate=unexpected_native_allocation)
-    cache_engine.block_cache_plan = BlockCachePlan(resources=resources,
+    cache_engine.block_cache_plan = BlockCachePlan(tensor_specs=tensor_specs,
                                                    layout=native_layout,
                                                    kernel_blocks_per_logical_block=1)
 
@@ -661,11 +662,13 @@ def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
     assert cache_engine._legacy_gpu_cache_pool is mem_pool
     assert cache_engine.full_gpu_cache is mem_pool
     assert cache_engine.full_cpu_cache is mem_pool
-    assert CacheEngine.get_cache_block_size(cache_engine.cache_config, cache_engine.model_config) == mem_pool.numel()
+    assert CacheEngine.get_logical_block_nbytes(cache_engine.cache_config,
+                                                cache_engine.model_config) == mem_pool.numel()
 
 
 def test_dlinfer_backend_uses_native_block_and_state_allocations(monkeypatch):
     monkeypatch.setattr(cache_engine_module, 'get_backend', lambda: DlinferOpsBackend)
+    monkeypatch.setattr(state_cache_module, 'get_backend', lambda: DlinferOpsBackend)
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                kernel_block_size=64,
@@ -685,17 +688,18 @@ def test_dlinfer_backend_uses_native_block_and_state_allocations(monkeypatch):
         device='cpu',
     )
 
-    assert len(block_allocation.pools) == len(block_allocation.caches) == 2
+    assert len(block_allocation.pools) == len(block_allocation.cache_tensors) == 2
     assert [pool.entry_axis for pool in block_allocation.pools] == [1, 1]
-    assert [tuple(cache.shape) for cache in block_allocation.caches] == [
+    assert [tuple(cache.shape) for cache in block_allocation.cache_tensors] == [
         (4, 2, 64, 2, 8),
         (4, 2, 64, 2, 8),
     ]
-    assert len(state_allocation.pools) == len(state_allocation.caches) == 2
+    assert len(state_allocation.pools) == len(state_allocation.cache_tensors) == 2
     assert [pool.entry_axis for pool in state_allocation.pools] == [0, 0]
-    assert all(cache.is_contiguous() for cache in (*block_allocation.caches, *state_allocation.caches))
-    assert CacheEngine.get_cache_block_size(cache_config, model_config) == block_allocation.nbytes // 2
-    assert StateCacheEngine.get_cache_state_size(state_shapes) == state_allocation.nbytes // 3
+    assert all(cache.is_contiguous()
+               for cache in (*block_allocation.cache_tensors, *state_allocation.cache_tensors))
+    assert CacheEngine.get_logical_block_nbytes(cache_config, model_config) == block_allocation.nbytes // 2
+    assert StateCacheEngine.get_state_slot_nbytes(state_shapes) == state_allocation.nbytes // 3
 
 
 def test_cache_engine_swap_uses_each_pool_entry_axis(monkeypatch):
@@ -707,18 +711,18 @@ def test_cache_engine_swap_uses_each_pool_entry_axis(monkeypatch):
     cache_engine = object.__new__(CacheEngine)
     cache_engine.cpu_allocation = CacheAllocation(
         pools=(CachePool(cpu_first, entry_axis=0), CachePool(cpu_second, entry_axis=1)),
-        caches=(),
+        cache_tensors=(),
     )
     cache_engine.gpu_allocation = CacheAllocation(
         pools=(CachePool(gpu_first, entry_axis=0), CachePool(gpu_second, entry_axis=1)),
-        caches=(),
+        cache_tensors=(),
     )
     cache_engine._cpu_cache_list = []
     cache_engine._gpu_cache_list = []
     cache_engine._build_swap_pairs()
     cache_engine.cache_stream = object()
     recorded_streams = []
-    cache_engine.events = SimpleNamespace(record=lambda stream: recorded_streams.append(stream))
+    cache_engine.swap_event = SimpleNamespace(record=lambda stream: recorded_streams.append(stream))
     monkeypatch.setattr(torch.cuda, 'stream', lambda stream: nullcontext())
 
     cache_engine.swap_in({0: 2, 2: 1})
@@ -747,7 +751,7 @@ def test_cache_engine_legacy_swap_uses_typed_block_views(monkeypatch):
     cache_engine._gpu_cache_list = [gpu_cache]
     cache_engine._build_swap_pairs()
     cache_engine.cache_stream = object()
-    cache_engine.events = SimpleNamespace(record=lambda stream: None)
+    cache_engine.swap_event = SimpleNamespace(record=lambda stream: None)
     monkeypatch.setattr(torch.cuda, 'stream', lambda stream: nullcontext())
 
     cache_engine.swap_in({1: 3})
@@ -759,11 +763,11 @@ def test_cache_engine_rejects_incompatible_swap_entry_axes():
     cache_engine = object.__new__(CacheEngine)
     cache_engine.cpu_allocation = CacheAllocation(
         pools=(CachePool(torch.empty((3, 2)), entry_axis=0), ),
-        caches=(),
+        cache_tensors=(),
     )
     cache_engine.gpu_allocation = CacheAllocation(
         pools=(CachePool(torch.empty((2, 4)), entry_axis=1), ),
-        caches=(),
+        cache_tensors=(),
     )
     cache_engine._cpu_cache_list = []
     cache_engine._gpu_cache_list = []
@@ -790,15 +794,15 @@ def test_layer_scoped_block_cache_specs_reject_invalid_layer_ids():
                                     world_size=1,
                                     device='meta')
 
-    overlapping_segments = _make_model_config(
+    overlapping_specs = _make_model_config(
         use_standard_kv_cache=False,
         block_cache_specs=[
             BlockCacheSpec('overlap', [1], (1, ), torch.float32),
             BlockCacheSpec('overlap', [1, 2], (2, ), torch.float32),
         ],
     )
-    with pytest.raises(ValueError, match='row 1 belongs to multiple resources'):
-        CacheEngine.build_cache_plan(overlapping_segments, cache_config, world_size=1)
+    with pytest.raises(ValueError, match='row 1 belongs to multiple tensor specs'):
+        CacheEngine.build_cache_plan(overlapping_specs, cache_config, world_size=1)
 
 def test_deepseek_v4_cache_accessors_resolve_layer_scoped_rows():
     from lmdeploy.pytorch.models.deepseek_v4 import V4Caches
@@ -816,10 +820,10 @@ def test_deepseek_v4_cache_accessors_resolve_layer_scoped_rows():
         caches.state_cache('state', 2)
 
 
-def test_named_block_cache_property_returns_dict_without_layer_maps():
+def test_named_block_cache_property_returns_dict_without_layer_rows():
     block_cache_engine = object.__new__(CacheEngine)
-    block_cache_engine._cache_names = ['k_cache']
-    block_cache_engine._cache_list = [torch.empty(1)]
-    block_cache_engine._block_cache_layer_maps = {}
+    block_cache_engine._block_cache_names = ['k_cache']
+    block_cache_engine._gpu_cache_list = [torch.empty(1)]
+    block_cache_engine._block_rows_by_layer = {}
 
     assert type(block_cache_engine.block_caches) is dict

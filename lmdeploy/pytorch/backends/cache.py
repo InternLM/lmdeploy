@@ -50,14 +50,14 @@ class CacheBackend(ABC):
 
     @classmethod
     @abstractmethod
-    def build_block_layout(cls, resources, num_layers: int):
-        """Select the physical layout for block-cache resources."""
+    def build_block_layout(cls, tensor_specs, num_layers: int):
+        """Select the physical layout for block-cache tensor specs."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def build_state_layout(cls, resources):
-        """Select the physical layout for state-cache resources."""
+    def build_state_layout(cls, tensor_specs):
+        """Select the physical layout for state-cache tensor specs."""
         raise NotImplementedError
 
     @classmethod

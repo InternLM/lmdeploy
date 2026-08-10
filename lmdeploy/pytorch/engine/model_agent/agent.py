@@ -164,7 +164,7 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: d
         issued_cache_op = True
 
     if issued_cache_op:
-        cache_engine.events.wait()
+        cache_engine.swap_event.wait()
 
 
 def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
@@ -176,7 +176,7 @@ def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpoint
     if cache_inputs.kv_restore_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
     if cache_inputs.state_restore_plan is not None:
-        state_cache_engine.copy_caches(*cache_inputs.state_restore_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_restore_plan)
 
 
 def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
@@ -188,7 +188,7 @@ def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInp
     if cache_inputs.kv_save_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
     if cache_inputs.state_save_plan is not None:
-        state_cache_engine.copy_caches(*cache_inputs.state_save_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_save_plan)
 
 
 @torch.inference_mode()
@@ -1231,7 +1231,7 @@ class BaseModelAgent:
                 tp,
                 request_collector=request_collector,
             )
-            target_nbytes = CacheEngine.get_cache_block_size(
+            target_nbytes = CacheEngine.get_logical_block_nbytes(
                 cache_config,
                 self.model_config,
                 tp,

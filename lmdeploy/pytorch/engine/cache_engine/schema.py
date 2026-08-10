@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Validated cache resource descriptions and layer membership."""
+"""Validated cache-tensor specifications and row membership."""
 
 import math
 from collections.abc import Sequence
@@ -99,7 +99,7 @@ def _normalize_cache_layer_ids(cache_name: str, layer_ids: Sequence[int]) -> lis
 
 @dataclass(frozen=True)
 class LayerRowMap:
-    """Map global layer ids to compact resource rows."""
+    """Map global layer ids to compact cache-tensor rows."""
 
     layer_ids: tuple[int, ...]
     row_by_layer: dict[int, int]
@@ -120,8 +120,8 @@ class LayerRowMap:
 
 
 @dataclass(frozen=True)
-class CacheResource:
-    """Pair one named cache payload with its optional compact rows."""
+class CacheTensorSpec:
+    """Describe one named cache tensor without owning its storage."""
 
     name: str
     desc: CacheDesc
@@ -141,12 +141,12 @@ class CacheResource:
         if any(row < 0 for row in consumer_rows):
             raise ValueError(f'{self.name} consumer rows must be non-negative.')
         if len(consumer_rows) != len(set(consumer_rows)):
-            raise ValueError(f'{self.name} consumer rows must be unique within one resource.')
+            raise ValueError(f'{self.name} consumer rows must be unique within one tensor spec.')
         object.__setattr__(self, 'consumer_rows', consumer_rows)
 
     @property
     def has_rows(self) -> bool:
-        """Whether the resource has an explicit compact-row axis."""
+        """Whether the tensor has an explicit compact-row axis."""
         return self.consumer_rows is not None or self.layer_rows is not None
 
     @property
@@ -158,33 +158,33 @@ class CacheResource:
 
     @property
     def num_rows(self) -> int:
-        """Return compact rows for operator- or layer-scoped resources."""
+        """Return compact rows for an operator- or layer-scoped tensor."""
         if self.consumer_rows is not None:
             return len(self.consumer_rows)
         assert self.layer_rows is not None
         return self.layer_rows.num_rows
 
 
-def layer_maps_from_resources(resources: Sequence[CacheResource]) -> dict[str, dict[int, int]]:
-    """Collect layer maps from named resources."""
+def layer_maps_from_specs(tensor_specs: Sequence[CacheTensorSpec]) -> dict[str, dict[int, int]]:
+    """Collect layer maps from named cache-tensor specs."""
     return {
-        resource.name: resource.layer_map
-        for resource in resources if resource.layer_map is not None
+        spec.name: spec.layer_map
+        for spec in tensor_specs if spec.layer_map is not None
     }
 
 
-def build_block_cache_resources(block_specs: Sequence[BlockCacheSpec]) -> tuple[CacheResource, ...]:
-    """Normalize named block-cache specs into validated resources."""
-    resources = []
+def build_block_cache_tensor_specs(block_specs: Sequence[BlockCacheSpec]) -> tuple[CacheTensorSpec, ...]:
+    """Normalize configured block caches into internal tensor specs."""
+    tensor_specs = []
     for spec in block_specs:
         layer_rows = LayerRowMap.build(spec.name, spec.layer_ids)
         desc = CacheDesc(shape=spec.shape, dtype=spec.dtype, alignment=spec.alignment)
-        resources.append(CacheResource(name=spec.name, desc=desc, layer_rows=layer_rows))
-    return tuple(resources)
+        tensor_specs.append(CacheTensorSpec(name=spec.name, desc=desc, layer_rows=layer_rows))
+    return tuple(tensor_specs)
 
 
-def build_block_cache_resources_from_requests(
-        requests: Sequence[BlockCacheRequest]) -> tuple[CacheResource, ...]:
+def build_block_cache_tensor_specs_from_requests(
+        requests: Sequence[BlockCacheRequest]) -> tuple[CacheTensorSpec, ...]:
     """Group equal contracts while retaining each consumer's logical row."""
     rows_by_request: dict[BlockCacheRequest, list[int]] = {}
     next_row_by_name: dict[str, int] = {}
@@ -194,23 +194,24 @@ def build_block_cache_resources_from_requests(
         next_row_by_name[request.name] = row + 1
         rows_by_request.setdefault(request, []).append(row)
 
-    resources = []
+    tensor_specs = []
     for request, consumer_rows in rows_by_request.items():
         desc = CacheDesc(shape=list(request.shape), dtype=request.dtype, alignment=request.alignment)
-        resources.append(
-            CacheResource(name=request.name,
-                          desc=desc,
-                          consumer_rows=tuple(consumer_rows),
-                          per_row_contiguous=request.per_row_contiguous))
-    return tuple(resources)
+        tensor_specs.append(
+            CacheTensorSpec(name=request.name,
+                            desc=desc,
+                            consumer_rows=tuple(consumer_rows),
+                            per_row_contiguous=request.per_row_contiguous))
+    return tuple(tensor_specs)
 
 
-def build_state_cache_resources(state_shapes: Sequence[tuple[tuple[int, ...], torch.dtype]],
-                                state_specs: Sequence[StateCacheSpec] | None = None) -> tuple[CacheResource, ...]:
+def build_state_cache_tensor_specs(
+        state_shapes: Sequence[tuple[tuple[int, ...], torch.dtype]],
+        state_specs: Sequence[StateCacheSpec] | None = None) -> tuple[CacheTensorSpec, ...]:
     """Normalize named or legacy state-cache declarations."""
     state_specs = state_specs or ()
     if len(state_specs) > 0:
-        resources = []
+        tensor_specs = []
         for spec in state_specs:
             layer_rows = None
             shape = spec.shape
@@ -218,9 +219,9 @@ def build_state_cache_resources(state_shapes: Sequence[tuple[tuple[int, ...], to
                 layer_rows = LayerRowMap.build(spec.name, spec.layer_ids)
                 shape = (layer_rows.num_rows, *shape)
             desc = CacheDesc(shape=shape, dtype=spec.dtype, alignment=spec.alignment)
-            resources.append(CacheResource(name=spec.name, desc=desc, layer_rows=layer_rows))
-        return tuple(resources)
+            tensor_specs.append(CacheTensorSpec(name=spec.name, desc=desc, layer_rows=layer_rows))
+        return tuple(tensor_specs)
 
     return tuple(
-        CacheResource(name=f'state_{idx}', desc=CacheDesc(shape=shape, dtype=dtype))
+        CacheTensorSpec(name=f'state_{idx}', desc=CacheDesc(shape=shape, dtype=dtype))
         for idx, (shape, dtype) in enumerate(state_shapes))

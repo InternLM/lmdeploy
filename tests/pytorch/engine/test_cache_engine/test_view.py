@@ -2,16 +2,16 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.engine.cache_engine.schema import CacheDesc, CacheResource, LayerRowMap
+from lmdeploy.pytorch.engine.cache_engine.schema import CacheDesc, CacheTensorSpec, LayerRowMap
 from lmdeploy.pytorch.engine.cache_engine.view import NamedCacheView
 
 
-def _resource(name: str, *, layers=None, consumers=None):
+def _tensor_spec(name: str, *, layers=None, consumers=None):
     layer_rows = None if layers is None else LayerRowMap.build(name, layers)
-    return CacheResource(name=name,
-                         desc=CacheDesc([1], torch.float32),
-                         layer_rows=layer_rows,
-                         consumer_rows=consumers)
+    return CacheTensorSpec(name=name,
+                           desc=CacheDesc([1], torch.float32),
+                           layer_rows=layer_rows,
+                           consumer_rows=consumers)
 
 
 def test_named_cache_view_keeps_unscoped_mapping_access():
@@ -29,16 +29,16 @@ def test_named_cache_view_keeps_unscoped_mapping_access():
 
 
 def test_named_cache_view_resolves_consumer_rows_across_tensors():
-    resources = (
-        _resource('index', consumers=(0, 2)),
-        _resource('index', consumers=(1, )),
+    tensor_specs = (
+        _tensor_spec('index', consumers=(0, 2)),
+        _tensor_spec('index', consumers=(1, )),
     )
     caches = (
         torch.tensor([[10], [12]]),
         torch.tensor([[11]]),
     )
 
-    view = NamedCacheView.from_resources(resources, caches)
+    view = NamedCacheView.from_specs(tensor_specs, caches)
 
     assert view.row('index', 0).item() == 10
     assert view.row('index', 1).item() == 11
@@ -50,16 +50,16 @@ def test_named_cache_view_resolves_consumer_rows_across_tensors():
 
 
 def test_named_cache_view_resolves_layer_rows_across_tensors():
-    resources = (
-        _resource('kv', layers=(0, 2)),
-        _resource('kv', layers=(1, )),
+    tensor_specs = (
+        _tensor_spec('kv', layers=(0, 2)),
+        _tensor_spec('kv', layers=(1, )),
     )
     caches = (
         torch.tensor([[20], [22]]),
         torch.tensor([[21]]),
     )
 
-    view = NamedCacheView.from_resources(resources, caches)
+    view = NamedCacheView.from_specs(tensor_specs, caches)
 
     assert view.layer('kv', 0).item() == 20
     assert view.layer('kv', 1).item() == 21
@@ -68,8 +68,8 @@ def test_named_cache_view_resolves_layer_rows_across_tensors():
         view.layer('kv', 3)
 
 
-def test_named_cache_view_requires_one_tensor_per_resource():
-    resources = (_resource('cache'), )
+def test_named_cache_view_requires_one_tensor_per_spec():
+    tensor_specs = (_tensor_spec('cache'), )
 
     with pytest.raises(ValueError, match='same length'):
-        NamedCacheView.from_resources(resources, ())
+        NamedCacheView.from_specs(tensor_specs, ())

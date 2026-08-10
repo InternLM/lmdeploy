@@ -164,7 +164,7 @@ def test_model_agent_builds_and_retains_worker_local_cache_plans():
 
     assert sizes == (2048, 128, 64)
     assert agent.block_cache_plan.cache_names == ('operator_cache', )
-    assert agent.block_cache_plan.resources[0].consumer_rows == (0, 1)
+    assert agent.block_cache_plan.tensor_specs[0].consumer_rows == (0, 1)
     assert [requester.cache_row for requester in agent.patched_model.requesters] == [0, 1]
 
 
@@ -307,7 +307,7 @@ def test_model_forward_orders_checkpoint_copies(monkeypatch, is_dummy, expected_
         state_caches = object()
         named_state_caches = {}
 
-        def copy_caches(self, src, dst):
+        def copy_slots(self, src, dst):
             events.append('state_restore' if src == (5, ) else 'state_save')
 
     inputs = SimpleNamespace(is_dummy=is_dummy, seq_length=torch.tensor([1]))

@@ -8,12 +8,12 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
     CacheDesc,
-    CacheResource,
+    CacheTensorSpec,
     LayerRowMap,
-    build_block_cache_resources,
-    build_block_cache_resources_from_requests,
-    build_state_cache_resources,
-    layer_maps_from_resources,
+    build_block_cache_tensor_specs,
+    build_block_cache_tensor_specs_from_requests,
+    build_state_cache_tensor_specs,
+    layer_maps_from_specs,
 )
 
 
@@ -59,44 +59,44 @@ def test_layer_row_map_rejects_invalid_membership(layer_ids, message):
         LayerRowMap.build('index', layer_ids)
 
 
-def test_cache_resource_collects_only_layer_scoped_maps():
+def test_cache_tensor_spec_collects_only_layer_scoped_maps():
     desc = CacheDesc(shape=[4], dtype=torch.float32)
     layer_rows = LayerRowMap.build('layered', [2, 0])
-    resources = (
-        CacheResource(name='global', desc=desc),
-        CacheResource(name='layered', desc=desc, layer_rows=layer_rows),
+    tensor_specs = (
+        CacheTensorSpec(name='global', desc=desc),
+        CacheTensorSpec(name='layered', desc=desc, layer_rows=layer_rows),
     )
 
-    assert resources[0].layer_map is None
-    assert resources[1].num_rows == 2
-    assert layer_maps_from_resources(resources) == {'layered': {2: 0, 0: 1}}
+    assert tensor_specs[0].layer_map is None
+    assert tensor_specs[1].num_rows == 2
+    assert layer_maps_from_specs(tensor_specs) == {'layered': {2: 0, 0: 1}}
 
 
-def test_build_block_cache_resources_normalizes_specs_in_declared_order():
+def test_build_block_cache_tensor_specs_preserves_declared_order():
     specs = [
         BlockCacheSpec('compressed', [3, 1], (8, ), torch.float16),
         BlockCacheSpec('index', [2], (4, ), torch.uint8, alignment=128),
     ]
 
-    resources = build_block_cache_resources(specs)
+    tensor_specs = build_block_cache_tensor_specs(specs)
 
-    assert [resource.name for resource in resources] == ['compressed', 'index']
-    assert [resource.desc.shape for resource in resources] == [(8, ), (4, )]
-    assert [resource.layer_map for resource in resources] == [{3: 0, 1: 1}, {2: 0}]
-    assert resources[1].desc.alignment == 128
+    assert [spec.name for spec in tensor_specs] == ['compressed', 'index']
+    assert [spec.desc.shape for spec in tensor_specs] == [(8, ), (4, )]
+    assert [spec.layer_map for spec in tensor_specs] == [{3: 0, 1: 1}, {2: 0}]
+    assert tensor_specs[1].desc.alignment == 128
 
 
-def test_build_block_cache_resources_counts_operator_request_rows():
+def test_build_block_cache_tensor_specs_counts_operator_request_rows():
     request = BlockCacheRequest('index', (64, 1, 132), torch.uint8, per_row_contiguous=True)
-    resources = build_block_cache_resources_from_requests([request, request, request])
+    tensor_specs = build_block_cache_tensor_specs_from_requests([request, request, request])
 
-    assert len(resources) == 1
-    assert resources[0].name == 'index'
-    assert resources[0].desc.shape == [64, 1, 132]
-    assert resources[0].layer_map is None
-    assert resources[0].consumer_rows == (0, 1, 2)
-    assert resources[0].num_rows == 3
-    assert resources[0].per_row_contiguous
+    assert len(tensor_specs) == 1
+    assert tensor_specs[0].name == 'index'
+    assert tensor_specs[0].desc.shape == [64, 1, 132]
+    assert tensor_specs[0].layer_map is None
+    assert tensor_specs[0].consumer_rows == (0, 1, 2)
+    assert tensor_specs[0].num_rows == 3
+    assert tensor_specs[0].per_row_contiguous
 
 
 def test_block_cache_request_normalizes_integer_like_shape_and_alignment():
@@ -106,28 +106,28 @@ def test_block_cache_request_normalizes_integer_like_shape_and_alignment():
     assert request.alignment == 128
 
 
-def test_build_block_cache_resources_segments_heterogeneous_requests():
+def test_build_block_cache_tensor_specs_groups_heterogeneous_requests():
     first = BlockCacheRequest('index', (64, 128), torch.uint8)
     second = BlockCacheRequest('index', (64, 256), torch.uint8)
 
-    resources = build_block_cache_resources_from_requests([first, second, first])
+    tensor_specs = build_block_cache_tensor_specs_from_requests([first, second, first])
 
-    assert [resource.name for resource in resources] == ['index', 'index']
-    assert [resource.desc.shape for resource in resources] == [[64, 128], [64, 256]]
-    assert [resource.consumer_rows for resource in resources] == [(0, 2), (1, )]
+    assert [spec.name for spec in tensor_specs] == ['index', 'index']
+    assert [spec.desc.shape for spec in tensor_specs] == [[64, 128], [64, 256]]
+    assert [spec.consumer_rows for spec in tensor_specs] == [(0, 2), (1, )]
 
 
-def test_build_state_cache_resources_prefers_named_specs_and_keeps_legacy_bridge():
-    named = build_state_cache_resources(
+def test_build_state_cache_tensor_specs_prefers_names_and_keeps_legacy_bridge():
+    named = build_state_cache_tensor_specs(
         state_shapes=[((99, ), torch.float32)],
         state_specs=[StateCacheSpec('state', (5, ), torch.float16, layer_ids=[3, 1])],
     )
-    legacy = build_state_cache_resources(
+    legacy = build_state_cache_tensor_specs(
         state_shapes=[((3, ), torch.float32), ((2, ), torch.float16)],
     )
 
-    assert [resource.name for resource in named] == ['state']
+    assert [spec.name for spec in named] == ['state']
     assert named[0].desc.shape == (2, 5)
     assert named[0].layer_map == {3: 0, 1: 1}
-    assert [resource.name for resource in legacy] == ['state_0', 'state_1']
-    assert all(resource.layer_map is None for resource in legacy)
+    assert [spec.name for spec in legacy] == ['state_0', 'state_1']
+    assert all(spec.layer_map is None for spec in legacy)
