@@ -23,6 +23,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
+from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
@@ -50,7 +51,7 @@ from .scoring import compute_input_ce_loss
 logger = get_logger('lmdeploy')
 
 _H2D_TRANSFER_KEY = '_h2d_transfer'
-_H2D_INPUT_KEYS = ('inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
+_H2D_INPUT_KEYS = ('inputs', 'delta', 'cache_inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
 
 
 @dataclass
@@ -166,6 +167,30 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: d
         cache_engine.events.wait()
 
 
+def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
+                              cache_engine: CacheEngine, state_cache_engine: StateCacheEngine) -> None:
+    """Restore one-forward KV and state checkpoints before model execution."""
+    if cache_inputs is None or inputs.is_dummy:
+        return
+
+    if cache_inputs.kv_restore_plan is not None:
+        cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
+    if cache_inputs.state_restore_plan is not None:
+        state_cache_engine.copy_caches(*cache_inputs.state_restore_plan)
+
+
+def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
+                           cache_engine: CacheEngine, state_cache_engine: StateCacheEngine) -> None:
+    """Save one-forward KV and state checkpoints after model execution."""
+    if cache_inputs is None or inputs.is_dummy:
+        return
+
+    if cache_inputs.kv_save_plan is not None:
+        cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
+    if cache_inputs.state_save_plan is not None:
+        state_cache_engine.copy_caches(*cache_inputs.state_save_plan)
+
+
 @torch.inference_mode()
 def model_forward(
     model: torch.nn.Module,
@@ -173,6 +198,7 @@ def model_forward(
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
+    cache_inputs: CacheCheckpointInputs | None = None,
 ):
     """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
@@ -193,15 +219,11 @@ def model_forward(
         context.named_state_caches = state_cache_engine.named_state_caches
 
         with ctx_mgr.context(context):
-            if (not inputs.is_dummy and inputs.state_offsets is not None
-                    and inputs.state_prefix_cache_offsets is not None):
-                # Restore frozen SSM prefix state into this request's runtime
-                # slot on the forward stream.  The input maker already
-                # compacted valid src/dst pairs on CPU, so no CUDA boolean
-                # indexing/nonzero synchronization is needed here.
-                state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets,
-                                               inputs.state_prefix_cache_dst_offsets)
-
+            # Some backends synchronize while building context. Queue restore
+            # afterward so that synchronization does not absorb copy latency;
+            # forward-stream ordering still keeps every model consumer behind
+            # the restore.
+            _restore_cache_checkpoint(inputs, cache_inputs, cache_engine, state_cache_engine)
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -216,13 +238,7 @@ def model_forward(
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
-            if (not inputs.is_dummy and inputs.state_offsets is not None
-                    and inputs.state_prefix_cache_save_offsets is not None):
-                # Save the post-forward runtime state into reserved checkpoint
-                # slots.  The scheduler publishes these slots only after the
-                # executor output boundary confirms the copy was enqueued.
-                state_cache_engine.copy_caches(inputs.state_prefix_cache_save_src_offsets,
-                                               inputs.state_prefix_cache_save_offsets)
+            _save_cache_checkpoint(inputs, cache_inputs, cache_engine, state_cache_engine)
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             # for draft model reuse
@@ -511,12 +527,13 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         return_logits: bool,
+        cache_inputs: CacheCheckpointInputs | None = None,
     ):
         """Model forward."""
         if self.memdecode_agent is not None and return_logits:
             raise RuntimeError('MemDecode does not support returned prompt logits yet.')
 
-        ret = await self.async_forward(inputs)
+        ret = await self.async_forward(inputs, cache_inputs=cache_inputs)
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
@@ -827,6 +844,7 @@ class BaseModelAgent:
         return_routed_experts: bool = False,
         return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
+        cache_inputs: CacheCheckpointInputs | None = None,
     ):
         """Asyc forward task."""
 
@@ -891,7 +909,8 @@ class BaseModelAgent:
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits or return_ce_loss,
-            )
+            cache_inputs=cache_inputs,
+        )
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
@@ -1259,25 +1278,26 @@ class BaseModelAgent:
                 self.memdecode_agent.set_cache_config(self.cache_config)
                 self.memdecode_agent.build_cache_engine(self.cache_stream)
 
-    def _forward_impl(self, inputs: ModelInputs):
+    def _forward_impl(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         output = model_forward(
             self.patched_model,
             inputs,
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
+            cache_inputs=cache_inputs,
         )
         return output
 
-    async def async_forward(self, inputs: ModelInputs):
+    async def async_forward(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         """Model forward.
 
         Args:
-            inputs (dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
+            inputs (ModelInputs): Persistent model execution inputs.
+            cache_inputs (CacheCheckpointInputs | None): One-forward cache
+                checkpoint operations.
         """
-        output = self._forward_impl(inputs)
+        output = self._forward_impl(inputs, cache_inputs=cache_inputs)
         await asyncio.sleep(0)
         return output
 

@@ -239,6 +239,98 @@ def test_spec_agent_reset_runtime_state_discards_chunk_carry():
     assert agent._prev_chunk_last == {}
 
 
+@pytest.mark.parametrize(
+    ('is_dummy', 'expected_events'),
+    [
+        pytest.param(False, [
+            'build_context',
+            'kv_restore',
+            'state_restore',
+            'update_model_metas',
+            'prepare_inputs',
+            'model_forward',
+            'kv_save',
+            'state_save',
+        ], id='real-forward'),
+        pytest.param(True, [
+            'build_context',
+            'update_model_metas',
+            'prepare_inputs',
+            'model_forward',
+        ], id='dummy-forward'),
+    ],
+)
+def test_model_forward_orders_checkpoint_copies(monkeypatch, is_dummy, expected_events):
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    restore_plan = torch.tensor([[1], [2]])
+    save_plan = torch.tensor([[3], [4]])
+
+    class _ContextManager:
+
+        def build_context(self, **kwargs):
+            events.append('build_context')
+            return SimpleNamespace(q_seqlens=torch.tensor([1]),
+                                   position_ids=torch.tensor([0]),
+                                   is_model_meta_updated=False)
+
+        def context(self, context):
+            return nullcontext()
+
+    class _Model:
+        ctx_mgr = _ContextManager()
+
+        def update_model_metas(self, **kwargs):
+            events.append('update_model_metas')
+            return []
+
+        def prepare_inputs_for_generation(self, **kwargs):
+            events.append('prepare_inputs')
+            return {}
+
+        def __call__(self, **kwargs):
+            events.append('model_forward')
+            return {'hidden_states': torch.tensor([0])}
+
+    class _CacheEngine:
+        model_config = object()
+        cache_config = SimpleNamespace(quant_policy=0)
+        gpu_cache = object()
+        block_caches = {}
+
+        def copy_logical_blocks(self, plan):
+            events.append('kv_restore' if plan is restore_plan else 'kv_save')
+
+    class _StateCacheEngine:
+        state_caches = object()
+        named_state_caches = {}
+
+        def copy_caches(self, src, dst):
+            events.append('state_restore' if src == (5, ) else 'state_save')
+
+    inputs = SimpleNamespace(is_dummy=is_dummy, seq_length=torch.tensor([1]))
+    cache_inputs = CacheCheckpointInputs(
+        kv_restore_plan=restore_plan,
+        kv_save_plan=save_plan,
+        state_restore_plan=((5, ), (6, )),
+        state_save_plan=((7, ), (8, )),
+    )
+
+    monkeypatch.setattr(agent_module, 'step_ctx_manager', lambda ctx_mgr: nullcontext())
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda stream: nullcontext())
+
+    agent_module.model_forward(_Model(),
+                               inputs,
+                               _CacheEngine(),
+                               _StateCacheEngine(),
+                               stream=object(),
+                               cache_inputs=cache_inputs)
+
+    assert events == expected_events
+
+
 def test_record_forward_input_stream_uses_payload_protocol():
     from lmdeploy.pytorch.engine.model_agent.agent import _record_forward_input_stream
 
@@ -266,9 +358,11 @@ def test_record_forward_input_stream_uses_payload_protocol():
     tensor = _CudaTensor()
     nested_tensor = _CudaTensor()
     payload = _Payload()
+    cache_payload = _Payload()
     forward_inputs = {
         'inputs': payload,
         'delta': tensor,
+        'cache_inputs': cache_payload,
         'unowned_container': {'tensor': nested_tensor},
     }
 
@@ -277,6 +371,7 @@ def test_record_forward_input_stream_uses_payload_protocol():
     assert recorded == [
         ('payload', id(payload), stream),
         ('tensor', id(tensor), stream),
+        ('payload', id(cache_payload), stream),
     ]
 
 
@@ -998,7 +1093,8 @@ class TestMemDecodeModelAgentLifecycle:
                 indices = seq_length.cumsum(0) - 1
                 return hidden_states[indices]
 
-        async def _base_forward(forward_inputs):
+        async def _base_forward(forward_inputs, cache_inputs=None):
+            assert cache_inputs is None
             calls.append(('base_forward', forward_inputs))
             return {'hidden_states': base_hidden.clone(), 'seq_length': forward_inputs.seq_length}
 
@@ -1065,7 +1161,8 @@ class TestMemDecodeModelAgentLifecycle:
         def _cache_swapping(cache_engine, swap_in_map=None, swap_out_map=None):
             calls.append((cache_engine, swap_in_map, swap_out_map))
 
-        async def _async_model_forward(_inputs, return_logits):
+        async def _async_model_forward(_inputs, return_logits, cache_inputs=None):
+            assert cache_inputs is None
             raise _StopAfterSwap
 
         monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: _DistManager())
