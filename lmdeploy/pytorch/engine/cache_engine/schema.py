@@ -213,6 +213,16 @@ class BlockCacheGeometry:
 
 
 @dataclass(frozen=True)
+class BlockCacheRequestContext:
+    """Carry worker-finalized inputs into built-operator cache requests.
+
+    Model and backend facts already owned by the built operator do not belong here.
+    """
+
+    geometry: BlockCacheGeometry
+
+
+@dataclass(frozen=True)
 class BlockCacheRequest:
     """Describe one block-cache payload requested by a built operator."""
 
@@ -233,6 +243,14 @@ class BlockCacheRequest:
             raise ValueError(f'{self.name} shape dimensions must be non-negative.')
         object.__setattr__(self, 'alignment', alignment)
         object.__setattr__(self, 'shape', shape)
+
+
+@dataclass(frozen=True)
+class BlockCacheBinding:
+    """Identify one built operator's logical row in a named block cache."""
+
+    cache_name: str
+    consumer_row: int
 
 
 @dataclass(frozen=True)

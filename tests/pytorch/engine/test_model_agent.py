@@ -117,21 +117,21 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
 
 def test_model_agent_builds_and_retains_worker_local_cache_plans():
     from lmdeploy.pytorch.config import CacheConfig, ModelConfig
-    from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
+    from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     request = BlockCacheRequest('operator_cache', (64, 3), torch.float16)
 
     class _CacheRequester(torch.nn.Module):
 
-        def get_block_cache_requests(self, geometry):
-            assert geometry.logical_block_size == 128
-            assert geometry.kernel_block_size == 64
+        def get_block_cache_requests(self, context):
+            assert context.geometry.logical_block_size == 128
+            assert context.geometry.kernel_block_size == 64
             return (request, )
 
-        def bind_block_cache_row(self, name, row):
-            assert name == 'operator_cache'
-            self.cache_row = row
+        def bind_block_cache(self, binding: BlockCacheBinding):
+            assert binding.cache_name == 'operator_cache'
+            self.cache_binding = binding
 
     class _PatchedModel(torch.nn.Module):
 
@@ -165,7 +165,7 @@ def test_model_agent_builds_and_retains_worker_local_cache_plans():
     assert sizes == (2048, 128, 64)
     assert agent.block_cache_plan.cache_names == ('operator_cache', )
     assert agent.block_cache_plan.tensor_specs[0].consumer_rows == (0, 1)
-    assert [requester.cache_row for requester in agent.patched_model.requesters] == [0, 1]
+    assert [requester.cache_binding.consumer_row for requester in agent.patched_model.requesters] == [0, 1]
 
 
 def test_build_spec_agent_allows_guided_spec_followers_without_proposer():

@@ -21,6 +21,7 @@ from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
 from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
+    BlockCacheRequestContext,
     CacheDesc,
     CacheTensorSpec,
 )
@@ -170,7 +171,7 @@ def test_cache_plan_finalizes_sparse_mla_policy_before_request_collection():
                                quant_policy=QuantPolicy.FP8)
     collected_dtypes = []
 
-    def collect_requests(geometry):
+    def collect_requests(context):
         collected_dtypes.append(model_config.mla_kv_cache_dtype)
         return None
 
@@ -217,10 +218,10 @@ def test_build_cache_plan_collects_built_operator_requests():
                                kernel_block_size=64,
                                num_cpu_blocks=0,
                                num_gpu_blocks=0)
-    geometries = []
+    request_contexts = []
 
-    def request_collector(geometry: BlockCacheGeometry):
-        geometries.append(geometry)
+    def request_collector(context: BlockCacheRequestContext):
+        request_contexts.append(context)
         request = BlockCacheRequest('operator_cache', (64, 5), torch.float16)
         return [request, request]
 
@@ -229,7 +230,10 @@ def test_build_cache_plan_collects_built_operator_requests():
                                         world_size=1,
                                         request_collector=request_collector)
 
-    assert geometries == [BlockCacheGeometry(logical_block_size=128, kernel_block_size=64)]
+    assert request_contexts == [
+        BlockCacheRequestContext(
+            geometry=BlockCacheGeometry(logical_block_size=128, kernel_block_size=64))
+    ]
     assert plan.cache_names == ('operator_cache', )
     assert plan.tensor_specs[0].consumer_rows == (0, 1)
     assert plan.kernel_blocks_per_logical_block == 2
@@ -249,7 +253,7 @@ def test_empty_built_operator_requests_are_authoritative_for_custom_caches():
     plan = CacheEngine.build_cache_plan(model_config,
                                         cache_config,
                                         world_size=1,
-                                        request_collector=lambda geometry: ())
+                                        request_collector=lambda context: ())
 
     assert plan.cache_names == ()
 
@@ -268,7 +272,7 @@ def test_absent_built_operator_requester_uses_config_fallback():
     plan = CacheEngine.build_cache_plan(model_config,
                                         cache_config,
                                         world_size=1,
-                                        request_collector=lambda geometry: None)
+                                        request_collector=lambda context: None)
 
     assert plan.cache_names == ('fallback', )
 
@@ -291,7 +295,7 @@ def test_built_operator_request_collection_rejects_patched_allocator(monkeypatch
         CacheEngine.build_cache_plan(model_config,
                                      cache_config,
                                      world_size=1,
-                                     request_collector=lambda geometry: ())
+                                     request_collector=lambda context: ())
 
 
 def test_build_cache_plan_combines_standard_kv_and_operator_requests():
@@ -312,7 +316,7 @@ def test_build_cache_plan_combines_standard_kv_and_operator_requests():
         model_config,
         cache_config,
         world_size=1,
-        request_collector=lambda geometry: [request, request],
+        request_collector=lambda context: [request, request],
     )
     allocation = plan.allocate(num_logical_blocks=2, device='cpu')
 
@@ -336,7 +340,7 @@ def test_operator_cache_requests_cannot_shadow_standard_cache_names():
         CacheEngine.build_cache_plan(model_config,
                                      cache_config,
                                      world_size=1,
-                                     request_collector=lambda geometry: [request])
+                                     request_collector=lambda context: [request])
 
 
 def test_mixed_cache_plan_keeps_named_tensor_out_of_legacy_layer_tuples():
@@ -356,7 +360,7 @@ def test_mixed_cache_plan_keeps_named_tensor_out_of_legacy_layer_tuples():
         model_config,
         cache_config,
         world_size=1,
-        request_collector=lambda geometry: [request, request],
+        request_collector=lambda context: [request, request],
     )
 
     class CpuLayout:
@@ -402,7 +406,7 @@ def test_heterogeneous_operator_cache_rows_resolve_physical_tensors():
         model_config,
         cache_config,
         world_size=1,
-        request_collector=lambda geometry: [narrow, wide, narrow],
+        request_collector=lambda context: [narrow, wide, narrow],
     )
 
     class CpuLayout:

@@ -5,12 +5,12 @@ from collections import defaultdict
 
 from torch import nn
 
-from .schema import BlockCacheGeometry, BlockCacheRequest
+from .schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestContext
 
 
 def collect_block_cache_requests(
     model: nn.Module,
-    geometry: BlockCacheGeometry,
+    context: BlockCacheRequestContext,
 ) -> tuple[BlockCacheRequest, ...] | None:
     """Collect cache requests from built operators and bind compact rows.
 
@@ -26,13 +26,13 @@ def collect_block_cache_requests(
         if get_requests is None:
             continue
         found_requester = True
-        requests = tuple(get_requests(geometry))
+        requests = tuple(get_requests(context))
         if not requests:
             continue
 
-        bind_row = getattr(module, 'bind_block_cache_row', None)
-        if bind_row is None:
-            raise TypeError(f'{type(module).__name__} declares block caches but cannot bind their rows.')
+        bind_cache = getattr(module, 'bind_block_cache', None)
+        if bind_cache is None:
+            raise TypeError(f'{type(module).__name__} declares block caches but cannot bind them.')
 
         names = set()
         for request in requests:
@@ -41,16 +41,17 @@ def collect_block_cache_requests(
             if request.name in names:
                 raise ValueError(f'{type(module).__name__} requested block cache {request.name} more than once.')
             names.add(request.name)
-            collected.append((bind_row, request))
+            collected.append((bind_cache, request))
 
     if not found_requester:
         return None
 
     next_row_by_name = defaultdict(int)
     requests = []
-    for bind_row, request in collected:
+    for bind_cache, request in collected:
         row = next_row_by_name[request.name]
-        bind_row(request.name, row)
+        binding = BlockCacheBinding(cache_name=request.name, consumer_row=row)
+        bind_cache(binding)
         next_row_by_name[request.name] += 1
         requests.append(request)
     return tuple(requests)

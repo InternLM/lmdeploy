@@ -34,6 +34,7 @@ from .plan import build_block_cache_plan as _build_block_cache_plan
 from .schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
+    BlockCacheRequestContext,
     CacheDesc,
     apply_sparse_mla_cache_policy,
     build_block_rows_by_layer,
@@ -215,7 +216,7 @@ class CacheEngine:
         model_config: ModelConfig,
         cache_config: CacheConfig,
         world_size: int,
-        request_collector: Callable[[BlockCacheGeometry], Sequence[BlockCacheRequest] | None] | None = None,
+        request_collector: Callable[[BlockCacheRequestContext], Sequence[BlockCacheRequest] | None] | None = None,
     ) -> BlockCachePlan:
         """Finalize block geometry, tensor specs, and backend layout."""
         geometry = BlockCacheGeometry(logical_block_size=cache_config.block_size,
@@ -224,7 +225,8 @@ class CacheEngine:
         apply_sparse_mla_cache_policy(model_config, cache_config)
         block_requests = None
         if request_collector is not None:
-            collected_requests = request_collector(geometry)
+            request_context = BlockCacheRequestContext(geometry=geometry)
+            collected_requests = request_collector(request_context)
             if collected_requests is not None:
                 allocator = cls.allocate_caches
                 allocator_func = getattr(allocator, '__func__', allocator)

@@ -58,12 +58,15 @@ BlockCacheRequest(
 
 The operator knows its payload and kernel-visible requirements. A generic
 worker-local collector walks the built model's operator modules, collects
-their `get_block_cache_requests(geometry)` results, and calls
-`bind_block_cache_row(name, row)` on each consumer. It uses built module
-instances and registration order; it does not infer layer IDs from module
-names or require a model-specific collector. Collection happens independently
-on every target, speculative, and memory-model worker after logical/kernel
-block geometry is finalized.
+their `get_block_cache_requests(context)` results, and calls
+`bind_block_cache(binding)` on each consumer. `BlockCacheRequestContext`
+carries worker-finalized inputs, currently logical/kernel block geometry;
+`BlockCacheBinding` carries the consumer's logical cache name and row. These
+records can grow without changing every operator method signature, but never
+carry physical tensors or layout details. Collection uses built module
+instances and registration order; it does not infer layer IDs from module names
+or require a model-specific collector. It happens independently on every
+target, speculative, and memory-model worker after block geometry is finalized.
 
 The DSA indexer is the first production cache-requesting operator on this
 path. Its selected backend implementation requests one packed
@@ -105,7 +108,7 @@ The exact construction path is:
 ```text
 CacheEngine.build_cache_plan()
   ├── finalize BlockCacheGeometry and sparse-MLA cache policy
-  ├── request_collector(geometry)
+  ├── request_collector(BlockCacheRequestContext(geometry))
   └── plan.build_block_cache_plan(...)
         ├── schema.build_model_block_cache_tensor_specs(...)
         ├── get_backend().get_cache_backend().build_block_layout(...)

@@ -6,6 +6,7 @@ from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
 from lmdeploy.pytorch.backends.nsa import NSAIndexMeta
 from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 
@@ -34,27 +35,28 @@ class IndexerTopKFP8(nn.Module):
         index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
         self.index_impl = index_builder.build(topk, softmax_scale, block_size, fill)
         self.head_dim = head_dim
-        self._block_cache_row: int | None = None
+        self._block_cache_binding: BlockCacheBinding | None = None
 
-    def get_block_cache_requests(self, geometry):
+    def get_block_cache_requests(self, context: BlockCacheRequestContext):
         """Return the selected implementation's cache requirements."""
-        request = self.index_impl.get_block_cache_request(geometry, self.head_dim)
+        request = self.index_impl.get_block_cache_request(context.geometry, self.head_dim)
         return (request, )
 
-    def bind_block_cache_row(self, name: str, row: int):
-        """Retain the compact row assigned to this built indexer."""
-        if name != DSA_INDEXER_K_CACHE_NAME:
-            raise ValueError(f'Unexpected DSA indexer cache name: {name}.')
-        self._block_cache_row = row
+    def bind_block_cache(self, binding: BlockCacheBinding):
+        """Retain the logical cache binding assigned to this indexer."""
+        if binding.cache_name != DSA_INDEXER_K_CACHE_NAME:
+            raise ValueError(f'Unexpected DSA indexer cache name: {binding.cache_name}.')
+        self._block_cache_binding = binding
 
     def _get_block_cache(self) -> Tensor:
-        if self._block_cache_row is None:
-            raise RuntimeError('The DSA indexer block-cache row has not been bound.')
+        binding = self._block_cache_binding
+        if binding is None:
+            raise RuntimeError('The DSA indexer block cache has not been bound.')
         context = get_step_ctx_manager().current_context()
         block_caches = context.block_caches
         if hasattr(block_caches, 'row'):
-            return block_caches.row(DSA_INDEXER_K_CACHE_NAME, self._block_cache_row)
-        return block_caches[DSA_INDEXER_K_CACHE_NAME][self._block_cache_row]
+            return block_caches.row(binding.cache_name, binding.consumer_row)
+        return block_caches[binding.cache_name][binding.consumer_row]
 
     @staticmethod
     def _get_max_q_seqlen(q: Tensor,
