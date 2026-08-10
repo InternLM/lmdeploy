@@ -2,6 +2,7 @@
 from .glm4_moe_lite import Glm4MoeLiteModel  # noqa: F401
 from .gpt_oss import GptOssModel  # noqa: F401
 from .internlm2 import InternLM2Model  # noqa: F401
+from .interns2_mobius import InternS2MobiusModel  # noqa: F401
 from .internvl import InternVLModel  # noqa: F401
 from .llama import LlamaModel  # noqa: F401
 from .mixtral import MixtralModel  # noqa: F401

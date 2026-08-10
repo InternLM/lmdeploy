@@ -73,6 +73,7 @@ bool invokeDecoding(const typename Kernel::ParamType& params, int sm_count, int 
                                                     params.partial_ML,
                                                     params.partial_O,
                                                     split_cnt > 1 ? params.split_cnt : nullptr,
+                                                    params.token_mask,
                                                     params.max_split_k,
                                                     split_cnt,
                                                     params.cp_size,

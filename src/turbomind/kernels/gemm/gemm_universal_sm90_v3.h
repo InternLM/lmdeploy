@@ -866,7 +866,7 @@ struct GemmUniversalSm90_v3 {
                                     const int n_group = tile->offset_n / TILE_N;
                                     int row0 = tile->offset_m + wg_idx_m * WG_TILE_M + (warp_id % 4) * 16 + lane_id / 4
                                                + i_m * GMMA::OP_M;
-                                    int row_end = 0x7fffffff;
+                                    int row_end = sched.gemm_shape().x;
                                     if constexpr (is_grouped_gemm) {
                                         row0 += tile->m0;
                                         row_end = tile->m1;

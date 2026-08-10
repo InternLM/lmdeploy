@@ -31,6 +31,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/kernels/attention/attention.h"
@@ -107,6 +108,11 @@ struct AttentionData {
     Buffer_<int>  k_offsets;
     Buffer_<int>  readonly_block_num;  // per-request, batch order
 
+    // Global per-token validity mask, owned by LanguageModel and borrowed here; the
+    // content is only built at Forward time. Consumed by the attention reduce.
+    Buffer_<bool> token_mask;
+    int           token_mask_base = 0;  // this DP rank's token offset within the global mask
+
     // int dbg_offset;
     // int dbg_size;
 };
@@ -126,15 +132,13 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
                                              CacheRegistry&                registry,
                                              const EngineParam&            engine,
                                              const Context&                context,
-                                             int                           phases,
-                                             bool                          init):
+                                             int                           phases):
     quant_policy_{engine.quant_policy},
     rope_{weights.at(0)->rope},
     engine_param_{engine},
-    cp_fn_ctx_{context.comm.d_comm, context.comm.d_cp_group},
+    cp_fn_ctx_{context.comm.d_comm, context.comm.d_cp_group, engine.attn_cp_size},
     is_warm_up_{*context.is_warm_up},
     context_{context},
-    init_{init},
     linear_(*context.linear),
     arch_{getSMVersion()}
 {
@@ -222,10 +226,6 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
         partial_O_  = Tensor_<float>({workspace_tokens, local_head_num, size_per_head}, kDEVICE);
         partial_ML_ = Tensor_<float>({engine_param_.attn_cp_size, workspace_tokens, local_head_num, 2}, alloc);
         split_cnt_  = Tensor_<int>({workspace_tokens}, kDEVICE);
-        if (init_) {
-            const int dim = local_head_num * size_per_head;
-            tmp_attn_     = Tensor{{engine_param_.max_forward_token_num, dim}, w.data_type, kDEVICE};
-        }
 
         Clear(split_cnt_.buffer());
     }
@@ -262,21 +262,21 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
         Setup(phase, env);
     }
     else if (op == BatchOp::kPrepare) {
-        data_.at(phase)->finished           = env.at("finished").buffer().borrow();
-        data_.at(phase)->q_offsets          = env.at("q_offsets").buffer().borrow();
-        data_.at(phase)->k_offsets          = env.at("k_offsets").buffer().borrow();
-        data_.at(phase)->readonly_block_num = env.at("readonly_block_num").buffer().borrow();
+        auto& d               = data_.at(phase);
+        d->finished           = env.at("finished").buffer().borrow();
+        d->q_offsets          = env.at("q_offsets").buffer().borrow();
+        d->k_offsets          = env.at("k_offsets").buffer().borrow();
+        d->readonly_block_num = env.at("readonly_block_num").buffer().borrow();
 
-        // This is needed in async mode to clear the `attn` buffer for the finished sequences. Ohterwise random NaNs
-        // will crash the MoE router later
-        /// TODO: use better solution, this increase memory usage and heterogenous attention layers may still break it
-        if (tmp_attn_) {
-            auto& d = data_.at(phase);
-            Clear(tmp_attn_.slice(0, d->decode.n + d->prefill.q_sum));
-            Clear(split_cnt_);
-            if (engine_param_.attn_cp_size > 1) {
-                invokeFillNegInfML(partial_ML_.data(), partial_ML_.size() / 2, core::Context::stream().handle());
-            }
+        // Borrow the global mask owned by LanguageModel (pointer only; its content is
+        // built at Forward time) and resolve this rank's token offset within it.
+        d->token_mask      = env.at("token_mask").buffer().borrow();
+        d->token_mask_base = 0;
+        if (engine_param_.attn_dp_size > 1) {
+            const auto& local_token_num = env.at("batch").data<BatchData*>()[0]->local_token_num;
+            TM_CHECK_EQ((int)local_token_num.size(), engine_param_.attn_dp_size);
+            d->token_mask_base =
+                std::accumulate(local_token_num.begin(), local_token_num.begin() + engine_param_.attn_dp_rank, 0);
         }
     }
 }
@@ -480,13 +480,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
     const int local_q_kv_head_num = local_head_num + 2 * local_kv_head_num;
 
-    Tensor attn;
-    if (tmp_attn_) {
-        attn = tmp_attn_.slice(0, q_count);
-    }
-    else {
-        attn = {{q_count, local_head_num * size_per_head}, dtype, device};
-    }
+    Tensor attn{{q_count, local_head_num * size_per_head}, dtype, device};
 
     const bool is_mla = weights.is_mla();
 
@@ -552,7 +546,9 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             };
         }
 
-        params.finished           = d.finished.data() + offset;
+        params.finished = d.finished.data() + offset;
+        // decode rows: base; prefill rows: + decode.n (this rank's slice of the global mask)
+        params.token_mask         = d.token_mask.data() + d.token_mask_base + offset;
         params.cu_q_len           = d.q_offsets.data() + offset;
         params.cu_k_len           = d.k_offsets.data() + offset;
         params.readonly_block_num = d.readonly_block_num.data() + offset;
@@ -635,7 +631,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const cudaStream_t stream = core::Context::stream().handle();
 
     cudaStream_t pf_stream = stream;
-    cudaStream_t dc_stream = pf_stream;
+    cudaStream_t dc_stream = stream;
 
     if (d.decode.n && d.prefill.n) {
         pf_stream = aux_stream_;

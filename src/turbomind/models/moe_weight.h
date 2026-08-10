@@ -52,6 +52,7 @@ public:
     MoeWeight(const core::MoeConfig& cfg);
 
     void prepare() override;
+    void link_block();
     int  num_experts() const
     {
         return expert_num;
@@ -95,7 +96,20 @@ public:
     int         ep_size{1};
     int         ep_rank{0};
 
+    // Wire the shared meta-MoE pack (a ModelWeight::meta_experts entry) whose
+    // routed gate/experts this layer aliases in prepare(). Called by the
+    // Python loader; never set for a MoE that owns its routed weights.
+    void set_meta_pack(const MoeWeight* meta_pack)
+    {
+        meta_pack_ = meta_pack;
+    }
+
 private:
+    // Create gate/experts children that share the meta pack's tensors.
+    void AliasRouted(const MoeWeight& meta_pack);
+
+    const MoeWeight* meta_pack_{};  // non-owning; nullptr = own routed weights
+
     ActivationType act_type_{};
     bool           fuse_silu_act_{};
 
