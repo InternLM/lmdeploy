@@ -125,7 +125,7 @@ def test_model_agent_builds_and_retains_worker_local_cache_plans():
     class _CacheRequester(torch.nn.Module):
 
         def get_block_cache_requests(self, geometry):
-            assert geometry.block_size == 128
+            assert geometry.logical_block_size == 128
             assert geometry.kernel_block_size == 64
             return (request, )
 

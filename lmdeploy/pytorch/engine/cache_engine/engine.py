@@ -218,7 +218,7 @@ class CacheEngine:
         request_collector: Callable[[BlockCacheGeometry], Sequence[BlockCacheRequest] | None] | None = None,
     ) -> BlockCachePlan:
         """Finalize block geometry, tensor specs, and backend layout."""
-        geometry = BlockCacheGeometry(block_size=cache_config.block_size,
+        geometry = BlockCacheGeometry(logical_block_size=cache_config.block_size,
                                       kernel_block_size=cache_config.kernel_block_size)
         # Finalize sparse-MLA policy before built operators describe caches.
         apply_sparse_mla_cache_policy(model_config, cache_config)

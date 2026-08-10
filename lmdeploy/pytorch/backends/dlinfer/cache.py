@@ -21,18 +21,18 @@ class DlinferBlockCacheLayout:
         """Realize contiguous cache tensors for a block count and device."""
         if len(self.tensor_specs) == 0:
             empty = torch.empty((self.num_layers, num_blocks, 0), dtype=torch.uint8, device=device)
-            return CacheAllocation(pools=(CachePool(empty, entry_axis=1), ), cache_tensors=())
+            return CacheAllocation(pools=(CachePool(empty, entry_axis=1), ), tensor_views=())
 
         pools = []
-        cache_tensors = []
+        tensor_views = []
         for spec in self.tensor_specs:
             num_rows = spec.num_rows if spec.has_rows else self.num_layers
             cache = torch.zeros((num_rows, num_blocks, *spec.desc.shape),
                                 dtype=spec.desc.dtype,
                                 device=device)
             pools.append(CachePool(cache, entry_axis=1))
-            cache_tensors.append(cache)
-        return CacheAllocation(pools=tuple(pools), cache_tensors=tuple(cache_tensors))
+            tensor_views.append(cache)
+        return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))
 
 
 @dataclass(frozen=True)
@@ -45,10 +45,10 @@ class DlinferStateCacheLayout:
         """Realize independent contiguous state tensors for a slot count."""
         if len(self.tensor_specs) == 0 or num_caches == 0:
             empty = torch.empty((0, 0), dtype=torch.uint8, device=device)
-            return CacheAllocation(pools=(CachePool(empty, entry_axis=0), ), cache_tensors=())
+            return CacheAllocation(pools=(CachePool(empty, entry_axis=0), ), tensor_views=())
 
         pools = []
-        cache_tensors = []
+        tensor_views = []
         for spec in self.tensor_specs:
             if spec.layer_rows is None:
                 cache_shape = (num_caches, *spec.desc.shape)
@@ -59,8 +59,8 @@ class DlinferStateCacheLayout:
                 entry_axis = 1
             cache = torch.zeros(cache_shape, dtype=spec.desc.dtype, device=device)
             pools.append(CachePool(cache, entry_axis=entry_axis))
-            cache_tensors.append(cache)
-        return CacheAllocation(pools=tuple(pools), cache_tensors=tuple(cache_tensors))
+            tensor_views.append(cache)
+        return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))
 
 
 class DlinferCacheBackend(DefaultCacheBackend):

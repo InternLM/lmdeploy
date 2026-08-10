@@ -131,7 +131,7 @@ allocation = plan.allocate(num_logical_blocks, device)
 ```
 
 `CacheAllocation.pools` own storage and drive byte accounting and movement.
-`CacheAllocation.cache_tensors` are typed tensors in the same order as
+`CacheAllocation.tensor_views` are typed tensors in the same order as
 `plan.tensor_specs`. Count bytes from pools, never from possibly overlapping
 views.
 

@@ -66,7 +66,7 @@ def _make_multi_pool_state_allocation(num_caches: int, device: torch.device | st
     second = torch.zeros((3, num_caches, 2), dtype=torch.float16, device=device)
     return CacheAllocation(
         pools=(CachePool(first, entry_axis=0), CachePool(second, entry_axis=1)),
-        cache_tensors=(first, second),
+        tensor_views=(first, second),
     )
 
 

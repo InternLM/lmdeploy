@@ -26,16 +26,16 @@ def test_cache_desc_owns_payload_and_alignment_sizes():
 
 
 def test_block_cache_geometry_validates_and_converts_block_units():
-    geometry = BlockCacheGeometry(block_size=128, kernel_block_size=32)
+    geometry = BlockCacheGeometry(logical_block_size=128, kernel_block_size=32)
 
     assert geometry.kernel_blocks_per_logical_block == 4
 
-    with pytest.raises(ValueError, match='block_size must be positive'):
-        BlockCacheGeometry(block_size=0, kernel_block_size=64)
+    with pytest.raises(ValueError, match='logical_block_size must be positive'):
+        BlockCacheGeometry(logical_block_size=0, kernel_block_size=64)
     with pytest.raises(ValueError, match='greater than or equal'):
-        BlockCacheGeometry(block_size=32, kernel_block_size=64)
+        BlockCacheGeometry(logical_block_size=32, kernel_block_size=64)
     with pytest.raises(ValueError, match='divisible'):
-        BlockCacheGeometry(block_size=96, kernel_block_size=64)
+        BlockCacheGeometry(logical_block_size=96, kernel_block_size=64)
 
 
 def test_layer_row_map_preserves_declared_row_order():

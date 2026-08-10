@@ -187,30 +187,29 @@ def build_quant_cache_descs(k_cache_desc: CacheDesc, v_cache_desc: CacheDesc, mo
 
 @dataclass(frozen=True)
 class BlockCacheGeometry:
-    """Finalized logical and physical block sizes passed to request
-    collection."""
+    """Relate one logical scheduler block to physical kernel cache blocks."""
 
-    block_size: int
+    logical_block_size: int
     kernel_block_size: int
 
     def __post_init__(self):
-        if self.block_size <= 0:
-            raise ValueError('block_size must be positive.')
+        if self.logical_block_size <= 0:
+            raise ValueError('logical_block_size must be positive.')
         if self.kernel_block_size <= 0:
             raise ValueError('kernel_block_size must be positive.')
-        if self.block_size < self.kernel_block_size:
+        if self.logical_block_size < self.kernel_block_size:
             raise ValueError(
-                f'block_size {self.block_size} must be greater than or equal to '
+                f'logical_block_size {self.logical_block_size} must be greater than or equal to '
                 f'kernel_block_size {self.kernel_block_size}.')
-        if self.block_size % self.kernel_block_size != 0:
+        if self.logical_block_size % self.kernel_block_size != 0:
             raise ValueError(
-                f'block_size {self.block_size} must be divisible by '
+                f'logical_block_size {self.logical_block_size} must be divisible by '
                 f'kernel_block_size {self.kernel_block_size}.')
 
     @property
     def kernel_blocks_per_logical_block(self) -> int:
         """Return physical kernel blocks in one scheduler block."""
-        return self.block_size // self.kernel_block_size
+        return self.logical_block_size // self.kernel_block_size
 
 
 @dataclass(frozen=True)
@@ -236,23 +235,6 @@ class BlockCacheRequest:
         object.__setattr__(self, 'shape', shape)
 
 
-def _normalize_cache_layer_ids(cache_name: str, layer_ids: Sequence[int]) -> list[int]:
-    """Validate structural layer-id invariants and return host integers."""
-    normalized = []
-    seen = set()
-    for layer_id in layer_ids:
-        layer_id = as_index(layer_id)
-        if layer_id < 0:
-            raise ValueError(f'{cache_name} layer id {layer_id} must be non-negative.')
-        if layer_id in seen:
-            raise ValueError(f'{cache_name} layer id {layer_id} is duplicated.')
-        seen.add(layer_id)
-        normalized.append(layer_id)
-    if len(normalized) == 0:
-        raise ValueError(f'{cache_name} layer_ids must not be empty.')
-    return normalized
-
-
 @dataclass(frozen=True)
 class LayerRowMap:
     """Map global layer ids to compact cache-tensor rows."""
@@ -262,7 +244,20 @@ class LayerRowMap:
 
     @classmethod
     def build(cls, cache_name: str, layer_ids: Sequence[int]):
-        layer_ids = tuple(_normalize_cache_layer_ids(cache_name, layer_ids))
+        normalized_layer_ids = []
+        seen_layer_ids = set()
+        for layer_id in layer_ids:
+            layer_id = as_index(layer_id)
+            if layer_id < 0:
+                raise ValueError(f'{cache_name} layer id {layer_id} must be non-negative.')
+            if layer_id in seen_layer_ids:
+                raise ValueError(f'{cache_name} layer id {layer_id} is duplicated.')
+            seen_layer_ids.add(layer_id)
+            normalized_layer_ids.append(layer_id)
+        if not normalized_layer_ids:
+            raise ValueError(f'{cache_name} layer_ids must not be empty.')
+
+        layer_ids = tuple(normalized_layer_ids)
         row_by_layer = {
             layer_id: cache_row
             for cache_row, layer_id in enumerate(layer_ids)

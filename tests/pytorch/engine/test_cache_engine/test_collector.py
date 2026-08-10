@@ -22,14 +22,14 @@ class _CacheRequester(nn.Module):
 
 
 def test_collect_block_cache_requests_distinguishes_absent_and_empty_requesters():
-    geometry = BlockCacheGeometry(block_size=64, kernel_block_size=64)
+    geometry = BlockCacheGeometry(logical_block_size=64, kernel_block_size=64)
 
     assert collect_block_cache_requests(nn.Linear(2, 2), geometry) is None
     assert collect_block_cache_requests(_CacheRequester(), geometry) == ()
 
 
 def test_collect_block_cache_requests_binds_rows_by_cache_name():
-    geometry = BlockCacheGeometry(block_size=64, kernel_block_size=64)
+    geometry = BlockCacheGeometry(logical_block_size=64, kernel_block_size=64)
     index = BlockCacheRequest('index', (64, 8), torch.float16)
     scale = BlockCacheRequest('scale', (64, 1), torch.float32)
     first = _CacheRequester(index, scale)
@@ -44,7 +44,7 @@ def test_collect_block_cache_requests_binds_rows_by_cache_name():
 
 
 def test_collect_block_cache_requests_keeps_rows_stable_across_contracts():
-    geometry = BlockCacheGeometry(block_size=64, kernel_block_size=64)
+    geometry = BlockCacheGeometry(logical_block_size=64, kernel_block_size=64)
     narrow = BlockCacheRequest('index', (64, 8), torch.float16)
     wide = BlockCacheRequest('index', (64, 16), torch.float16)
     consumers = [_CacheRequester(narrow), _CacheRequester(wide), _CacheRequester(narrow)]

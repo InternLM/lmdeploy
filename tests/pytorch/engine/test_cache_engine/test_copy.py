@@ -19,7 +19,7 @@ def _make_allocation(num_logical_blocks: int = 6, pages_per_block: int = 2):
         CachePool(torch.full((physical_pages, 3, 7), 99, dtype=torch.float16), entry_axis=0),
         CachePool(torch.full((2, 3, physical_pages, 4), 99, dtype=torch.float32), entry_axis=2),
     )
-    return CacheAllocation(pools=pools, cache_tensors=tuple(pool.tensor for pool in pools))
+    return CacheAllocation(pools=pools, tensor_views=tuple(pool.tensor for pool in pools))
 
 
 def _fill_sources(allocation, src_blocks, num_logical_blocks, pages_per_block):
@@ -72,13 +72,13 @@ def test_default_block_copy_bounds_aggregate_workspace(monkeypatch):
 
 
 def test_block_copy_validates_allocation_geometry_and_device():
-    empty = CacheAllocation(pools=(), cache_tensors=())
+    empty = CacheAllocation(pools=(), tensor_views=())
     with pytest.raises(ValueError, match='at least one allocation pool'):
         TorchBlockCacheCopy.build(empty, num_logical_blocks=2, pages_per_block=1)
 
     wrong_pages = CacheAllocation(
         pools=(CachePool(torch.empty((2, 3, 4)), entry_axis=1), ),
-        cache_tensors=(),
+        tensor_views=(),
     )
     with pytest.raises(ValueError, match='has 3 physical pages; expected 4'):
         TorchBlockCacheCopy.build(wrong_pages, num_logical_blocks=2, pages_per_block=2)
@@ -88,7 +88,7 @@ def test_block_copy_validates_allocation_geometry_and_device():
             CachePool(torch.empty((2, 2)), entry_axis=0),
             CachePool(torch.empty((2, 2), device='meta'), entry_axis=0),
         ),
-        cache_tensors=(),
+        tensor_views=(),
     )
     with pytest.raises(ValueError, match='must use one device'):
         TorchBlockCacheCopy.build(mixed_devices, num_logical_blocks=2, pages_per_block=1)
@@ -96,7 +96,7 @@ def test_block_copy_validates_allocation_geometry_and_device():
 
 def test_default_block_copy_supports_an_empty_allocation_extent():
     pool = CachePool(torch.empty((2, 0, 5)), entry_axis=1)
-    allocation = CacheAllocation(pools=(pool, ), cache_tensors=())
+    allocation = CacheAllocation(pools=(pool, ), tensor_views=())
     block_copy = TorchBlockCacheCopy.build(allocation, num_logical_blocks=0, pages_per_block=2)
 
     block_copy.copy(torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long))

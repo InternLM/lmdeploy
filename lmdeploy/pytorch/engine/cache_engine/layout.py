@@ -19,9 +19,12 @@ class BlockCacheLayout(Protocol):
 
 @dataclass(frozen=True)
 class CachePool:
-    """Own one storage tensor and identify its cache-entry axis."""
+    """Own one storage tensor used for cache movement and accounting."""
 
     tensor: torch.Tensor
+    # Axis indexing independently movable entries: physical kernel pages for
+    # block-cache pools or state slots for state-cache pools. Every other axis
+    # forms the payload moved with one entry.
     entry_axis: int
 
     def __post_init__(self):
@@ -36,10 +39,10 @@ class CachePool:
 
 @dataclass(frozen=True)
 class CacheAllocation:
-    """Own cache pools and retain the typed cache views derived from them."""
+    """Own cache pools and retain typed tensor views in cache-spec order."""
 
     pools: tuple[CachePool, ...]
-    cache_tensors: tuple[torch.Tensor, ...]
+    tensor_views: tuple[torch.Tensor, ...]
 
     @property
     def nbytes(self) -> int:
@@ -56,7 +59,7 @@ class CacheAllocation:
 
     def as_legacy(self) -> tuple[torch.Tensor | list[torch.Tensor], list[torch.Tensor]]:
         """Return the temporary two-value allocation facade."""
-        return self.legacy_pool, list(self.cache_tensors)
+        return self.legacy_pool, list(self.tensor_views)
 
     def __iter__(self):
         """Preserve legacy ``mem_pool, caches = allocate_caches()`` use."""
@@ -86,17 +89,17 @@ class PackedBlockCacheLayout:
         pool_size = sum(spec.desc.aligned_size for spec in self.tensor_specs)
         pool_tensor = torch.zeros((self.num_layers, num_blocks, pool_size), dtype=torch.uint8, device=device)
 
-        cache_tensors = []
+        tensor_views = []
         offset = 0
         for spec in self.tensor_specs:
             desc = spec.desc
             cache = pool_tensor[:, :, offset:offset + desc.size].view(desc.dtype)
             cache = cache.view((self.num_layers, num_blocks, *desc.shape))
-            cache_tensors.append(cache)
+            tensor_views.append(cache)
             offset += desc.aligned_size
 
         return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=1), ),
-                               cache_tensors=tuple(cache_tensors))
+                               tensor_views=tuple(tensor_views))
 
 
 @dataclass(frozen=True)
@@ -112,7 +115,7 @@ class RowBlockCacheLayout:
     def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Realize the layout for a block count and device."""
         pools = []
-        cache_tensors = []
+        tensor_views = []
         for spec in self.tensor_specs:
             desc = spec.desc
             pool_tensor = torch.zeros((spec.num_rows, num_blocks, desc.aligned_size),
@@ -121,9 +124,9 @@ class RowBlockCacheLayout:
             cache = pool_tensor[:, :, :desc.size].view(desc.dtype)
             cache = cache.view((spec.num_rows, num_blocks, *desc.shape))
             pools.append(CachePool(pool_tensor, entry_axis=1))
-            cache_tensors.append(cache)
+            tensor_views.append(cache)
 
-        return CacheAllocation(pools=tuple(pools), cache_tensors=tuple(cache_tensors))
+        return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))
 
 
 @dataclass(frozen=True)
@@ -136,16 +139,16 @@ class ContiguousBlockCacheLayout:
     def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Allocate contiguous cache tensors for one block count."""
         pools = []
-        cache_tensors = []
+        tensor_views = []
         for spec in self.tensor_specs:
             num_rows = spec.num_rows if spec.has_rows else self.num_layers
             cache = torch.zeros((num_rows, num_blocks, *spec.desc.shape),
                                 dtype=spec.desc.dtype,
                                 device=device)
             pools.append(CachePool(cache, entry_axis=1))
-            cache_tensors.append(cache)
+            tensor_views.append(cache)
 
-        return CacheAllocation(pools=tuple(pools), cache_tensors=tuple(cache_tensors))
+        return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))
 
 
 @dataclass(frozen=True)
@@ -158,8 +161,8 @@ class CompositeBlockCacheLayout:
         """Allocate child layouts and preserve their cache-tensor order."""
         allocations = [layout.allocate(num_blocks, device) for layout in self.layouts]
         pools = tuple(pool for allocation in allocations for pool in allocation.pools)
-        cache_tensors = tuple(cache for allocation in allocations for cache in allocation.cache_tensors)
-        return CacheAllocation(pools=pools, cache_tensors=cache_tensors)
+        tensor_views = tuple(cache for allocation in allocations for cache in allocation.tensor_views)
+        return CacheAllocation(pools=pools, tensor_views=tensor_views)
 
 
 @dataclass(frozen=True)
@@ -172,12 +175,12 @@ class PackedStateCacheLayout:
         """Realize the layout for a state-slot count and device."""
         if len(self.tensor_specs) == 0 or num_caches == 0:
             pool_tensor = torch.empty((0, 0), dtype=torch.uint8, device=device)
-            return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ), cache_tensors=())
+            return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ), tensor_views=())
 
         pool_size = sum(spec.desc.aligned_size for spec in self.tensor_specs)
         pool_tensor = torch.zeros((num_caches, pool_size), dtype=torch.uint8, device=device)
 
-        cache_tensors = []
+        tensor_views = []
         offset = 0
         for spec in self.tensor_specs:
             desc = spec.desc
@@ -186,8 +189,8 @@ class PackedStateCacheLayout:
             if spec.layer_rows is not None:
                 dims = list(range(cache.dim()))
                 cache = cache.permute(1, 0, *dims[2:])
-            cache_tensors.append(cache)
+            tensor_views.append(cache)
             offset += desc.aligned_size
 
         return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ),
-                               cache_tensors=tuple(cache_tensors))
+                               tensor_views=tuple(tensor_views))

@@ -229,7 +229,7 @@ def test_build_cache_plan_collects_built_operator_requests():
                                         world_size=1,
                                         request_collector=request_collector)
 
-    assert geometries == [BlockCacheGeometry(block_size=128, kernel_block_size=64)]
+    assert geometries == [BlockCacheGeometry(logical_block_size=128, kernel_block_size=64)]
     assert plan.cache_names == ('operator_cache', )
     assert plan.tensor_specs[0].consumer_rows == (0, 1)
     assert plan.kernel_blocks_per_logical_block == 2
@@ -319,8 +319,8 @@ def test_build_cache_plan_combines_standard_kv_and_operator_requests():
     assert plan.cache_names == ('k_cache', 'v_cache', 'operator_cache')
     assert plan.legacy_cache_indices == (0, 1)
     assert len(allocation.pools) == 2
-    assert allocation.cache_tensors[2].is_contiguous()
-    assert allocation.cache_tensors[2][0].is_contiguous()
+    assert allocation.tensor_views[2].is_contiguous()
+    assert allocation.tensor_views[2][0].is_contiguous()
 
 
 def test_operator_cache_requests_cannot_shadow_standard_cache_names():
@@ -448,11 +448,11 @@ def test_heterogeneous_config_cache_layers_resolve_physical_tensors():
                                num_gpu_blocks=2)
     plan = CacheEngine.build_cache_plan(model_config, cache_config, world_size=1)
     allocation = plan.allocate(num_logical_blocks=2, device='cpu')
-    block_caches = NamedCacheView.from_specs(plan.tensor_specs, allocation.cache_tensors)
+    block_caches = NamedCacheView.from_specs(plan.tensor_specs, allocation.tensor_views)
 
-    assert torch.equal(block_caches.layer('layer_cache', 0), allocation.cache_tensors[0][0])
-    assert torch.equal(block_caches.layer('layer_cache', 1), allocation.cache_tensors[1][0])
-    assert torch.equal(block_caches.layer('layer_cache', 2), allocation.cache_tensors[0][1])
+    assert torch.equal(block_caches.layer('layer_cache', 0), allocation.tensor_views[0][0])
+    assert torch.equal(block_caches.layer('layer_cache', 1), allocation.tensor_views[1][0])
+    assert torch.equal(block_caches.layer('layer_cache', 2), allocation.tensor_views[0][1])
     with pytest.raises(RuntimeError, match='multiple physical tensors'):
         block_caches['layer_cache']
 
@@ -648,7 +648,7 @@ def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations(monkey
         def allocate(self, num_blocks, device):
             allocations.append((num_blocks, device))
             cache = torch.zeros((4, num_blocks, 3), dtype=torch.float32)
-            return CacheAllocation(pools=(CachePool(cache, entry_axis=1), ), cache_tensors=(cache, ))
+            return CacheAllocation(pools=(CachePool(cache, entry_axis=1), ), tensor_views=(cache, ))
 
     cache_engine = object.__new__(CacheEngine)
     cache_engine.cache_config = CacheConfig(max_batches=1,
@@ -744,16 +744,16 @@ def test_dlinfer_backend_uses_native_block_and_state_allocations(monkeypatch):
         device='cpu',
     )
 
-    assert len(block_allocation.pools) == len(block_allocation.cache_tensors) == 2
+    assert len(block_allocation.pools) == len(block_allocation.tensor_views) == 2
     assert [pool.entry_axis for pool in block_allocation.pools] == [1, 1]
-    assert [tuple(cache.shape) for cache in block_allocation.cache_tensors] == [
+    assert [tuple(cache.shape) for cache in block_allocation.tensor_views] == [
         (4, 2, 64, 2, 8),
         (4, 2, 64, 2, 8),
     ]
-    assert len(state_allocation.pools) == len(state_allocation.cache_tensors) == 2
+    assert len(state_allocation.pools) == len(state_allocation.tensor_views) == 2
     assert [pool.entry_axis for pool in state_allocation.pools] == [0, 0]
     assert all(cache.is_contiguous()
-               for cache in (*block_allocation.cache_tensors, *state_allocation.cache_tensors))
+               for cache in (*block_allocation.tensor_views, *state_allocation.tensor_views))
     assert CacheEngine.get_logical_block_nbytes(cache_config, model_config) == block_allocation.nbytes // 2
     assert StateCacheEngine.get_state_slot_nbytes(state_shapes) == state_allocation.nbytes // 3
 
@@ -767,11 +767,11 @@ def test_cache_engine_swap_uses_each_pool_entry_axis(monkeypatch):
     cache_engine = object.__new__(CacheEngine)
     cache_engine.cpu_allocation = CacheAllocation(
         pools=(CachePool(cpu_first, entry_axis=0), CachePool(cpu_second, entry_axis=1)),
-        cache_tensors=(),
+        tensor_views=(),
     )
     cache_engine.gpu_allocation = CacheAllocation(
         pools=(CachePool(gpu_first, entry_axis=0), CachePool(gpu_second, entry_axis=1)),
-        cache_tensors=(),
+        tensor_views=(),
     )
     cache_engine._cpu_cache_list = []
     cache_engine._gpu_cache_list = []
@@ -819,11 +819,11 @@ def test_cache_engine_rejects_incompatible_swap_entry_axes():
     cache_engine = object.__new__(CacheEngine)
     cache_engine.cpu_allocation = CacheAllocation(
         pools=(CachePool(torch.empty((3, 2)), entry_axis=0), ),
-        cache_tensors=(),
+        tensor_views=(),
     )
     cache_engine.gpu_allocation = CacheAllocation(
         pools=(CachePool(torch.empty((2, 4)), entry_axis=1), ),
-        cache_tensors=(),
+        tensor_views=(),
     )
     cache_engine._cpu_cache_list = []
     cache_engine._gpu_cache_list = []

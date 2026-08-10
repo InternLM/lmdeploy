@@ -50,12 +50,12 @@ def test_packed_block_allocation_owns_one_block_axis_pool():
     assert tuple(allocation.pools[0].tensor.shape) == (2, 3, 24)
     assert torch.count_nonzero(allocation.pools[0].tensor) == 0
     assert allocation.nbytes == 2 * 3 * 24
-    assert [tuple(cache.shape) for cache in allocation.cache_tensors] == [(2, 3, 3), (2, 3, 2)]
-    assert [cache.storage_offset() for cache in allocation.cache_tensors] == [0, 8]
+    assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 3, 3), (2, 3, 2)]
+    assert [cache.storage_offset() for cache in allocation.tensor_views] == [0, 8]
 
     legacy_pool, legacy_caches = allocation
     assert legacy_pool is allocation.pools[0].tensor
-    assert legacy_caches == list(allocation.cache_tensors)
+    assert legacy_caches == list(allocation.tensor_views)
 
 
 def test_layer_row_block_allocation_owns_one_pool_per_tensor_spec():
@@ -75,7 +75,7 @@ def test_layer_row_block_allocation_owns_one_pool_per_tensor_spec():
     assert [tuple(pool.tensor.shape) for pool in allocation.pools] == [(2, 3, 16), (1, 3, 8)]
     assert all(torch.count_nonzero(pool.tensor) == 0 for pool in allocation.pools)
     assert allocation.nbytes == 120
-    assert [tuple(cache.shape) for cache in allocation.cache_tensors] == [(2, 3, 3), (1, 3, 2)]
+    assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 3, 3), (1, 3, 2)]
 
 
 def test_packed_state_allocation_owns_state_slot_axis():
@@ -94,7 +94,7 @@ def test_packed_state_allocation_owns_state_slot_axis():
     assert tuple(allocation.pools[0].tensor.shape) == (4, 80)
     assert torch.count_nonzero(allocation.pools[0].tensor) == 0
     assert allocation.nbytes == 320
-    assert [tuple(cache.shape) for cache in allocation.cache_tensors] == [(2, 4, 5), (4, 3)]
+    assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 4, 5), (4, 3)]
 
 
 def test_empty_state_allocation_keeps_one_empty_owning_pool():
@@ -103,7 +103,7 @@ def test_empty_state_allocation_keeps_one_empty_owning_pool():
     assert len(allocation.pools) == 1
     assert allocation.pools[0].entry_axis == 0
     assert tuple(allocation.pools[0].tensor.shape) == (0, 0)
-    assert allocation.cache_tensors == ()
+    assert allocation.tensor_views == ()
 
 
 def test_row_block_layout_rejects_tensor_specs_without_rows():
@@ -152,11 +152,11 @@ def test_default_composite_layout_packs_plain_and_isolates_contiguous_tensors():
     assert [type(child) for child in layout.layouts] == [PackedBlockCacheLayout, ContiguousBlockCacheLayout]
     assert [pool.entry_axis for pool in allocation.pools] == [1, 1]
     assert [tuple(pool.tensor.shape) for pool in allocation.pools] == [(4, 3, 24), (2, 3, 5)]
-    assert [tuple(cache.shape) for cache in allocation.cache_tensors] == [(4, 3, 3), (4, 3, 2), (2, 3, 5)]
-    assert allocation.cache_tensors[2] is allocation.pools[1].tensor
-    assert allocation.cache_tensors[2].is_contiguous()
-    assert allocation.cache_tensors[2][0].is_contiguous()
-    assert [allocation.cache_tensors[index].storage_offset() for index in (0, 1)] == [0, 8]
+    assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(4, 3, 3), (4, 3, 2), (2, 3, 5)]
+    assert allocation.tensor_views[2] is allocation.pools[1].tensor
+    assert allocation.tensor_views[2].is_contiguous()
+    assert allocation.tensor_views[2][0].is_contiguous()
+    assert [allocation.tensor_views[index].storage_offset() for index in (0, 1)] == [0, 8]
     assert all(torch.count_nonzero(pool.tensor) == 0 for pool in allocation.pools)
     assert allocation.nbytes == meta_allocation.nbytes == 4 * 3 * 24 + 2 * 3 * 5 * 2
 
@@ -175,11 +175,11 @@ def test_dlinfer_block_layout_owns_contiguous_cache_tensors():
 
     assert [pool.entry_axis for pool in allocation.pools] == [1, 1]
     assert [tuple(pool.tensor.shape) for pool in allocation.pools] == [(4, 3, 3), (2, 3, 2)]
-    assert all(pool.tensor is cache for pool, cache in zip(allocation.pools, allocation.cache_tensors))
-    assert all(cache.is_contiguous() for cache in allocation.cache_tensors)
-    assert all(torch.count_nonzero(cache) == 0 for cache in allocation.cache_tensors)
-    assert allocation.cache_tensors[0].stride(1) == 3
-    assert allocation.cache_tensors[1].stride(1) == 2
+    assert all(pool.tensor is cache for pool, cache in zip(allocation.pools, allocation.tensor_views))
+    assert all(cache.is_contiguous() for cache in allocation.tensor_views)
+    assert all(torch.count_nonzero(cache) == 0 for cache in allocation.tensor_views)
+    assert allocation.tensor_views[0].stride(1) == 3
+    assert allocation.tensor_views[1].stride(1) == 2
     assert allocation.nbytes == meta_allocation.nbytes == 4 * 3 * 3 * 4 + 2 * 3 * 2 * 2
 
 
@@ -197,10 +197,10 @@ def test_dlinfer_state_layout_owns_contiguous_cache_tensors():
 
     assert [pool.entry_axis for pool in allocation.pools] == [0, 1]
     assert [tuple(pool.tensor.shape) for pool in allocation.pools] == [(4, 3), (2, 4, 5)]
-    assert all(pool.tensor is cache for pool, cache in zip(allocation.pools, allocation.cache_tensors))
-    assert all(cache.is_contiguous() for cache in allocation.cache_tensors)
-    assert all(torch.count_nonzero(cache) == 0 for cache in allocation.cache_tensors)
-    assert allocation.cache_tensors[1][0].is_contiguous()
+    assert all(pool.tensor is cache for pool, cache in zip(allocation.pools, allocation.tensor_views))
+    assert all(cache.is_contiguous() for cache in allocation.tensor_views)
+    assert all(torch.count_nonzero(cache) == 0 for cache in allocation.tensor_views)
+    assert allocation.tensor_views[1][0].is_contiguous()
     assert allocation.nbytes == meta_allocation.nbytes == 4 * 3 * 2 + 2 * 4 * 5 * 4
 
 
@@ -217,9 +217,9 @@ def test_dlinfer_empty_layouts_keep_semantic_empty_pools():
     block_allocation = DlinferBlockCacheLayout((), num_layers=2).allocate(num_blocks=3, device='cpu')
     state_allocation = DlinferStateCacheLayout(()).allocate(num_caches=4, device='cpu')
 
-    assert block_allocation.cache_tensors == ()
+    assert block_allocation.tensor_views == ()
     assert block_allocation.pools[0].entry_axis == 1
     assert tuple(block_allocation.pools[0].tensor.shape) == (2, 3, 0)
-    assert state_allocation.cache_tensors == ()
+    assert state_allocation.tensor_views == ()
     assert state_allocation.pools[0].entry_axis == 0
     assert tuple(state_allocation.pools[0].tensor.shape) == (0, 0)

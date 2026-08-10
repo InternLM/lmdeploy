@@ -32,7 +32,7 @@ def test_block_cache_plan_owns_geometry_layout_and_access_metadata():
     block_nbytes = plan.logical_block_nbytes
 
     assert allocations == [(6, 'cpu'), (2, 'meta')]
-    assert [tuple(cache.shape) for cache in allocation.cache_tensors] == [(2, 6, 3), (1, 6, 2)]
+    assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 6, 3), (1, 6, 2)]
     assert plan.cache_names == ('first', 'second')
     assert plan.legacy_cache_indices == ()
     assert block_nbytes == 2 * 2 * 16 + 1 * 2 * 8
