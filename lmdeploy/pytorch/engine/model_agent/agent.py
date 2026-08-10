@@ -219,10 +219,9 @@ def model_forward(
         context.named_state_caches = state_cache_engine.named_state_caches
 
         with ctx_mgr.context(context):
-            # Some backends synchronize while building context. Queue restore
-            # afterward so that synchronization does not absorb copy latency;
-            # forward-stream ordering still keeps every model consumer behind
-            # the restore.
+            # Queue restores after context construction because some backends
+            # synchronize while building context. Forward-stream ordering
+            # still keeps all model consumers behind the copies.
             _restore_cache_checkpoint(inputs, cache_inputs, cache_engine, state_cache_engine)
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,

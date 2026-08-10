@@ -131,6 +131,38 @@ primitive. CacheEngine validates only plan metadata on the hot path. The caller
 owns source/destination relationship validation and keeps block lifetimes safe
 until the stream-ordered copy completes.
 
+### Per-forward checkpoint pipeline
+
+Checkpoint copies are one-forward side effects, not persistent model inputs:
+
+```text
+checkpoint lifecycle + paging ids
+              |
+              v
+InputsMaker reserves/pins and resolves physical block offsets
+              |
+              v
+CacheCheckpointInputs
+    restore plans -> model forward -> save plans
+              |                         |
+              +---- CacheEngine --------+  KV logical-block copies
+              `---- StateCacheEngine ---+  state-slot copies
+```
+
+`CacheCheckpointInputs` travels beside `ModelInputs` in the executor payload.
+Only its KV plans move to the cache device; state plans remain compact host
+index pairs. The model agent consumes restores after context construction and
+before the model, then consumes saves after the model. The engine loop
+publishes reserved state checkpoints and releases their pins at the existing
+forward/output boundaries.
+
+Keeping this payload separate prevents one-shot operations from being cloned,
+reindexed, merged, or advanced with persistent decode inputs. At this stage the
+existing SSM state checkpoint flow produces state plans. The KV plan fields and
+logical-to-physical validation boundary are ready for the later non-aligned
+checkpoint chapter; that chapter will decide which frozen KV block pairs to
+emit.
+
 ## Layout Selection and Composition
 
 An atomic layout implements one physical storage policy:
@@ -258,7 +290,9 @@ not provide per-pool entry-axis metadata.
 5. [`migration.py`](./migration.py): PD pool metadata and byte-transfer planning.
 6. [`backends/default/cache.py`](../../backends/default/cache.py): default
    resource-to-layout selection.
-7. [`engine.py`](./engine.py): allocation lifetime, model views, and movement.
+7. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
+   payloads.
+8. [`engine.py`](./engine.py): allocation lifetime, model views, and movement.
 
 Backend-specific layouts remain with their backend, for example
 [`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py). Avoid adding a

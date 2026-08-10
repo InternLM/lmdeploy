@@ -878,16 +878,15 @@ class InputsMakerAsync:
         state_checkpoints = self.scheduler.block_trie.state_checkpoints
         state_restore_plan = _make_state_prefix_cache_restore_plan(messages)
         if state_restore_plan is not None:
-            # Pin restore checkpoints while the forward copies them into
-            # runtime state slots; otherwise checkpoint eviction could race
-            # with input prefetching for the next batch.
+            # Keep restore checkpoints alive while a prefetched forward waits
+            # to copy them into request-owned runtime state.
             state_checkpoints.pin_restores(messages)
             if any(msg.prefix_cache.restore.is_selected and not msg.prefix_cache.restore.pinned
                    for msg in messages):
                 raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
 
-        # Prefill saves publish only after model_forward has copied the runtime
-        # state to these reserved checkpoint offsets.
+        # Saves become visible only after model_forward has copied runtime
+        # state into these reserved checkpoint offsets.
         if save_steps is None:
             save_state_offsets = [state_checkpoints.reserve_save(msg) for msg in messages]
         else:
@@ -906,7 +905,7 @@ class InputsMakerAsync:
             return None
 
         decode_state_interval = self.cache_config.prefix_cache_decode_state_interval
-        if (decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1):
+        if decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1:
             return None
 
         state_checkpoints = self.scheduler.block_trie.state_checkpoints
