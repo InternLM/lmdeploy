@@ -2,36 +2,44 @@ import os
 
 import allure
 import pytest
-from utils.config_utils import get_cuda_prefix_by_workerid, get_quantization_model_list
+from utils.config_utils import (
+    SUFFIX_INNER_AWQ,
+    SUFFIX_INNER_GPTQ,
+    SUFFIX_INNER_W8A8,
+    get_cuda_prefix_by_workerid,
+    get_quantization_model_list,
+)
 from utils.quantization_utils import quantization
 
+_QUANT_SUFFIX = {
+    'awq': SUFFIX_INNER_AWQ,
+    'gptq': SUFFIX_INNER_GPTQ,
+    'w8a8': SUFFIX_INNER_W8A8,
+}
+
+
+def _quantization_cases():
+    """Build (model, type, output_name) cases; skip empty types to avoid
+    phantom collects."""
+    cases = []
+    for quantization_type, suffix in _QUANT_SUFFIX.items():
+        for model in get_quantization_model_list(quantization_type):
+            cases.append(
+                pytest.param(
+                    model,
+                    quantization_type,
+                    model + suffix,
+                    id=f'{quantization_type}:{model}',
+                ))
+    return cases
+
 
 @pytest.mark.order(3)
 @pytest.mark.test_3090
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize('model', get_quantization_model_list('awq'))
-def test_quantization_awq(config, model, worker_id):
-    quantization_type = 'awq'
-    quantization_all(config, model + '-inner-4bits', model, quantization_type,
-                     get_cuda_prefix_by_workerid(worker_id, {'tp': 1}))
-
-
-@pytest.mark.order(3)
-@pytest.mark.timeout(900)
-@pytest.mark.parametrize('model', get_quantization_model_list('gptq'))
-def test_quantization_gptq(config, model, worker_id):
-    quantization_type = 'gptq'
-    quantization_all(config, model + '-inner-gptq', model, quantization_type,
-                     get_cuda_prefix_by_workerid(worker_id, {'tp': 1}))
-
-
-@pytest.mark.order(3)
-@pytest.mark.test_3090
-@pytest.mark.timeout(900)
-@pytest.mark.parametrize('model', get_quantization_model_list('w8a8'))
-def test_quantization_w8a8(config, model, worker_id):
-    quantization_type = 'w8a8'
-    quantization_all(config, model + '-inner-w8a8', model, quantization_type,
+@pytest.mark.parametrize('model,quantization_type,quantization_model_name', _quantization_cases())
+def test_quantization(config, model, quantization_type, quantization_model_name, worker_id):
+    quantization_all(config, quantization_model_name, model, quantization_type,
                      get_cuda_prefix_by_workerid(worker_id, {'tp': 1}))
 
 
@@ -43,7 +51,7 @@ def test_quantization_w8a8(config, model, worker_id):
 @pytest.mark.parametrize('model', ['Qwen/Qwen3-0.6B'])
 def test_quantization_awq_pr(config, model):
     quantization_type = 'awq'
-    quantization_all(config, model + '-inner-4bits', model, quantization_type, cuda_prefix='CUDA_VISIBLE_DEVICES=6')
+    quantization_all(config, model + SUFFIX_INNER_AWQ, model, quantization_type, cuda_prefix='CUDA_VISIBLE_DEVICES=6')
 
 
 def quantization_all(config, quantization_model_name, origin_model_name, quantization_type, cuda_prefix: str = ''):
