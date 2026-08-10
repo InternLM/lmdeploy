@@ -41,6 +41,7 @@ from .schema import (
     build_state_cache_resources,
     layer_maps_from_resources,
 )
+from .view import NamedCacheView
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
 
@@ -54,98 +55,6 @@ def _unpack_cache_allocation(result):
         return result, mem_pool, caches
     mem_pool, caches = result
     return None, mem_pool, caches
-
-
-class NamedCacheView(Mapping[str, torch.Tensor]):
-    """Resolve named cache tensors and their consumer/layer rows."""
-
-    def __init__(self, caches: dict[str, torch.Tensor], layer_maps: dict[str, dict[int, int]] | None = None):
-        self._segments = {
-            name: (cache, )
-            for name, cache in caches.items()
-        }
-        self._consumer_locations = {}
-        self._layer_locations = {
-            name: {
-                layer_id: (0, row)
-                for layer_id, row in layer_map.items()
-            }
-            for name, layer_map in (layer_maps or {}).items()
-        }
-
-    @classmethod
-    def from_resources(cls, resources: Sequence[CacheResource], caches: Sequence[torch.Tensor]):
-        """Build segmented row lookup from normalized resources."""
-        if len(resources) != len(caches):
-            raise ValueError('Cache resources and tensors must have the same length.')
-
-        view = cls({})
-        segments = {}
-        consumer_locations = {}
-        layer_locations = {}
-        for resource, cache in zip(resources, caches):
-            resource_segments = segments.setdefault(resource.name, [])
-            segment = len(resource_segments)
-            resource_segments.append(cache)
-
-            if resource.consumer_rows is not None:
-                locations = consumer_locations.setdefault(resource.name, {})
-                for local_row, consumer_row in enumerate(resource.consumer_rows):
-                    locations[consumer_row] = (segment, local_row)
-            elif resource.layer_rows is not None:
-                locations = layer_locations.setdefault(resource.name, {})
-                for layer_id, local_row in resource.layer_rows.row_by_layer.items():
-                    locations[layer_id] = (segment, local_row)
-
-        view._segments = {
-            name: tuple(resource_segments)
-            for name, resource_segments in segments.items()
-        }
-        view._consumer_locations = {
-            name: tuple(locations[row] for row in range(len(locations)))
-            for name, locations in consumer_locations.items()
-        }
-        view._layer_locations = layer_locations
-        return view
-
-    def __getitem__(self, name: str):
-        segments = self._segments[name]
-        if len(segments) != 1:
-            accessor = 'row' if name in self._consumer_locations else 'layer'
-            raise RuntimeError(
-                f'Cache {name} has multiple physical segments; use block_caches.{accessor}(...) to select one row.')
-        return segments[0]
-
-    def __contains__(self, name: str):
-        return name in self._segments
-
-    def __iter__(self):
-        return iter(self._segments)
-
-    def __len__(self):
-        return len(self._segments)
-
-    def row(self, name: str, consumer_row: int):
-        """Return the physical cache row bound to one built consumer."""
-        locations = self._consumer_locations.get(name)
-        if locations is None:
-            return self[name][consumer_row]
-        consumer_row = as_index(consumer_row)
-        if consumer_row < 0 or consumer_row >= len(locations):
-            raise RuntimeError(f'Consumer row {consumer_row} does not own cache {name}.')
-        segment, local_row = locations[consumer_row]
-        return self._segments[name][segment][local_row]
-
-    def layer(self, name: str, layer_id: int):
-        """Return a named cache row for a global layer id."""
-        locations = self._layer_locations.get(name)
-        if locations is None:
-            return self[name][layer_id]
-        try:
-            segment, local_row = locations[layer_id]
-        except KeyError as e:
-            raise RuntimeError(f'Layer {layer_id} does not own cache {name}.') from e
-        return self._segments[name][segment][local_row]
 
 
 def _get_kv_cache_dtype(model_config: ModelConfig):

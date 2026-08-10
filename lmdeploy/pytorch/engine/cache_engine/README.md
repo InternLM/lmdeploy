@@ -24,8 +24,9 @@ BlockCachePlan               "the finalized worker-local recipe"
 ```
 
 `CacheEngine` retains one plan and the CPU/GPU allocations realized from it.
-It owns their lifetime, compatibility views, swap ordering, streams, and
-events. It does not decide operator payloads or backend packing.
+It owns their lifetime, view construction, swap ordering, streams, and events.
+`NamedCacheView` owns only model-facing name/row/layer lookup. Neither decides
+operator payloads or backend packing.
 
 The remaining types support one of those three stages:
 
@@ -34,6 +35,7 @@ The remaining types support one of those three stages:
 | `CacheResource`    | Normalized, validated request data retained inside the plan       |
 | `BlockCacheLayout` | Backend-selected allocation strategy retained inside the plan     |
 | `CachePool`        | One owning tensor and the axis representing movable cache entries |
+| `NamedCacheView`   | Read-only model-facing lookup across physical cache tensors       |
 
 These supporting types are not additional runtime managers. Requests are
 temporary build inputs; resources and layout are immutable plan details; pools
@@ -290,9 +292,11 @@ not provide per-pool entry-axis metadata.
 5. [`migration.py`](./migration.py): PD pool metadata and byte-transfer planning.
 6. [`backends/default/cache.py`](../../backends/default/cache.py): default
    resource-to-layout selection.
-7. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
+7. [`view.py`](./view.py): named tensor, consumer-row, and layer-row lookup.
+8. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
    payloads.
-8. [`engine.py`](./engine.py): allocation lifetime, model views, and movement.
+9. [`engine.py`](./engine.py): allocation lifetime, view construction, and
+   movement.
 
 Backend-specific layouts remain with their backend, for example
 [`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py). Avoid adding a

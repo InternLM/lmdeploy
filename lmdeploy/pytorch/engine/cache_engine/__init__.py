@@ -4,7 +4,6 @@
 from .engine import (
     CacheEngine,
     KVCache,
-    NamedCacheView,
     StateCacheEngine,
 )
 from .engine import (
@@ -19,7 +18,6 @@ __all__ = [
     'CacheDesc',
     'CacheEngine',
     'KVCache',
-    'NamedCacheView',
     'StateCacheEngine',
     'round_up',
 ]

@@ -12,7 +12,7 @@ from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
 from lmdeploy.pytorch.config import BlockCacheSpec, CacheConfig, ModelConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.engine.cache_engine import CacheEngine, NamedCacheView, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool
 from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
 from lmdeploy.pytorch.engine.cache_engine.schema import (
@@ -21,6 +21,7 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     CacheDesc,
     CacheResource,
 )
+from lmdeploy.pytorch.engine.cache_engine.view import NamedCacheView
 
 
 def _make_model_config(**kwargs):
@@ -332,7 +333,7 @@ def test_mixed_cache_plan_keeps_named_resource_out_of_legacy_layer_tuples():
     assert torch.equal(cache_engine.block_caches.row('operator_cache', 1), cache_engine._gpu_cache_list[2][1])
 
 
-def test_heterogeneous_operator_cache_rows_resolve_physical_segments():
+def test_heterogeneous_operator_cache_rows_resolve_physical_tensors():
     model_config = _make_model_config(use_standard_kv_cache=False)
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
@@ -370,13 +371,13 @@ def test_heterogeneous_operator_cache_rows_resolve_physical_segments():
     assert torch.equal(block_caches.row('operator_cache', 0), cache_engine._gpu_cache_list[0][0])
     assert torch.equal(block_caches.row('operator_cache', 1), cache_engine._gpu_cache_list[1][0])
     assert torch.equal(block_caches.row('operator_cache', 2), cache_engine._gpu_cache_list[0][1])
-    with pytest.raises(RuntimeError, match='multiple physical segments'):
+    with pytest.raises(RuntimeError, match='multiple physical tensors'):
         block_caches['operator_cache']
     with pytest.raises(RuntimeError, match='Consumer row 3 does not own cache'):
         block_caches.row('operator_cache', 3)
 
 
-def test_heterogeneous_config_cache_layers_resolve_physical_segments():
+def test_heterogeneous_config_cache_layers_resolve_physical_tensors():
     model_config = _make_model_config(
         use_standard_kv_cache=False,
         block_cache_specs=[
@@ -396,7 +397,7 @@ def test_heterogeneous_config_cache_layers_resolve_physical_segments():
     assert torch.equal(block_caches.layer('layer_cache', 0), allocation.caches[0][0])
     assert torch.equal(block_caches.layer('layer_cache', 1), allocation.caches[1][0])
     assert torch.equal(block_caches.layer('layer_cache', 2), allocation.caches[0][1])
-    with pytest.raises(RuntimeError, match='multiple physical segments'):
+    with pytest.raises(RuntimeError, match='multiple physical tensors'):
         block_caches['layer_cache']
 
 
