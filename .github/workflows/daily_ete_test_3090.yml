@@ -52,7 +52,8 @@ env:
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
-  COV_PARAM: --cov /opt/py3/lib/python3.12/site-packages/lmdeploy
+  COV_PARAM: --cov=/opt/py3/lib/python3.12/site-packages/lmdeploy --cov-branch
+  COVERAGE_PROCESS_START: .coveragerc
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
@@ -154,7 +155,7 @@ jobs:
     runs-on: [self-hosted, 3090-r1]
     timeout-minutes: 150
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 3090
@@ -193,7 +194,10 @@ jobs:
         continue-on-error: true
         run: |
           pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          shopt -s nullglob
+          for f in .coverage .coverage.*; do
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Clear workfile
         if: always()
         run: |
@@ -224,7 +228,7 @@ jobs:
             model: mllm
             function: chat
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 3090
@@ -263,19 +267,28 @@ jobs:
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          shopt -s nullglob
+          for f in .coverage .coverage.*; do
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         if: matrix.function == 'pipeline'
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          shopt -s nullglob
+          for f in .coverage .coverage.*; do
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Test lmdeploy - restful
         continue-on-error: true
         if: matrix.function == 'restful'
         run: |
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          shopt -s nullglob
+          for f in .coverage .coverage.*; do
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Clear workfile
         if: always()
         run: |
@@ -311,7 +324,7 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 3090
@@ -358,19 +371,28 @@ jobs:
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          shopt -s nullglob
+          for f in .coverage .coverage.*; do
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Test lmdeploy - completions_v1 - other
         if: contains(matrix.case_info, 'completions_v1')
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          shopt -s nullglob
+          for f in .coverage .coverage.*; do
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Test generate - logprob
         if:  matrix.generate_type == 'logprob' && contains(matrix.case_info, 'generate')
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          shopt -s nullglob
+          for f in .coverage .coverage.*; do
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Kill api server
         if: always()
         run: |
@@ -389,7 +411,7 @@ jobs:
   get_coverage_report:
     if: ${{!cancelled()}}
     runs-on: [self-hosted, 3090-r1]
-    needs: [test_tools, test_restful]
+    needs: [test_quantization, test_tools, test_restful]
     timeout-minutes: 5
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
