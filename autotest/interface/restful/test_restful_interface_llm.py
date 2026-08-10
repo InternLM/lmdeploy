@@ -30,6 +30,7 @@ def _iface_id(run_config):
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
 @pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', _iface_configs({'tp': 1}), ids=_iface_id)
 def test_restful_interface_tp1(config, run_config, worker_id):
     run_interface_restful_test(config, run_config, worker_id)
@@ -37,6 +38,7 @@ def test_restful_interface_tp1(config, run_config, worker_id):
 
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', _iface_configs({'tp': 2}), ids=_iface_id)
 def test_restful_interface_tp2(config, run_config, worker_id):
     run_interface_restful_test(config, run_config, worker_id)
@@ -44,6 +46,7 @@ def test_restful_interface_tp2(config, run_config, worker_id):
 
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', _iface_configs({'tp': 4}), ids=_iface_id)
 def test_restful_interface_tp4(config, run_config, worker_id):
     run_interface_restful_test(config, run_config, worker_id)
@@ -51,6 +54,7 @@ def test_restful_interface_tp4(config, run_config, worker_id):
 
 @pytest.mark.gpu_num_8
 @pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', _iface_configs({'tp': 8}), ids=_iface_id)
 def test_restful_interface_tp8(config, run_config, worker_id):
     run_interface_restful_test(config, run_config, worker_id)
@@ -58,6 +62,7 @@ def test_restful_interface_tp8(config, run_config, worker_id):
 
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', _iface_configs({'tp': 16}), ids=_iface_id)
 def test_restful_interface_tp16(config, run_config, worker_id):
     run_interface_restful_test(config, run_config, worker_id)

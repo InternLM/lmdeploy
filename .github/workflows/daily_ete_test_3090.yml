@@ -52,8 +52,9 @@ env:
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
-  COV_PARAM: --cov=/opt/py3/lib/python3.12/site-packages/lmdeploy --cov-branch
+  COV_PARAM: --cov=lmdeploy --cov-branch
   COVERAGE_PROCESS_START: .coveragerc
+  PYTHONSAFEPATH: '1'
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
@@ -194,8 +195,8 @@ jobs:
         continue-on-error: true
         run: |
           pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          shopt -s nullglob
           for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
       - name: Clear workfile
@@ -267,8 +268,8 @@ jobs:
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          shopt -s nullglob
           for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
       - name: Test lmdeploy - pipeline
@@ -276,8 +277,8 @@ jobs:
         if: matrix.function == 'pipeline'
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          shopt -s nullglob
           for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
       - name: Test lmdeploy - restful
@@ -285,8 +286,8 @@ jobs:
         if: matrix.function == 'restful'
         run: |
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          shopt -s nullglob
           for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
       - name: Clear workfile
@@ -371,8 +372,8 @@ jobs:
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          shopt -s nullglob
           for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
       - name: Test lmdeploy - completions_v1 - other
@@ -380,8 +381,8 @@ jobs:
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          shopt -s nullglob
           for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
       - name: Test generate - logprob
@@ -389,8 +390,8 @@ jobs:
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          shopt -s nullglob
           for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
       - name: Kill api server

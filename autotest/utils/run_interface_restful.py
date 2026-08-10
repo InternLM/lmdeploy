@@ -108,6 +108,18 @@ def _phase_run_configs(run_config: dict) -> list[dict]:
     return out
 
 
+def _read_log_tail(log_path: str, max_lines: int = 80) -> str:
+    """Return the last ``max_lines`` of a nested suite log for CI output."""
+    try:
+        with open(log_path, encoding='utf-8', errors='replace') as log_file:
+            lines = log_file.readlines()
+    except OSError as exc:
+        return f'(failed to read log {log_path}: {exc})'
+    if not lines:
+        return f'(empty log: {log_path})'
+    return ''.join(lines[-max_lines:]).rstrip()
+
+
 def _pytest_cmd(
     test_path: str,
     *,
@@ -116,6 +128,7 @@ def _pytest_cmd(
     env: dict[str, str],
     n_workers: int,
     log_path: str,
+    reruns: int = 5,
 ) -> int:
     """Run a nested pytest against one interface suite file."""
     cmd = [
@@ -126,7 +139,9 @@ def _pytest_cmd(
         '-k',
         k_expr,
         '-q',
-        '--tb=line',
+        '--tb=short',
+        f'--reruns={reruns}',
+        '--reruns-delay=1',
         '-p',
         'no:cacheprovider',
     ]
@@ -244,13 +259,22 @@ def _run_interface_suites(
             env=env,
             n_workers=n_workers,
             log_path=log_path,
+            reruns=5,
         )
         if rc != 0:
-            failures.append(f'{case_name} (exit={rc})')
+            tail = _read_log_tail(log_path)
+            print(
+                f'--- nested suite failed: {case_name} exit={rc} log={log_path} ---\n{tail}\n',
+                flush=True,
+            )
+            failures.append(
+                f'{case_name} (exit={rc}, log={log_path})\n'
+                f'----- {case_name} log tail -----\n{tail}'
+            )
 
     assert not failures, (
-        f'interface restful failures for {backend} {model} port={port}: '
-        + ', '.join(failures)
+        f'interface restful failures for {backend} {model} port={port}:\n'
+        + '\n\n'.join(failures)
     )
 
 
