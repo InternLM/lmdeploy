@@ -21,6 +21,8 @@ logger = get_logger('lmdeploy')
 class SessionState:
     init_done: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: bool = False
+    cancel_task: asyncio.Task | None = None
+    cleanup_task: asyncio.Task | None = None
 
 
 class MPEngine(EngineBase):
@@ -124,10 +126,11 @@ class MPEngineInstance(EngineInstanceBase):
         state = self.session_states[session_id]
         await state.init_done.wait()
         try:
+            if state.cancel_task is not None:
+                await asyncio.shield(state.cancel_task)
             return await self.engine._collective_rpc_async('instance_async_end', session_id)
         finally:
-            self.session_states.pop(session_id, None)
-            self.engine.pending_cancel_sessions.discard(session_id)
+            self._cleanup_session(session_id, state)
 
     async def async_cancel(self, session_id: int):
         """Stop current streaming inference."""
@@ -138,16 +141,50 @@ class MPEngineInstance(EngineInstanceBase):
         self.engine.pending_cancel_sessions.add(session_id)
         if not state.init_done.is_set():
             state.cancelled = True
+            if state.cancel_task is None or state.cancel_task.done():
+                state.cancel_task = asyncio.create_task(
+                    self._cancel_after_init(session_id, state),
+                    name=f'MPEngineInstance.cancel_after_init.{session_id}',
+                )
             return ResponseType.SUCCESS
         return await self.engine._collective_rpc_async('instance_async_cancel', session_id)
+
+    async def _cancel_after_init(self, session_id: int, state: SessionState):
+        """Forward a cancellation that raced with remote stream startup."""
+        await state.init_done.wait()
+        # A cancellation before async_stream_infer entered is handled locally;
+        # that path clears ``cancelled`` before setting this event. Once remote
+        # startup began, keep forwarding the cancel even if stream cleanup
+        # concurrently removed the parent-side state.
+        if not state.cancelled:
+            return
+        try:
+            await self.engine._collective_rpc_async('instance_async_cancel', session_id)
+        except Exception:
+            logger.exception(f'MPEngine session {session_id} deferred cancel failed.')
+
+    def _cleanup_session(self, session_id: int, state: SessionState):
+        """Remove this session state without deleting a newer reuse."""
+        if self.session_states.get(session_id) is state:
+            self.session_states.pop(session_id, None)
+            self.engine.pending_cancel_sessions.discard(session_id)
+
+    async def _cleanup_after_init(self, session_id: int, state: SessionState):
+        """Finish cleanup skipped by a stream cancelled during startup."""
+        try:
+            await state.init_done.wait()
+            if state.cancel_task is not None:
+                await asyncio.shield(state.cancel_task)
+        finally:
+            self._cleanup_session(session_id, state)
 
     async def async_stream_infer(self, session_id: int, *args, **kwargs):
         """Send stream inference request."""
         state = self.session_states[session_id]
         if state.cancelled or session_id in self.engine.pending_cancel_sessions:
+            state.cancelled = False
             state.init_done.set()
-            self.session_states.pop(session_id, None)
-            self.engine.pending_cancel_sessions.discard(session_id)
+            self._cleanup_session(session_id, state)
             yield EngineOutput(ResponseType.CANCEL, [])
             return
         kwargs['session_id'] = session_id
@@ -166,5 +203,9 @@ class MPEngineInstance(EngineInstanceBase):
             raise
         finally:
             if state.init_done.is_set():
-                self.session_states.pop(session_id, None)
-                self.engine.pending_cancel_sessions.discard(session_id)
+                self._cleanup_session(session_id, state)
+            elif state.cleanup_task is None or state.cleanup_task.done():
+                state.cleanup_task = asyncio.create_task(
+                    self._cleanup_after_init(session_id, state),
+                    name=f'MPEngineInstance.cleanup_after_init.{session_id}',
+                )
