@@ -359,16 +359,6 @@ class MemDecodeConfig:
 
 
 @dataclass
-class BlockCacheSpec:
-    """Spec for a named block-scoped cache (e.g. compressed KV)."""
-    name: str
-    layer_ids: list[int]
-    shape: tuple[int, ...]
-    dtype: torch.dtype
-    alignment: int = 256
-
-
-@dataclass
 class StateCacheSpec:
     """Spec for a named sequence-scoped state cache (e.g. compressor
     scratch)."""
@@ -421,9 +411,7 @@ class ModelConfig:
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
 
-    # Named cache specs for models that need multiple block/state caches.
-    # V4 uses these instead of cache_shapes/states_shapes for formal resource declaration.
-    block_cache_specs: list[BlockCacheSpec] = field(default_factory=list)
+    # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
     use_standard_kv_cache: bool = True
     post_build_func: Callable[['ModelConfig', int], None] | None = None

@@ -11,7 +11,7 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 
 from ....messages import QuantPolicy
-from ...config import BlockCacheSpec, CacheConfig, ModelConfig, StateCacheSpec
+from ...config import CacheConfig, ModelConfig, StateCacheSpec
 
 _FP8_CACHE_DTYPES = {
     QuantPolicy.FP8: torch.float8_e4m3fn,
@@ -336,16 +336,6 @@ class CacheTensorSpec:
 # Tensor-spec assembly.
 
 
-def build_block_cache_tensor_specs(block_specs: Sequence[BlockCacheSpec]) -> tuple[CacheTensorSpec, ...]:
-    """Normalize configured block caches into internal tensor specs."""
-    tensor_specs = []
-    for spec in block_specs:
-        layer_rows = LayerRowMap.build(spec.name, spec.layer_ids)
-        desc = CacheDesc(shape=spec.shape, dtype=spec.dtype, alignment=spec.alignment)
-        tensor_specs.append(CacheTensorSpec(name=spec.name, desc=desc, layer_rows=layer_rows))
-    return tuple(tensor_specs)
-
-
 def build_block_cache_tensor_specs_from_requests(
         requests: Sequence[BlockCacheRequest]) -> tuple[CacheTensorSpec, ...]:
     """Group equal contracts while retaining each consumer's logical row."""
@@ -391,10 +381,7 @@ def build_state_cache_tensor_specs(
 
 
 def build_custom_cache_descs(model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
-    """Build configured named or anonymous custom-cache descriptions."""
-    if len(model_config.block_cache_specs) > 0:
-        return [spec.desc for spec in build_block_cache_tensor_specs(model_config.block_cache_specs)]
-
+    """Build configured anonymous custom-cache descriptions."""
     block_size = cache_config.kernel_block_size
     return [
         CacheDesc(shape=(block_size, *shape), dtype=dtype)
@@ -422,8 +409,6 @@ def build_model_block_cache_tensor_specs(
 
     if block_requests is not None:
         tensor_specs.extend(build_block_cache_tensor_specs_from_requests(block_requests))
-    elif len(model_config.block_cache_specs) > 0:
-        tensor_specs.extend(build_block_cache_tensor_specs(model_config.block_cache_specs))
     else:
         tensor_specs.extend(
             CacheTensorSpec(name=f'custom_{index}', desc=desc)

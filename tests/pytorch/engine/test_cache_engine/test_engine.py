@@ -11,7 +11,7 @@ import lmdeploy.pytorch.engine.cache_engine.schema as cache_schema_module
 import lmdeploy.pytorch.engine.cache_engine.state as state_cache_module
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
-from lmdeploy.pytorch.config import BlockCacheSpec, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import CacheConfig, ModelConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
@@ -223,9 +223,7 @@ def test_allocate_caches_requires_block_size_divisible_by_kernel_block_size():
 
 def test_build_cache_plan_collects_built_operator_requests():
     model_config = _make_model_config(use_standard_kv_cache=False,
-                                      block_cache_specs=[
-                                          BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
-                                      ])
+                                      cache_shapes=[((3, ), torch.float16)])
     cache_config = CacheConfig(max_batches=1,
                                block_size=128,
                                kernel_block_size=64,
@@ -254,9 +252,7 @@ def test_build_cache_plan_collects_built_operator_requests():
 
 def test_empty_built_operator_requests_are_authoritative_for_custom_caches():
     model_config = _make_model_config(use_standard_kv_cache=False,
-                                      block_cache_specs=[
-                                          BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
-                                      ])
+                                      cache_shapes=[((3, ), torch.float16)])
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                kernel_block_size=64,
@@ -271,11 +267,9 @@ def test_empty_built_operator_requests_are_authoritative_for_custom_caches():
     assert plan.cache_names == ()
 
 
-def test_absent_built_operator_requester_uses_config_fallback():
+def test_absent_built_operator_requester_uses_anonymous_config_fallback():
     model_config = _make_model_config(use_standard_kv_cache=False,
-                                      block_cache_specs=[
-                                          BlockCacheSpec('fallback', [0], (64, 3), torch.float16),
-                                      ])
+                                      cache_shapes=[((3, ), torch.float16)])
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                kernel_block_size=64,
@@ -287,7 +281,7 @@ def test_absent_built_operator_requester_uses_config_fallback():
                                         world_size=1,
                                         request_collector=lambda context: None)
 
-    assert plan.cache_names == ('fallback', )
+    assert plan.cache_names == ('custom_0', )
 
 
 def test_built_operator_request_collection_rejects_patched_allocator(monkeypatch):
@@ -450,30 +444,6 @@ def test_heterogeneous_operator_cache_rows_resolve_physical_tensors():
         block_caches.row('operator_cache', 3)
 
 
-def test_heterogeneous_config_cache_layers_resolve_physical_tensors():
-    model_config = _make_model_config(
-        use_standard_kv_cache=False,
-        block_cache_specs=[
-            BlockCacheSpec('layer_cache', [0, 2], (64, 3), torch.float16),
-            BlockCacheSpec('layer_cache', [1], (64, 5), torch.float16),
-        ],
-    )
-    cache_config = CacheConfig(max_batches=1,
-                               block_size=64,
-                               kernel_block_size=64,
-                               num_cpu_blocks=0,
-                               num_gpu_blocks=2)
-    plan = CacheEngine.build_cache_plan(model_config, cache_config, world_size=1)
-    allocation = plan.allocate(num_logical_blocks=2, device='cpu')
-    block_caches = NamedCacheView.from_specs(plan.tensor_specs, allocation.tensor_views)
-
-    assert torch.equal(block_caches.layer('layer_cache', 0), allocation.tensor_views[0][0])
-    assert torch.equal(block_caches.layer('layer_cache', 1), allocation.tensor_views[1][0])
-    assert torch.equal(block_caches.layer('layer_cache', 2), allocation.tensor_views[0][1])
-    with pytest.raises(RuntimeError, match='multiple physical tensors'):
-        block_caches['layer_cache']
-
-
 def test_standard_cache_layout_preserves_pool_bytes_strides_and_tensor_order():
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
@@ -612,33 +582,6 @@ def test_pd_migration_rejects_split_kernel_blocks():
 
     with pytest.raises(RuntimeError, match='PD migration does not support block_size != kernel_block_size'):
         asyncio.run(cache_engine.migrate(migration_inputs))
-
-
-def test_named_block_cache_specs_do_not_require_total_layer_count():
-    cache_config = CacheConfig(max_batches=1,
-                               block_size=64,
-                               kernel_block_size=64,
-                               num_cpu_blocks=0,
-                               num_gpu_blocks=0)
-    model_config = _make_model_config(
-        use_standard_kv_cache=False,
-        block_cache_specs=[
-            BlockCacheSpec('r4', [1, 9], (40, ), torch.float32),
-            BlockCacheSpec('r128', [7], (96, ), torch.float32),
-        ],
-    )
-
-    allocation = CacheEngine.allocate_caches(num_blocks=3,
-                                             model_config=model_config,
-                                             cache_config=cache_config,
-                                             world_size=1,
-                                             device='cpu')
-    mem_pool = [pool.tensor for pool in allocation.pools]
-    caches = allocation.tensor_views
-
-    assert [tuple(pool.shape) for pool in mem_pool] == [(2, 3, 256), (1, 3, 512)]
-    assert [tuple(cache.shape) for cache in caches] == [(2, 3, 40), (1, 3, 96)]
-    assert _get_native_logical_block_nbytes(cache_config, model_config) == 1024
 
 
 def test_cache_engine_retains_cpu_allocation_owner():
@@ -856,34 +799,6 @@ def test_cache_engine_rejects_incompatible_swap_entry_axes():
     with pytest.raises(RuntimeError, match='entry axes differ'):
         cache_engine._build_swap_pairs()
 
-
-def test_layer_scoped_block_cache_specs_reject_invalid_layer_ids():
-    cache_config = CacheConfig(max_batches=1,
-                               block_size=64,
-                               kernel_block_size=64,
-                               num_cpu_blocks=0,
-                               num_gpu_blocks=0)
-
-    duplicate_layer = _make_model_config(
-        use_standard_kv_cache=False,
-        block_cache_specs=[BlockCacheSpec('dup', [1, 1], (1, ), torch.float32)],
-    )
-    with pytest.raises(ValueError, match='duplicated'):
-        CacheEngine.allocate_caches(num_blocks=1,
-                                    model_config=duplicate_layer,
-                                    cache_config=cache_config,
-                                    world_size=1,
-                                    device='meta')
-
-    overlapping_specs = _make_model_config(
-        use_standard_kv_cache=False,
-        block_cache_specs=[
-            BlockCacheSpec('overlap', [1], (1, ), torch.float32),
-            BlockCacheSpec('overlap', [1, 2], (2, ), torch.float32),
-        ],
-    )
-    with pytest.raises(ValueError, match='row 1 belongs to multiple tensor specs'):
-        CacheEngine.build_cache_plan(overlapping_specs, cache_config, world_size=1)
 
 def test_deepseek_v4_caches_resolve_state_and_carry_block_view():
     from lmdeploy.pytorch.models.deepseek_v4 import V4Caches

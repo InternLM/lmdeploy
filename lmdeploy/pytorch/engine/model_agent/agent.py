@@ -214,7 +214,7 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
-        # Attach named cache views for models that declare block_cache_specs / state_cache_specs.
+        # Attach operator-owned block caches and configured state caches.
         context.block_caches = cache_engine.block_caches
         context.named_state_caches = state_cache_engine.named_state_caches
 

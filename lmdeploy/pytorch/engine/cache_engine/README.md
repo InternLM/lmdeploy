@@ -86,9 +86,9 @@ or block-layer lookup. Model configuration no longer describes these pageable
 cache tensors.
 
 Models without a cache-requesting operator retain the compatibility path
-through standard K/V configuration, `block_cache_specs`, and anonymous
-`cache_shapes`. A discovered requester is authoritative for custom block
-caches, even when it returns no requests.
+through standard K/V configuration and anonymous `cache_shapes`. A discovered
+requester is authoritative for custom block caches, even when it returns no
+requests.
 
 ### 2. Build one worker-local plan
 
@@ -96,7 +96,6 @@ Schema construction validates requests and combines equal contracts from built
 consumers into `CacheTensorSpec` objects. Each spec records the stable consumer
 rows stored by its future tensor. For example, requests with contracts
 `A, B, A` become `A(consumer_rows=(0, 2))` and `B(consumer_rows=(1,))`.
-Configuration-owned specs may instead retain explicit layer-row maps.
 `schema.py` also derives standard K/V and quantized payload descriptions from
 the finalized model/cache policy. `plan.py` passes the ordered tensor specs to
 the active `CacheBackend`, retains its selected physical layout, and constructs

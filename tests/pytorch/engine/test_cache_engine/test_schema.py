@@ -3,13 +3,12 @@ import numpy as np
 import pytest
 import torch
 
-from lmdeploy.pytorch.config import BlockCacheSpec, StateCacheSpec
+from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
     CacheDesc,
     LayerRowMap,
-    build_block_cache_tensor_specs,
     build_block_cache_tensor_specs_from_requests,
     build_state_cache_tensor_specs,
 )
@@ -55,20 +54,6 @@ def test_layer_row_map_preserves_declared_row_order():
 def test_layer_row_map_rejects_invalid_membership(layer_ids, message):
     with pytest.raises(ValueError, match=message):
         LayerRowMap.build('index', layer_ids)
-
-
-def test_build_block_cache_tensor_specs_preserves_declared_order():
-    specs = [
-        BlockCacheSpec('compressed', [3, 1], (8, ), torch.float16),
-        BlockCacheSpec('index', [2], (4, ), torch.uint8, alignment=128),
-    ]
-
-    tensor_specs = build_block_cache_tensor_specs(specs)
-
-    assert [spec.name for spec in tensor_specs] == ['compressed', 'index']
-    assert [spec.desc.shape for spec in tensor_specs] == [(8, ), (4, )]
-    assert [spec.layer_map for spec in tensor_specs] == [{3: 0, 1: 1}, {2: 0}]
-    assert tensor_specs[1].desc.alignment == 128
 
 
 def test_build_block_cache_tensor_specs_counts_operator_request_rows():
