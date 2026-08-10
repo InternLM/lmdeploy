@@ -26,6 +26,16 @@ def test_quantization_gptq(config, model, worker_id):
 
 
 @pytest.mark.order(3)
+@pytest.mark.test_3090
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize('model', get_quantization_model_list('w8a8'))
+def test_quantization_w8a8(config, model, worker_id):
+    quantization_type = 'w8a8'
+    quantization_all(config, model + '-inner-w8a8', model, quantization_type,
+                     get_cuda_prefix_by_workerid(worker_id, {'tp': 1}))
+
+
+@pytest.mark.order(3)
 @pytest.mark.pr_test
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
