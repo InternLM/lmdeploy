@@ -185,9 +185,10 @@ release clears both the fresh range and the canonical mapping while keeping
 the strategy's `recompute_blocks` policy.
 
 For SSM matching, the same concept begins at the selected state-checkpoint
-step. The checkpoint supplies the recurrent state and canonical KV before that
-step; any deeper cached blocks form the recomputed suffix and receive fresh
-sequence-owned KV.
+step. The checkpoint supplies the recurrent state and canonical full KV blocks
+before its anchor. A non-aligned checkpoint also supplies one frozen partial
+block, which is copied into a private request-owned destination before forward;
+any deeper cached blocks remain private and writable as well.
 
 ## SSM Checkpoint Matching
 
@@ -198,22 +199,24 @@ state checkpoints rather than treating a KV walk as the source of truth.
 `StateCheckpointIndex` uses a coarse key:
 
 ```text
-(adapter_name, checkpoint_step, last_block_hash)
+(adapter_name, checkpoint_step, tail_hash)
 ```
 
 Candidate steps are searched from deepest to shallowest. The exact verifier,
 `verify_candidate()`, then checks that:
 
 - the node still owns a published checkpoint;
-- the checkpoint path is current and has the expected length;
+- the full-block anchor and canonical path have the expected length;
+- partial checkpoints own exactly one frozen logical block;
 - the sparse key and adapter still match the node;
 - the step is valid for this request and outside multimodal interiors; and
 - the immutable full-prefix token and multimodal identities match exactly.
 
-On a hit, `BlockTrie` acquires the checkpoint's canonical KV blocks, advances
-the sequence, records `prefix_cache.restore`, and applies routed-expert and
-recompute-overlap policy. A KV path without an exact published checkpoint is a
-miss.
+On a hit, `BlockTrie` acquires the checkpoint's canonical full KV blocks,
+advances the sequence to the exact step, records `prefix_cache.restore`, and
+keeps the partial destination and known suffix private. Partial checkpoints
+fail closed when routed-expert tail history is requested. A KV path without an
+exact published checkpoint is a miss.
 
 `StateCheckpointMatchData` intentionally freezes full-prefix host identity and
 the canonical logical KV path at publication. This makes lookup independent of
@@ -222,7 +225,9 @@ cost of metadata proportional to the saved prefix length.
 
 ## SSM Checkpoint Lifecycle
 
-A node checkpoint has three ownership states:
+A node checkpoint has three ownership states. Its record always owns a state
+slot and may additionally own one frozen logical KV block when the exact step
+is not block-aligned:
 
 | State     | Representation                                | Matchable? |
 | --------- | --------------------------------------------- | ---------- |
@@ -232,21 +237,25 @@ A node checkpoint has three ownership states:
 
 `pin_count > 0` is an overlay on a published checkpoint. A pinned checkpoint
 cannot be evicted or released because an asynchronous restore or save copy may
-still reference its slot.
+still reference its state slot or frozen block.
 
-The current implementation reserves checkpoints only at positive,
-block-aligned steps that are safe multimodal boundaries.
+Prefill checkpoints may be reserved at any positive model-forward boundary
+outside multimodal spans. Decode checkpoints remain block-aligned. One
+checkpoint is retained per full-block anchor; an unpinned variant may replace
+the older checkpoint while reusing its resources.
 
 ### Save path
 
 ```text
 InputsMakerAsync
   reserve_save(seq)
+  producer partial block -> frozen block KV copy plan (when partial)
   runtime slot -> checkpoint slot copy plan
         |
         v
 ModelAgent.model_forward()
   run model
+  queue producer partial block -> frozen block
   queue runtime state -> checkpoint copy on the forward stream
         |
         v
@@ -272,10 +281,12 @@ BlockTrie.match()
         v
 Scheduler / InputsMakerAsync
   pin_restore(seq) before checkpoint eviction can run
+  frozen block -> request-private block KV copy plan (when partial)
   checkpoint slot -> runtime slot copy plan
         |
         v
 ModelAgent.model_forward()
+  queue frozen block -> request-private block
   queue checkpoint -> runtime state copy before model execution
         |
         v
@@ -289,9 +300,11 @@ clears a selected restore.
 
 ## Device-copy Contract
 
-The input maker stores compact host integer source/destination sequences in
-`ModelInputs` or `ModelInputsDelta`. `ModelAgent` passes them directly to the
-state cache engine before or after model execution on the same forward stream.
+The input maker stores one-forward KV and state plans in
+`CacheCheckpointInputs`, beside persistent model inputs. KV logical ids are
+resolved through paging into the device plan consumed by `CacheEngine`; compact
+state pairs remain on the host for `StateCacheEngine`. `ModelAgent` executes
+both around model execution on the same forward stream.
 
 Keep these rules:
 
@@ -313,6 +326,8 @@ KV and state pressure are related but independently accounted:
 - `StateCheckpointLifecycle.evict()` may release a published, unpinned state
   checkpoint while retaining the node and its KV block. It uses
   `last_access_time` as state-only LRU order.
+- KV pressure first calls `evict_frozen_checkpoints()` so an unpinned partial
+  checkpoint can release one frozen block without removing its trie anchor.
 
 Both paths revalidate candidates because their heaps and indexes are auxiliary
 state that may contain stale entries.
@@ -329,7 +344,8 @@ state that may contain stale entries.
   checkpoint.
 - Trie nodes attach once, and eviction detaches leaves only; attached ancestor
   paths never change.
-- Pinned state checkpoints and shared KV nodes are not evictable.
+- Pinned checkpoints, their frozen blocks, and shared trie KV nodes are not
+  evictable.
 - Blocks in `recompute_overlap` must remain sequence-owned and writable through
   `BlockTrie.allocate()`.
 - `block_size` is the scheduler/trie identity unit. `kernel_block_size` is a

@@ -182,11 +182,12 @@ publishes reserved state checkpoints and releases their pins at the existing
 forward/output boundaries.
 
 Keeping this payload separate prevents one-shot operations from being cloned,
-reindexed, merged, or advanced with persistent decode inputs. At this stage the
-existing SSM state checkpoint flow produces state plans. The KV plan fields and
-logical-to-physical validation boundary are ready for the later non-aligned
-checkpoint chapter; that chapter will decide which frozen KV block pairs to
-emit.
+reindexed, merged, or advanced with persistent decode inputs. An aligned SSM
+checkpoint emits only state plans. A non-aligned prefill checkpoint also emits
+one KV pair: save copies the producer's partial logical block into a
+checkpoint-owned frozen block, while restore copies that frozen source into the
+consumer's private writable block. Paging resolves both pairs before
+`CacheEngine` sees them.
 
 ## Layout Selection and Composition
 
