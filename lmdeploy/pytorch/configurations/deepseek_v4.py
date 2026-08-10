@@ -5,9 +5,10 @@ import torch
 
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
 from lmdeploy.pytorch.consts import (
-    V4_FLASHMLA_D_NOPE,
-    V4_FLASHMLA_D_ROPE,
-    V4_FLASHMLA_NUM_TILES,
+    V4_COMPRESSED_KV_R4_CACHE_NAME,
+    V4_COMPRESSED_KV_R128_CACHE_NAME,
+    V4_INDEX_KV_R4_CACHE_NAME,
+    V4_PACKED_TOKEN_DIM,
     v4_packed_index_cache_shape,
 )
 from lmdeploy.utils import get_logger
@@ -17,7 +18,6 @@ from .builder import AutoModelConfigBuilder
 logger = get_logger('lmdeploy')
 
 
-V4_PACKED_TOKEN_DIM = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE + V4_FLASHMLA_NUM_TILES + 1
 V4_SUPPORTED_COMPRESS_RATIOS = (0, 4, 128)
 
 
@@ -106,15 +106,15 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
         entries_r4 = block_size // 4
         index_head_dim = getattr(hf_config, 'index_head_dim', 128)
         block_specs.append(
-            BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (entries_r4, V4_PACKED_TOKEN_DIM),
+            BlockCacheSpec(V4_COMPRESSED_KV_R4_CACHE_NAME, ratio4_layers, (entries_r4, V4_PACKED_TOKEN_DIM),
                            torch.float8_e4m3fn))
         block_specs.append(
-            BlockCacheSpec('v4_index_kv_r4', ratio4_layers,
+            BlockCacheSpec(V4_INDEX_KV_R4_CACHE_NAME, ratio4_layers,
                            v4_packed_index_cache_shape(entries_r4, index_head_dim), torch.uint8))
     if ratio128_layers:
         entries_r128 = block_size // 128
         block_specs.append(
-            BlockCacheSpec('v4_compressed_kv_r128_fp8', ratio128_layers, (entries_r128, V4_PACKED_TOKEN_DIM),
+            BlockCacheSpec(V4_COMPRESSED_KV_R128_CACHE_NAME, ratio128_layers, (entries_r128, V4_PACKED_TOKEN_DIM),
                            torch.float8_e4m3fn))
 
     model_config.block_cache_specs = block_specs

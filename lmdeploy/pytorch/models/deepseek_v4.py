@@ -13,6 +13,12 @@ from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
+from lmdeploy.pytorch.consts import (
+    V4_COMPRESSED_KV_R4_CACHE_NAME,
+    V4_COMPRESSED_KV_R128_CACHE_NAME,
+    V4_INDEX_KV_R4_CACHE_NAME,
+    V4_INDEX_KV_R4_SCALE_CACHE_NAME,
+)
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcPrePost, RMSNorm, SiluAndMul, rms_scale
@@ -168,7 +174,8 @@ class Compressor(nn.Module):
         self.compressor_impl = NativeV4Compressor(
             compress_ratio=compress_ratio,
             overlap=self.overlap,
-            head_dim=head_dim)
+            head_dim=head_dim,
+            is_indexer=rotate)
         self.state_cache_name = self._get_state_cache_name()
 
     def _get_state_cache_name(self):
@@ -183,7 +190,7 @@ class Compressor(nn.Module):
         """Return the indexer simple-FP8 cache name, if this compressor uses
         one."""
         if self.rotate:
-            return 'v4_index_kv_r4'
+            return V4_INDEX_KV_R4_CACHE_NAME
         return None
 
     def _get_flashmla_fp8_cache_name(self) -> str | None:
@@ -192,9 +199,9 @@ class Compressor(nn.Module):
         if self.rotate:
             return None
         if self.compress_ratio == 4:
-            return 'v4_compressed_kv_r4_fp8'
+            return V4_COMPRESSED_KV_R4_CACHE_NAME
         if self.compress_ratio == 128:
-            return 'v4_compressed_kv_r128_fp8'
+            return V4_COMPRESSED_KV_R128_CACHE_NAME
         return None
 
     def forward(self,
@@ -470,12 +477,12 @@ class Attention(nn.Module):
         index_kv_scale = None
         if self.compress_ratio:
             if self.compress_ratio == 4:
-                compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r4_fp8', self.layer_id)
-                index_kv = caches.block_cache('v4_index_kv_r4', self.layer_id)
-                if 'v4_index_kv_r4_scale' in caches.block_caches:
-                    index_kv_scale = caches.block_cache('v4_index_kv_r4_scale', self.layer_id)
+                compressed_kv_fp8 = caches.block_cache(V4_COMPRESSED_KV_R4_CACHE_NAME, self.layer_id)
+                index_kv = caches.block_cache(V4_INDEX_KV_R4_CACHE_NAME, self.layer_id)
+                if V4_INDEX_KV_R4_SCALE_CACHE_NAME in caches.block_caches:
+                    index_kv_scale = caches.block_cache(V4_INDEX_KV_R4_SCALE_CACHE_NAME, self.layer_id)
             else:
-                compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r128_fp8', self.layer_id)
+                compressed_kv_fp8 = caches.block_cache(V4_COMPRESSED_KV_R128_CACHE_NAME, self.layer_id)
 
         return dict(window_state_fp8=window_state_fp8,
                     compressed_kv=compressed_kv,

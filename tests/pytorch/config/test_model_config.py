@@ -6,6 +6,12 @@ import torch
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
+from lmdeploy.pytorch.consts import (
+    V4_COMPRESSED_KV_R4_CACHE_NAME,
+    V4_COMPRESSED_KV_R128_CACHE_NAME,
+    V4_INDEX_KV_R4_CACHE_NAME,
+    V4_PACKED_TOKEN_DIM,
+)
 
 
 def _make_model_config(num_attention_heads=32, num_key_value_heads=8, dist_config=None):
@@ -116,10 +122,17 @@ def test_deepseek_v4_model_config_normalizes_block_cache_spec_shapes():
 
     assert model_config.block_size == 256
     block_specs = {spec.name: spec for spec in model_config.block_cache_specs}
-    assert block_specs['v4_compressed_kv_r4_fp8'].shape[0] == 64
-    assert block_specs['v4_index_kv_r4'].shape == (64, 1, 132)
-    assert block_specs['v4_index_kv_r4'].dtype == torch.uint8
-    assert block_specs['v4_compressed_kv_r128_fp8'].shape[0] == 2
+    assert set(block_specs) == {
+        V4_COMPRESSED_KV_R4_CACHE_NAME,
+        V4_INDEX_KV_R4_CACHE_NAME,
+        V4_COMPRESSED_KV_R128_CACHE_NAME,
+    }
+    assert block_specs[V4_COMPRESSED_KV_R4_CACHE_NAME].shape == (64, V4_PACKED_TOKEN_DIM)
+    assert block_specs[V4_COMPRESSED_KV_R4_CACHE_NAME].dtype == torch.float8_e4m3fn
+    assert block_specs[V4_INDEX_KV_R4_CACHE_NAME].shape == (64, 1, 132)
+    assert block_specs[V4_INDEX_KV_R4_CACHE_NAME].dtype == torch.uint8
+    assert block_specs[V4_COMPRESSED_KV_R128_CACHE_NAME].shape == (2, V4_PACKED_TOKEN_DIM)
+    assert block_specs[V4_COMPRESSED_KV_R128_CACHE_NAME].dtype == torch.float8_e4m3fn
 
 
 def test_deepseek_v4_model_config_trims_trailing_zero_compress_ratio():
@@ -136,9 +149,9 @@ def test_deepseek_v4_model_config_trims_trailing_zero_compress_ratio():
     assert state_specs['v4_compress_state_r128'].layer_ids == [2]
 
     block_specs = {spec.name: spec for spec in model_config.block_cache_specs}
-    assert block_specs['v4_compressed_kv_r4_fp8'].layer_ids == [1]
-    assert block_specs['v4_index_kv_r4'].layer_ids == [1]
-    assert block_specs['v4_compressed_kv_r128_fp8'].layer_ids == [2]
+    assert block_specs[V4_COMPRESSED_KV_R4_CACHE_NAME].layer_ids == [1]
+    assert block_specs[V4_INDEX_KV_R4_CACHE_NAME].layer_ids == [1]
+    assert block_specs[V4_COMPRESSED_KV_R128_CACHE_NAME].layer_ids == [2]
 
 
 def test_deepseek_v4_model_config_rejects_extra_nonzero_compress_ratio():

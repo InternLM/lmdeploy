@@ -9,14 +9,19 @@ from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
 class V4Compressor(nn.Module):
     """DeepSeek V4 compressor wrapper."""
 
-    def __init__(self, compress_ratio: int, overlap: bool, head_dim: int):
+    def __init__(self,
+                 compress_ratio: int,
+                 overlap: bool,
+                 head_dim: int,
+                 is_indexer: bool = False):
         super().__init__()
         backend = get_backend()
         impl_builder = backend.get_layer_impl_builder(OpType.V4Compressor)
         self.impl = impl_builder.build(
             compress_ratio=compress_ratio,
             overlap=overlap,
-            head_dim=head_dim)
+            head_dim=head_dim,
+            is_indexer=is_indexer)
 
     def score_and_fill_state(
         self,

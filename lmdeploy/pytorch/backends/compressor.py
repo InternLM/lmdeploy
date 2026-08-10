@@ -1,8 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
+
+if TYPE_CHECKING:
+    from ..engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 
 
 @dataclass
@@ -17,6 +21,11 @@ class V4CompressorMetadata:
 
 
 class BaseV4Compressor(ABC):
+
+    @abstractmethod
+    def get_block_cache_requests(self, geometry: 'BlockCacheGeometry') -> tuple['BlockCacheRequest', ...]:
+        """Describe block caches required by this compressor implementation."""
+        raise NotImplementedError
 
     @abstractmethod
     def score_and_fill_state(
@@ -51,5 +60,8 @@ class BaseV4CompressorBuilder:
 
     @staticmethod
     @abstractmethod
-    def build(compress_ratio: int, overlap: bool, head_dim: int) -> BaseV4Compressor:
+    def build(compress_ratio: int,
+              overlap: bool,
+              head_dim: int,
+              is_indexer: bool = False) -> BaseV4Compressor:
         raise NotImplementedError
