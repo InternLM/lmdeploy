@@ -53,11 +53,6 @@ def test_packed_block_allocation_owns_one_block_axis_pool():
     assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 3, 3), (2, 3, 2)]
     assert [cache.storage_offset() for cache in allocation.tensor_views] == [0, 8]
 
-    legacy_pool, legacy_caches = allocation
-    assert legacy_pool is allocation.pools[0].tensor
-    assert legacy_caches == list(allocation.tensor_views)
-
-
 def test_layer_row_block_allocation_owns_one_pool_per_tensor_spec():
     tensor_specs = (
         CacheTensorSpec('first',

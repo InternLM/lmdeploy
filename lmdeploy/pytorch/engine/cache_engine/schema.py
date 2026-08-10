@@ -379,7 +379,7 @@ def build_block_cache_tensor_specs_from_requests(
 def build_state_cache_tensor_specs(
         state_shapes: Sequence[tuple[tuple[int, ...], torch.dtype]],
         state_specs: Sequence[StateCacheSpec] | None = None) -> tuple[CacheTensorSpec, ...]:
-    """Normalize named or legacy state-cache declarations."""
+    """Normalize named or anonymous state-cache declarations."""
     state_specs = state_specs or ()
     if len(state_specs) > 0:
         tensor_specs = []
@@ -399,7 +399,7 @@ def build_state_cache_tensor_specs(
 
 
 def build_custom_cache_descs(model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
-    """Build configured named or legacy custom-cache descriptions."""
+    """Build configured named or anonymous custom-cache descriptions."""
     if len(model_config.block_cache_specs) > 0:
         return [spec.desc for spec in build_block_cache_tensor_specs(model_config.block_cache_specs)]
 

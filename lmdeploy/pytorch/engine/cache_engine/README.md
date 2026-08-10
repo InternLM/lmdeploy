@@ -87,7 +87,7 @@ Schema construction validates requests and combines equal contracts from built
 consumers into `CacheTensorSpec` objects. Each spec records the stable consumer
 rows stored by its future tensor. For example, requests with contracts
 `A, B, A` become `A(consumer_rows=(0, 2))` and `B(consumer_rows=(1,))`.
-Legacy configuration-owned specs may instead retain explicit layer-row maps.
+Configuration-owned specs may instead retain explicit layer-row maps.
 `schema.py` also derives standard K/V and quantized payload descriptions from
 the finalized model/cache policy. `plan.py` passes the ordered tensor specs to
 the active `CacheBackend`, retains its selected physical layout, and constructs
@@ -227,7 +227,7 @@ layouts while sharing one plan and scheduler block count.
 
 Two access forms coexist during migration:
 
-- `gpu_cache` / `cpu_cache` provide the legacy per-layer tuple used as
+- `gpu_cache` / `cpu_cache` provide the per-layer tuple used as
   `past_key_values`;
 - `block_caches.row(name, consumer_row)` resolves the row assigned to a built
   operator, even when that name spans different physical shapes;
@@ -238,8 +238,8 @@ Two access forms coexist during migration:
 physical tensor. When a name is heterogeneous, direct lookup raises and asks
 the caller to select a consumer or layer row explicitly.
 
-`BlockCachePlan.legacy_cache_indices` determines which tensors participate in
-legacy tuples. In a mixed allocation, adding a compact-row named tensor
+`BlockCachePlan.model_cache_indices` determines which tensors participate in
+per-layer tuples. In a mixed allocation, adding a compact-row named tensor
 does not change standard K/V tuple ordering.
 
 These views do not own memory. The corresponding `CacheAllocation` must remain
@@ -285,26 +285,26 @@ one backend batch per remote engine.
 
 The package temporarily preserves:
 
-- unpacking `CacheAllocation` as `(mem_pool, caches)`;
 - `CacheEngine.build_cache_plan()`, `allocate_caches()`, and the K/V/quant/custom
   description facades used by dlinfer's contiguous allocator patch;
 - `CacheEngine.num_layers` and `kv_cache_dtype`, which dlinfer's Ascend310P
   allocator patch still reads even though native allocation uses the plan;
 - anonymous cache/state shapes and model-config named specifications;
-- `gpu_cache`, `cpu_cache`, `full_gpu_cache`, and `full_cpu_cache`.
+- `gpu_cache` and `cpu_cache` as per-layer model-facing tuples;
+- the external dlinfer allocator result `(mem_pool, caches)`.
 
 For native block caches, `gpu_allocation` and `cpu_allocation` are the internal
-sources of truth. `full_gpu_cache` and `full_cpu_cache` are retained only as raw
-tensor-or-list facades for downstream readers; native swap, copy, sizing, and
-PD paths do not recover ownership or geometry from them. A private legacy GPU
-pool is retained only when an external patched allocator returns the old
-`(mem_pool, caches)` tuple, because that path has no `CacheAllocation`.
+sources of truth. Native allocation, swap, copy, sizing, and PD paths consume
+`CacheAllocation` directly and do not coerce it into a tuple. A private external
+GPU pool is retained only when a downstream patched allocator returns
+`(mem_pool, caches)`, because that result has no ownership or entry-axis
+metadata.
 
 Native operator request collection requires the retained-plan allocator path.
 PD migration accepts one or more contiguous native allocation pools with equal
 logical/kernel block sizes. Corresponding P/D pools must retain the same order,
 dtype, and logical payload shape after removing the entry axis. It does not yet
-map a packed pool on one endpoint to several pools on the other. Legacy patched
+map a packed pool on one endpoint to several pools on the other. External patched
 allocators remain limited to one `[layer, block, ...]` tensor because they do
 not provide per-pool entry-axis metadata.
 

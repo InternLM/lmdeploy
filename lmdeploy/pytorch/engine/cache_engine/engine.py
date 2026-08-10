@@ -22,11 +22,11 @@ from lmdeploy.utils import get_logger
 
 from ....messages import QuantPolicy
 from ...config import CacheConfig, ModelConfig
-from .layout import CacheAllocation, CachePool, _unpack_cache_allocation
+from .layout import CacheAllocation, CachePool
 from .migration import (
     build_cache_pool_assignments,
     describe_cache_pools,
-    describe_legacy_remote_pool,
+    infer_remote_pool_without_metadata,
     validate_cache_pool_layouts,
 )
 from .plan import BlockCachePlan
@@ -74,8 +74,8 @@ def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy) -> str | None:
     return _KV_CACHE_QUANT_POLICY_DESCS.get(quant_policy)
 
 
-def _resolve_legacy_kv_cache_dtype(model_config: ModelConfig, cache_config: CacheConfig) -> torch.dtype:
-    """Resolve the dtype exposed to legacy downstream CacheEngine patches."""
+def _resolve_dlinfer_patch_kv_cache_dtype(model_config: ModelConfig, cache_config: CacheConfig) -> torch.dtype:
+    """Resolve the dtype exposed to downstream dlinfer CacheEngine patches."""
     kv_cache_dtype = resolve_model_kv_cache_dtype(model_config)
 
     # Sparse MLA records its selected dtype on ModelConfig. Its generic quant
@@ -128,9 +128,9 @@ class CacheEngine:
         apply_sparse_mla_cache_policy(model_config, cache_config)
 
         # The native allocator derives these values from the retained plan.
-        # dlinfer's Ascend310P CacheEngine patch still reads the legacy fields.
+        # dlinfer's Ascend310P CacheEngine patch still reads these fields.
         self.num_layers = model_config.num_layers
-        self.kv_cache_dtype = _resolve_legacy_kv_cache_dtype(model_config, cache_config)
+        self.kv_cache_dtype = _resolve_dlinfer_patch_kv_cache_dtype(model_config, cache_config)
 
         if self.model_config.mla_index_topk is not None:
             cache_config.quant_policy = 0
@@ -166,12 +166,12 @@ class CacheEngine:
 
     @property
     def cpu_cache(self):
-        """CPU cache tensors in legacy model order."""
+        """CPU cache tensors in per-layer model order."""
         return self.local_cpu_cache
 
     @property
     def gpu_cache(self):
-        """Device cache tensors in legacy model order."""
+        """Device cache tensors in per-layer model order."""
         return self.local_gpu_cache
 
     @property
@@ -248,7 +248,7 @@ class CacheEngine:
         return plan.allocate(num_logical_blocks=num_blocks, device=device)
 
     def _allocate_runtime_caches(self, num_blocks: int, device: str):
-        """Realize the retained plan or use a legacy patched allocator."""
+        """Realize the retained plan or use an external patched allocator."""
         plan = getattr(self, 'block_cache_plan', None)
         allocator = self.allocate_caches
         class_allocator = type(self).allocate_caches
@@ -263,11 +263,11 @@ class CacheEngine:
             device=device,
         )
 
-    def _build_legacy_layer_cache(self, caches: Sequence[torch.Tensor]):
-        """Build the compatibility tuple without scoped named tensors."""
+    def _build_model_layer_cache(self, caches: Sequence[torch.Tensor]):
+        """Build the per-layer model cache without scoped named tensors."""
         plan = getattr(self, 'block_cache_plan', None)
         if plan is not None:
-            caches = [caches[index] for index in plan.legacy_cache_indices]
+            caches = [caches[index] for index in plan.model_cache_indices]
             return list(zip(*caches)) if caches else []
         if uses_layer_scoped_block_caches(self.model_config):
             return []
@@ -281,12 +281,16 @@ class CacheEngine:
             num_blocks=self.num_gpu_blocks,
             device='cuda',
         )
-        self.gpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
-        self._legacy_gpu_cache_pool = mem_pool if self.gpu_allocation is None else None
-        # Retain the raw tensor-or-list facade for downstream compatibility.
-        self.full_gpu_cache = mem_pool
+        if isinstance(result, CacheAllocation):
+            self.gpu_allocation = result
+            self._external_gpu_cache_pool = None
+            caches = list(result.tensor_views)
+        else:
+            self.gpu_allocation = None
+            self._external_gpu_cache_pool, caches = result
+            caches = list(caches)
         self._gpu_cache_list = caches
-        self.local_gpu_cache = self._build_legacy_layer_cache(caches)
+        self.local_gpu_cache = self._build_model_layer_cache(caches)
         plan = getattr(self, 'block_cache_plan', None)
         if plan is None:
             tensor_specs = build_model_block_cache_tensor_specs(self.model_config,
@@ -308,11 +312,15 @@ class CacheEngine:
             num_blocks=self.num_cpu_blocks,
             device='cpu',
         )
-        self.cpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
-        # Retain the raw tensor-or-list facade for downstream compatibility.
-        self.full_cpu_cache = mem_pool
+        if isinstance(result, CacheAllocation):
+            self.cpu_allocation = result
+            caches = list(result.tensor_views)
+        else:
+            self.cpu_allocation = None
+            _, caches = result
+            caches = list(caches)
         self._cpu_cache_list = caches
-        self.local_cpu_cache = self._build_legacy_layer_cache(caches)
+        self.local_cpu_cache = self._build_model_layer_cache(caches)
         return self.local_cpu_cache
 
     def _build_block_cache_view(self) -> Mapping[str, torch.Tensor]:
@@ -339,7 +347,7 @@ class CacheEngine:
         return self._build_block_cache_view()
 
     @staticmethod
-    def _legacy_mem_pool_nbytes(mem_pool: torch.Tensor | list[torch.Tensor]) -> int:
+    def _external_pool_nbytes(mem_pool: torch.Tensor | list[torch.Tensor]) -> int:
         """Size the tensor-or-list result of an external patched allocator."""
         pools = [mem_pool] if isinstance(mem_pool, torch.Tensor) else mem_pool
         return sum(pool.numel() * pool.element_size() for pool in pools)
@@ -358,7 +366,7 @@ class CacheEngine:
         else:
             # Existing dlinfer patches return raw owning envelopes whose axes do
             # not describe cache blocks. Their typed cache views retain the
-            # legacy [layer, block, ...] contract, so use those views directly.
+            # per-layer [layer, block, ...] contract, so use those views directly.
             cpu_entries = [(cache, 1) for cache in self._cpu_cache_list]
             gpu_entries = [(cache, 1) for cache in self._gpu_cache_list]
 
@@ -488,10 +496,10 @@ class CacheEngine:
             world_size=world_size,
             device='meta',
         )
-        allocation, mem_pool, _ = _unpack_cache_allocation(result)
-        if allocation is not None:
-            return allocation.nbytes
-        return cls._legacy_mem_pool_nbytes(mem_pool)
+        if isinstance(result, CacheAllocation):
+            return result.nbytes
+        mem_pool, _ = result
+        return cls._external_pool_nbytes(mem_pool)
 
     # PD disaggregation.
 
@@ -502,7 +510,7 @@ class CacheEngine:
 
         allocation = getattr(self, 'gpu_allocation', None)
         if allocation is None:
-            pool = getattr(self, '_legacy_gpu_cache_pool', None)
+            pool = getattr(self, '_external_gpu_cache_pool', None)
             if not isinstance(pool, torch.Tensor):
                 raise RuntimeError('PD migration of multiple pools requires native CacheAllocation metadata.')
             return (CachePool(pool, entry_axis=1), )
@@ -549,7 +557,7 @@ class CacheEngine:
             remote_engine_id].remote_engine_config.num_gpu_blocks
         remote_pools = conn_request.cache_pools
         if remote_pools is None:
-            remote_pools = describe_legacy_remote_pool(local_pools, remote_num_blocks)
+            remote_pools = infer_remote_pool_without_metadata(local_pools, remote_num_blocks)
         validate_cache_pool_layouts(local_pools, remote_pools, self.num_gpu_blocks, remote_num_blocks)
         self._remote_pd_cache_pool_infos[remote_engine_id] = tuple(remote_pools)
         self.migration_backend_impl.p2p_connect(remote_engine_id, conn_request)

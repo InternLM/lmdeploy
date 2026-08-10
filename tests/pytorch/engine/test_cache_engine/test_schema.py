@@ -117,17 +117,17 @@ def test_build_block_cache_tensor_specs_groups_heterogeneous_requests():
     assert [spec.consumer_rows for spec in tensor_specs] == [(0, 2), (1, )]
 
 
-def test_build_state_cache_tensor_specs_prefers_names_and_keeps_legacy_bridge():
+def test_build_state_cache_tensor_specs_prefers_names_and_keeps_anonymous_fallback():
     named = build_state_cache_tensor_specs(
         state_shapes=[((99, ), torch.float32)],
         state_specs=[StateCacheSpec('state', (5, ), torch.float16, layer_ids=[3, 1])],
     )
-    legacy = build_state_cache_tensor_specs(
+    anonymous = build_state_cache_tensor_specs(
         state_shapes=[((3, ), torch.float32), ((2, ), torch.float16)],
     )
 
     assert [spec.name for spec in named] == ['state']
     assert named[0].desc.shape == (2, 5)
     assert named[0].layer_map == {3: 0, 1: 1}
-    assert [spec.name for spec in legacy] == ['state_0', 'state_1']
-    assert all(spec.layer_map is None for spec in legacy)
+    assert [spec.name for spec in anonymous] == ['state_0', 'state_1']
+    assert all(spec.layer_map is None for spec in anonymous)

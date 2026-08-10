@@ -49,33 +49,6 @@ class CacheAllocation:
         """Count owning pools without double-counting cache views."""
         return sum(pool.nbytes for pool in self.pools)
 
-    @property
-    def legacy_pool(self) -> torch.Tensor | list[torch.Tensor]:
-        """Return the temporary tensor-or-list owning-pool facade."""
-        pool_tensors = [pool.tensor for pool in self.pools]
-        if len(pool_tensors) == 1:
-            return pool_tensors[0]
-        return pool_tensors
-
-    def as_legacy(self) -> tuple[torch.Tensor | list[torch.Tensor], list[torch.Tensor]]:
-        """Return the temporary two-value allocation facade."""
-        return self.legacy_pool, list(self.tensor_views)
-
-    def __iter__(self):
-        """Preserve legacy ``mem_pool, caches = allocate_caches()`` use."""
-        return iter(self.as_legacy())
-
-
-def _unpack_cache_allocation(
-    result: CacheAllocation | tuple[torch.Tensor | list[torch.Tensor], list[torch.Tensor]],
-) -> tuple[CacheAllocation | None, torch.Tensor | list[torch.Tensor], list[torch.Tensor]]:
-    """Normalize native or legacy allocation while preserving its facade."""
-    if isinstance(result, CacheAllocation):
-        legacy_pool, caches = result.as_legacy()
-        return result, legacy_pool, caches
-    legacy_pool, caches = result
-    return None, legacy_pool, caches
-
 
 @dataclass(frozen=True)
 class PackedBlockCacheLayout:

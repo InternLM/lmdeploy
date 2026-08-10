@@ -10,7 +10,7 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
-from .layout import CacheAllocation, _unpack_cache_allocation
+from .layout import CacheAllocation
 from .schema import build_state_cache_tensor_specs, layer_maps_from_specs
 from .view import NamedCacheView
 
@@ -39,7 +39,13 @@ class StateCacheEngine:
         if state_specs is not None:
             allocate_kwargs['state_specs'] = state_specs
         result = self.allocate_caches(**allocate_kwargs)
-        self.allocation, self.legacy_pool, self._cache_tensors = _unpack_cache_allocation(result)
+        if isinstance(result, CacheAllocation):
+            self.allocation = result
+            self._cache_tensors = list(result.tensor_views)
+        else:
+            self.allocation = None
+            _, state_caches = result
+            self._cache_tensors = list(state_caches)
         self._slot_tensors = self._resolve_slot_tensors(self.allocation, self._cache_tensors)
 
     @staticmethod
@@ -71,16 +77,16 @@ class StateCacheEngine:
         if state_specs is not None:
             allocate_kwargs['state_specs'] = state_specs
         result = StateCacheEngine.allocate_caches(**allocate_kwargs)
-        allocation, legacy_pool, _ = _unpack_cache_allocation(result)
-        if allocation is not None:
-            return allocation.nbytes
-        if not isinstance(legacy_pool, torch.Tensor):
-            raise RuntimeError('Legacy state-cache sizing requires one tensor pool.')
-        return legacy_pool.numel() * legacy_pool.element_size()
+        if isinstance(result, CacheAllocation):
+            return result.nbytes
+        external_pool, _ = result
+        if not isinstance(external_pool, torch.Tensor):
+            raise RuntimeError('External state-cache sizing requires one tensor pool.')
+        return external_pool.numel() * external_pool.element_size()
 
     @property
     def state_caches(self) -> Sequence[torch.Tensor]:
-        """Return state-cache tensors in legacy model order."""
+        """Return state-cache tensors in model-facing order."""
         return self._cache_tensors
 
     @property

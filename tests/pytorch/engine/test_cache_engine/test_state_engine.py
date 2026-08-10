@@ -19,7 +19,8 @@ def test_layered_state_cache_specs_do_not_require_total_layer_count():
                                                   state_shapes=state_shapes,
                                                   state_specs=state_specs,
                                                   device='cpu')
-    mem_pool, caches = allocation
+    mem_pool = allocation.pools[0].tensor
+    caches = allocation.tensor_views
 
     assert isinstance(allocation, CacheAllocation)
     assert tuple(mem_pool.shape) == (2, 768)
@@ -27,15 +28,15 @@ def test_layered_state_cache_specs_do_not_require_total_layer_count():
     assert StateCacheEngine.get_state_slot_nbytes(state_shapes, state_specs=state_specs) == 768
 
 
-def test_state_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
+def test_state_cache_engine_accepts_external_allocation_tuple(monkeypatch):
     mem_pool = torch.empty((2, 8), dtype=torch.uint8)
     caches = [torch.empty((2, 2), dtype=torch.float32)]
 
     @staticmethod
-    def legacy_allocate(num_caches, state_shapes, device):
+    def external_allocate(num_caches, state_shapes, device):
         return mem_pool, caches
 
-    monkeypatch.setattr(StateCacheEngine, 'allocate_caches', legacy_allocate)
+    monkeypatch.setattr(StateCacheEngine, 'allocate_caches', external_allocate)
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                num_cpu_blocks=0,
@@ -46,8 +47,7 @@ def test_state_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
     cache_engine = StateCacheEngine(cache_config)
 
     assert cache_engine.allocation is None
-    assert cache_engine.legacy_pool is mem_pool
-    assert cache_engine.state_caches is caches
+    assert all(actual is expected for actual, expected in zip(cache_engine.state_caches, caches))
     assert cache_engine._slot_tensors[0][0] is caches[0]
     assert cache_engine._slot_tensors[0][1] == 0
 
@@ -123,7 +123,7 @@ def _make_state_cache_engine(num_caches: int = 4):
         state_shapes=cache_engine.cache_config.states_shapes,
         device='cpu',
     )
-    cache_engine.legacy_pool, cache_engine._cache_tensors = cache_engine.allocation
+    cache_engine._cache_tensors = list(cache_engine.allocation.tensor_views)
     cache_engine._slot_tensors = StateCacheEngine._resolve_slot_tensors(cache_engine.allocation,
                                                                         cache_engine._cache_tensors)
     return cache_engine
@@ -138,7 +138,7 @@ def _make_multi_pool_state_cache_engine(num_caches: int = 4):
                                             num_state_caches=num_caches,
                                             states_shapes=[])
     cache_engine.allocation = _make_multi_pool_state_allocation(num_caches)
-    cache_engine.legacy_pool, cache_engine._cache_tensors = cache_engine.allocation
+    cache_engine._cache_tensors = list(cache_engine.allocation.tensor_views)
     cache_engine._slot_tensors = StateCacheEngine._resolve_slot_tensors(cache_engine.allocation,
                                                                         cache_engine._cache_tensors)
     return cache_engine

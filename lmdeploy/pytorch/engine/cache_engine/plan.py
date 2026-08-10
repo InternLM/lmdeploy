@@ -71,8 +71,8 @@ class BlockCachePlan:
         return tuple(spec.name for spec in self.tensor_specs)
 
     @property
-    def legacy_cache_indices(self) -> tuple[int, ...]:
-        """Return tensors exposed through the legacy per-layer cache tuple."""
+    def model_cache_indices(self) -> tuple[int, ...]:
+        """Return tensors exposed through the per-layer model cache."""
         return tuple(index for index, spec in enumerate(self.tensor_specs) if not spec.has_rows)
 
     def allocate(self, num_logical_blocks: int, device: torch.device | str) -> CacheAllocation:

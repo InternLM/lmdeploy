@@ -66,8 +66,8 @@ class DlinferStateCacheLayout:
 class DlinferCacheBackend(DefaultCacheBackend):
     """Build native dlinfer cache layouts.
 
-    The presence of this provider is the feature-detection boundary for dlinfer versions that can skip their legacy
-    CacheEngine monkey patches.
+    This provider is the feature-detection boundary that lets new dlinfer versions skip their CacheEngine monkey
+    patches.
     """
 
     @classmethod

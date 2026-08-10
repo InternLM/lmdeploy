@@ -29,9 +29,9 @@ def describe_cache_pools(pools: Sequence[CachePool], num_blocks: int) -> tuple[D
     return tuple(descriptions)
 
 
-def describe_legacy_remote_pool(local_pools: Sequence[DistServeCachePoolInfo],
-                                remote_num_blocks: int) -> tuple[DistServeCachePoolInfo, ...]:
-    """Infer the old single-pool endpoint shape for rolling compatibility."""
+def infer_remote_pool_without_metadata(local_pools: Sequence[DistServeCachePoolInfo],
+                                       remote_num_blocks: int) -> tuple[DistServeCachePoolInfo, ...]:
+    """Infer a single-pool endpoint shape for a peer without metadata."""
     if len(local_pools) != 1 or local_pools[0].entry_axis != 1:
         raise RuntimeError('The remote PD endpoint must provide cache-pool metadata for this layout.')
 

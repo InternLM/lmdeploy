@@ -140,11 +140,11 @@ def test_cache_engine_builds_block_copy_from_retained_allocation(monkeypatch):
     assert cache_engine._block_copy is block_copy
 
 
-def test_cache_engine_skips_block_copy_for_legacy_allocation(monkeypatch):
+def test_cache_engine_skips_block_copy_for_external_allocation(monkeypatch):
     cache_engine = object.__new__(CacheEngine)
     cache_engine.gpu_allocation = None
     monkeypatch.setattr(cache_engine_module, 'get_backend',
-                        lambda: (_ for _ in ()).throw(AssertionError('legacy allocation must not request backend')))
+                        lambda: (_ for _ in ()).throw(AssertionError('external allocation must not request backend')))
 
     cache_engine._build_block_copy()
 
