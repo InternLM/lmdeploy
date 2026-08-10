@@ -3,7 +3,8 @@
 
 from fastapi import APIRouter
 
-from . import auxiliary, chat_completions, completions, distserve, generate, management, models
+from .. import chat_completions
+from . import auxiliary, completions, distserve, generate, management, models
 
 
 def create_openai_router(server_context) -> APIRouter:

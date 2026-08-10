@@ -5,32 +5,23 @@ import json
 import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from functools import partial
 from http import HTTPStatus
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
-
 
 import shortuuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from lmdeploy.messages import LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
-    ChatCompletionResponse,  # noqa: E501
+    ChatCompletionResponse,
     ChatCompletionResponseChoice,
     ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse,
-    ChatCompletionTokenLogprob,
     ChatMessage,
     ChoiceLogprobs,
     DeltaMessage,
-    TopLogprob,
     UsageInfo,
 )
 from lmdeploy.serve.openai.utils import create_error_response, maybe_filter_parallel_tool_calls
@@ -38,166 +29,11 @@ from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
 
+from .logits_processors import logit_bias_logits_processor
+from .logprobs import _create_chat_completion_logprobs, _create_output_token_logprobs
+from .validation import check_request
+
 logger = get_logger('lmdeploy')
-
-
-def check_request(request: ChatCompletionRequest, server_context) -> str:
-    engine_config = server_context.engine_config
-    session_manager = server_context.session_manager
-    try:
-        # Check logprobs settings
-        logprobs_mode = engine_config.logprobs_mode
-        logprobs = request.logprobs
-        top_logprobs = request.top_logprobs or 0
-        return_logprob = request.return_logprob
-        if logprobs_mode is None:
-            if logprobs or top_logprobs > 0:
-                return (
-                    f'Logprobs({logprobs})/top_logprobs({top_logprobs}) requested '
-                    'but not enabled logprobs_mode in engine configuration')
-            if return_logprob:
-                return (
-                    f'return_logprob({return_logprob}) requested '
-                    'but not enabled logprobs_mode in engine configuration.')
-        if logprobs_mode is not None and (top_logprobs < 0 or
-                                          (not logprobs and top_logprobs > 0)):
-            return (
-                f'Invalid logprobs({logprobs})/top_logprobs({top_logprobs}) requested '
-                'when logprobs_mode is enabled in engine configuration.')
-    except AttributeError:
-        pass
-
-    if session_manager.has(request.session_id):
-        return f'The session_id {request.session_id!r} is occupied.'
-
-    # check sampling settings
-    if request.n <= 0:
-        return f'The n {request.n!r} must be a positive int.'
-    if request.top_p is not None and not (0 < request.top_p <= 1):
-        return f'The top_p {request.top_p!r} must be in (0, 1].'
-    if request.top_k is not None and request.top_k < 0:
-        return f'The top_k {request.top_k!r} cannot be a negative integer.'
-    if request.temperature is not None and not (0 <= request.temperature <= 2):
-        return f'The temperature {request.temperature!r} must be in [0, 2]'
-
-    # Validate input_ids and image_data constraints.
-    # messages has higher priority. input_ids and image_data are only used when
-    # messages is empty (None, '', or []). image_data requires input_ids.
-    messages_empty = (request.messages is None or request.messages == ''
-                      or (isinstance(request.messages, list)
-                          and len(request.messages) == 0))
-    if not messages_empty:
-        # messages is active — input_ids and image_data must not be set
-        if request.input_ids is not None:
-            return 'input_ids cannot be used when messages is non-empty. messages takes priority.'
-        if request.image_data is not None:
-            return 'image_data cannot be used when messages is non-empty. messages takes priority.'
-    else:
-        # messages is empty — input_ids and image_data are the active inputs
-        if request.input_ids is not None and len(request.input_ids) == 0:
-            return 'The input_ids must not be an empty list.'
-        if request.image_data is not None and request.input_ids is None:
-            return 'image_data requires input_ids to be set when messages is empty.'
-
-    parser_cls = server_context.response_parser_cls
-    if request.tool_choice != 'none' and request.tools:
-        if parser_cls is None or parser_cls.tool_parser_cls is None:
-            return 'Please launch the api_server with --tool-call-parser if you want to use tools.'
-
-    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
-        return (
-            'routed experts requested but not configured in engine configuration. '
-            'May start api_server with --enable-return-routed-experts flag.')
-
-    return ''
-
-
-def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
-                                     token_ids: list[int] | None = None,
-                                     logprobs: list[dict[int, float]]
-                                     | None = None):
-    """Create openai LogProbs for chat.completion.
-
-    Args:
-        tokenizer (PreTrainedTokenizerBase): tokenizer.
-        token_ids (list[int]): output token ids.
-        logprobs (list[dict[int, float]]): the top logprobs for each output
-            position.
-    Returns:
-        ChoiceLogprobs: logprob result.
-    """
-    if token_ids is None or logprobs is None:
-        return None
-
-    content: list[ChatCompletionTokenLogprob] = []
-    for token_id, tops in zip(token_ids, logprobs):
-        item = ChatCompletionTokenLogprob(token='',
-                                          bytes=[],
-                                          logprob=0.0,
-                                          top_logprobs=[])
-        for top_id, prob in tops.items():
-            token = tokenizer.convert_ids_to_tokens(top_id)
-            if isinstance(token, bytes):
-                _bytes = list(token)
-                token = token.decode('utf-8', errors='backslashreplace')
-            else:
-                _bytes = list(token.encode())  # token is str
-            if top_id == token_id:
-                item.token = token
-                item.bytes = _bytes
-                item.logprob = prob
-            else:
-                item.top_logprobs.append(
-                    TopLogprob(token=token, bytes=_bytes, logprob=prob))
-        content.append(item)
-    return ChoiceLogprobs(content=content)
-
-
-def _create_output_token_logprobs(token_ids: list[int] | None = None,
-                                  logprobs: list[dict[int, float]]
-                                  | None = None):
-    """Create raw (logprob, token_id) pairs for output tokens."""
-    if token_ids is None or logprobs is None:
-        return None
-
-    output_token_logprobs = []
-    for tok, tok_logprobs in zip(token_ids, logprobs):
-        output_token_logprobs.append((tok_logprobs[tok], tok))
-    return output_token_logprobs or None
-
-
-# modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
-def logit_bias_logits_processor(
-        logit_bias: dict[int, float] | dict[str, float],
-        tokenizer: PreTrainedTokenizerBase) -> LogitsProcessor:
-    try:
-        # Convert token_id to integer
-        # Clamp the bias between -100 and 100 per OpenAI API spec
-        clamped_logit_bias: dict[int, float] = {
-            int(token_id): min(100.0, max(-100.0, bias))
-            for token_id, bias in logit_bias.items()
-        }
-    except ValueError as exc:
-        raise ValueError(
-            'Found token_id in logit_bias that is not '
-            'an integer or string representing an integer') from exc
-
-    # Check if token_id is within the vocab size
-    for token_id, bias in clamped_logit_bias.items():
-        if token_id < 0 or token_id >= tokenizer.vocab_size:
-            raise ValueError(f'token_id {token_id} in logit_bias contains '
-                             'out-of-vocab token id')
-
-    def _logit_bias_processor(
-        logit_bias,
-        token_ids,
-        logits,
-    ):
-        for token_id, bias in logit_bias.items():
-            logits[token_id] = logits[token_id] + bias
-        return logits
-
-    return partial(_logit_bias_processor, clamped_logit_bias)
 
 
 def register(router: APIRouter, server_context) -> None:
