@@ -46,7 +46,7 @@ Three similar terms describe different identities:
 | Term              | Meaning                                                             |
 | ----------------- | ------------------------------------------------------------------- |
 | Consumer row      | Logical row assigned to one built cache-using operator              |
-| Layer row         | Compact tensor row mapped from a configured global model layer ID   |
+| Layer row         | State-cache tensor row mapped from a configured global model layer  |
 | Pool `entry_axis` | Physical tensor axis whose blocks or state slots move independently |
 
 ## Construction Pipeline
@@ -99,7 +99,8 @@ rows stored by its future tensor. For example, requests with contracts
 `schema.py` also derives standard K/V and quantized payload descriptions from
 the finalized model/cache policy. `plan.py` passes the ordered tensor specs to
 the active `CacheBackend`, retains its selected physical layout, and constructs
-the plan.
+the plan. Block plans contain only plain model tensors and operator consumer
+rows; configured layer rows belong to state caches.
 
 `BlockCachePlan` retains:
 
@@ -206,7 +207,7 @@ An atomic layout implements one physical storage policy:
 | Layout                       | Storage policy                                                  |
 | ---------------------------- | --------------------------------------------------------------- |
 | `PackedBlockCacheLayout`     | Pack compatible full-layer tensors into one byte pool           |
-| `RowBlockCacheLayout`        | Give compact-row tensors independent padded byte pools          |
+| `RowBlockCacheLayout`        | Give consumer-row tensors independent padded byte pools         |
 | `ContiguousBlockCacheLayout` | Give every tensor spec an independent contiguous typed tensor   |
 | `PackedStateCacheLayout`     | Pack tensors behind one state-slot axis                         |
 | dlinfer block/state layouts  | Use dlinfer's backend-specific contiguous tensor representation |
@@ -240,9 +241,10 @@ Two model-facing access categories coexist during migration:
 
 - `gpu_cache` / `cpu_cache` provide the per-layer tuple used as
   `past_key_values`;
-- `block_caches` provides named access: `row(name, consumer_row)` resolves the
-  row assigned to a built operator, while `layer(name, layer_id)` resolves a
-  configuration-owned layer mapping.
+- named views provide scoped access: `block_caches.row(name, consumer_row)`
+  resolves a row assigned to a built operator, while
+  `named_state_caches.layer(name, layer_id)` resolves a configured state-cache
+  layer.
 
 `block_caches[name]` still returns the complete tensor when a name has one
 physical tensor. When a name is heterogeneous, direct lookup raises and asks
@@ -299,7 +301,7 @@ The package temporarily preserves:
   description facades used by dlinfer's contiguous allocator patch;
 - `CacheEngine.num_layers` and `kv_cache_dtype`, which dlinfer's Ascend310P
   allocator patch still reads even though native allocation uses the plan;
-- anonymous cache/state shapes and model-config named specifications;
+- anonymous cache/state shapes and model-config named state specifications;
 - `gpu_cache` and `cpu_cache` as per-layer model-facing tuples;
 - the external dlinfer allocator result `(mem_pool, caches)`.
 

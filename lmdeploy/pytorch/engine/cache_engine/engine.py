@@ -292,8 +292,8 @@ class CacheEngine:
     def _build_block_cache_view(self) -> Mapping[str, torch.Tensor]:
         """Build the model-facing view once for this device allocation."""
         tensor_specs = self.block_cache_plan.tensor_specs
-        if any(spec.has_rows for spec in tensor_specs):
-            return NamedCacheView.from_specs(tensor_specs, self._gpu_cache_list)
+        if any(spec.consumer_rows is not None for spec in tensor_specs):
+            return NamedCacheView(tensor_specs, self._gpu_cache_list)
         return {
             spec.name: cache
             for spec, cache in zip(tensor_specs, self._gpu_cache_list)

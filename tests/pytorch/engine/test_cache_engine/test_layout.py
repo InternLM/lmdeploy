@@ -53,14 +53,14 @@ def test_packed_block_allocation_owns_one_block_axis_pool():
     assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 3, 3), (2, 3, 2)]
     assert [cache.storage_offset() for cache in allocation.tensor_views] == [0, 8]
 
-def test_layer_row_block_allocation_owns_one_pool_per_tensor_spec():
+def test_consumer_row_block_allocation_owns_one_pool_per_tensor_spec():
     tensor_specs = (
         CacheTensorSpec('first',
                         CacheDesc(shape=[3], dtype=torch.float32, alignment=16),
-                        layer_rows=LayerRowMap.build('first', [1, 9])),
+                        consumer_rows=(0, 1)),
         CacheTensorSpec('second',
                         CacheDesc(shape=[2], dtype=torch.float16, alignment=8),
-                        layer_rows=LayerRowMap.build('second', [7])),
+                        consumer_rows=(0, )),
     )
 
     layout = RowBlockCacheLayout(tensor_specs)
@@ -101,29 +101,29 @@ def test_empty_state_allocation_keeps_one_empty_owning_pool():
     assert allocation.tensor_views == ()
 
 
-def test_row_block_layout_rejects_tensor_specs_without_rows():
+def test_row_block_layout_rejects_tensor_specs_without_consumer_rows():
     tensor_specs = (CacheTensorSpec('plain', CacheDesc(shape=[3], dtype=torch.float32)), )
 
-    with pytest.raises(ValueError, match='explicit rows'):
+    with pytest.raises(ValueError, match='consumer rows'):
         RowBlockCacheLayout(tensor_specs)
 
 
 def test_default_cache_backend_selects_layout_from_tensor_spec_membership():
     plain_specs = (CacheTensorSpec('plain', CacheDesc(shape=[3], dtype=torch.float32)), )
-    layer_specs = (
-        CacheTensorSpec('layered',
+    consumer_specs = (
+        CacheTensorSpec('consumer',
                         CacheDesc(shape=[3], dtype=torch.float32),
-                        layer_rows=LayerRowMap.build('layered', [1, 9])),
+                        consumer_rows=(0, 1)),
     )
 
     cache_backend = DefaultOpsBackend.get_cache_backend()
     block_layout = cache_backend.build_block_layout(plain_specs, num_layers=4)
-    layer_layout = cache_backend.build_block_layout(layer_specs, num_layers=4)
+    consumer_layout = cache_backend.build_block_layout(consumer_specs, num_layers=4)
     state_layout = cache_backend.build_state_layout(plain_specs)
 
     assert cache_backend is DefaultCacheBackend
     assert isinstance(block_layout, PackedBlockCacheLayout)
-    assert isinstance(layer_layout, RowBlockCacheLayout)
+    assert isinstance(consumer_layout, RowBlockCacheLayout)
     assert isinstance(state_layout, PackedStateCacheLayout)
 
 
@@ -159,9 +159,9 @@ def test_default_composite_layout_packs_plain_and_isolates_contiguous_tensors():
 def test_dlinfer_block_layout_owns_contiguous_cache_tensors():
     tensor_specs = (
         CacheTensorSpec('plain', CacheDesc(shape=[3], dtype=torch.float32, alignment=16)),
-        CacheTensorSpec('layered',
+        CacheTensorSpec('consumer',
                         CacheDesc(shape=[2], dtype=torch.float16, alignment=8),
-                        layer_rows=LayerRowMap.build('layered', [1, 9])),
+                        consumer_rows=(0, 1)),
     )
 
     layout = DlinferBlockCacheLayout(tensor_specs, num_layers=4)

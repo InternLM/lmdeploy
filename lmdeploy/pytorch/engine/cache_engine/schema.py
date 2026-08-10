@@ -258,7 +258,6 @@ class LayerRowMap:
     """Map global layer ids to compact cache-tensor rows."""
 
     layer_ids: tuple[int, ...]
-    row_by_layer: dict[int, int]
 
     @classmethod
     def build(cls, cache_name: str, layer_ids: Sequence[int]):
@@ -276,11 +275,7 @@ class LayerRowMap:
             raise ValueError(f'{cache_name} layer_ids must not be empty.')
 
         layer_ids = tuple(normalized_layer_ids)
-        row_by_layer = {
-            layer_id: cache_row
-            for cache_row, layer_id in enumerate(layer_ids)
-        }
-        return cls(layer_ids=layer_ids, row_by_layer=row_by_layer)
+        return cls(layer_ids=layer_ids)
 
     @property
     def num_rows(self) -> int:
@@ -312,18 +307,6 @@ class CacheTensorSpec:
         if len(consumer_rows) != len(set(consumer_rows)):
             raise ValueError(f'{self.name} consumer rows must be unique within one tensor spec.')
         object.__setattr__(self, 'consumer_rows', consumer_rows)
-
-    @property
-    def has_rows(self) -> bool:
-        """Whether the tensor has an explicit compact-row axis."""
-        return self.consumer_rows is not None or self.layer_rows is not None
-
-    @property
-    def layer_map(self) -> dict[int, int] | None:
-        """Return the global-layer-id to compact-row map if layered."""
-        if self.layer_rows is None:
-            return None
-        return self.layer_rows.row_by_layer
 
     @property
     def num_rows(self) -> int:

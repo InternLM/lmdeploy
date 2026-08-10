@@ -26,7 +26,7 @@ class DlinferBlockCacheLayout:
         pools = []
         tensor_views = []
         for spec in self.tensor_specs:
-            num_rows = spec.num_rows if spec.has_rows else self.num_layers
+            num_rows = len(spec.consumer_rows) if spec.consumer_rows is not None else self.num_layers
             cache = torch.zeros((num_rows, num_blocks, *spec.desc.shape),
                                 dtype=spec.desc.dtype,
                                 device=device)

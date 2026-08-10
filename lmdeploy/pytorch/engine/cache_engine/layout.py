@@ -82,8 +82,8 @@ class RowBlockCacheLayout:
     tensor_specs: tuple[CacheTensorSpec, ...]
 
     def __post_init__(self):
-        if any(not spec.has_rows for spec in self.tensor_specs):
-            raise ValueError('Row block layouts require explicit rows for every tensor spec.')
+        if any(spec.consumer_rows is None for spec in self.tensor_specs):
+            raise ValueError('Row block layouts require consumer rows for every tensor spec.')
 
     def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Realize the layout for a block count and device."""
@@ -114,7 +114,7 @@ class ContiguousBlockCacheLayout:
         pools = []
         tensor_views = []
         for spec in self.tensor_specs:
-            num_rows = spec.num_rows if spec.has_rows else self.num_layers
+            num_rows = len(spec.consumer_rows) if spec.consumer_rows is not None else self.num_layers
             cache = torch.zeros((num_rows, num_blocks, *spec.desc.shape),
                                 dtype=spec.desc.dtype,
                                 device=device)

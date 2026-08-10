@@ -24,6 +24,7 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheRequestContext,
     CacheDesc,
     CacheTensorSpec,
+    LayerRowMap,
 )
 from lmdeploy.pytorch.engine.cache_engine.view import NamedCacheView
 
@@ -805,9 +806,18 @@ def test_deepseek_v4_caches_resolve_state_and_carry_block_view():
 
     state_cache = torch.arange(24).view(2, 3, 4)
     block_cache = torch.arange(40).view(2, 5, 4)
-    block_cache_view = NamedCacheView({'block': block_cache}, {'block': {1: 0, 3: 1}})
+    block_cache_view = NamedCacheView(
+        (CacheTensorSpec('block', CacheDesc([5, 4], block_cache.dtype), consumer_rows=(0, 1)), ),
+        (block_cache, ),
+    )
+    state_cache_view = NamedCacheView(
+        (CacheTensorSpec('state',
+                         CacheDesc([2, 3, 4], state_cache.dtype),
+                         layer_rows=LayerRowMap.build('state', [1, 3])), ),
+        (state_cache, ),
+    )
     caches = V4Caches(
-        named_state_caches=NamedCacheView({'state': state_cache}, {'state': {1: 0, 3: 1}}),
+        named_state_caches=state_cache_view,
         block_caches=block_cache_view,
     )
 

@@ -33,12 +33,11 @@ class BlockCachePlan:
         row_kind_by_name = {}
         row_ids_by_name = {}
         for spec in self.tensor_specs:
+            if spec.layer_rows is not None:
+                raise ValueError(f'Block cache {spec.name} cannot use model-layer rows.')
             if spec.consumer_rows is not None:
                 row_kind = 'consumer'
                 row_ids = spec.consumer_rows
-            elif spec.layer_rows is not None:
-                row_kind = 'layer'
-                row_ids = spec.layer_rows.layer_ids
             else:
                 row_kind = 'plain'
                 row_ids = ()
@@ -73,7 +72,7 @@ class BlockCachePlan:
     @property
     def model_cache_indices(self) -> tuple[int, ...]:
         """Return tensors exposed through the per-layer model cache."""
-        return tuple(index for index, spec in enumerate(self.tensor_specs) if not spec.has_rows)
+        return tuple(index for index, spec in enumerate(self.tensor_specs) if spec.consumer_rows is None)
 
     def allocate(self, num_logical_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Realize a logical block count through the selected physical

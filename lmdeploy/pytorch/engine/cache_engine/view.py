@@ -16,27 +16,11 @@ _CacheRowLocation: TypeAlias = tuple[int, int]
 class NamedCacheView(Mapping[str, torch.Tensor]):
     """Resolve named cache tensors and their consumer/layer rows."""
 
-    def __init__(self, caches: dict[str, torch.Tensor], rows_by_layer: dict[str, dict[int, int]] | None = None):
-        self._cache_tensors: dict[str, tuple[torch.Tensor, ...]] = {
-            name: (cache, )
-            for name, cache in caches.items()
-        }
-        self._consumer_row_locations: dict[str, tuple[_CacheRowLocation, ...]] = {}
-        self._layer_row_locations: dict[str, dict[int, _CacheRowLocation]] = {
-            name: {
-                layer_id: (0, row)
-                for layer_id, row in layer_map.items()
-            }
-            for name, layer_map in (rows_by_layer or {}).items()
-        }
-
-    @classmethod
-    def from_specs(cls, tensor_specs: Sequence[CacheTensorSpec], caches: Sequence[torch.Tensor]):
+    def __init__(self, tensor_specs: Sequence[CacheTensorSpec], caches: Sequence[torch.Tensor]):
         """Build row lookup across planned cache tensors."""
         if len(tensor_specs) != len(caches):
             raise ValueError('Cache tensor specs and tensors must have the same length.')
 
-        view = cls({})
         cache_tensors: dict[str, list[torch.Tensor]] = {}
         consumer_row_locations: dict[str, dict[int, _CacheRowLocation]] = {}
         layer_row_locations: dict[str, dict[int, _CacheRowLocation]] = {}
@@ -51,19 +35,18 @@ class NamedCacheView(Mapping[str, torch.Tensor]):
                     locations[consumer_row] = (tensor_idx, local_row)
             elif spec.layer_rows is not None:
                 locations = layer_row_locations.setdefault(spec.name, {})
-                for layer_id, local_row in spec.layer_rows.row_by_layer.items():
+                for local_row, layer_id in enumerate(spec.layer_rows.layer_ids):
                     locations[layer_id] = (tensor_idx, local_row)
 
-        view._cache_tensors = {
+        self._cache_tensors = {
             name: tuple(tensors)
             for name, tensors in cache_tensors.items()
         }
-        view._consumer_row_locations = {
+        self._consumer_row_locations = {
             name: tuple(locations[row] for row in range(len(locations)))
             for name, locations in consumer_row_locations.items()
         }
-        view._layer_row_locations = layer_row_locations
-        return view
+        self._layer_row_locations = layer_row_locations
 
     def __getitem__(self, name: str):
         tensors = self._cache_tensors[name]

@@ -86,7 +86,7 @@ class DefaultCacheBackend(CacheBackend):
         def layout_kind(spec):
             if spec.per_row_contiguous:
                 return 'contiguous'
-            if spec.has_rows:
+            if spec.consumer_rows is not None:
                 return 'rows'
             return 'packed'
 

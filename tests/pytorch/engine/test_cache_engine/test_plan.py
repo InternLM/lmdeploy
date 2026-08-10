@@ -11,10 +11,10 @@ def test_block_cache_plan_owns_geometry_layout_and_access_metadata():
     tensor_specs = (
         CacheTensorSpec('first',
                         CacheDesc(shape=[3], dtype=torch.float32, alignment=16),
-                        layer_rows=LayerRowMap.build('first', [1, 9])),
+                        consumer_rows=(0, 1)),
         CacheTensorSpec('second',
                         CacheDesc(shape=[2], dtype=torch.float16, alignment=8),
-                        layer_rows=LayerRowMap.build('second', [7])),
+                        consumer_rows=(0, )),
     )
     allocations = []
 
@@ -67,4 +67,17 @@ def test_block_cache_plan_validates_heterogeneous_consumer_rows():
         missing = (CacheTensorSpec('index', CacheDesc(shape=[3], dtype=torch.float32), consumer_rows=(1, )), )
         BlockCachePlan(tensor_specs=missing,
                        layout=RowBlockCacheLayout(missing),
+                       kernel_blocks_per_logical_block=1)
+
+
+def test_block_cache_plan_rejects_state_layer_rows():
+    tensor_specs = (
+        CacheTensorSpec('state',
+                        CacheDesc(shape=[1, 3], dtype=torch.float32),
+                        layer_rows=LayerRowMap.build('state', [1])),
+    )
+
+    with pytest.raises(ValueError, match='cannot use model-layer rows'):
+        BlockCachePlan(tensor_specs=tensor_specs,
+                       layout=PackedBlockCacheLayout(tensor_specs, num_layers=1),
                        kernel_blocks_per_logical_block=1)

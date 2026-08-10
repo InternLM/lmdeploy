@@ -45,8 +45,8 @@ class StateCacheEngine:
             _, state_caches = result
             self._cache_tensors = list(state_caches)
         self._slot_tensors = self._resolve_slot_tensors(self.allocation, self._cache_tensors)
-        if any(spec.has_rows for spec in tensor_specs):
-            self._named_state_caches = NamedCacheView.from_specs(tensor_specs, self._cache_tensors)
+        if any(spec.layer_rows is not None for spec in tensor_specs):
+            self._named_state_caches = NamedCacheView(tensor_specs, self._cache_tensors)
         else:
             self._named_state_caches = {
                 spec.name: cache

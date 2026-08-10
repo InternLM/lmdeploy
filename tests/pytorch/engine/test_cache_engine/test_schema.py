@@ -39,7 +39,6 @@ def test_layer_row_map_preserves_declared_row_order():
     row_map = LayerRowMap.build('index', [9, 1])
 
     assert row_map.layer_ids == (9, 1)
-    assert row_map.row_by_layer == {9: 0, 1: 1}
     assert row_map.num_rows == 2
 
 
@@ -63,7 +62,7 @@ def test_build_block_cache_tensor_specs_counts_operator_request_rows():
     assert len(tensor_specs) == 1
     assert tensor_specs[0].name == 'index'
     assert tensor_specs[0].desc.shape == [64, 1, 132]
-    assert tensor_specs[0].layer_map is None
+    assert tensor_specs[0].layer_rows is None
     assert tensor_specs[0].consumer_rows == (0, 1, 2)
     assert tensor_specs[0].num_rows == 3
     assert tensor_specs[0].per_row_contiguous
@@ -98,6 +97,6 @@ def test_build_state_cache_tensor_specs_prefers_names_and_keeps_anonymous_fallba
 
     assert [spec.name for spec in named] == ['state']
     assert named[0].desc.shape == (2, 5)
-    assert named[0].layer_map == {3: 0, 1: 1}
+    assert named[0].layer_rows.layer_ids == (3, 1)
     assert [spec.name for spec in anonymous] == ['state_0', 'state_1']
-    assert all(spec.layer_map is None for spec in anonymous)
+    assert all(spec.layer_rows is None for spec in anonymous)
