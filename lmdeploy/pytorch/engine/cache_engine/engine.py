@@ -9,9 +9,12 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeCachePoolInfo,
+    DistServeInitRequest,
+    DistServeKVTransferEndpointInfo,
+)
 from lmdeploy.pytorch.disagg.messages import (
-    AssignmentInstruct,
     DistServeRegisterMRMessage,
     MigrationAssignment,
     MigrationExecutionBatch,
@@ -20,7 +23,13 @@ from lmdeploy.utils import get_logger
 
 from ....messages import QuantPolicy
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
-from .layout import CacheAllocation
+from .layout import CacheAllocation, CachePool
+from .migration import (
+    build_cache_pool_assignments,
+    describe_cache_pools,
+    describe_legacy_remote_pool,
+    validate_cache_pool_layouts,
+)
 from .plan import BlockCachePlan
 from .schema import (
     BlockCacheGeometry,
@@ -259,6 +268,8 @@ class CacheEngine:
         self._build_block_copy()
 
         self.migration_backend_impl: MigrationBackendImpl | None = None
+        self._pd_cache_pool_infos: tuple[DistServeCachePoolInfo, ...] | None = None
+        self._remote_pd_cache_pool_infos: dict[str, tuple[DistServeCachePoolInfo, ...]] = {}
 
         # Initialize the stream for caching operations.
         # Non-CUDA device integrations currently provide CUDA-compatible torch
@@ -801,73 +812,84 @@ class CacheEngine:
             return allocation.nbytes
         return cls._mem_pool_nbytes(mem_pool)
 
-    """ Metheds for PD Disaggregation Begin. """
+    # PD disaggregation.
+
+    def _resolve_pd_cache_pools(self) -> tuple[CachePool, ...]:
+        """Return owning pools with the metadata required by PD migration."""
+        if self.cache_config.block_size != self.cache_config.kernel_block_size:
+            raise RuntimeError('PD migration does not support block_size != kernel_block_size.')
+
+        allocation = getattr(self, 'gpu_allocation', None)
+        if allocation is None:
+            pool = getattr(self, 'full_gpu_cache', None)
+            if not isinstance(pool, torch.Tensor):
+                raise RuntimeError('PD migration of multiple pools requires native CacheAllocation metadata.')
+            return (CachePool(pool, entry_axis=1), )
+        return allocation.pools
+
+    def _get_pd_cache_pool_infos(self) -> tuple[DistServeCachePoolInfo, ...]:
+        """Describe the stable local allocation once for every PD link."""
+        pool_infos = getattr(self, '_pd_cache_pool_infos', None)
+        if pool_infos is None:
+            pool_infos = describe_cache_pools(self._resolve_pd_cache_pools(), self.num_gpu_blocks)
+            self._pd_cache_pool_infos = pool_infos
+        return pool_infos
 
     def p2p_initialize(self, migration_init_request: DistServeInitRequest) -> DistServeKVTransferEndpointInfo:
-        if isinstance(getattr(self, 'full_gpu_cache', None), list):
-            raise RuntimeError('PD migration does not support packed named block caches.')
+        pools = self._resolve_pd_cache_pools()
+        pool_infos = describe_cache_pools(pools, self.num_gpu_blocks)
+        self._pd_cache_pool_infos = pool_infos
         if not self.migration_backend_impl:
             self.migration_backend_impl = MIGRATION_BACKENDS.module_dict[self.cache_config.migration_backend.name]()
         migration_init_request.rank = self.rank
         self.migration_backend_impl.p2p_initialize(migration_init_request)
-        for i, t in enumerate([self.full_gpu_cache]):
-            if t.numel() == 0:
+        for mr_key, pool in enumerate(pools):
+            tensor = pool.tensor
+            if tensor.numel() == 0:
                 continue
             register_mr_request = DistServeRegisterMRMessage(protocol=migration_init_request.protocol,
                                                              remote_engine_id=migration_init_request.remote_engine_id,
-                                                             mr_key=i,
-                                                             addr=t.data_ptr(),
-                                                             offset=t.storage_offset(),
-                                                             length=t.numel() * t.itemsize)
+                                                             mr_key=mr_key,
+                                                             addr=tensor.data_ptr(),
+                                                             offset=tensor.storage_offset(),
+                                                             length=tensor.numel() * tensor.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
         return DistServeKVTransferEndpointInfo(protocol=migration_init_request.protocol,
                                                endpoint_info=json.dumps(
                                                    self.migration_backend_impl.endpoint_info(
                                                        migration_init_request.remote_engine_id,
-                                                       migration_init_request.protocol)))
+                                                       migration_init_request.protocol)),
+                                               cache_pools=pool_infos)
 
     def p2p_connect(self, remote_engine_id: str, migration_conn_request: list[DistServeKVTransferEndpointInfo]):
-        self.migration_backend_impl.p2p_connect(remote_engine_id, migration_conn_request[self.tp_rank])
+        conn_request = migration_conn_request[self.tp_rank]
+        local_pools = self._get_pd_cache_pool_infos()
+        remote_num_blocks = self.migration_backend_impl.links[
+            remote_engine_id].remote_engine_config.num_gpu_blocks
+        remote_pools = conn_request.cache_pools
+        if remote_pools is None:
+            remote_pools = describe_legacy_remote_pool(local_pools, remote_num_blocks)
+        validate_cache_pool_layouts(local_pools, remote_pools, self.num_gpu_blocks, remote_num_blocks)
+        self._remote_pd_cache_pool_infos[remote_engine_id] = tuple(remote_pools)
+        self.migration_backend_impl.p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
-        if isinstance(getattr(self, 'full_gpu_cache', None), list):
-            raise RuntimeError('PD migration does not support packed named block caches.')
-        if self.cache_config.block_size != self.cache_config.kernel_block_size:
-            raise RuntimeError('PD migration does not support block_size != kernel_block_size.')
+        local_pools = self._get_pd_cache_pool_infos()
+        blocks_by_remote: dict[str, list[tuple[int, int]]] = {}
+        for remote_engine_id, block_pairs in migration_execution_inputs.requests:
+            blocks_by_remote.setdefault(remote_engine_id, []).extend(block_pairs)
 
-        assignment_len = self.full_gpu_cache.element_size() * self.full_gpu_cache.size(-1)
-        layer_stride = self.cache_config.num_gpu_blocks * assignment_len
-
-        def get_assignment_batch(mr_key, block_ids, assignment_len, layer_stride, remote_layer_stride):
-            return [
-                AssignmentInstruct(mr_key=mr_key,
-                                   target_offset=block_id[0] * assignment_len + layer * remote_layer_stride,
-                                   source_offset=block_id[1] * assignment_len + layer * layer_stride,
-                                   length=assignment_len) for layer in range(self.model_config.num_layers)
-                for block_id in block_ids
-            ]
-
-        assignment_batch: list[tuple[str, int, int, int]] = []  # mr_key, target, source, offset
-        for migration_exe_req in migration_execution_inputs.requests:
-            remote_engine_id = migration_exe_req[0]
-            blocks_to_migration = migration_exe_req[1]
-            remote_layer_stride = self.migration_backend_impl.links[
-                remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
-
-            for i, t in enumerate([self.full_gpu_cache]):
-                if t.numel() == 0:
-                    continue
-                assignment_batch.extend(
-                    get_assignment_batch(i, blocks_to_migration, assignment_len, layer_stride, remote_layer_stride))
-        await self.migration_backend_impl.p2p_migrate(
-            MigrationAssignment(
-                protocol=migration_execution_inputs.protocol,
-                remote_engine_id=remote_engine_id,
-                batch=assignment_batch,
-            ))
-
-    """ Metheds for PD Disaggregation End. """
-
+        for remote_engine_id, block_pairs in blocks_by_remote.items():
+            remote_pools = getattr(self, '_remote_pd_cache_pool_infos', {}).get(remote_engine_id)
+            if remote_pools is None:
+                raise RuntimeError(f'PD cache-pool metadata is unavailable for remote engine {remote_engine_id}.')
+            assignment_batch = build_cache_pool_assignments(local_pools, remote_pools, block_pairs)
+            await self.migration_backend_impl.p2p_migrate(
+                MigrationAssignment(
+                    protocol=migration_execution_inputs.protocol,
+                    remote_engine_id=remote_engine_id,
+                    batch=assignment_batch,
+                ))
 
 # Existing dlinfer releases replace this class method after importing LMDeploy.
 # Keep its original function identity so runtime and sizing can retain that

@@ -216,6 +216,14 @@ assumed shared pool.
 Same-device block copy, CPU/accelerator swap, and PD/LMCache/Mooncake transfer
 remain separate operations. Layout selection does not own those lifecycles.
 
+PD migration registers every accelerator allocation pool with a stable
+memory-region key. The P/D endpoint handshake exchanges each pool's shape,
+dtype, element size, and entry axis. Migration then decomposes a requested
+block into contiguous byte segments for that pool. Pools may use different
+entry axes, and corresponding P/D pools may place the entry axis differently;
+the planner pairs their segments in logical payload order before dispatching
+one backend batch per remote engine.
+
 ## Compatibility Boundaries
 
 The package temporarily preserves:
@@ -226,8 +234,12 @@ The package temporarily preserves:
 - `gpu_cache`, `cpu_cache`, `full_gpu_cache`, and `full_cpu_cache`.
 
 Native operator request collection requires the retained-plan allocator path.
-PD migration still rejects unsupported multi-pool layouts before registering
-memory.
+PD migration accepts one or more contiguous native allocation pools with equal
+logical/kernel block sizes. Corresponding P/D pools must retain the same order,
+dtype, and logical payload shape after removing the entry axis. It does not yet
+map a packed pool on one endpoint to several pools on the other. Legacy patched
+allocators remain limited to one `[layer, block, ...]` tensor because they do
+not provide per-pool entry-axis metadata.
 
 ## Code Reading Order
 
@@ -236,9 +248,10 @@ memory.
 2. [`schema.py`](./schema.py): requests, normalized resources, and layer rows.
 3. [`plan.py`](./plan.py): the retained worker-local allocation recipe.
 4. [`layout.py`](./layout.py): atomic/composite layouts, pools, and allocations.
-5. [`backends/default/cache.py`](../../backends/default/cache.py): default
+5. [`migration.py`](./migration.py): PD pool metadata and byte-transfer planning.
+6. [`backends/default/cache.py`](../../backends/default/cache.py): default
    resource-to-layout selection.
-6. [`engine.py`](./engine.py): allocation lifetime, model views, and movement.
+7. [`engine.py`](./engine.py): allocation lifetime, model views, and movement.
 
 Backend-specific layouts remain with their backend, for example
 [`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py). Avoid adding a
