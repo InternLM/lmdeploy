@@ -885,17 +885,18 @@ def test_layer_scoped_block_cache_specs_reject_invalid_layer_ids():
     with pytest.raises(ValueError, match='row 1 belongs to multiple tensor specs'):
         CacheEngine.build_cache_plan(overlapping_specs, cache_config, world_size=1)
 
-def test_deepseek_v4_cache_accessors_resolve_layer_scoped_rows():
+def test_deepseek_v4_caches_resolve_state_and_carry_block_view():
     from lmdeploy.pytorch.models.deepseek_v4 import V4Caches
 
     state_cache = torch.arange(24).view(2, 3, 4)
     block_cache = torch.arange(40).view(2, 5, 4)
+    block_cache_view = NamedCacheView({'block': block_cache}, {'block': {1: 0, 3: 1}})
     caches = V4Caches(
         named_state_caches=NamedCacheView({'state': state_cache}, {'state': {1: 0, 3: 1}}),
-        block_caches=NamedCacheView({'block': block_cache}, {'block': {1: 0, 3: 1}}),
+        block_caches=block_cache_view,
     )
 
     assert torch.equal(caches.state_cache('state', 3), state_cache[1])
-    assert torch.equal(caches.block_cache('block', 1), block_cache[0])
+    assert caches.block_caches is block_cache_view
     with pytest.raises(RuntimeError, match='does not own cache'):
         caches.state_cache('state', 2)

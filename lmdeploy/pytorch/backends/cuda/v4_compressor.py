@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Mapping
+
 import torch
 
 from lmdeploy.pytorch.consts import (
@@ -55,32 +57,35 @@ class TritonV4CompressorImpl(BaseV4Compressor):
         self.overlap = overlap
         self.head_dim = head_dim
         self.is_indexer = is_indexer
+        self.block_cache_name = self._resolve_block_cache_name()
 
-    def get_block_cache_requests(self, geometry: BlockCacheGeometry) -> tuple[BlockCacheRequest, ...]:
-        """Describe the CUDA compressor's contiguous per-consumer cache."""
+    def _resolve_block_cache_name(self) -> str:
         if self.is_indexer:
             if self.compress_ratio != 4:
                 raise ValueError('The V4 indexer compressor requires compress_ratio=4.')
-            entries_per_block = geometry.kernel_block_size // self.compress_ratio
+            return V4_INDEX_KV_R4_CACHE_NAME
+        try:
+            return {
+                4: V4_COMPRESSED_KV_R4_CACHE_NAME,
+                128: V4_COMPRESSED_KV_R128_CACHE_NAME,
+            }[self.compress_ratio]
+        except KeyError as e:
+            raise ValueError(f'Unsupported V4 compression ratio: {self.compress_ratio}.') from e
+
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry) -> tuple[BlockCacheRequest, ...]:
+        """Describe the CUDA compressor's contiguous per-consumer cache."""
+        entries_per_block = geometry.kernel_block_size // self.compress_ratio
+        if self.is_indexer:
             request = BlockCacheRequest(
-                name=V4_INDEX_KV_R4_CACHE_NAME,
+                name=self.block_cache_name,
                 shape=v4_packed_index_cache_shape(entries_per_block, self.head_dim),
                 dtype=torch.uint8,
                 per_row_contiguous=True,
             )
             return (request, )
 
-        cache_names = {
-            4: V4_COMPRESSED_KV_R4_CACHE_NAME,
-            128: V4_COMPRESSED_KV_R128_CACHE_NAME,
-        }
-        try:
-            cache_name = cache_names[self.compress_ratio]
-        except KeyError as e:
-            raise ValueError(f'Unsupported V4 compression ratio: {self.compress_ratio}.') from e
-        entries_per_block = geometry.kernel_block_size // self.compress_ratio
         request = BlockCacheRequest(
-            name=cache_name,
+            name=self.block_cache_name,
             shape=(entries_per_block, V4_PACKED_TOKEN_DIM),
             dtype=torch.float8_e4m3fn,
             per_row_contiguous=True,
@@ -115,13 +120,18 @@ class TritonV4CompressorImpl(BaseV4Compressor):
     def write_compressed_kv(
         self,
         compressed_kv: torch.Tensor,
-        kv_cache: torch.Tensor | None,
+        block_caches: Mapping[str, torch.Tensor],
         meta: V4CompressorMetadata,
-        fp8_cache: torch.Tensor | None = None,
-        kv_scale_cache: torch.Tensor | None = None,
     ) -> None:
-        if kv_cache is not None and kv_cache.dtype == torch.uint8:
+        cache = block_caches[self.block_cache_name]
+        kv_cache = None
+        kv_scale_cache = None
+        fp8_cache = None
+        if self.is_indexer:
+            kv_cache = cache
             kv_cache, kv_scale_cache = _get_v4_packed_index_cache_views(kv_cache, compressed_kv.size(-1))
+        else:
+            fp8_cache = cache
         fill_compressed_kv(
             compressed_kv, kv_cache,
             meta.cu_q_seqlens, meta.kv_seqlens,

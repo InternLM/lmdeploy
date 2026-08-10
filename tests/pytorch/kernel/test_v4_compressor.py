@@ -886,7 +886,7 @@ class TestFillCompressedKVFP8:
             TritonV4CompressorImpl,
             _get_v4_packed_index_cache_views,
         )
-        from lmdeploy.pytorch.consts import v4_packed_index_cache_shape
+        from lmdeploy.pytorch.consts import V4_INDEX_KV_R4_CACHE_NAME, v4_packed_index_cache_shape
 
         index_cache = torch.zeros(num_blocks,
                                   *v4_packed_index_cache_shape(entries_per_block, head_dim),
@@ -899,8 +899,8 @@ class TestFillCompressedKVFP8:
             block_size=self.BLOCK_SIZE,
             max_q_seqlen=1,
         )
-        impl = TritonV4CompressorImpl(compress_ratio=4, overlap=True, head_dim=head_dim)
-        impl.write_compressed_kv(compressed_kv, index_cache, meta)
+        impl = TritonV4CompressorImpl(compress_ratio=4, overlap=True, head_dim=head_dim, is_indexer=True)
+        impl.write_compressed_kv(compressed_kv, {V4_INDEX_KV_R4_CACHE_NAME: index_cache}, meta)
 
         value_cache, scale_cache = _get_v4_packed_index_cache_views(index_cache, head_dim)
         num_written = 0

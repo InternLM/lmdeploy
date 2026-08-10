@@ -1,17 +1,10 @@
 from types import SimpleNamespace
 
 import pytest
-import torch
 
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
-from lmdeploy.pytorch.consts import (
-    V4_COMPRESSED_KV_R4_CACHE_NAME,
-    V4_COMPRESSED_KV_R128_CACHE_NAME,
-    V4_INDEX_KV_R4_CACHE_NAME,
-    V4_PACKED_TOKEN_DIM,
-)
 
 
 def _make_model_config(num_attention_heads=32, num_key_value_heads=8, dist_config=None):
@@ -113,33 +106,19 @@ def test_deepseek_v4_update_cache_config_normalizes_block_and_kernel_size(block_
     assert cache_config.window_size == -1
 
 
-def test_deepseek_v4_model_config_normalizes_block_cache_spec_shapes():
+def test_deepseek_v4_model_config_leaves_block_caches_to_built_operators():
     hf_config = _make_deepseek_v4_hf_config([4, 128], num_hidden_layers=2)
 
     model_config = AutoModelConfigBuilder.build(hf_config)
-    model_config.block_size = 192
-    model_config.post_build_func(model_config, 192)
 
-    assert model_config.block_size == 256
-    block_specs = {spec.name: spec for spec in model_config.block_cache_specs}
-    assert set(block_specs) == {
-        V4_COMPRESSED_KV_R4_CACHE_NAME,
-        V4_INDEX_KV_R4_CACHE_NAME,
-        V4_COMPRESSED_KV_R128_CACHE_NAME,
-    }
-    assert block_specs[V4_COMPRESSED_KV_R4_CACHE_NAME].shape == (64, V4_PACKED_TOKEN_DIM)
-    assert block_specs[V4_COMPRESSED_KV_R4_CACHE_NAME].dtype == torch.float8_e4m3fn
-    assert block_specs[V4_INDEX_KV_R4_CACHE_NAME].shape == (64, 1, 132)
-    assert block_specs[V4_INDEX_KV_R4_CACHE_NAME].dtype == torch.uint8
-    assert block_specs[V4_COMPRESSED_KV_R128_CACHE_NAME].shape == (2, V4_PACKED_TOKEN_DIM)
-    assert block_specs[V4_COMPRESSED_KV_R128_CACHE_NAME].dtype == torch.float8_e4m3fn
+    assert model_config.block_cache_specs == []
+    assert model_config.post_build_func is None
 
 
 def test_deepseek_v4_model_config_trims_trailing_zero_compress_ratio():
     hf_config = _make_deepseek_v4_hf_config([0, 4, 128, 0])
 
     model_config = AutoModelConfigBuilder.build(hf_config)
-    model_config.post_build_func(model_config, 256)
 
     assert hf_config.compress_ratios == [0, 4, 128]
     state_specs = {spec.name: spec for spec in model_config.state_cache_specs}
@@ -148,10 +127,7 @@ def test_deepseek_v4_model_config_trims_trailing_zero_compress_ratio():
     assert state_specs['v4_compress_state_r4_idx'].layer_ids == [1]
     assert state_specs['v4_compress_state_r128'].layer_ids == [2]
 
-    block_specs = {spec.name: spec for spec in model_config.block_cache_specs}
-    assert block_specs[V4_COMPRESSED_KV_R4_CACHE_NAME].layer_ids == [1]
-    assert block_specs[V4_INDEX_KV_R4_CACHE_NAME].layer_ids == [1]
-    assert block_specs[V4_COMPRESSED_KV_R128_CACHE_NAME].layer_ids == [2]
+    assert model_config.block_cache_specs == []
 
 
 def test_deepseek_v4_model_config_rejects_extra_nonzero_compress_ratio():

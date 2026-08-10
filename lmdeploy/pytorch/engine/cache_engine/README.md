@@ -76,13 +76,14 @@ instances and registration order; it does not infer layer IDs from module names
 or require a model-specific collector. It happens independently on every
 target, speculative, and memory-model worker after block geometry is finalized.
 
-The DSA indexer is the first production cache-requesting operator on this
-path. Its selected backend implementation requests one packed
-`dsa_indexer_k` byte tensor with a per-row contiguity requirement. Every built
-indexer receives its compact row and retrieves that named row at runtime.
-Target and MTP model classes contain no cache-discovery code, and model
-configuration no longer describes separate anonymous K and scale cache
-tensors.
+The DSA indexer and DeepSeek-V4 compressors use this path. Their selected
+backend implementations declare packed tensor names, payloads, and contiguity;
+the generic wrappers retain collector-assigned rows. A V4 compressor resolves
+its rows once per forward, writes through that mapping, and passes the same
+mapping to the selected attention or indexer reader. The V4 model still
+resolves state caches by global layer ID, but it contains no block-cache names
+or block-layer lookup. Model configuration no longer describes these pageable
+cache tensors.
 
 Models without a cache-requesting operator retain the compatibility path
 through standard K/V configuration, `block_cache_specs`, and anonymous

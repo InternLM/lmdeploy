@@ -3,14 +3,8 @@ import importlib.util
 
 import torch
 
-from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
-from lmdeploy.pytorch.consts import (
-    V4_COMPRESSED_KV_R4_CACHE_NAME,
-    V4_COMPRESSED_KV_R128_CACHE_NAME,
-    V4_INDEX_KV_R4_CACHE_NAME,
-    V4_PACKED_TOKEN_DIM,
-    v4_packed_index_cache_shape,
-)
+from lmdeploy.pytorch.config import ModelConfig, StateCacheSpec
+from lmdeploy.pytorch.consts import V4_PACKED_TOKEN_DIM
 from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
@@ -90,36 +84,6 @@ def _check_env_v4(device: str = 'cuda'):
         raise ImportError('DeepSeek-V4 requires <tile_kernels> to be installed.')
 
 
-def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
-    normalized_block_size = _normalize_v4_block_size(block_size)
-    if normalized_block_size != block_size:
-        logger.warning(f'DeepSeek-V4 requires block_size >= 256 and a multiple of 128. '
-                       f'Adjusting block_size from {model_config.block_size} to {normalized_block_size}.')
-        model_config.block_size = normalized_block_size
-        block_size = normalized_block_size
-
-    hf_config = model_config.hf_config
-    _, ratio4_layers, ratio128_layers = _get_v4_cache_layers(hf_config)
-
-    block_specs = []
-    if ratio4_layers:
-        entries_r4 = block_size // 4
-        index_head_dim = getattr(hf_config, 'index_head_dim', 128)
-        block_specs.append(
-            BlockCacheSpec(V4_COMPRESSED_KV_R4_CACHE_NAME, ratio4_layers, (entries_r4, V4_PACKED_TOKEN_DIM),
-                           torch.float8_e4m3fn))
-        block_specs.append(
-            BlockCacheSpec(V4_INDEX_KV_R4_CACHE_NAME, ratio4_layers,
-                           v4_packed_index_cache_shape(entries_r4, index_head_dim), torch.uint8))
-    if ratio128_layers:
-        entries_r128 = block_size // 128
-        block_specs.append(
-            BlockCacheSpec(V4_COMPRESSED_KV_R128_CACHE_NAME, ratio128_layers, (entries_r128, V4_PACKED_TOKEN_DIM),
-                           torch.float8_e4m3fn))
-
-    model_config.block_cache_specs = block_specs
-
-
 def update_cache_config(cache_config):
     original_block_size = cache_config.block_size
     original_kernel_block_size = cache_config.kernel_block_size
@@ -147,11 +111,7 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def build(cls, hf_config, model_path: str | None = None, tp: int = 1, **kwargs):
-        """Build model config.
-
-        Declares real V4 cache footprint via block_cache_specs / state_cache_specs and removes the dummy KV cache shapes
-        used during bring-up.
-        """
+        """Build model config with configuration-owned V4 state caches."""
         bos_token_id = getattr(hf_config, 'bos_token_id', None)
         head_dim = getattr(hf_config, 'head_dim', 512)
         num_layers = hf_config.num_hidden_layers
@@ -170,11 +130,6 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
             model_paradigm='ar',
             use_standard_kv_cache=False,
         )
-
-        # ---- block cache specs ----
-        # block_cache_specs depend on the final token block_size, so they are
-        # materialized in a post-build hook after ModelConfig.block_size is set.
-        config.block_cache_specs = []
 
         # ---- state cache specs ----
         state_specs = []
@@ -208,6 +163,5 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         config.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in state_specs]
 
         config.check_env_func = _check_env_v4
-        config.post_build_func = _finalize_v4_cache_specs
         config.update_cache_config_func = update_cache_config
         return config

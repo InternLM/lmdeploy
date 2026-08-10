@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -44,10 +45,8 @@ class BaseV4Compressor(ABC):
     def write_compressed_kv(
         self,
         compressed_kv: torch.Tensor,
-        kv_cache: torch.Tensor | None,
+        block_caches: Mapping[str, torch.Tensor],
         meta: V4CompressorMetadata,
-        fp8_cache: torch.Tensor | None = None,
-        kv_scale_cache: torch.Tensor | None = None,
     ) -> None:
         raise NotImplementedError
 
