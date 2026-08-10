@@ -16,20 +16,24 @@ def test_state_checkpoint_is_allocated_lazily():
 
     assert node.state_checkpoint is None
 
-    node.state_checkpoint = NodeStateCheckpoint(slot=3)
+    node.state_checkpoint = NodeStateCheckpoint(slot=3, step=16)
 
     assert node.state_checkpoint.slot == 3
     assert not node.state_checkpoint.published
 
 
 def test_attach_and_detach_leaf_maintain_both_sides():
-    root = _make_node(0)
+    root = _make_node(-1)
     child = _make_node(1)
+
+    assert root.is_attached_or_root()
+    assert not child.is_attached_or_root()
 
     child.attach_to(root)
 
     assert child.parent is root
     assert child.is_attached()
+    assert child.is_attached_or_root()
     assert root.children == {child.block_hash: child}
     assert child.path_from_root() == [child]
 
@@ -37,6 +41,7 @@ def test_attach_and_detach_leaf_maintain_both_sides():
 
     assert child.parent is None
     assert not child.is_attached()
+    assert not child.is_attached_or_root()
     assert root.children == {}
 
 

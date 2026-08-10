@@ -18,7 +18,7 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     _make_state_prefix_cache_restore_plan,
     _make_state_prefix_cache_save_plan,
 )
-from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore
+from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
 
 
 @dataclass
@@ -63,8 +63,14 @@ class _DummySeq:
 
 
 def _state_seq(logical_state: int, restore_state: int = -1):
+    restore = StateCheckpointRestore()
+    if restore_state >= 0:
+        checkpoint = SimpleNamespace(step=0, frozen_block_id=-1)
+        restore.select(restore_state, SimpleNamespace(state_checkpoint=checkpoint))
     return SimpleNamespace(logical_state=logical_state,
-                           prefix_cache=SimpleNamespace(restore=StateCheckpointRestore(slot=restore_state)))
+                           logical_blocks=np.empty((0, ), dtype=np.int64),
+                           prefix_cache=SimpleNamespace(restore=restore,
+                                                        pending_save=StateCheckpointSaveReservation()))
 
 
 class _CopyPlanScheduler:
@@ -1202,7 +1208,7 @@ def test_state_prefix_cache_save_plan_is_compact():
     assert _make_state_prefix_cache_save_plan(messages, [-1, -1, -1]) is None
 
 
-def test_prepare_prefill_cache_inputs_groups_restore_and_save_plans():
+def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
     messages = [_state_seq(4, 11), _state_seq(5)]
     events = []
 
@@ -1216,7 +1222,12 @@ def test_prepare_prefill_cache_inputs_groups_restore_and_save_plans():
 
         def reserve_save(self, seq, step=None):
             assert step is None
-            return {4: 21, 5: -1}[seq.logical_state]
+            state_idx = {4: 21, 5: -1}[seq.logical_state]
+            if state_idx >= 0:
+                checkpoint = SimpleNamespace(step=0, frozen_block_id=-1)
+                node = SimpleNamespace(state_checkpoint=checkpoint)
+                seq.prefix_cache.pending_save.reserve(state_idx, 0, node, False)
+            return state_idx
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=True)
@@ -1242,6 +1253,9 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
 
         def reserve_save(self, seq, step=None):
             reserve_steps.append(step)
+            checkpoint = SimpleNamespace(step=step, frozen_block_id=-1)
+            node = SimpleNamespace(state_checkpoint=checkpoint)
+            seq.prefix_cache.pending_save.reserve(21, step, node, False)
             return 21
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
@@ -1254,6 +1268,44 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
     assert reserve_steps == [160]
     assert cache_inputs.state_restore_plan == ((11, ), (4, ))
     assert cache_inputs.state_save_plan == ((4, ), (21, ))
+
+
+def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans():
+    messages = [_state_seq(4, 11), _state_seq(5, 12)]
+    for msg, dst_block in zip(messages, (20, 21)):
+        checkpoint = SimpleNamespace(step=17, frozen_block_id=70)
+        msg.prefix_cache.restore.node = SimpleNamespace(state_checkpoint=checkpoint)
+        msg.logical_blocks = np.array([10, dst_block], dtype=np.int64)
+
+    class _StateCheckpoints:
+
+        def pin_restores(self, seqs):
+            for seq in seqs:
+                seq.prefix_cache.restore.pinned = True
+
+        def reserve_save(self, seq, step=None):
+            state_idx = {4: 21, 5: 22}[seq.logical_state]
+            frozen_block = {4: 80, 5: 81}[seq.logical_state]
+            checkpoint = SimpleNamespace(step=17, frozen_block_id=frozen_block)
+            node = SimpleNamespace(state_checkpoint=checkpoint)
+            seq.prefix_cache.pending_save.reserve(state_idx, 17, node, False)
+            return state_idx
+
+    scheduler = _CopyPlanScheduler()
+    scheduler.block_trie = SimpleNamespace(state_checkpoints=_StateCheckpoints())
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(is_ssm=True)
+    maker.cache_config = SimpleNamespace(enable_prefix_caching=True, block_size=16)
+    maker.scheduler = scheduler
+
+    cache_inputs = maker._prepare_prefill_cache_inputs(messages)
+
+    assert torch.equal(cache_inputs.kv_restore_plan, torch.tensor([[70, 70], [20, 21]]))
+    assert torch.equal(cache_inputs.kv_save_plan, torch.tensor([[20, 21], [80, 81]]))
+    assert cache_inputs.state_restore_plan == ((11, 12), (4, 5))
+    assert cache_inputs.state_save_plan == ((4, 5), (21, 22))
+    assert np.array_equal(scheduler.calls[0], np.array([70, 20, 70, 21]))
+    assert np.array_equal(scheduler.calls[1], np.array([20, 80, 21, 81]))
 
 
 def test_make_decode_cache_inputs_compacts_valid_state_saves():

@@ -866,6 +866,70 @@ class InputsMakerAsync:
         """Check whether this input maker emits SSM checkpoint operations."""
         return self.config.is_ssm and self.cache_config.enable_prefix_caching
 
+    def _prepare_prefill_cache_restore(
+            self, messages: 'SeqList') -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
+        """Acquire checkpoints and build prefill restore plans."""
+        state_restore_plan = _make_state_prefix_cache_restore_plan(messages)
+        if state_restore_plan is None:
+            return None, None
+
+        state_checkpoints = self.scheduler.block_trie.state_checkpoints
+        # Keep checkpoint sources alive while the prefetched forward waits to
+        # copy them into request-owned KV and runtime state.
+        state_checkpoints.pin_restores(messages)
+        if any(msg.prefix_cache.restore.is_selected and not msg.prefix_cache.restore.pinned for msg in messages):
+            raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+
+        logical_pairs = []
+        for msg in messages:
+            restore = msg.prefix_cache.restore
+            if not restore.is_selected:
+                continue
+            checkpoint = restore.node.state_checkpoint
+            if checkpoint.frozen_block_id < 0:
+                continue
+            dst_block_idx = checkpoint.step // self.cache_config.block_size
+            if dst_block_idx >= len(msg.logical_blocks):
+                raise RuntimeError('SSM prefix-cache restore destination block is missing.')
+            logical_pairs.append((checkpoint.frozen_block_id, msg.logical_blocks[dst_block_idx]))
+
+        kv_restore_plan = None
+        if logical_pairs:
+            kv_restore_plan = self._make_kv_prefix_cache_copy_plan(logical_pairs)
+        return kv_restore_plan, state_restore_plan
+
+    def _prepare_prefill_cache_save(
+        self,
+        messages: 'SeqList',
+        save_steps: tuple[int, ...] | None,
+    ) -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
+        """Reserve checkpoints and build prefill save plans."""
+        state_checkpoints = self.scheduler.block_trie.state_checkpoints
+        if save_steps is None:
+            save_state_offsets = [state_checkpoints.reserve_save(msg) for msg in messages]
+        else:
+            save_state_offsets = [state_checkpoints.reserve_save(msg, step=step)
+                                  for msg, step in zip(messages, save_steps)]
+        state_save_plan = _make_state_prefix_cache_save_plan(messages, save_state_offsets)
+
+        logical_pairs = []
+        for msg, state_idx in zip(messages, save_state_offsets):
+            if state_idx < 0:
+                continue
+            pending_save = msg.prefix_cache.pending_save
+            checkpoint = pending_save.node.state_checkpoint
+            if checkpoint.frozen_block_id < 0:
+                continue
+            src_block_idx = pending_save.step // self.cache_config.block_size
+            if src_block_idx >= len(msg.logical_blocks):
+                raise RuntimeError('SSM prefix-cache save source block is missing.')
+            logical_pairs.append((msg.logical_blocks[src_block_idx], checkpoint.frozen_block_id))
+
+        kv_save_plan = None
+        if logical_pairs:
+            kv_save_plan = self._make_kv_prefix_cache_copy_plan(logical_pairs)
+        return kv_save_plan, state_save_plan
+
     def _prepare_prefill_cache_inputs(self,
                                       messages: 'SeqList',
                                       save_steps: tuple[int, ...] | None = None):
@@ -875,28 +939,15 @@ class InputsMakerAsync:
         if save_steps is not None and len(save_steps) != len(messages):
             raise ValueError('save_steps must have one entry per prefill sequence.')
 
-        state_checkpoints = self.scheduler.block_trie.state_checkpoints
-        state_restore_plan = _make_state_prefix_cache_restore_plan(messages)
-        if state_restore_plan is not None:
-            # Keep restore checkpoints alive while a prefetched forward waits
-            # to copy them into request-owned runtime state.
-            state_checkpoints.pin_restores(messages)
-            if any(msg.prefix_cache.restore.is_selected and not msg.prefix_cache.restore.pinned
-                   for msg in messages):
-                raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+        kv_restore_plan, state_restore_plan = self._prepare_prefill_cache_restore(messages)
+        kv_save_plan, state_save_plan = self._prepare_prefill_cache_save(messages, save_steps)
 
-        # Saves become visible only after model_forward has copied runtime
-        # state into these reserved checkpoint offsets.
-        if save_steps is None:
-            save_state_offsets = [state_checkpoints.reserve_save(msg) for msg in messages]
-        else:
-            save_state_offsets = [state_checkpoints.reserve_save(msg, step=step)
-                                  for msg, step in zip(messages, save_steps)]
-        state_save_plan = _make_state_prefix_cache_save_plan(messages, save_state_offsets)
-
-        if state_restore_plan is None and state_save_plan is None:
+        if (kv_restore_plan is None and kv_save_plan is None and state_restore_plan is None
+                and state_save_plan is None):
             return None
-        return CacheCheckpointInputs(state_restore_plan=state_restore_plan,
+        return CacheCheckpointInputs(kv_restore_plan=kv_restore_plan,
+                                     kv_save_plan=kv_save_plan,
+                                     state_restore_plan=state_restore_plan,
                                      state_save_plan=state_save_plan)
 
     def _make_decode_cache_inputs(self, valid_seqs: 'SeqList', delta: ModelInputsDelta | None):
@@ -905,7 +956,7 @@ class InputsMakerAsync:
             return None
 
         decode_state_interval = self.cache_config.prefix_cache_decode_state_interval
-        if decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1:
+        if (decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1):
             return None
 
         state_checkpoints = self.scheduler.block_trie.state_checkpoints
