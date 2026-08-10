@@ -48,7 +48,7 @@ logger = get_logger('lmdeploy')
 
 
 def _unpack_cache_allocation(result):
-    """Return the native owner and temporary compatibility views."""
+    """Adapt a native allocation or the pinned external tuple contract."""
     if isinstance(result, CacheAllocation):
         mem_pool, caches = result.as_legacy()
         return result, mem_pool, caches
@@ -566,6 +566,8 @@ class CacheEngine:
             device='cuda',
         )
         self.gpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
+        self._legacy_gpu_cache_pool = mem_pool if self.gpu_allocation is None else None
+        # Retain the raw tensor-or-list facade for downstream compatibility.
         self.full_gpu_cache = mem_pool
         self._gpu_cache_list = caches
         self.local_gpu_cache = self._build_legacy_layer_cache(caches)
@@ -590,6 +592,7 @@ class CacheEngine:
             device='cpu',
         )
         self.cpu_allocation, mem_pool, caches = _unpack_cache_allocation(result)
+        # Retain the raw tensor-or-list facade for downstream compatibility.
         self.full_cpu_cache = mem_pool
         self._cpu_cache_list = caches
         self.local_cpu_cache = self._build_legacy_layer_cache(caches)
@@ -644,16 +647,10 @@ class CacheEngine:
         return custom_caches
 
     @staticmethod
-    def _as_mem_pools(mem_pool: torch.Tensor | list[torch.Tensor]) -> list[torch.Tensor]:
-        """Normalize one or many allocation pools."""
-        if isinstance(mem_pool, torch.Tensor):
-            return [mem_pool]
-        return mem_pool
-
-    @staticmethod
-    def _mem_pool_nbytes(mem_pool: torch.Tensor | list[torch.Tensor]) -> int:
-        """Return memory size for one or many allocation pools."""
-        return sum(pool.numel() * pool.element_size() for pool in CacheEngine._as_mem_pools(mem_pool))
+    def _legacy_mem_pool_nbytes(mem_pool: torch.Tensor | list[torch.Tensor]) -> int:
+        """Size the tensor-or-list result of an external patched allocator."""
+        pools = [mem_pool] if isinstance(mem_pool, torch.Tensor) else mem_pool
+        return sum(pool.numel() * pool.element_size() for pool in pools)
 
     def _build_swap_pairs(self):
         """Resolve compatible CPU-to-device cache entries once at build
@@ -810,7 +807,7 @@ class CacheEngine:
         allocation, mem_pool, _ = _unpack_cache_allocation(result)
         if allocation is not None:
             return allocation.nbytes
-        return cls._mem_pool_nbytes(mem_pool)
+        return cls._legacy_mem_pool_nbytes(mem_pool)
 
     # PD disaggregation.
 
@@ -821,7 +818,7 @@ class CacheEngine:
 
         allocation = getattr(self, 'gpu_allocation', None)
         if allocation is None:
-            pool = getattr(self, 'full_gpu_cache', None)
+            pool = getattr(self, '_legacy_gpu_cache_pool', None)
             if not isinstance(pool, torch.Tensor):
                 raise RuntimeError('PD migration of multiple pools requires native CacheAllocation metadata.')
             return (CachePool(pool, entry_axis=1), )
@@ -918,6 +915,8 @@ class StateCacheEngine:
             allocate_kwargs['state_specs'] = state_specs
         result = self.allocate_caches(**allocate_kwargs)
         self.allocation, self.mem_pool, self._state_caches = _unpack_cache_allocation(result)
+        # ``mem_pool`` remains a downstream facade; state operations use the
+        # resolved allocation entries below.
         self._state_entries = self._build_state_entries(self.allocation, self._state_caches)
 
     @staticmethod

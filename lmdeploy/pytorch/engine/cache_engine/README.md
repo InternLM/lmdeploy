@@ -233,6 +233,13 @@ The package temporarily preserves:
 - anonymous cache/state shapes and model-config named specifications;
 - `gpu_cache`, `cpu_cache`, `full_gpu_cache`, and `full_cpu_cache`.
 
+For native block caches, `gpu_allocation` and `cpu_allocation` are the internal
+sources of truth. `full_gpu_cache` and `full_cpu_cache` are retained only as raw
+tensor-or-list facades for downstream readers; native swap, copy, sizing, and
+PD paths do not recover ownership or geometry from them. A private legacy GPU
+pool is retained only when an external patched allocator returns the old
+`(mem_pool, caches)` tuple, because that path has no `CacheAllocation`.
+
 Native operator request collection requires the retained-plan allocator path.
 PD migration accepts one or more contiguous native allocation pools with equal
 logical/kernel block sizes. Corresponding P/D pools must retain the same order,

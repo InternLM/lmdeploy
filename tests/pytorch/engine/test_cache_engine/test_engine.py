@@ -614,6 +614,9 @@ def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations(monkey
     cpu_cache = cache_engine.allocate_cpu_cache()
 
     assert allocations == [(6, 'cuda'), (6, 'cpu')]
+    assert cache_engine._legacy_gpu_cache_pool is None
+    assert cache_engine.full_gpu_cache is cache_engine.gpu_allocation.pools[0].tensor
+    assert cache_engine.full_cpu_cache is cache_engine.cpu_allocation.pools[0].tensor
     assert cache_engine._cache_names == ['only']
     assert cache_engine._block_cache_layer_maps == {}
     assert len(gpu_cache) == len(cpu_cache) == 4
@@ -649,9 +652,13 @@ def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
                                                    layout=native_layout,
                                                    kernel_blocks_per_logical_block=1)
 
+    cache_engine.allocate_gpu_cache()
     cache_engine.allocate_cpu_cache()
 
+    assert cache_engine.gpu_allocation is None
     assert cache_engine.cpu_allocation is None
+    assert cache_engine._legacy_gpu_cache_pool is mem_pool
+    assert cache_engine.full_gpu_cache is mem_pool
     assert cache_engine.full_cpu_cache is mem_pool
     assert CacheEngine.get_cache_block_size(cache_engine.cache_config, cache_engine.model_config) == mem_pool.numel()
 
