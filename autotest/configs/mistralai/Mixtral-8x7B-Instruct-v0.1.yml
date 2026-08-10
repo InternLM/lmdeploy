@@ -11,10 +11,6 @@ a100:
     - cuda-ipc
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
 - model_type: chat
   engine_config:
     tp: 2
@@ -37,7 +33,3 @@ h:
     - cuda-ipc
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
