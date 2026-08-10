@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Validated cache-tensor specifications and row membership."""
+"""Cache payload descriptions, tensor specifications, and row bindings."""
 
 import math
 from collections.abc import Sequence
@@ -8,7 +8,20 @@ from operator import index as as_index
 
 import torch
 
-from ...config import BlockCacheSpec, StateCacheSpec
+from lmdeploy.pytorch.backends import get_backend
+
+from ....messages import QuantPolicy
+from ...config import BlockCacheSpec, CacheConfig, ModelConfig, StateCacheSpec
+
+_FP8_CACHE_DTYPES = {
+    QuantPolicy.FP8: torch.float8_e4m3fn,
+    QuantPolicy.FP8_E5M2: torch.float8_e5m2,
+}
+
+# 512*1 + 4*4 + 64*2 = 656
+_MLA_FP8_HEAD_DIM = 656
+
+# Cache payload descriptions and policy.
 
 
 def round_up(x: int, alignment: int) -> int:
@@ -27,6 +40,149 @@ class CacheDesc:
         self.numel = math.prod(self.shape)
         self.size = self.numel * self.dtype.itemsize
         self.aligned_size = round_up(self.size, self.alignment)
+
+
+def resolve_model_kv_cache_dtype(model_config: ModelConfig) -> torch.dtype:
+    """Resolve the model-selected KV-cache dtype before policy overrides."""
+    kv_cache_dtype = model_config.dtype
+    if model_config.use_mla_fp8_cache:
+        kv_cache_dtype = torch.float8_e4m3fn
+    elif model_config.mla_kv_cache_dtype == 'bfloat16':
+        kv_cache_dtype = torch.bfloat16
+    return kv_cache_dtype
+
+
+def apply_sparse_mla_cache_policy(model_config: ModelConfig, cache_config: CacheConfig) -> None:
+    """Apply an explicit sparse-MLA cache policy to the model config."""
+    if model_config.mla_index_topk is None or cache_config.quant_policy == QuantPolicy.NONE:
+        return
+    if cache_config.quant_policy == QuantPolicy.FP8:
+        model_config.mla_kv_cache_dtype = 'fp8_ds_mla'
+        return
+    raise ValueError(f'Sparse MLA does not support quant_policy={cache_config.quant_policy}. '
+                     'Use none/0 for BF16 or fp8/16 for FP8.')
+
+
+def is_fp8_cache_policy(quant_policy: QuantPolicy) -> bool:
+    """Return whether a quantization policy stores KV payload as torch FP8."""
+    return quant_policy in _FP8_CACHE_DTYPES
+
+
+def resolve_fp8_cache_dtype(quant_policy: QuantPolicy) -> torch.dtype:
+    """Return the tensor dtype selected by an FP8 KV-cache policy."""
+    try:
+        return _FP8_CACHE_DTYPES[quant_policy]
+    except KeyError as e:
+        raise ValueError(f'Not an FP8 quant policy: {quant_policy}') from e
+
+
+def _resolve_key_block_shape(model_config: ModelConfig,
+                             block_size: int,
+                             head_size: int,
+                             world_size: int = 1,
+                             quant_policy: QuantPolicy = QuantPolicy.NONE) -> tuple[int, ...]:
+    """Resolve one backend-specific key block shape."""
+    attn_backend = get_backend()
+    dtype = model_config.dtype
+    num_heads = model_config.num_key_value_heads
+
+    assert num_heads % world_size == 0, f'num_heads: {num_heads}, world_size: {world_size}'
+    num_heads = num_heads // world_size
+
+    if model_config.use_mla_fp8_cache:
+        return (block_size, num_heads, _MLA_FP8_HEAD_DIM)
+
+    if quant_policy in (QuantPolicy.INT4, QuantPolicy.TURBO_QUANT):
+        assert head_size % 2 == 0, f'head_size: {head_size}, quant_policy: {quant_policy}'
+        head_size = head_size // 2
+    return attn_backend.get_k_block_shape(block_size, num_heads, head_size, dtype)
+
+
+def _resolve_value_block_shape(model_config: ModelConfig,
+                               block_size: int,
+                               head_size: int,
+                               world_size: int = 1,
+                               quant_policy: QuantPolicy = QuantPolicy.NONE) -> tuple[int, ...]:
+    """Resolve one backend-specific value block shape."""
+    attn_backend = get_backend()
+    dtype = model_config.dtype
+    num_heads = model_config.num_key_value_heads
+
+    assert num_heads % world_size == 0, f'num_heads: {num_heads}, world_size: {world_size}'
+    num_heads = num_heads // world_size
+
+    if model_config.use_mla_fp8_cache:
+        # FlashMLA shares key and value storage.
+        return (block_size, num_heads, 0)
+
+    if quant_policy == QuantPolicy.TURBO_QUANT:
+        assert head_size % 4 == 0, f'head_size: {head_size}, quant_policy: {quant_policy}'
+        head_size = head_size // 4
+    elif quant_policy == QuantPolicy.INT4:
+        assert head_size % 2 == 0, f'head_size: {head_size}, quant_policy: {quant_policy}'
+        head_size = head_size // 2
+    return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
+
+
+def build_k_cache_desc(model_config: ModelConfig, cache_config: CacheConfig, world_size: int = 1) -> CacheDesc:
+    """Build the standard key-cache payload description."""
+    head_size = model_config.k_head_dim
+    if head_size is None:
+        head_size = model_config.head_dim
+    shape = _resolve_key_block_shape(
+        model_config,
+        block_size=cache_config.kernel_block_size,
+        head_size=head_size,
+        world_size=world_size,
+        quant_policy=cache_config.quant_policy,
+    )
+    dtype = resolve_model_kv_cache_dtype(model_config)
+    if is_fp8_cache_policy(cache_config.quant_policy):
+        dtype = resolve_fp8_cache_dtype(cache_config.quant_policy)
+    elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        dtype = torch.uint8
+    return CacheDesc(shape=list(shape), dtype=dtype)
+
+
+def build_v_cache_desc(model_config: ModelConfig, cache_config: CacheConfig, world_size: int = 1) -> CacheDesc:
+    """Build the standard value-cache payload description."""
+    head_size = model_config.v_head_dim
+    if head_size is None:
+        head_size = model_config.head_dim
+    shape = _resolve_value_block_shape(
+        model_config,
+        block_size=cache_config.kernel_block_size,
+        head_size=head_size,
+        world_size=world_size,
+        quant_policy=cache_config.quant_policy,
+    )
+    dtype = resolve_model_kv_cache_dtype(model_config)
+    if is_fp8_cache_policy(cache_config.quant_policy):
+        dtype = resolve_fp8_cache_dtype(cache_config.quant_policy)
+    elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        dtype = torch.uint8
+    return CacheDesc(shape=list(shape), dtype=dtype)
+
+
+def build_quant_cache_descs(k_cache_desc: CacheDesc, v_cache_desc: CacheDesc, model_config: ModelConfig,
+                            cache_config: CacheConfig) -> list[CacheDesc]:
+    """Build auxiliary scale/zero cache descriptions when required."""
+    if cache_config.quant_policy == QuantPolicy.NONE or is_fp8_cache_policy(cache_config.quant_policy):
+        return []
+
+    dtype = model_config.dtype
+    if cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
+        key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
+        val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
+    else:
+        key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
+        val_scale_zero_shape = v_cache_desc.shape[:-1] + [2]
+    return [
+        CacheDesc(shape=key_scale_zero_shape, dtype=dtype),
+        CacheDesc(shape=val_scale_zero_shape, dtype=dtype),
+    ]
+
+# Normalized requests and row bindings.
 
 
 @dataclass(frozen=True)
@@ -164,6 +320,8 @@ class CacheTensorSpec:
         assert self.layer_rows is not None
         return self.layer_rows.num_rows
 
+# Tensor-spec assembly.
+
 
 def layer_maps_from_specs(tensor_specs: Sequence[CacheTensorSpec]) -> dict[str, dict[int, int]]:
     """Collect layer maps from named cache-tensor specs."""
@@ -225,3 +383,58 @@ def build_state_cache_tensor_specs(
     return tuple(
         CacheTensorSpec(name=f'state_{idx}', desc=CacheDesc(shape=shape, dtype=dtype))
         for idx, (shape, dtype) in enumerate(state_shapes))
+
+
+def build_custom_cache_descs(model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
+    """Build configured named or legacy custom-cache descriptions."""
+    if len(model_config.block_cache_specs) > 0:
+        return [spec.desc for spec in build_block_cache_tensor_specs(model_config.block_cache_specs)]
+
+    block_size = cache_config.kernel_block_size
+    return [
+        CacheDesc(shape=(block_size, *shape), dtype=dtype)
+        for shape, dtype in model_config.cache_shapes
+    ]
+
+
+def build_model_block_cache_tensor_specs(
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        world_size: int,
+        block_requests: Sequence[BlockCacheRequest] | None = None) -> tuple[CacheTensorSpec, ...]:
+    """Build ordered block-cache tensor specs from model and operator
+    inputs."""
+    tensor_specs = []
+    if model_config.use_standard_kv_cache:
+        k_cache_desc = build_k_cache_desc(model_config, cache_config, world_size)
+        v_cache_desc = build_v_cache_desc(model_config, cache_config, world_size)
+        quant_cache_descs = build_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
+        tensor_specs.append(CacheTensorSpec(name='k_cache', desc=k_cache_desc))
+        tensor_specs.append(CacheTensorSpec(name='v_cache', desc=v_cache_desc))
+        tensor_specs.extend(
+            CacheTensorSpec(name=f'quant_{index}', desc=desc)
+            for index, desc in enumerate(quant_cache_descs))
+
+    if block_requests is not None:
+        tensor_specs.extend(build_block_cache_tensor_specs_from_requests(block_requests))
+    elif len(model_config.block_cache_specs) > 0:
+        tensor_specs.extend(build_block_cache_tensor_specs(model_config.block_cache_specs))
+    else:
+        tensor_specs.extend(
+            CacheTensorSpec(name=f'custom_{index}', desc=desc)
+            for index, desc in enumerate(build_custom_cache_descs(model_config, cache_config)))
+    return tuple(tensor_specs)
+
+
+def uses_layer_scoped_block_caches(model_config: ModelConfig | None) -> bool:
+    """Return whether configured named block caches use declared layer rows."""
+    return (model_config is not None and not model_config.use_standard_kv_cache
+            and len(model_config.block_cache_specs) > 0)
+
+
+def build_block_rows_by_layer(model_config: ModelConfig) -> dict[str, dict[int, int]]:
+    """Build global-layer-id to local-row maps for configured block caches."""
+    if not uses_layer_scoped_block_caches(model_config):
+        return {}
+    tensor_specs = build_block_cache_tensor_specs(model_config.block_cache_specs)
+    return layer_maps_from_specs(tensor_specs)

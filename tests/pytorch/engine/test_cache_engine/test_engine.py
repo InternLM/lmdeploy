@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-import lmdeploy.pytorch.engine.cache_engine.engine as cache_engine_module
+import lmdeploy.pytorch.engine.cache_engine.plan as cache_plan_module
+import lmdeploy.pytorch.engine.cache_engine.schema as cache_schema_module
 import lmdeploy.pytorch.engine.cache_engine.state as state_cache_module
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
@@ -14,6 +15,7 @@ from lmdeploy.pytorch.config import BlockCacheSpec, CacheConfig, ModelConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine.engine import _resolve_legacy_kv_cache_dtype
 from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool
 from lmdeploy.pytorch.engine.cache_engine.plan import BlockCachePlan
 from lmdeploy.pytorch.engine.cache_engine.schema import (
@@ -36,6 +38,35 @@ def _make_model_config(**kwargs):
     for key, value in kwargs.items():
         setattr(model_config, key, value)
     return model_config
+
+
+@pytest.mark.parametrize(
+    ('quant_policy', 'device_type', 'expected_dtype'),
+    [
+        (QuantPolicy.NONE, 'cuda', torch.float16),
+        (QuantPolicy.INT8, 'cuda', torch.uint8),
+        (QuantPolicy.INT8, 'npu', torch.int8),
+        (QuantPolicy.FP8, 'cuda', torch.float8_e4m3fn),
+    ],
+)
+def test_resolve_legacy_kv_cache_dtype(quant_policy, device_type, expected_dtype):
+    model_config = SimpleNamespace(dtype=torch.float16,
+                                   use_mla_fp8_cache=False,
+                                   mla_kv_cache_dtype=None,
+                                   mla_index_topk=None)
+    cache_config = SimpleNamespace(quant_policy=quant_policy, device_type=device_type)
+
+    assert _resolve_legacy_kv_cache_dtype(model_config, cache_config) is expected_dtype
+
+
+def test_sparse_mla_legacy_dtype_bypasses_generic_quantization():
+    model_config = SimpleNamespace(dtype=torch.bfloat16,
+                                   use_mla_fp8_cache=True,
+                                   mla_kv_cache_dtype='fp8_ds_mla',
+                                   mla_index_topk=2048)
+    cache_config = SimpleNamespace(quant_policy=QuantPolicy.FP8, device_type='npu')
+
+    assert _resolve_legacy_kv_cache_dtype(model_config, cache_config) is torch.float8_e4m3fn
 
 
 def test_bf16_sparse_mla_cache_layout():
@@ -125,6 +156,30 @@ def test_retained_plan_uses_finalized_sparse_mla_dtype():
 
     assert model_config.mla_kv_cache_dtype == 'fp8_ds_mla'
     assert plan.tensor_specs[0].desc.dtype == torch.float8_e4m3fn
+
+
+def test_cache_plan_finalizes_sparse_mla_policy_before_request_collection():
+    model_config = _make_model_config(dtype=torch.bfloat16,
+                                      mla_index_topk=2048,
+                                      mla_kv_cache_dtype='bfloat16')
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               quant_policy=QuantPolicy.FP8)
+    collected_dtypes = []
+
+    def collect_requests(geometry):
+        collected_dtypes.append(model_config.mla_kv_cache_dtype)
+        return None
+
+    CacheEngine.build_cache_plan(model_config,
+                                 cache_config,
+                                 world_size=1,
+                                 request_collector=collect_requests)
+
+    assert collected_dtypes == ['fp8_ds_mla']
 
 
 @pytest.mark.parametrize('quant_policy',
@@ -667,7 +722,8 @@ def test_cache_engine_accepts_legacy_allocation_tuple(monkeypatch):
 
 
 def test_dlinfer_backend_uses_native_block_and_state_allocations(monkeypatch):
-    monkeypatch.setattr(cache_engine_module, 'get_backend', lambda: DlinferOpsBackend)
+    monkeypatch.setattr(cache_plan_module, 'get_backend', lambda: DlinferOpsBackend)
+    monkeypatch.setattr(cache_schema_module, 'get_backend', lambda: DlinferOpsBackend)
     monkeypatch.setattr(state_cache_module, 'get_backend', lambda: DlinferOpsBackend)
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,

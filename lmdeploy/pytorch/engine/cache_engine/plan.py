@@ -1,12 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Finalized block-cache geometry, access metadata, and layout."""
+"""Block-cache plan construction and its finalized allocation recipe."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
 
+from lmdeploy.pytorch.backends import get_backend
+
+from ...config import CacheConfig, ModelConfig
 from .layout import BlockCacheLayout, CacheAllocation
-from .schema import CacheTensorSpec
+from .schema import (
+    BlockCacheGeometry,
+    BlockCacheRequest,
+    CacheTensorSpec,
+    build_model_block_cache_tensor_specs,
+)
 
 
 @dataclass(frozen=True)
@@ -76,3 +85,24 @@ class BlockCachePlan:
     def logical_block_nbytes(self) -> int:
         """Return owning storage bytes required by one logical block."""
         return self.allocate(num_logical_blocks=1, device='meta').nbytes
+
+
+def build_block_cache_plan(
+    model_config: ModelConfig,
+    cache_config: CacheConfig,
+    world_size: int,
+    geometry: BlockCacheGeometry,
+    block_requests: Sequence[BlockCacheRequest] | None = None,
+) -> BlockCachePlan:
+    """Build one plan from finalized model, cache, and request inputs."""
+    tensor_specs = build_model_block_cache_tensor_specs(model_config,
+                                                        cache_config,
+                                                        world_size,
+                                                        block_requests=block_requests)
+    layout = get_backend().get_cache_backend().build_block_layout(tensor_specs,
+                                                                  num_layers=model_config.num_layers)
+    return BlockCachePlan(
+        tensor_specs=tensor_specs,
+        layout=layout,
+        kernel_blocks_per_logical_block=geometry.kernel_blocks_per_logical_block,
+    )

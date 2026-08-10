@@ -85,8 +85,10 @@ consumers into `CacheTensorSpec` objects. Each spec records the stable consumer
 rows stored by its future tensor. For example, requests with contracts
 `A, B, A` become `A(consumer_rows=(0, 2))` and `B(consumer_rows=(1,))`.
 Legacy configuration-owned specs may instead retain explicit layer-row maps.
-The active `CacheBackend` then selects physical layouts for the ordered tensor
-specs.
+`schema.py` also derives standard K/V and quantized payload descriptions from
+the finalized model/cache policy. `plan.py` passes the ordered tensor specs to
+the active `CacheBackend`, retains its selected physical layout, and constructs
+the plan.
 
 `BlockCachePlan` retains:
 
@@ -98,9 +100,27 @@ It owns no tensors, streams, events, or movement policy. Plans never cross the
 executor RPC boundary; each worker returns only target/speculative/memory byte
 counts to the executor.
 
+The exact construction path is:
+
+```text
+CacheEngine.build_cache_plan()
+  ├── finalize BlockCacheGeometry and sparse-MLA cache policy
+  ├── request_collector(geometry)
+  └── plan.build_block_cache_plan(...)
+        ├── schema.build_model_block_cache_tensor_specs(...)
+        ├── get_backend().get_cache_backend().build_block_layout(...)
+        └── BlockCachePlan(...)
+```
+
+The first method is a compatibility and request-collection boundary. The
+function in `plan.py` receives finalized inputs and owns physical layout
+selection plus construction of the immutable plan.
+
 Request collection through the old dlinfer allocator monkey patch remains
 rejected at build time because that compatibility path cannot consume a
-worker-local plan.
+worker-local plan. `CacheEngine.build_cache_plan()` remains the compatibility
+facade that finalizes geometry, invokes the worker-owned request collector, and
+enforces this guard before delegating plan construction.
 
 ### 3. Realize allocations
 
@@ -263,7 +283,10 @@ one backend batch per remote engine.
 The package temporarily preserves:
 
 - unpacking `CacheAllocation` as `(mem_pool, caches)`;
-- `CacheEngine.allocate_caches()` for direct callers and older dlinfer patches;
+- `CacheEngine.build_cache_plan()`, `allocate_caches()`, and the K/V/quant/custom
+  description facades used by dlinfer's contiguous allocator patch;
+- `CacheEngine.num_layers` and `kv_cache_dtype`, which dlinfer's Ascend310P
+  allocator patch still reads even though native allocation uses the plan;
 - anonymous cache/state shapes and model-config named specifications;
 - `gpu_cache`, `cpu_cache`, `full_gpu_cache`, and `full_cpu_cache`.
 
@@ -286,8 +309,10 @@ not provide per-pool entry-axis metadata.
 
 01. [`collector.py`](./collector.py): built-operator request collection and row
     binding.
-02. [`schema.py`](./schema.py): requests, tensor specs, and layer rows.
-03. [`plan.py`](./plan.py): the retained worker-local allocation recipe.
+02. [`schema.py`](./schema.py): payload descriptions, requests, tensor specs,
+    and row bindings.
+03. [`plan.py`](./plan.py): backend layout selection and the retained
+    worker-local allocation recipe.
 04. [`layout.py`](./layout.py): atomic/composite layouts, pools, and allocations.
 05. [`migration.py`](./migration.py): PD pool metadata and byte-transfer planning.
 06. [`backends/default/cache.py`](../../backends/default/cache.py): default
@@ -296,8 +321,8 @@ not provide per-pool entry-axis metadata.
 08. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
     payloads.
 09. [`state.py`](./state.py): state allocation and state-slot transitions.
-10. [`engine.py`](./engine.py): block-cache allocation lifetime, view
-    construction, and movement.
+10. [`engine.py`](./engine.py): compatibility construction facades, block-cache
+    allocation lifetime, view construction, and movement.
 
 Backend-specific layouts remain with their backend, for example
 [`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py). Avoid adding a

@@ -30,14 +30,22 @@ from .migration import (
     validate_cache_pool_layouts,
 )
 from .plan import BlockCachePlan
+from .plan import build_block_cache_plan as _build_block_cache_plan
 from .schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
     CacheDesc,
-    CacheTensorSpec,
-    build_block_cache_tensor_specs,
-    build_block_cache_tensor_specs_from_requests,
-    layer_maps_from_specs,
+    apply_sparse_mla_cache_policy,
+    build_block_rows_by_layer,
+    build_custom_cache_descs,
+    build_k_cache_desc,
+    build_model_block_cache_tensor_specs,
+    build_quant_cache_descs,
+    build_v_cache_desc,
+    is_fp8_cache_policy,
+    resolve_fp8_cache_dtype,
+    resolve_model_kv_cache_dtype,
+    uses_layer_scoped_block_caches,
 )
 from .view import NamedCacheView
 
@@ -46,30 +54,10 @@ KVCache = tuple[torch.Tensor, torch.Tensor]
 logger = get_logger('lmdeploy')
 
 
-def _get_kv_cache_dtype(model_config: ModelConfig):
-    kv_cache_dtype = model_config.dtype
-    if model_config.use_mla_fp8_cache:
-        kv_cache_dtype = torch.float8_e4m3fn
-    elif model_config.mla_kv_cache_dtype == 'bfloat16':
-        kv_cache_dtype = torch.bfloat16
-    return kv_cache_dtype
+def _get_fp8_cache_dtype(quant_policy: QuantPolicy) -> torch.dtype:
+    """Preserve the existing private cache-dtype compatibility helper."""
+    return resolve_fp8_cache_dtype(quant_policy)
 
-
-def _update_mla_kv_cache_dtype(model_config: ModelConfig, cache_config: CacheConfig):
-    """Apply an explicit sparse MLA cache policy to the model config."""
-    if model_config.mla_index_topk is None or cache_config.quant_policy == QuantPolicy.NONE:
-        return
-    if cache_config.quant_policy == QuantPolicy.FP8:
-        model_config.mla_kv_cache_dtype = 'fp8_ds_mla'
-        return
-    raise ValueError(f'Sparse MLA does not support quant_policy={cache_config.quant_policy}. '
-                     'Use none/0 for BF16 or fp8/16 for FP8.')
-
-
-_FP8_CACHE_DTYPES = {
-    QuantPolicy.FP8: torch.float8_e4m3fn,
-    QuantPolicy.FP8_E5M2: torch.float8_e5m2,
-}
 
 _KV_CACHE_QUANT_POLICY_DESCS = {
     QuantPolicy.FP8: 'fp8_e4m3 KV cache',
@@ -80,26 +68,32 @@ _KV_CACHE_QUANT_POLICY_DESCS = {
 }
 
 
-def _is_fp8_quant_policy(quant_policy: QuantPolicy):
-    """Return whether quant policy stores KV payload as torch FP8."""
-    return quant_policy in _FP8_CACHE_DTYPES
-
-
-def _get_fp8_cache_dtype(quant_policy: QuantPolicy):
-    """Get the cache tensor dtype for an FP8 KV-cache quant policy."""
-    try:
-        return _FP8_CACHE_DTYPES[quant_policy]
-    except KeyError as e:
-        raise ValueError(f'Not an FP8 quant policy: {quant_policy}') from e
-
-
-def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy):
+def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy) -> str | None:
     """Describe the active KV-cache quantization policy for logs."""
     return _KV_CACHE_QUANT_POLICY_DESCS.get(quant_policy)
 
 
-# 512*1 + 4*4 + 64*2 = 656
-MLA_FP8_HEAD_DIM = 656
+def _resolve_legacy_kv_cache_dtype(model_config: ModelConfig, cache_config: CacheConfig) -> torch.dtype:
+    """Resolve the dtype exposed to legacy downstream CacheEngine patches."""
+    kv_cache_dtype = resolve_model_kv_cache_dtype(model_config)
+
+    # Sparse MLA records its selected dtype on ModelConfig. Its generic quant
+    # policy is cleared after this compatibility field has been resolved.
+    if model_config.mla_index_topk is not None:
+        return kv_cache_dtype
+
+    quant_policy = cache_config.quant_policy
+    if is_fp8_cache_policy(quant_policy):
+        assert cache_config.device_type == 'cuda', \
+            f'FP8 quantization is only supported on CUDA device, but got {cache_config.device_type}.'
+        return resolve_fp8_cache_dtype(quant_policy)
+    if quant_policy <= QuantPolicy.NONE:
+        return kv_cache_dtype
+    if cache_config.device_type == 'cuda':
+        return torch.uint8
+    if cache_config.device_type in ('ascend', 'npu'):
+        return torch.int8
+    raise ValueError(f'unsupported device_type {cache_config.device_type}')
 
 
 class CacheEngine:
@@ -130,26 +124,15 @@ class CacheEngine:
         self.tp_rank = tp_rank
         self.cache_config = cache_config
         self.model_config = model_config
-        _update_mla_kv_cache_dtype(model_config, cache_config)
+        apply_sparse_mla_cache_policy(model_config, cache_config)
 
-        self.kernel_block_size = cache_config.kernel_block_size
+        # The native allocator derives these values from the retained plan.
+        # dlinfer's Ascend310P CacheEngine patch still reads the legacy fields.
         self.num_layers = model_config.num_layers
-        self.kv_cache_dtype = _get_kv_cache_dtype(self.model_config)
+        self.kv_cache_dtype = _resolve_legacy_kv_cache_dtype(model_config, cache_config)
 
         if self.model_config.mla_index_topk is not None:
             cache_config.quant_policy = 0
-
-        if _is_fp8_quant_policy(cache_config.quant_policy):
-            self.kv_cache_dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
-            assert self.cache_config.device_type in ['cuda'], \
-                f'FP8 quantization is only supported on CUDA device, but got {self.cache_config.device_type}.'
-        elif cache_config.quant_policy > 0:
-            if self.cache_config.device_type in ['cuda']:
-                self.kv_cache_dtype = torch.uint8
-            elif self.cache_config.device_type in ['ascend', 'npu']:
-                self.kv_cache_dtype = torch.int8
-            else:
-                raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
 
         quant_desc = _describe_kv_cache_quant_policy(cache_config.quant_policy)
         if quant_desc is not None:
@@ -201,195 +184,30 @@ class CacheEngine:
         return self.cache_config.num_cpu_blocks
 
     @classmethod
-    def _get_key_block_shape_impl(cls,
-                                  model_config: ModelConfig,
-                                  block_size: int,
-                                  head_size: int,
-                                  world_size: int = 1,
-                                  quant_policy: QuantPolicy = QuantPolicy.NONE):
-        """Get single block shape."""
-        attn_backend = get_backend()
-        dtype = model_config.dtype
-        num_heads = model_config.num_key_value_heads
-
-        # split heads by tp
-        assert num_heads % world_size == 0, \
-            f'num_heads: {num_heads}, world_size: {world_size}'
-        num_heads = num_heads // world_size
-
-        # patch for flash mla
-        if model_config.use_mla_fp8_cache:
-            return (block_size, num_heads, MLA_FP8_HEAD_DIM)
-
-        # pack head_dim to uint8 (4-bit)
-        if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
-            assert head_size % 2 == 0, \
-                f'head_size: {head_size}, quant_policy: {quant_policy}'
-            head_size = head_size // 2
-        return attn_backend.get_k_block_shape(block_size, num_heads, head_size, dtype)
-
-    @classmethod
-    def _get_value_block_shape_impl(cls,
-                                    model_config: ModelConfig,
-                                    block_size: int,
-                                    head_size: int,
-                                    world_size: int = 1,
-                                    quant_policy: QuantPolicy = QuantPolicy.NONE):
-        """Get single block shape."""
-        attn_backend = get_backend()
-        dtype = model_config.dtype
-        num_heads = model_config.num_key_value_heads
-
-        # split heads by tp
-        assert num_heads % world_size == 0, \
-            f'num_heads: {num_heads}, world_size: {world_size}'
-        num_heads = num_heads // world_size
-
-        # patch for flash mla
-        if model_config.use_mla_fp8_cache:
-            # flash mla shared key and value
-            return (block_size, num_heads, 0)
-
-        if quant_policy == QuantPolicy.TURBO_QUANT:  # pack head_dim to uint8 (2-bit for V cache)
-            assert head_size % 4 == 0, \
-                f'head_size: {head_size}, quant_policy: {quant_policy}'
-            head_size = head_size // 4
-        elif quant_policy == QuantPolicy.INT4:  # pack head_dim to uint8 (4-bit)
-            assert head_size % 2 == 0, \
-                f'head_size: {head_size}, quant_policy: {quant_policy}'
-            head_size = head_size // 2
-
-        return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
-
-    @classmethod
     def get_k_cache_desc(cls, model_config: ModelConfig, cache_config: CacheConfig, world_size: int = 1) -> CacheDesc:
-        """Get key cache description."""
-        head_size = model_config.k_head_dim
-        if head_size is None:
-            head_size = model_config.head_dim
-        shape = cls._get_key_block_shape_impl(
-            model_config,
-            block_size=cache_config.kernel_block_size,
-            head_size=head_size,
-            world_size=world_size,
-            quant_policy=cache_config.quant_policy,
-        )
-        shape = list(shape)
-        dtype = _get_kv_cache_dtype(model_config)
-        if _is_fp8_quant_policy(cache_config.quant_policy):
-            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
-        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
-            dtype = torch.uint8
-        return CacheDesc(shape=shape, dtype=dtype)
+        """Compatibility facade for the schema-owned key description."""
+        return build_k_cache_desc(model_config, cache_config, world_size)
 
     @classmethod
     def get_v_cache_desc(cls, model_config: ModelConfig, cache_config: CacheConfig, world_size: int = 1) -> CacheDesc:
-        """Get value cache description."""
-        head_size = model_config.v_head_dim
-        if head_size is None:
-            head_size = model_config.head_dim
-        shape = cls._get_value_block_shape_impl(
-            model_config,
-            block_size=cache_config.kernel_block_size,
-            head_size=head_size,
-            world_size=world_size,
-            quant_policy=cache_config.quant_policy,
-        )
-        shape = list(shape)
-        dtype = _get_kv_cache_dtype(model_config)
-        if _is_fp8_quant_policy(cache_config.quant_policy):
-            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
-        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
-            dtype = torch.uint8
-        return CacheDesc(shape=shape, dtype=dtype)
+        """Compatibility facade for the schema-owned value description."""
+        return build_v_cache_desc(model_config, cache_config, world_size)
 
     @classmethod
     def get_quant_cache_descs(cls, k_cache_desc: CacheDesc, v_cache_desc: CacheDesc, model_config: ModelConfig,
-                              cache_config: CacheConfig):
-        """Get quant cache descs."""
-        if cache_config.quant_policy == QuantPolicy.NONE:
-            return []
-        if _is_fp8_quant_policy(cache_config.quant_policy):
-            # Regular FP8 KV cache uses fixed scalar scales from Attention, not
-            # per-token scale/zero cache tensors.
-            return []
-
-        dtype = model_config.dtype
-        # For quant_policy==QuantPolicy.TURBO_QUANT, K uses 4-bit quantization (has MSE norm and QJL norm),
-        # V uses 2-bit quantization (only has MSE norm)
-        if cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
-            key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
-            val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
-        else:
-            key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
-            val_scale_zero_shape = v_cache_desc.shape[:-1] + [2]
-        key_scale_zero_desc = CacheDesc(shape=key_scale_zero_shape, dtype=dtype)
-        val_scale_zero_desc = CacheDesc(shape=val_scale_zero_shape, dtype=dtype)
-        return [key_scale_zero_desc, val_scale_zero_desc]
-
-    @classmethod
-    def _get_cache_tensor_specs(
-            cls,
-            model_config: ModelConfig,
-            cache_config: CacheConfig,
-            world_size: int,
-            block_requests: Sequence[BlockCacheRequest] | None = None) -> tuple[CacheTensorSpec, ...]:
-        """Build the ordered tensor specs consumed by the physical layout."""
-        tensor_specs = []
-        use_std = model_config.use_standard_kv_cache
-
-        if use_std:
-            k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
-            v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
-            quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
-            tensor_specs.append(CacheTensorSpec(name='k_cache', desc=k_cache_desc))
-            tensor_specs.append(CacheTensorSpec(name='v_cache', desc=v_cache_desc))
-            for idx, desc in enumerate(quant_cache_descs):
-                tensor_specs.append(CacheTensorSpec(name=f'quant_{idx}', desc=desc))
-
-        if block_requests is not None:
-            tensor_specs.extend(build_block_cache_tensor_specs_from_requests(block_requests))
-        # named block cache specs (shape without block_size, same as cache_shapes)
-        elif len(model_config.block_cache_specs) > 0:
-            tensor_specs.extend(build_block_cache_tensor_specs(model_config.block_cache_specs))
-        else:
-            # legacy anonymous cache_shapes (shape without block_size)
-            custom_descs = cls.get_custom_cache_descs(model_config, cache_config)
-            for idx, desc in enumerate(custom_descs):
-                tensor_specs.append(CacheTensorSpec(name=f'custom_{idx}', desc=desc))
-
-        return tuple(tensor_specs)
-
-    @classmethod
-    def _uses_layer_scoped_block_caches(cls, model_config: ModelConfig):
-        """Whether model-facing named caches use declared layer rows."""
-        return (model_config is not None and not model_config.use_standard_kv_cache
-                and len(model_config.block_cache_specs) > 0)
+                              cache_config: CacheConfig) -> list[CacheDesc]:
+        """Compatibility facade for schema-owned quant descriptions."""
+        return build_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
 
     @staticmethod
     def _get_block_rows_by_layer(model_config: ModelConfig) -> dict[str, dict[int, int]]:
-        """Build global-layer-id to local-row maps for named block caches."""
-        if not CacheEngine._uses_layer_scoped_block_caches(model_config):
-            return {}
-        tensor_specs = build_block_cache_tensor_specs(model_config.block_cache_specs)
-        return layer_maps_from_specs(tensor_specs)
+        """Compatibility facade for configured layer-row bindings."""
+        return build_block_rows_by_layer(model_config)
 
     @classmethod
     def get_custom_cache_descs(cls, model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
-        """Get custom cache descs."""
-        descs = []
-        block_size = cache_config.kernel_block_size
-        # named block cache specs (shape without block_size, same convention as cache_shapes)
-        if len(model_config.block_cache_specs) > 0:
-            for spec in build_block_cache_tensor_specs(model_config.block_cache_specs):
-                descs.append(spec.desc)
-            return descs
-        # legacy cache_shapes
-        if len(model_config.cache_shapes) > 0:
-            for shape, dtype in model_config.cache_shapes:
-                custom_shape = (block_size, *shape)
-                descs.append(CacheDesc(shape=custom_shape, dtype=dtype))
-        return descs
+        """Compatibility facade for schema-owned custom descriptions."""
+        return build_custom_cache_descs(model_config, cache_config)
 
     @classmethod
     def build_cache_plan(
@@ -402,7 +220,8 @@ class CacheEngine:
         """Finalize block geometry, tensor specs, and backend layout."""
         geometry = BlockCacheGeometry(block_size=cache_config.block_size,
                                       kernel_block_size=cache_config.kernel_block_size)
-        _update_mla_kv_cache_dtype(model_config, cache_config)
+        # Finalize sparse-MLA policy before built operators describe caches.
+        apply_sparse_mla_cache_policy(model_config, cache_config)
         block_requests = None
         if request_collector is not None:
             collected_requests = request_collector(geometry)
@@ -413,18 +232,11 @@ class CacheEngine:
                     raise RuntimeError(
                         'Built-operator cache request collection requires the native CacheEngine allocator.')
                 block_requests = tuple(collected_requests)
-        num_layers = model_config.num_layers
-        tensor_specs = cls._get_cache_tensor_specs(model_config,
-                                                   cache_config,
-                                                   world_size,
-                                                   block_requests=block_requests)
-        cache_backend = get_backend().get_cache_backend()
-        layout = cache_backend.build_block_layout(tensor_specs, num_layers=num_layers)
-        return BlockCachePlan(
-            tensor_specs=tensor_specs,
-            layout=layout,
-            kernel_blocks_per_logical_block=geometry.kernel_blocks_per_logical_block,
-        )
+        return _build_block_cache_plan(model_config=model_config,
+                                       cache_config=cache_config,
+                                       world_size=world_size,
+                                       geometry=geometry,
+                                       block_requests=block_requests)
 
     @classmethod
     def allocate_caches(cls, num_blocks: int, model_config: ModelConfig, cache_config: CacheConfig, world_size: int,
@@ -455,7 +267,7 @@ class CacheEngine:
         if plan is not None:
             caches = [caches[index] for index in plan.legacy_cache_indices]
             return list(zip(*caches)) if caches else []
-        if self._uses_layer_scoped_block_caches(self.model_config):
+        if uses_layer_scoped_block_caches(self.model_config):
             return []
         return list(zip(*caches))
 
@@ -475,7 +287,9 @@ class CacheEngine:
         self.local_gpu_cache = self._build_legacy_layer_cache(caches)
         plan = getattr(self, 'block_cache_plan', None)
         if plan is None:
-            tensor_specs = self._get_cache_tensor_specs(self.model_config, self.cache_config, self.world_size)
+            tensor_specs = build_model_block_cache_tensor_specs(self.model_config,
+                                                                self.cache_config,
+                                                                self.world_size)
             self._block_cache_names = [spec.name for spec in tensor_specs]
             self._cache_tensor_specs = None
             self._block_rows_by_layer = self._get_block_rows_by_layer(self.model_config)
@@ -521,31 +335,6 @@ class CacheEngine:
         if hasattr(self, '_block_caches'):
             return self._block_caches
         return self._build_block_cache_view()
-
-    @staticmethod
-    def get_custom_cache_shape_impl(num_layers: int, num_blocks: int, block_size: int, shape: list[int]):
-        """Get single block shape."""
-        return (num_layers, num_blocks, block_size, *shape)
-
-    @staticmethod
-    def _allocate_single_custom_cache(shape: Sequence[int], dtype: torch.dtype, device: str):
-        """Allocate custom cache."""
-        return torch.empty(shape, dtype=dtype, device=device)
-
-    def allocate_custom_cache(self, device: str):
-        """Allocate custom caches on GPU."""
-        num_layers = self.model_config.num_layers
-        custom_caches = []
-        for shape, dtype in self.model_config.cache_shapes:
-            custom_shape = self.get_custom_cache_shape_impl(
-                num_layers=num_layers,
-                num_blocks=self.num_gpu_blocks,
-                block_size=self.kernel_block_size,
-                shape=shape,
-            )
-            custom_cache = self._allocate_single_custom_cache(shape=custom_shape, dtype=dtype, device=device)
-            custom_caches.append(custom_cache)
-        return custom_caches
 
     @staticmethod
     def _legacy_mem_pool_nbytes(mem_pool: torch.Tensor | list[torch.Tensor]) -> int:
@@ -684,12 +473,12 @@ class CacheEngine:
             if block_cache_plan is None:
                 # Preserve direct sizing callers that validate cache policy
                 # without constructing complete model/cache configs.
-                _update_mla_kv_cache_dtype(model_config, cache_config)
+                apply_sparse_mla_cache_policy(model_config, cache_config)
                 block_cache_plan = cls.build_cache_plan(model_config, cache_config, world_size)
             return block_cache_plan.logical_block_nbytes
 
         # Existing patched allocators derive their layout from ModelConfig.
-        _update_mla_kv_cache_dtype(model_config, cache_config)
+        apply_sparse_mla_cache_policy(model_config, cache_config)
         result = allocator(
             num_blocks=1,
             model_config=model_config,
