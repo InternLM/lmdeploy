@@ -47,6 +47,7 @@ def test_state_cache_engine_accepts_external_allocation_tuple(monkeypatch):
     cache_engine = StateCacheEngine(cache_config)
 
     assert cache_engine.allocation is None
+    assert type(cache_engine.named_state_caches) is dict
     assert all(actual is expected for actual, expected in zip(cache_engine.state_caches, caches))
     assert cache_engine._slot_tensors[0][0] is caches[0]
     assert cache_engine._slot_tensors[0][1] == 0
@@ -99,15 +100,6 @@ def test_layer_scoped_state_cache_specs_reject_invalid_layer_ids():
                                          state_shapes=[((1, ), torch.float32)],
                                          state_specs=empty_state_layers,
                                          device='meta')
-
-
-def test_named_state_cache_property_returns_dict_without_layer_rows():
-    cache_engine = object.__new__(StateCacheEngine)
-    cache_engine._tensor_names = ['state_0']
-    cache_engine._cache_tensors = [torch.empty(1)]
-    cache_engine._rows_by_layer = {}
-
-    assert type(cache_engine.named_state_caches) is dict
 
 
 def _make_state_cache_engine(num_caches: int = 4):

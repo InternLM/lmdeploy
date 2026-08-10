@@ -8,12 +8,10 @@ from lmdeploy.pytorch.engine.cache_engine.schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
     CacheDesc,
-    CacheTensorSpec,
     LayerRowMap,
     build_block_cache_tensor_specs,
     build_block_cache_tensor_specs_from_requests,
     build_state_cache_tensor_specs,
-    layer_maps_from_specs,
 )
 
 
@@ -57,19 +55,6 @@ def test_layer_row_map_preserves_declared_row_order():
 def test_layer_row_map_rejects_invalid_membership(layer_ids, message):
     with pytest.raises(ValueError, match=message):
         LayerRowMap.build('index', layer_ids)
-
-
-def test_cache_tensor_spec_collects_only_layer_scoped_maps():
-    desc = CacheDesc(shape=[4], dtype=torch.float32)
-    layer_rows = LayerRowMap.build('layered', [2, 0])
-    tensor_specs = (
-        CacheTensorSpec(name='global', desc=desc),
-        CacheTensorSpec(name='layered', desc=desc, layer_rows=layer_rows),
-    )
-
-    assert tensor_specs[0].layer_map is None
-    assert tensor_specs[1].num_rows == 2
-    assert layer_maps_from_specs(tensor_specs) == {'layered': {2: 0, 0: 1}}
 
 
 def test_build_block_cache_tensor_specs_preserves_declared_order():

@@ -2,6 +2,7 @@
 # modify from: https://github.com/vllm-project/vllm
 import json
 from collections.abc import Callable, Mapping, Sequence
+from typing import TypeAlias
 
 import torch
 
@@ -37,20 +38,19 @@ from .schema import (
     BlockCacheRequestContext,
     CacheDesc,
     apply_sparse_mla_cache_policy,
-    build_block_rows_by_layer,
     build_custom_cache_descs,
     build_k_cache_desc,
-    build_model_block_cache_tensor_specs,
     build_quant_cache_descs,
     build_v_cache_desc,
     is_fp8_cache_policy,
     resolve_fp8_cache_dtype,
     resolve_model_kv_cache_dtype,
-    uses_layer_scoped_block_caches,
 )
 from .view import NamedCacheView
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
+_ExternalCacheAllocation: TypeAlias = tuple[torch.Tensor | list[torch.Tensor], Sequence[torch.Tensor]]
+_RuntimeCacheAllocation: TypeAlias = CacheAllocation | _ExternalCacheAllocation
 
 logger = get_logger('lmdeploy')
 
@@ -104,10 +104,13 @@ class CacheEngine:
         cache_config (CacheConfig): config of the cache information.
         model_config (ModelConfig): config of the model.
         rank (int): distribution rank, 0 on non-distributed environment.
+        tp_rank (int): rank within the attention tensor-parallel group.
         world_size (int): distribution world size, 1 on non-distributed
             environment.
         cache_stream (torch.cuda.Stream): the stream used for cache engine swap,
             if set to None, it's created in CacheEngine.
+        block_cache_plan (BlockCachePlan): finalized worker-local allocation
+            recipe shared by sizing, CPU allocation, and device allocation.
     """
 
     def __init__(
@@ -117,15 +120,15 @@ class CacheEngine:
         rank: int = 0,
         tp_rank: int = 0,
         world_size: int = 1,
-        cache_stream: torch.cuda.Stream = None,
-        block_cache_plan: BlockCachePlan | None = None,
+        cache_stream: torch.cuda.Stream | None = None,
+        *,
+        block_cache_plan: BlockCachePlan,
     ) -> None:
         self.world_size = world_size
         self.rank = rank
         self.tp_rank = tp_rank
         self.cache_config = cache_config
         self.model_config = model_config
-        apply_sparse_mla_cache_policy(model_config, cache_config)
 
         # The native allocator derives these values from the retained plan.
         # dlinfer's Ascend310P CacheEngine patch still reads these fields.
@@ -139,8 +142,6 @@ class CacheEngine:
         if quant_desc is not None:
             logger.info('Using %s.', quant_desc)
 
-        if block_cache_plan is None:
-            block_cache_plan = self.build_cache_plan(model_config, cache_config, world_size)
         self.block_cache_plan = block_cache_plan
 
         # Initialize the cache.
@@ -174,16 +175,6 @@ class CacheEngine:
         """Device cache tensors in per-layer model order."""
         return self.local_gpu_cache
 
-    @property
-    def num_gpu_blocks(self):
-        """Num gpu blocks."""
-        return self.cache_config.num_gpu_blocks
-
-    @property
-    def num_cpu_blocks(self):
-        """Num gpu blocks."""
-        return self.cache_config.num_cpu_blocks
-
     @classmethod
     def get_k_cache_desc(cls, model_config: ModelConfig, cache_config: CacheConfig, world_size: int = 1) -> CacheDesc:
         """Compatibility facade for the schema-owned key description."""
@@ -199,11 +190,6 @@ class CacheEngine:
                               cache_config: CacheConfig) -> list[CacheDesc]:
         """Compatibility facade for schema-owned quant descriptions."""
         return build_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
-
-    @staticmethod
-    def _get_block_rows_by_layer(model_config: ModelConfig) -> dict[str, dict[int, int]]:
-        """Compatibility facade for configured layer-row bindings."""
-        return build_block_rows_by_layer(model_config)
 
     @classmethod
     def get_custom_cache_descs(cls, model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
@@ -247,14 +233,13 @@ class CacheEngine:
         plan = cls.build_cache_plan(model_config, cache_config, world_size)
         return plan.allocate(num_logical_blocks=num_blocks, device=device)
 
-    def _allocate_runtime_caches(self, num_blocks: int, device: str):
+    def _allocate_runtime_caches(self, num_blocks: int, device: str) -> _RuntimeCacheAllocation:
         """Realize the retained plan or use an external patched allocator."""
-        plan = getattr(self, 'block_cache_plan', None)
         allocator = self.allocate_caches
         class_allocator = type(self).allocate_caches
         allocator_func = getattr(class_allocator, '__func__', class_allocator)
-        if plan is not None and allocator_func is _NATIVE_BLOCK_ALLOCATOR:
-            return plan.allocate(num_logical_blocks=num_blocks, device=device)
+        if allocator_func is _NATIVE_BLOCK_ALLOCATOR:
+            return self.block_cache_plan.allocate(num_logical_blocks=num_blocks, device=device)
         return allocator(
             num_blocks=num_blocks,
             model_config=self.model_config,
@@ -265,12 +250,7 @@ class CacheEngine:
 
     def _build_model_layer_cache(self, caches: Sequence[torch.Tensor]):
         """Build the per-layer model cache without scoped named tensors."""
-        plan = getattr(self, 'block_cache_plan', None)
-        if plan is not None:
-            caches = [caches[index] for index in plan.model_cache_indices]
-            return list(zip(*caches)) if caches else []
-        if uses_layer_scoped_block_caches(self.model_config):
-            return []
+        caches = [caches[index] for index in self.block_cache_plan.model_cache_indices]
         return list(zip(*caches))
 
     def allocate_gpu_cache(self):
@@ -278,7 +258,7 @@ class CacheEngine:
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
         result = self._allocate_runtime_caches(
-            num_blocks=self.num_gpu_blocks,
+            num_blocks=self.cache_config.num_gpu_blocks,
             device='cuda',
         )
         if isinstance(result, CacheAllocation):
@@ -290,26 +270,13 @@ class CacheEngine:
             self._external_gpu_cache_pool, caches = result
             caches = list(caches)
         self._gpu_cache_list = caches
-        self.local_gpu_cache = self._build_model_layer_cache(caches)
-        plan = getattr(self, 'block_cache_plan', None)
-        if plan is None:
-            tensor_specs = build_model_block_cache_tensor_specs(self.model_config,
-                                                                self.cache_config,
-                                                                self.world_size)
-            self._block_cache_names = [spec.name for spec in tensor_specs]
-            self._cache_tensor_specs = None
-            self._block_rows_by_layer = self._get_block_rows_by_layer(self.model_config)
-        else:
-            self._block_cache_names = list(plan.cache_names)
-            self._cache_tensor_specs = plan.tensor_specs
-            self._block_rows_by_layer = {}
         self._block_caches = self._build_block_cache_view()
-        return self.local_gpu_cache
+        return self._build_model_layer_cache(caches)
 
     def allocate_cpu_cache(self):
         """Allocate caches on Host."""
         result = self._allocate_runtime_caches(
-            num_blocks=self.num_cpu_blocks,
+            num_blocks=self.cache_config.num_cpu_blocks,
             device='cpu',
         )
         if isinstance(result, CacheAllocation):
@@ -320,31 +287,22 @@ class CacheEngine:
             _, caches = result
             caches = list(caches)
         self._cpu_cache_list = caches
-        self.local_cpu_cache = self._build_model_layer_cache(caches)
-        return self.local_cpu_cache
+        return self._build_model_layer_cache(caches)
 
     def _build_block_cache_view(self) -> Mapping[str, torch.Tensor]:
         """Build the model-facing view once for this device allocation."""
-        if not hasattr(self, '_block_cache_names') or not hasattr(self, '_gpu_cache_list'):
-            return {}
-        tensor_specs = getattr(self, '_cache_tensor_specs', None)
-        if tensor_specs is not None and any(spec.has_rows for spec in tensor_specs):
+        tensor_specs = self.block_cache_plan.tensor_specs
+        if any(spec.has_rows for spec in tensor_specs):
             return NamedCacheView.from_specs(tensor_specs, self._gpu_cache_list)
-        caches = {
-            name: cache
-            for name, cache in zip(self._block_cache_names, self._gpu_cache_list)
+        return {
+            spec.name: cache
+            for spec, cache in zip(tensor_specs, self._gpu_cache_list)
         }
-        rows_by_layer = getattr(self, '_block_rows_by_layer', {})
-        if not rows_by_layer:
-            return caches
-        return NamedCacheView(caches, rows_by_layer)
 
     @property
     def block_caches(self) -> Mapping[str, torch.Tensor]:
         """Return all caches (including k/v and custom) by name."""
-        if hasattr(self, '_block_caches'):
-            return self._block_caches
-        return self._build_block_cache_view()
+        return self._block_caches
 
     @staticmethod
     def _external_pool_nbytes(mem_pool: torch.Tensor | list[torch.Tensor]) -> int:
@@ -391,7 +349,7 @@ class CacheEngine:
     def _build_block_copy(self):
         """Build local logical-block copy from the device allocation."""
         self._block_copy = None
-        allocation = getattr(self, 'gpu_allocation', None)
+        allocation = self.gpu_allocation
         if allocation is None:
             return
 
@@ -399,7 +357,7 @@ class CacheEngine:
         cache_backend = get_backend().get_cache_backend()
         self._block_copy = cache_backend.build_block_copy(
             allocation,
-            num_logical_blocks=self.num_gpu_blocks,
+            num_logical_blocks=self.cache_config.num_gpu_blocks,
             pages_per_block=pages_per_block,
         )
 
@@ -419,7 +377,7 @@ class CacheEngine:
         if copy_plan.dtype != torch.long:
             raise TypeError('copy_plan must use torch.long indices.')
 
-        block_copy = getattr(self, '_block_copy', None)
+        block_copy = self._block_copy
         if block_copy is None:
             raise RuntimeError('Logical block copy requires a native cache allocation.')
         if copy_plan.device != block_copy.device:
@@ -475,20 +433,15 @@ class CacheEngine:
                                  cache_config: CacheConfig,
                                  model_config: ModelConfig,
                                  world_size: int = 1,
-                                 block_cache_plan: BlockCachePlan | None = None) -> int:
+                                 *,
+                                 block_cache_plan: BlockCachePlan) -> int:
         """Return owning storage bytes required by one logical block."""
         allocator = cls.allocate_caches
         allocator_func = getattr(allocator, '__func__', allocator)
         if allocator_func is _NATIVE_BLOCK_ALLOCATOR:
-            if block_cache_plan is None:
-                # Preserve direct sizing callers that validate cache policy
-                # without constructing complete model/cache configs.
-                apply_sparse_mla_cache_policy(model_config, cache_config)
-                block_cache_plan = cls.build_cache_plan(model_config, cache_config, world_size)
             return block_cache_plan.logical_block_nbytes
 
         # Existing patched allocators derive their layout from ModelConfig.
-        apply_sparse_mla_cache_policy(model_config, cache_config)
         result = allocator(
             num_blocks=1,
             model_config=model_config,
@@ -496,8 +449,6 @@ class CacheEngine:
             world_size=world_size,
             device='meta',
         )
-        if isinstance(result, CacheAllocation):
-            return result.nbytes
         mem_pool, _ = result
         return cls._external_pool_nbytes(mem_pool)
 
@@ -508,9 +459,9 @@ class CacheEngine:
         if self.cache_config.block_size != self.cache_config.kernel_block_size:
             raise RuntimeError('PD migration does not support block_size != kernel_block_size.')
 
-        allocation = getattr(self, 'gpu_allocation', None)
+        allocation = self.gpu_allocation
         if allocation is None:
-            pool = getattr(self, '_external_gpu_cache_pool', None)
+            pool = self._external_gpu_cache_pool
             if not isinstance(pool, torch.Tensor):
                 raise RuntimeError('PD migration of multiple pools requires native CacheAllocation metadata.')
             return (CachePool(pool, entry_axis=1), )
@@ -518,17 +469,17 @@ class CacheEngine:
 
     def _get_pd_cache_pool_infos(self) -> tuple[DistServeCachePoolInfo, ...]:
         """Describe the stable local allocation once for every PD link."""
-        pool_infos = getattr(self, '_pd_cache_pool_infos', None)
+        pool_infos = self._pd_cache_pool_infos
         if pool_infos is None:
-            pool_infos = describe_cache_pools(self._resolve_pd_cache_pools(), self.num_gpu_blocks)
+            pool_infos = describe_cache_pools(self._resolve_pd_cache_pools(), self.cache_config.num_gpu_blocks)
             self._pd_cache_pool_infos = pool_infos
         return pool_infos
 
     def p2p_initialize(self, migration_init_request: DistServeInitRequest) -> DistServeKVTransferEndpointInfo:
         pools = self._resolve_pd_cache_pools()
-        pool_infos = describe_cache_pools(pools, self.num_gpu_blocks)
+        pool_infos = describe_cache_pools(pools, self.cache_config.num_gpu_blocks)
         self._pd_cache_pool_infos = pool_infos
-        if not self.migration_backend_impl:
+        if self.migration_backend_impl is None:
             self.migration_backend_impl = MIGRATION_BACKENDS.module_dict[self.cache_config.migration_backend.name]()
         migration_init_request.rank = self.rank
         self.migration_backend_impl.p2p_initialize(migration_init_request)
@@ -558,7 +509,7 @@ class CacheEngine:
         remote_pools = conn_request.cache_pools
         if remote_pools is None:
             remote_pools = infer_remote_pool_without_metadata(local_pools, remote_num_blocks)
-        validate_cache_pool_layouts(local_pools, remote_pools, self.num_gpu_blocks, remote_num_blocks)
+        validate_cache_pool_layouts(local_pools, remote_pools, self.cache_config.num_gpu_blocks, remote_num_blocks)
         self._remote_pd_cache_pool_infos[remote_engine_id] = tuple(remote_pools)
         self.migration_backend_impl.p2p_connect(remote_engine_id, conn_request)
 
@@ -569,7 +520,7 @@ class CacheEngine:
             blocks_by_remote.setdefault(remote_engine_id, []).extend(block_pairs)
 
         for remote_engine_id, block_pairs in blocks_by_remote.items():
-            remote_pools = getattr(self, '_remote_pd_cache_pool_infos', {}).get(remote_engine_id)
+            remote_pools = self._remote_pd_cache_pool_infos.get(remote_engine_id)
             if remote_pools is None:
                 raise RuntimeError(f'PD cache-pool metadata is unavailable for remote engine {remote_engine_id}.')
             assignment_batch = build_cache_pool_assignments(local_pools, remote_pools, block_pairs)

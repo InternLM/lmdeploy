@@ -11,7 +11,7 @@ from lmdeploy.pytorch.backends import get_backend
 
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
 from .layout import CacheAllocation
-from .schema import build_state_cache_tensor_specs, layer_maps_from_specs
+from .schema import build_state_cache_tensor_specs
 from .view import NamedCacheView
 
 _StateSlotTensor: TypeAlias = tuple[torch.Tensor, int]
@@ -28,8 +28,6 @@ class StateCacheEngine:
             state_specs = model_config.state_cache_specs
 
         tensor_specs = build_state_cache_tensor_specs(cache_config.states_shapes, state_specs=state_specs)
-        self._tensor_names = [spec.name for spec in tensor_specs]
-        self._rows_by_layer = layer_maps_from_specs(tensor_specs)
 
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
@@ -47,6 +45,13 @@ class StateCacheEngine:
             _, state_caches = result
             self._cache_tensors = list(state_caches)
         self._slot_tensors = self._resolve_slot_tensors(self.allocation, self._cache_tensors)
+        if any(spec.has_rows for spec in tensor_specs):
+            self._named_state_caches = NamedCacheView.from_specs(tensor_specs, self._cache_tensors)
+        else:
+            self._named_state_caches = {
+                spec.name: cache
+                for spec, cache in zip(tensor_specs, self._cache_tensors)
+            }
 
     @staticmethod
     def allocate_caches(num_caches: int,
@@ -92,15 +97,7 @@ class StateCacheEngine:
     @property
     def named_state_caches(self) -> Mapping[str, torch.Tensor]:
         """Return model-facing state-cache tensors keyed by semantic name."""
-        if not self._tensor_names or not self._cache_tensors:
-            return {}
-        caches = {
-            name: cache
-            for name, cache in zip(self._tensor_names, self._cache_tensors)
-        }
-        if not self._rows_by_layer:
-            return caches
-        return NamedCacheView(caches, self._rows_by_layer)
+        return self._named_state_caches
 
     def zero_slots(self, slot_ids: torch.Tensor | None, zero_mask: torch.Tensor) -> None:
         """Zero the selected state slots in every physical tensor."""

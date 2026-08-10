@@ -336,14 +336,6 @@ class CacheTensorSpec:
 # Tensor-spec assembly.
 
 
-def layer_maps_from_specs(tensor_specs: Sequence[CacheTensorSpec]) -> dict[str, dict[int, int]]:
-    """Collect layer maps from named cache-tensor specs."""
-    return {
-        spec.name: spec.layer_map
-        for spec in tensor_specs if spec.layer_map is not None
-    }
-
-
 def build_block_cache_tensor_specs(block_specs: Sequence[BlockCacheSpec]) -> tuple[CacheTensorSpec, ...]:
     """Normalize configured block caches into internal tensor specs."""
     tensor_specs = []
@@ -437,17 +429,3 @@ def build_model_block_cache_tensor_specs(
             CacheTensorSpec(name=f'custom_{index}', desc=desc)
             for index, desc in enumerate(build_custom_cache_descs(model_config, cache_config)))
     return tuple(tensor_specs)
-
-
-def uses_layer_scoped_block_caches(model_config: ModelConfig | None) -> bool:
-    """Return whether configured named block caches use declared layer rows."""
-    return (model_config is not None and not model_config.use_standard_kv_cache
-            and len(model_config.block_cache_specs) > 0)
-
-
-def build_block_rows_by_layer(model_config: ModelConfig) -> dict[str, dict[int, int]]:
-    """Build global-layer-id to local-row maps for configured block caches."""
-    if not uses_layer_scoped_block_caches(model_config):
-        return {}
-    tensor_specs = build_block_cache_tensor_specs(model_config.block_cache_specs)
-    return layer_maps_from_specs(tensor_specs)

@@ -101,7 +101,9 @@ the plan.
 
 It owns no tensors, streams, events, or movement policy. Plans never cross the
 executor RPC boundary; each worker returns only target/speculative/memory byte
-counts to the executor.
+counts to the executor. A finalized plan is required by native sizing and
+`CacheEngine` construction; runtime allocation never rebuilds a configuration-
+only fallback plan.
 
 The exact construction path is:
 
