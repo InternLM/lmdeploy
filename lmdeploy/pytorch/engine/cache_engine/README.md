@@ -41,6 +41,14 @@ These supporting types are not additional runtime managers. Requests are
 temporary build inputs; tensor specs and layout are immutable plan details;
 pools belong to one allocation.
 
+Three similar terms describe different identities:
+
+| Term              | Meaning                                                             |
+| ----------------- | ------------------------------------------------------------------- |
+| Consumer row      | Logical row assigned to one built cache-using operator              |
+| Layer row         | Compact tensor row mapped from a configured global model layer ID   |
+| Pool `entry_axis` | Physical tensor axis whose blocks or state slots move independently |
+
 ## Construction Pipeline
 
 ### 1. Collect requests
@@ -154,9 +162,9 @@ ratio, while `CacheAllocation` supplies every owning pool and its entry axis.
 The active `CacheBackend` builds the physical copy primitive once from that
 stable allocation. CUDA copies contiguous pools with Triton; other backends
 inherit the bounded tensor fallback unless they provide a more suitable local
-primitive. CacheEngine validates only plan metadata on the hot path. The caller
-owns source/destination relationship validation and keeps block lifetimes safe
-until the stream-ordered copy completes.
+primitive. CacheEngine validates only copy-plan metadata on the hot path. The
+caller owns source/destination relationship validation and keeps block
+lifetimes safe until the stream-ordered copy completes.
 
 ### Per-forward checkpoint pipeline
 
@@ -228,14 +236,13 @@ layouts while sharing one plan and scheduler block count.
 
 ## Model-Facing Views
 
-Two access forms coexist during migration:
+Two model-facing access categories coexist during migration:
 
 - `gpu_cache` / `cpu_cache` provide the per-layer tuple used as
   `past_key_values`;
-- `block_caches.row(name, consumer_row)` resolves the row assigned to a built
-  operator, even when that name spans different physical shapes;
-- `block_caches.layer(name, layer_id)` remains the compatibility lookup for
-  configuration-owned layer maps.
+- `block_caches` provides named access: `row(name, consumer_row)` resolves the
+  row assigned to a built operator, while `layer(name, layer_id)` resolves a
+  configuration-owned layer mapping.
 
 `block_caches[name]` still returns the complete tensor when a name has one
 physical tensor. When a name is heterogeneous, direct lookup raises and asks
