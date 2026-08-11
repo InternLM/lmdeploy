@@ -75,6 +75,9 @@ SINGLE_TOOL_CALL_SKIP_REASON = (
 MM_TOOL_CALL_SKIP_REASON = (
     'Multimodal tool-call tests require native VL models (Qwen3.5 / Intern-S1 / Intern-S2 / Qwen3-VL)')
 
+MM_VIDEO_TOOL_CALL_SKIP_REASON = (
+    'Native video not supported on Intern-S1 family (image-only)')
+
 # Test media filenames under config['resource_path'].
 MM_TEST_IMAGE_TIGER = 'tiger.jpeg'
 MM_TEST_IMAGE_BEIJING = 'Beijing_Small.jpeg'
@@ -109,6 +112,15 @@ def is_mm_tool_call_capable(model_case: str) -> bool:
     """True for model families that support image input and tool calling."""
     name = model_case.lower()
     return any(marker.lower() in name for marker in _MM_TOOL_CALL_MODEL_MARKERS)
+
+
+def is_mm_video_unsupported(model_case: str) -> bool:
+    """Intern-S1 family (incl.
+
+    Pro) rejects type=video; image MM still runs.
+    """
+    return 'intern-s1' in model_case.lower()
+
 
 def resolve_mm_resource_path(config, filename: str) -> str | None:
     """Return a local filesystem path for a test media file, or None if
@@ -208,9 +220,20 @@ def _mm_tool_call_skip_target(item) -> bool:
     return cls_name.startswith('TestToolCallMultimodal')
 
 
+def _mm_video_tool_call_skip_target(item) -> bool:
+    """True for MM tool tests that send video or mixed image+video."""
+    callspec = getattr(item, 'callspec', None)
+    if callspec is not None:
+        media_type = callspec.params.get('media_type')
+        if media_type in MM_VIDEO_MEDIA_TYPES:
+            return True
+    test_name = getattr(item, 'originalname', None) or item.name.split('[')[0]
+    return 'video' in test_name.lower()
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip parallel-tool tests on single-tool parsers; skip MM tool tests on
-    text-only models."""
+    text-only models; skip Intern-S1 video MM tool tests."""
     for item in items:
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
@@ -225,6 +248,10 @@ def pytest_collection_modifyitems(config, items):
         if _mm_tool_call_skip_target(item):
             if not is_mm_tool_call_capable(model_case):
                 item.add_marker(pytest.mark.skip(reason=MM_TOOL_CALL_SKIP_REASON))
+            elif (_mm_video_tool_call_skip_target(item)
+                  and is_mm_video_unsupported(model_case)):
+                item.add_marker(
+                    pytest.mark.skip(reason=MM_VIDEO_TOOL_CALL_SKIP_REASON))
 
 # ---------------------------------------------------------------------------
 # Per-test API request/response logging fixtures.

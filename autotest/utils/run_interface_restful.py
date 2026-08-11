@@ -18,7 +18,7 @@ from utils.constant import (
     RESTFUL_MODEL_LIST,
     TOOL_REASONING_MODEL_LIST,
 )
-from utils.proxy_distributed_utils import ApiServerPerTest
+from utils.proxy_distributed_utils import ApiServerPerTest, is_port_open
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, terminate_restful_api
 
@@ -156,7 +156,8 @@ def _run_interface_suites(
     routed-experts payloads (proxy response size limits): the whole
     ``generate`` suite (``/generate`` always emits ``output_ids``), and
     toolcall tests marked ``experts`` (return_token_ids / routed_experts /
-    encode+input_ids paths).
+    encode+input_ids paths). Also skips Anthropic suites and toolcall
+    tests marked ``anthropic`` (proxy does not expose ``/v1/messages``).
     """
     model = run_config['model']
     backend = run_config['backend']
@@ -175,6 +176,17 @@ def _run_interface_suites(
             flush=True,
         )
 
+    if via_proxy:
+        # Proxy does not expose Anthropic /v1/messages (404 Not Found).
+        dropped = [c for c in ('anthropic_v1', 'anthropic_sdk') if c in case_info]
+        if dropped:
+            case_info = [c for c in case_info if c not in ('anthropic_v1', 'anthropic_sdk')]
+            print(
+                f'proxy: skipping {", ".join(dropped)} '
+                '(Anthropic Messages API not available via proxy)',
+                flush=True,
+            )
+
     env = _scrub_outer_xdist_env(os.environ.copy())
     env['LMDEPLOY_PORT'] = str(port)
     env['TEST_ENV'] = env.get('TEST_ENV') or os.environ.get('TEST_ENV', 'a100')
@@ -192,7 +204,8 @@ def _run_interface_suites(
     toolcall_marker = f'tool_call and not not_{backend}'
     if via_proxy:
         # Exclude return_token_ids / routed_experts / encode(input_ids) cases.
-        toolcall_marker += ' and not experts'
+        # Exclude Anthropic /v1/messages toolcall cases (proxy returns 404).
+        toolcall_marker += ' and not experts and not anthropic'
 
     anthropic_marker = f'anthropic and not not_{backend}'
 
@@ -313,12 +326,36 @@ def _proxy_phase_flag_path(config, run_config, phase_idx: int) -> str:
     return os.path.join(log_dir, f'.interface_phase_done_{case_str}_{phase_idx}')
 
 
-def _proxy_worker_wait_phase_done(flag_path: str, timeout_minutes: int = 4880) -> None:
-    """Worker waits until master writes the phase-done flag (shared log fs)."""
+def _proxy_worker_wait_phase_done(
+        flag_path: str,
+        manager,
+        timeout_minutes: int = 4880,
+) -> str:
+    """Worker waits for phase-done flag, or master proxy death (evaluate-
+    style).
+
+    Returns:
+        ``'flag'`` if the shared phase flag appeared;
+        ``'proxy_down'`` if master proxy became unreachable (node 0 finished /
+        tore down) — caller should stop further phases and exit.
+    """
     deadline = time.time() + timeout_minutes * 60
+    consecutive_failures = 0
+    max_consecutive_failures = 3
     while time.time() < deadline:
         if os.path.exists(flag_path):
-            return
+            return 'flag'
+        if not is_port_open(manager.master_addr, manager.proxy_port, timeout=2.0):
+            consecutive_failures += 1
+            print(
+                f'⚠️ Proxy connection to master failed '
+                f'({consecutive_failures}/{max_consecutive_failures})',
+            )
+            if consecutive_failures >= max_consecutive_failures:
+                print('📡 Master proxy service stopped, worker node exiting')
+                return 'proxy_down'
+        else:
+            consecutive_failures = 0
         time.sleep(5)
     raise TimeoutError(f'proxy worker timed out waiting for phase flag {flag_path}')
 
@@ -326,12 +363,14 @@ def _proxy_worker_wait_phase_done(flag_path: str, timeout_minutes: int = 4880) -
 def run_interface_restful_proxy_distributed_test(config, run_config, manager) -> None:
     """Run interface suites against LMDeploy proxy (dp/ep multi-node).
 
-    Skips ``generate`` and toolcall ``experts``-marked cases: proxy cannot
+    Skips ``generate``, Anthropic suites (``/v1/messages`` 404 via proxy),
+    and toolcall ``experts`` / ``anthropic``-marked cases: proxy cannot
     safely carry large ``/generate`` / encode / return_token_ids /
-    routed_experts payloads.
+    routed_experts payloads, and does not forward Anthropic Messages.
 
     One ``ApiServerPerTest`` restart per launch profile. All ranks join each
-    phase; workers sync via a shared done-flag.
+    phase; workers sync via a shared done-flag, and also exit when master
+    proxy goes down (same as evaluate ``proxy_worker_node_wait``).
     """
     assert manager is not None, 'Manager instance must be provided'
     phases = _phase_run_configs(run_config)
@@ -349,19 +388,25 @@ def run_interface_restful_proxy_distributed_test(config, run_config, manager) ->
         if manager.is_master and os.path.exists(flag_path):
             os.remove(flag_path)
 
-        api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=phase_cfg)
+        api_server = ApiServerPerTest(
+            proxy_manager=manager, config=config, run_config=phase_cfg,
+        )
         api_server.start()
         try:
             if manager.is_master:
                 api_server.wait_until_ready()
-                _run_interface_suites(config, phase_cfg, PROXY_PORT, via_proxy=True)
+                _run_interface_suites(
+                    config, phase_cfg, PROXY_PORT, via_proxy=True,
+                )
                 Path(flag_path).touch()
             else:
                 print(
                     f'⏸️ Worker node {manager.node_rank} waiting for master phase '
                     f'{phase_idx} ({phase_cfg.get("case_info")})...',
                 )
-                _proxy_worker_wait_phase_done(flag_path)
+                wait_result = _proxy_worker_wait_phase_done(flag_path, manager)
+                if wait_result == 'proxy_down':
+                    return
         finally:
             api_server.cleanup()
             if manager.is_master:

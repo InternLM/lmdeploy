@@ -6,9 +6,7 @@ from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
     assert_chat_completions_stream_return,
-    assert_chat_delta_empty,
     assert_chat_delta_error,
-    assert_chat_message_empty,
     assert_chat_message_error,
     get_chat_delta_text,
     get_chat_message_text,
@@ -16,6 +14,9 @@ from utils.restful_return_check import (
 )
 
 from lmdeploy.serve.openai.api_client import APIClient
+
+# INPUT_LENGTH_ERROR: ~100k tokens (was *100000 ≈500k).
+_OVERSIZE_CHAT_PROMPT = 'Hi, pls intro yourself' * 20000
 
 
 @pytest.mark.order(8)
@@ -378,13 +379,13 @@ class TestRestfulInterfaceChatCompletions:
                                                      messages=[
                                                          {
                                                              'role': 'user',
-                                                             'content': 'Hi, pls intro yourself' * 100000,
+                                                             'content': _OVERSIZE_CHAT_PROMPT,
                                                          },
                                                      ],
                                                      temperature=0.01):
             continue
-        assert output.get('choices')[0].get('finish_reason') == 'length'
-        assert_chat_message_empty(output.get('choices')[0])
+        assert output.get('choices')[0].get('finish_reason') == 'error'
+        assert_chat_message_error(output.get('choices')[0])
 
     def test_longtext_input_streaming(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -394,15 +395,15 @@ class TestRestfulInterfaceChatCompletions:
                                                      messages=[
                                                          {
                                                              'role': 'user',
-                                                             'content': 'Hi, pls intro yourself' * 100000,
+                                                             'content': _OVERSIZE_CHAT_PROMPT,
                                                          },
                                                      ],
                                                      stream=True,
                                                      temperature=0.01):
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
-        assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
-        assert_chat_delta_empty(outputList[0].get('choices')[0])
+        assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
+        assert_chat_delta_error(outputList[0].get('choices')[0])
         assert len(outputList) == 1
 
     def test_ignore_eos(self, backend, model_case):
@@ -905,7 +906,7 @@ class TestRestfulOpenAI:
                                                  messages=[
                                                      {
                                                          'role': 'user',
-                                                         'content': 'Hi, pls intro yourself' * 100000
+                                                         'content': _OVERSIZE_CHAT_PROMPT,
                                                      },
                                                  ],
                                                  max_tokens=100)
@@ -923,7 +924,7 @@ class TestRestfulOpenAI:
                                                  messages=[
                                                      {
                                                          'role': 'user',
-                                                         'content': 'Hi, pls intro yourself' * 100000
+                                                         'content': _OVERSIZE_CHAT_PROMPT,
                                                      },
                                                  ],
                                                  max_tokens=100,

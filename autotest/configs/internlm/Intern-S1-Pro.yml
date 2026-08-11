@@ -1,4 +1,5 @@
-# HF model id: internlm/Intern-S1-Pro-FP8
+# HF model id: internlm/Intern-S1-Pro
+# Hub cache: models--internlm--Intern-S1-Pro (FP8 weights)
 
 h:
 - model_type: chat
