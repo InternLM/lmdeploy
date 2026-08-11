@@ -296,17 +296,19 @@ def register(router: APIRouter, server_context) -> None:
                 if request.return_logprob:
                     output_token_logprobs = _create_output_token_logprobs(
                         res.token_ids, res.logprobs)
+                delta_token_ids = res.token_ids if res.token_ids is not None else []
+                stream_deltas = response_parser.stream_chunk(
+                    res.response,
+                    delta_token_ids,
+                    final=res.finish_reason is not None,
+                )
                 if res.finish_reason and include_usage:
                     final_usage = UsageInfo.build(
                         prompt_tokens=res.input_token_len,
                         completion_tokens=res.generate_token_len,
                         cached_tokens=res.cached_tokens,
-                        # The engine does not currently expose a reasoning token
-                        # count, so completion_tokens_details is left None.
+                        reasoning_tokens=response_parser.reasoning_tokens,
                     )
-                delta_token_ids = res.token_ids if res.token_ids is not None else []
-                stream_deltas = response_parser.stream_chunk(
-                    res.response, delta_token_ids)
                 if not stream_deltas:
                     # Parser may buffer partial protocol tags and emit no visible delta
                     # while the engine still produced new tokens (e.g. MTP batch). Do not
@@ -455,8 +457,7 @@ def register(router: APIRouter, server_context) -> None:
             prompt_tokens=final_res.input_token_len,
             completion_tokens=final_res.generate_token_len,
             cached_tokens=final_res.cached_tokens,
-            # The engine does not currently expose a reasoning token count, so
-            # completion_tokens_details (incl. reasoning_tokens) is left None.
+            reasoning_tokens=response_parser.reasoning_tokens,
         )
         response = ChatCompletionResponse(
             id=request_id,

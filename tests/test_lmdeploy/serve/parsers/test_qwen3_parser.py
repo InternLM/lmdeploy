@@ -10,6 +10,17 @@ from .helpers import first_stream_delta
 MODEL_ID = 'Qwen/Qwen3-8B'
 
 
+class _ReasoningTokenizer:
+
+    def get_vocab(self):
+        return {
+            '<think>': 1,
+            '</think>': 2,
+            '<tool_call>': 3,
+            '</tool_call>': 5,
+        }
+
+
 @pytest.fixture()
 def response_parser():
     # Configure ResponseParser to use unified reasoning parser and Qwen3 tool parser.
@@ -351,8 +362,67 @@ class TestQwenResponseParserStreaming:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
 
+    def test_stream_chunk_counts_tool_tokens_until_reasoning_close(self):
+        cls = ResponseParserManager.get('default')
+        old_reasoning_cls = cls.reasoning_parser_cls
+        old_tool_cls = cls.tool_parser_cls
+        old_tokenizer = cls.tokenizer
+        try:
+            cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+            cls.tool_parser_cls = ToolParserManager.get('qwen3')
+            cls.tokenizer = _ReasoningTokenizer()
+            request = ChatCompletionRequest(
+                model=MODEL_ID,
+                messages=[],
+                stream=True,
+                tool_choice='auto',
+                chat_template_kwargs={'enable_thinking': True},
+            )
+            parser = cls(request=request)
+
+            parser.stream_chunk('<think>reason', [1, 10, 11])
+            parser.stream_chunk('<tool_call>{}</tool_call>more', [3, 20, 5, 30])
+            parser.stream_chunk('</think>answer', [2, 40], final=True)
+
+            # Every token after <think> and before </think> counts, including
+            # tool protocol, payload, and post-tool tokens.
+            assert parser.reasoning_tokens == 6
+        finally:
+            cls.reasoning_parser_cls = old_reasoning_cls
+            cls.tool_parser_cls = old_tool_cls
+            cls.tokenizer = old_tokenizer
+
 
 class TestQwenResponseParserComplete:
+
+    def test_parse_complete_counts_only_reasoning_content_tokens(self):
+        cls = ResponseParserManager.get('default')
+        old_reasoning_cls = cls.reasoning_parser_cls
+        old_tool_cls = cls.tool_parser_cls
+        old_tokenizer = cls.tokenizer
+        try:
+            cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+            cls.tool_parser_cls = None
+            cls.tokenizer = _ReasoningTokenizer()
+            request = ChatCompletionRequest(
+                model=MODEL_ID,
+                messages=[],
+                stream=False,
+                tool_choice='none',
+                chat_template_kwargs={'enable_thinking': True},
+            )
+            parser = cls(request=request)
+
+            parser.parse_complete(
+                '<think>reasoning</think>answer',
+                token_ids=[1, 10, 11, 2, 12],
+            )
+
+            assert parser.reasoning_tokens == 2
+        finally:
+            cls.reasoning_parser_cls = old_reasoning_cls
+            cls.tool_parser_cls = old_tool_cls
+            cls.tokenizer = old_tokenizer
 
     def test_parse_complete_strips_reasoning_open_tag(self):
         cls = ResponseParserManager.get('default')
