@@ -36,6 +36,8 @@ class GatedDeltaMeta:
         self.num_tokens = num_tokens
         self.is_decoding = attn_metadata.is_decoding
         self.cu_seqlens = attn_metadata.cu_seqlens_q
+        self.chunk_indices = attn_metadata.gated_delta_chunk_indices
+        self.chunk_offsets = attn_metadata.gated_delta_chunk_offsets
         self.cache_seqlens = None
         self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
         self.spec_conv_offsets = None
@@ -226,6 +228,8 @@ class GatedDelta:
         """call."""
         is_decoding = gated_delta_meta.is_decoding
         cu_seqlens = gated_delta_meta.cu_seqlens
+        chunk_indices = gated_delta_meta.chunk_indices
+        chunk_offsets = gated_delta_meta.chunk_offsets
         state_ids = gated_delta_meta.state_ids
         spec_state_offsets = gated_delta_meta.spec_state_offsets
         cache_seqlens = gated_delta_meta.cache_seqlens
@@ -244,7 +248,7 @@ class GatedDelta:
         )
 
         if not is_decoding:
-            core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
+            core_attn_out, last_recurrent_state, chunk_states = self.impl.chunk_gated_delta_rule(
                 query,
                 key,
                 value,
@@ -255,6 +259,8 @@ class GatedDelta:
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
                 cu_seqlens=cu_seqlens,
+                chunk_indices=chunk_indices,
+                chunk_offsets=chunk_offsets,
                 spec_state_offsets=spec_state_offsets,
                 transpose_state_layout=True,
             )
@@ -276,7 +282,9 @@ class GatedDelta:
             )
             # out (seqlen, B, ...) -> (1, seqlen * B, ...)
             core_attn_out = core_attn_out.flatten(0, 1).unsqueeze(0)
-        return core_attn_out, last_recurrent_state
+            # decode path does not produce per-chunk boundary states.
+            chunk_states = None
+        return core_attn_out, last_recurrent_state, chunk_states
 
 
 class CausalConv1d(nn.Module):

@@ -115,8 +115,14 @@ class CudaStepMetaUpdater(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def update(self, step_context: 'StepContext', sequence_metadata: CudaSequenceMetadata) -> None:
-        """Update metadata for one inference step."""
+    def update(self, step_context: 'StepContext', sequence_metadata: CudaSequenceMetadata,
+               attn_metadata) -> None:
+        """Update non-attention metadata for one inference step.
+
+        ``attn_metadata`` is the shared attention metadata object built for this
+        step; updaters may attach operator-owned fields (e.g. gated-delta chunk
+        indices/offsets) onto it so every layer reuses one preparation.
+        """
         raise NotImplementedError
 
 
@@ -225,7 +231,7 @@ class CudaStepMetaPlan:
         metadata = tuple(builder.build(step_context, sequence_metadata) for builder in self.attention_builders)
         self._attach_attention_metadata(attn_metadata, metadata)
         for updater in self.step_updaters:
-            updater.update(step_context, sequence_metadata)
+            updater.update(step_context, sequence_metadata, attn_metadata)
 
     def make_cudagraph_buffers(self, graph_meta, input_buffers,
                                step_context: 'StepContext') -> CudaStepMetaGraphBuffers:

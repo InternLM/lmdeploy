@@ -49,11 +49,18 @@ class GatedDeltaRuleImpl(ABC):
         scale: float | None = None,
         use_qk_l2norm_in_kernel: bool = False,
         cu_seqlens: torch.Tensor | None = None,
+        chunk_indices: torch.Tensor | None = None,
+        chunk_offsets: torch.Tensor | None = None,
         output_final_state: bool = False,
         spec_state_offsets: torch.Tensor | None = None,
         transpose_state_layout: bool = False,
     ):
-        """forward."""
+        """Run chunked prefill.
+
+        Returns the attention output, the updated recurrent-state bank, and the
+        states at the start of each 64-token chunk. The terminal sequence state
+        is in the updated state bank rather than the final chunk-state entry.
+        """
         raise NotImplementedError
 
     @abstractmethod

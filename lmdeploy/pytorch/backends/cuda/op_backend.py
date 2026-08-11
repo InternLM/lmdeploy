@@ -187,10 +187,21 @@ class CudaOpsBackend(DefaultOpsBackend):
         return attn_metadata
 
     @classmethod
-    def update_chunked_gated_delta_rule_meta(cls, attn_metadata):
-        from .gated_delta_rule import prepare_chunked_gated_delta_rule
+    @classmethod
+    def update_chunked_gated_delta_rule_meta(cls, attn_metadata, step_context=None):
+        """Build local gated-delta chunk metadata once per non-decode step.
 
-        prepare_chunked_gated_delta_rule(attn_metadata.cu_seqlens_q)
+        Stores ``prepare_chunk_indices`` / ``prepare_chunk_offsets`` results on
+        ``attn_metadata`` so every gated-delta layer reuses one preparation.
+        ``step_context`` is retained for API symmetry with the legacy path; the
+        metadata only depends on ``cu_seqlens_q``.
+        """
+        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
+            prepare_chunk_indices, prepare_chunk_offsets)
+        cu_seqlens_q = attn_metadata.cu_seqlens_q
+        chunk_size = 64
+        attn_metadata.gated_delta_chunk_indices = prepare_chunk_indices(cu_seqlens_q, chunk_size)
+        attn_metadata.gated_delta_chunk_offsets = prepare_chunk_offsets(cu_seqlens_q, chunk_size)
 
     @classmethod
     def _legacy_update_step_context(cls, step_context, attn_metadata):
