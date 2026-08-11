@@ -1058,15 +1058,18 @@ def _get_func_config_list_per_model(
     func_type: str,
     extra: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """Expand run configs from autotest/configs/<org>/<model>.yml entries."""
+    """Expand run configs from autotest/configs/<org>/<model>.yml entries.
+
+    Honors ``DEPS_PROFILE`` via :func:`_iter_per_model_entries`. Do not gate
+    models with :func:`get_model_list` (that helper always ignores deps-pinned
+    rows); intersecting them would empty ``tp1``/``tp2`` cases under pinned
+    profiles and show pytest ``[NOTSET]``.
+    """
     extra = extra or {}
     env_key = _model_matrix_env_key(config)
     deps_profile = get_deps_profile_selector()
     run_configs: list[dict[str, Any]] = []
     seen: set[tuple] = set()
-    base_case_list = get_model_list(
-        config, backend, parallel_config, model_type, func_type, extra=extra,
-    )
 
     for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
         layout = _parallel_layout(_entry_engine_config(entry))
@@ -1085,7 +1088,6 @@ def _get_func_config_list_per_model(
         models_for_quant = [base_model]
         if 'quantization' in (entry.get(TEST_COVERAGE_KEY) or []):
             _extend_quant_models_from_entry(backend, [base_model], quant_cfg, models_for_quant)
-        models_for_quant = [m for m in models_for_quant if m in base_case_list]
         launch_extra_sig = _entry_launch_extra_sig(entry)
 
         for model in models_for_quant:
