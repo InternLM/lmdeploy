@@ -584,6 +584,7 @@ void invokeQwenVitPrepareQKV(void*        qkv,
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeQwenVitBuildMappedIdx(int*         mapped_idx,
@@ -645,6 +646,7 @@ void invokeFastPosEmbedIdxWeight(int*         idx_out,
             idx_out, (T*)weight_out, grid_thws, grid_offsets, num_grids, total_n, num_grid_per_side);
     };
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeFusedPosEmbedMerge(void*        hidden_states,
@@ -677,6 +679,7 @@ void invokeFusedPosEmbedMerge(void*        hidden_states,
                                                                           hidden / vec_size);
     };
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeQwenVitRotaryPosEmb(void*        cos_sin,
@@ -705,6 +708,7 @@ void invokeQwenVitRotaryPosEmb(void*        cos_sin,
             <<<grid, block, 0, stream>>>((T*)cos_sin, grid_thws, grid_offsets, num_grids, total_hw, head_dim, scale);
     };
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeMropePositionIds(
@@ -716,6 +720,7 @@ void invokeMropePositionIds(
     const int  tiles = (max_seg_len + kMropeBlock - 1) / kMropeBlock;
     const dim3 grid((unsigned)num_segments, (unsigned)tiles);
     mropeScatterKernel<<<grid, kMropeBlock, 0, stream>>>(pos_ids, segments);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeQwenVitWindowReorder(

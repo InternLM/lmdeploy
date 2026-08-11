@@ -399,18 +399,17 @@ struct QwenVit::Impl {
         switch (norm_type) {
             case NormType::kLayerNorm: {
                 const auto& ln = static_cast<const LayerNormWeight&>(norm);
-                invokeLayerNorm(out, input, ln.weight, ln.bias, ln.norm_eps_, stream);
+                TM_SCOPE_CALL(invokeLayerNorm(out, input, ln.weight, ln.bias, ln.norm_eps_, stream));
                 break;
             }
             case NormType::kRMSNorm: {
                 const auto& rms = static_cast<const NormWeight&>(norm);
-                invokeRMSNorm(out, input, rms.weight, rms.norm_eps_, rms.zero_centered_, stream);
+                TM_SCOPE_CALL(invokeRMSNorm(out, input, rms.weight, rms.norm_eps_, rms.zero_centered_, stream));
                 break;
             }
             default:
                 TM_LOG_FATAL("unsupported QwenVit norm type: {}", (int)norm_type);
         }
-        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     void ResidualBiasNorm(Tensor&             hidden_states,
@@ -423,36 +422,35 @@ struct QwenVit::Impl {
         switch (norm_type) {
             case NormType::kLayerNorm: {
                 const auto& ln = static_cast<const LayerNormWeight&>(norm);
-                invokeResidualBiasLayerNorm(hidden_states.raw_data(),
-                                            residual.raw_data(),
-                                            ln.weight.raw_data(),
-                                            ln.bias.data_or((void*)nullptr),
-                                            residual_bias.data_or((void*)nullptr),
-                                            hidden_states.dtype(),
-                                            config_.hidden_dim,
-                                            hidden_states.shape(0),
-                                            ln.norm_eps_,
-                                            stream);
+                TM_SCOPE_CALL(invokeResidualBiasLayerNorm(hidden_states.raw_data(),
+                                                          residual.raw_data(),
+                                                          ln.weight.raw_data(),
+                                                          ln.bias.data_or((void*)nullptr),
+                                                          residual_bias.data_or((void*)nullptr),
+                                                          hidden_states.dtype(),
+                                                          config_.hidden_dim,
+                                                          hidden_states.shape(0),
+                                                          ln.norm_eps_,
+                                                          stream));
                 break;
             }
             case NormType::kRMSNorm: {
                 const auto& rms = static_cast<const NormWeight&>(norm);
-                invokeResidualBiasRMSNorm(hidden_states.raw_data(),
-                                          residual.raw_data(),
-                                          rms.weight.raw_data(),
-                                          residual_bias.data_or((void*)nullptr),
-                                          hidden_states.dtype(),
-                                          config_.hidden_dim,
-                                          hidden_states.shape(0),
-                                          rms.norm_eps_,
-                                          rms.zero_centered_,
-                                          stream);
+                TM_SCOPE_CALL(invokeResidualBiasRMSNorm(hidden_states.raw_data(),
+                                                        residual.raw_data(),
+                                                        rms.weight.raw_data(),
+                                                        residual_bias.data_or((void*)nullptr),
+                                                        hidden_states.dtype(),
+                                                        config_.hidden_dim,
+                                                        hidden_states.shape(0),
+                                                        rms.norm_eps_,
+                                                        rms.zero_centered_,
+                                                        stream));
                 break;
             }
             default:
                 TM_LOG_FATAL("unsupported QwenVit norm type: {}", (int)norm_type);
         }
-        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     // Qwen3.5: precompute the bilinear-interpolation gather indices/weights for the
@@ -470,20 +468,18 @@ struct QwenVit::Impl {
 
         Buffer_<int> pos_embed_idx     = {d.total_hw * 4, kDEVICE};
         Tensor       pos_embed_weights = {{d.total_hw, 4}, cfg.data_type, kDEVICE};
-        invokeFastPosEmbedIdxWeight(pos_embed_idx.data(),
-                                    pos_embed_weights.raw_data(),
-                                    cfg.data_type,
-                                    d.grid_thws.data(),
-                                    d.grid_offsets.data(),
-                                    (int)d.grid_thws_host.size(),
-                                    d.total_hw,
-                                    num_grid_per_side,
-                                    stream);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(invokeFastPosEmbedIdxWeight(pos_embed_idx.data(),
+                                                  pos_embed_weights.raw_data(),
+                                                  cfg.data_type,
+                                                  d.grid_thws.data(),
+                                                  d.grid_offsets.data(),
+                                                  (int)d.grid_thws_host.size(),
+                                                  d.total_hw,
+                                                  num_grid_per_side,
+                                                  stream));
 
         Tensor pos_embeds = {{d.total_hw * 4, cfg.hidden_dim}, cfg.data_type, kDEVICE};
-        invokeEmbeddingLookup(pos_embeds, pos_embed_idx, weights_.pos_embed, stream);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(invokeEmbeddingLookup(pos_embeds, pos_embed_idx, weights_.pos_embed, stream));
 
         env.produce("pos_embeds", pos_embeds);
         env.produce("pos_embed_weights", pos_embed_weights);
@@ -498,16 +494,15 @@ struct QwenVit::Impl {
         // keyed by the same natural flat index that `mapped_idx` already carries. Vision q/k
         // are reordered into this adjacent-pair layout at export time.
         Tensor rotary_pos_emb = {{d.total_hw, head_dim}, cfg.data_type, kDEVICE};
-        invokeQwenVitRotaryPosEmb(rotary_pos_emb.raw_data(),
-                                  cfg.data_type,
-                                  d.grid_thws.data(),
-                                  d.grid_offsets.data(),
-                                  (int)d.grid_thws_host.size(),
-                                  d.total_hw,
-                                  head_dim,
-                                  /*theta=*/10000.0f,
-                                  core::Context::stream().handle());
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(invokeQwenVitRotaryPosEmb(rotary_pos_emb.raw_data(),
+                                                cfg.data_type,
+                                                d.grid_thws.data(),
+                                                d.grid_offsets.data(),
+                                                (int)d.grid_thws_host.size(),
+                                                d.total_hw,
+                                                head_dim,
+                                                /*theta=*/10000.0f,
+                                                core::Context::stream().handle()));
         env.produce("rotary_pos_emb", rotary_pos_emb);
     }
 
@@ -517,7 +512,6 @@ struct QwenVit::Impl {
         Tensor input      = empty_like(host_input, kDEVICE);
 
         Copy(host_input, input);
-        TM_CUDA_CHECK(cudaGetLastError());
 
         Tensor output;
         TM_SCOPE_CALL(linear_.Forward(input, *weights_.patch_embed, output));
@@ -557,6 +551,8 @@ struct QwenVit::Impl {
 
     void Add(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
+
         // convert model-specific multimodal inputs to internal MultiModalData
         const Buffer_<Sequence*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
@@ -680,12 +676,11 @@ struct QwenVit::Impl {
         if (n_segs > 0) {
             const ssize_t segs_ints = (ssize_t)n_segs * kMropeSegInts;
             Copy(d.mrope_segs_host.slice(0, segs_ints), d.mrope_segs_dev.slice(0, segs_ints));
-            invokeMropePositionIds(d.mrope_position_ids.data(),
-                                   reinterpret_cast<const MropeSegment*>(d.mrope_segs_dev.data()),
-                                   n_segs,
-                                   max_seg_len,
-                                   core::Context::stream().handle());
-            TM_CUDA_CHECK(cudaGetLastError());
+            TM_SCOPE_CALL(invokeMropePositionIds(d.mrope_position_ids.data(),
+                                                 reinterpret_cast<const MropeSegment*>(d.mrope_segs_dev.data()),
+                                                 n_segs,
+                                                 max_seg_len,
+                                                 core::Context::stream().handle()));
         }
 
         // 5) Publish all tensors - the consumer relies on this contract unconditionally.
@@ -697,6 +692,8 @@ struct QwenVit::Impl {
 
     void Setup(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
+
         auto& d    = data_.at(phase);
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
@@ -721,25 +718,27 @@ struct QwenVit::Impl {
 
     void Prepare(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
+
         auto& d = data_.at(phase);
         if (d.batch_size == 0) {
             return;
         }
 
         auto stream = core::Context::stream().handle();
-        invokeQwenVitBuildMappedIdx(d.mapped_idx.data(),
-                                    d.grid_thws.data(),
-                                    d.grid_offsets.data(),
-                                    (int)d.grid_thws_host.size(),
-                                    config_.spatial_merge_size,
-                                    stream);
+        TM_SCOPE_CALL(invokeQwenVitBuildMappedIdx(d.mapped_idx.data(),
+                                                  d.grid_thws.data(),
+                                                  d.grid_offsets.data(),
+                                                  (int)d.grid_thws_host.size(),
+                                                  config_.spatial_merge_size,
+                                                  stream));
         if (config_.use_window_attention) {
-            invokeQwenVitBuildWindowMappedIdx(d.window_mapped_idx.data(),
-                                              d.mapped_idx.data(),
-                                              d.window_idx.data(),
-                                              config_.spatial_merge_size * config_.spatial_merge_size,
-                                              d.merge_unit_count,
-                                              stream);
+            TM_SCOPE_CALL(invokeQwenVitBuildWindowMappedIdx(d.window_mapped_idx.data(),
+                                                            d.mapped_idx.data(),
+                                                            d.window_idx.data(),
+                                                            config_.spatial_merge_size * config_.spatial_merge_size,
+                                                            d.merge_unit_count,
+                                                            stream));
         }
 
         // Qwen3.5 learned positional embedding (bilinear interpolation of a fixed grid).
@@ -752,6 +751,8 @@ struct QwenVit::Impl {
 
     void Forward(int phase, TensorMap& args)
     {
+        TM_FUNCTION_SCOPE();
+
         auto& d = data_.at(phase);
         if (d.batch_size == 0) {
             return;
@@ -768,26 +769,26 @@ struct QwenVit::Impl {
         if (cfg.num_position_embeddings > 0) {
             auto pos_embeds        = args.consume("pos_embeds");
             auto pos_embed_weights = args.consume("pos_embed_weights");
-            invokeFusedPosEmbedMerge(residual.raw_data(),
-                                     pos_embeds.raw_data(),
-                                     pos_embed_weights.raw_data(),
-                                     d.mapped_idx.data(),
-                                     weights_.patch_embed->bias ? weights_.patch_embed->bias.raw_data() : nullptr,
-                                     d.batch_size,
-                                     cfg.hidden_dim,
-                                     cfg.data_type,
-                                     stream);
-            TM_CUDA_CHECK(cudaGetLastError());
+            TM_SCOPE_CALL(
+                invokeFusedPosEmbedMerge(residual.raw_data(),
+                                         pos_embeds.raw_data(),
+                                         pos_embed_weights.raw_data(),
+                                         d.mapped_idx.data(),
+                                         weights_.patch_embed->bias ? weights_.patch_embed->bias.raw_data() : nullptr,
+                                         d.batch_size,
+                                         cfg.hidden_dim,
+                                         cfg.data_type,
+                                         stream));
         }
 
         if (cfg.use_window_attention) {
             Tensor reordered{{d.batch_size, cfg.hidden_dim}, cfg.data_type, kDEVICE};
-            invokeQwenVitWindowReorder(reordered,
-                                       residual,
-                                       d.window_idx.data(),
-                                       cfg.spatial_merge_size * cfg.spatial_merge_size,
-                                       d.merge_unit_count,
-                                       stream);
+            TM_SCOPE_CALL(invokeQwenVitWindowReorder(reordered,
+                                                     residual,
+                                                     d.window_idx.data(),
+                                                     cfg.spatial_merge_size * cfg.spatial_merge_size,
+                                                     d.merge_unit_count,
+                                                     stream));
             residual = std::move(reordered);
         }
 
@@ -833,7 +834,8 @@ struct QwenVit::Impl {
         Tensor image_embeds = Merger(hidden_states, symm_buf);
         if (cfg.use_window_attention) {
             Tensor reordered{{d.merge_unit_count, cfg.out_hidden_dim}, image_embeds.dtype(), kDEVICE};
-            invokeQwenVitReverseWindow(reordered, image_embeds, d.window_idx.data(), d.merge_unit_count, stream);
+            TM_SCOPE_CALL(
+                invokeQwenVitReverseWindow(reordered, image_embeds, d.window_idx.data(), d.merge_unit_count, stream));
             image_embeds = std::move(reordered);
         }
 
@@ -918,7 +920,6 @@ struct QwenVit::Impl {
 
         Tensor qkv;
         TM_SCOPE_CALL(linear_.Forward(input, *attn->w_qkv, qkv));
-        TM_CUDA_CHECK(cudaGetLastError());
 
         const int local_head_num = attn->head_num / attn->tp_size;
         const int head_dim       = attn->head_dim;                         // may be padded
@@ -928,26 +929,23 @@ struct QwenVit::Impl {
         const int* mapped_idx = (config_.use_window_attention ? d.window_mapped_idx.data() : d.mapped_idx.data());
 
         Tensor tmp_kv{{local_head_num, 2, d.batch_size, head_dim}, qkv.dtype(), qkv.device()};
-        invokeQwenVitPrepareQKV(qkv.raw_data(),
-                                tmp_kv.raw_data(),
-                                attn->w_qkv->bias.raw_data(),
-                                rotary_pos_emb.raw_data(),
-                                mapped_idx,
-                                qkv.dtype(),
-                                token_num,
-                                local_head_num,
-                                head_dim,
-                                rope_head_dim,
-                                core::Context::stream().handle());
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(invokeQwenVitPrepareQKV(qkv.raw_data(),
+                                              tmp_kv.raw_data(),
+                                              attn->w_qkv->bias.raw_data(),
+                                              rotary_pos_emb.raw_data(),
+                                              mapped_idx,
+                                              qkv.dtype(),
+                                              token_num,
+                                              local_head_num,
+                                              head_dim,
+                                              rope_head_dim,
+                                              core::Context::stream().handle()));
 
         Tensor attn_output{{token_num, local_head_num * head_dim}, qkv.dtype(), qkv.device()};
         auto   params = CreateVitAttentionParams<T>(attn_output, qkv, tmp_kv, d, *attn, layer_id);
         dispatchAttention<T>(params);
-        TM_CUDA_CHECK(cudaGetLastError());
 
         TM_SCOPE_CALL(linear_.Forward(attn_output, *attn->wo, output));
-        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     void Mlp(Tensor& input, Tensor& output, Data& d, int layer_id)
@@ -961,28 +959,23 @@ struct QwenVit::Impl {
             Tensor up;
             TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_gate, gate));
             TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, up));
-            TM_CUDA_CHECK(cudaGetLastError());
 
-            ApplyBias(gate, block->mlp_gate->bias, stream);
-            ApplyBias(up, block->mlp_fc1->bias, stream);
-            Activation(gate, up, ActivationType::kSilu, stream);
-            TM_CUDA_CHECK(cudaGetLastError());
+            TM_SCOPE_CALL(ApplyBias(gate, block->mlp_gate->bias, stream));
+            TM_SCOPE_CALL(ApplyBias(up, block->mlp_fc1->bias, stream));
+            TM_SCOPE_CALL(Activation(gate, up, ActivationType::kSilu, stream));
 
             TM_SCOPE_CALL(linear_.Forward(gate, *block->mlp_fc2, output));
         }
         else {
             Tensor inter;
             TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, inter));
-            TM_CUDA_CHECK(cudaGetLastError());
 
             // Qwen2-VL/2.5 use the erf GELU; Qwen3.5 uses the tanh approximation.
             const ActivationType act = config_.gelu_tanh ? ActivationType::kGeluPytorchTanh : ActivationType::kGelu;
-            invokeAddBiasActivation(inter, block->mlp_fc1->bias, act, stream);
-            TM_CUDA_CHECK(cudaGetLastError());
+            TM_SCOPE_CALL(invokeAddBiasActivation(inter, block->mlp_fc1->bias, act, stream));
 
             TM_SCOPE_CALL(linear_.Forward(inter, *block->mlp_fc2, output));
         }
-        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     Tensor Merger(Tensor& input, Buffer symm_buf)
@@ -995,22 +988,18 @@ struct QwenVit::Impl {
 
         Tensor inter;
         TM_SCOPE_CALL(linear_.Forward(merged_input, *weights_.merger_fc1, inter));
-        TM_CUDA_CHECK(cudaGetLastError());
 
-        invokeAddBiasActivation(inter, weights_.merger_fc1->bias, ActivationType::kGelu, stream);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(invokeAddBiasActivation(inter, weights_.merger_fc1->bias, ActivationType::kGelu, stream));
 
         Tensor output;
         if (d_comm_) {
             output = {symm_buf.view(config_.data_type), {inter.shape(0), weights_.merger_fc2->output_dim}};
         }
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.merger_fc2, output));
-        TM_CUDA_CHECK(cudaGetLastError());
         AllReduceSum(output, stream);
 
         Tensor result = empty_like(output);
-        ApplyBias(result, output, weights_.merger_fc2->bias, stream);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(ApplyBias(result, output, weights_.merger_fc2->bias, stream));
 
         return result;
     }

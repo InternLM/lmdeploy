@@ -3,6 +3,7 @@
 #include "src/turbomind/models/internvit/internvit.h"
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/attention/attention.h"
@@ -98,18 +99,17 @@ struct InternVit::Impl {
         switch (norm_type) {
             case NormType::kLayerNorm: {
                 const auto& ln = static_cast<const LayerNormWeight&>(norm);
-                invokeLayerNorm(out, input, ln.weight, ln.bias, ln.norm_eps_, stream);
+                TM_SCOPE_CALL(invokeLayerNorm(out, input, ln.weight, ln.bias, ln.norm_eps_, stream));
                 break;
             }
             case NormType::kRMSNorm: {
                 const auto& rms = static_cast<const NormWeight&>(norm);
-                invokeRMSNorm(out, input, rms.weight, rms.norm_eps_, rms.zero_centered_, stream);
+                TM_SCOPE_CALL(invokeRMSNorm(out, input, rms.weight, rms.norm_eps_, rms.zero_centered_, stream));
                 break;
             }
             default:
                 TM_LOG_FATAL("unsupported InternVit norm type: {}", (int)norm_type);
         }
-        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     void ResidualScaleNorm(Tensor&             hidden_states,
@@ -124,41 +124,40 @@ struct InternVit::Impl {
         switch (norm_type) {
             case NormType::kLayerNorm: {
                 const auto& ln = static_cast<const LayerNormWeight&>(*norm);
-                invokeInternVitResidualScaleNorm(hidden_states,
-                                                 residual,
-                                                 branch_output,
-                                                 branch_scale,
-                                                 branch_bias,
-                                                 ln.weight,
-                                                 ln.bias,
-                                                 ln.norm_eps_,
-                                                 norm_type,
-                                                 stream);
+                TM_SCOPE_CALL(invokeInternVitResidualScaleNorm(hidden_states,
+                                                               residual,
+                                                               branch_output,
+                                                               branch_scale,
+                                                               branch_bias,
+                                                               ln.weight,
+                                                               ln.bias,
+                                                               ln.norm_eps_,
+                                                               norm_type,
+                                                               stream));
                 break;
             }
             case NormType::kRMSNorm: {
                 const auto& rms = static_cast<const NormWeight&>(*norm);
-                invokeInternVitResidualScaleNorm(hidden_states,
-                                                 residual,
-                                                 branch_output,
-                                                 branch_scale,
-                                                 branch_bias,
-                                                 rms.weight,
-                                                 {},
-                                                 rms.norm_eps_,
-                                                 norm_type,
-                                                 stream);
+                TM_SCOPE_CALL(invokeInternVitResidualScaleNorm(hidden_states,
+                                                               residual,
+                                                               branch_output,
+                                                               branch_scale,
+                                                               branch_bias,
+                                                               rms.weight,
+                                                               {},
+                                                               rms.norm_eps_,
+                                                               norm_type,
+                                                               stream));
                 break;
             }
             case NormType::kNone: {
-                invokeInternVitResidualScaleNorm(
-                    hidden_states, residual, branch_output, branch_scale, branch_bias, {}, {}, 0.f, norm_type, stream);
+                TM_SCOPE_CALL(invokeInternVitResidualScaleNorm(
+                    hidden_states, residual, branch_output, branch_scale, branch_bias, {}, {}, 0.f, norm_type, stream));
                 break;
             }
             default:
                 TM_LOG_FATAL("unsupported InternVit norm type: {}", (int)norm_type);
         }
-        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     int Add(Sequence& s)
@@ -194,6 +193,8 @@ struct InternVit::Impl {
 
     void Add(int /*phase*/, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
+
         const Buffer_<Sequence*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
             auto& s = *TM_CHECK_NOTNULL(rc[i]);
@@ -205,6 +206,8 @@ struct InternVit::Impl {
 
     void Setup(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
+
         auto&       d    = data_.at(phase);
         auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
         const auto& cfg  = config_;
@@ -307,33 +310,31 @@ struct InternVit::Impl {
         Tensor host_input = d.batch_input.slice(0, d.batch_size);
         Tensor input      = empty_like(host_input, kDEVICE);
         Copy(host_input, input);
-        TM_CUDA_CHECK(cudaGetLastError());
 
         Tensor patches{{d.batch_size * cfg.num_patches, cfg.patch_in_dim}, cfg.data_type, kDEVICE};
-        invokeInternVitPatchify(patches,
-                                input,
-                                d.batch_size,
-                                cfg.in_channels,
-                                cfg.image_height,
-                                cfg.image_width,
-                                cfg.patch_height,
-                                cfg.patch_width,
-                                stream);
+        TM_SCOPE_CALL(invokeInternVitPatchify(patches,
+                                              input,
+                                              d.batch_size,
+                                              cfg.in_channels,
+                                              cfg.image_height,
+                                              cfg.image_width,
+                                              cfg.patch_height,
+                                              cfg.patch_width,
+                                              stream));
 
         Tensor patch_embeds;
         TM_SCOPE_CALL(linear_.Forward(patches, *weights_.patch_embed, patch_embeds));
-        TM_CUDA_CHECK(cudaGetLastError());
 
         Tensor hidden{{d.token_num, cfg.hidden_dim}, cfg.data_type, kDEVICE};
-        invokeInternVitAddEmbeddings(hidden,
-                                     patch_embeds,
-                                     weights_.patch_embed->bias,
-                                     weights_.cls_token,
-                                     weights_.position_embeddings,
-                                     d.batch_size,
-                                     cfg.num_patches,
-                                     cfg.hidden_dim,
-                                     stream);
+        TM_SCOPE_CALL(invokeInternVitAddEmbeddings(hidden,
+                                                   patch_embeds,
+                                                   weights_.patch_embed->bias,
+                                                   weights_.cls_token,
+                                                   weights_.position_embeddings,
+                                                   d.batch_size,
+                                                   cfg.num_patches,
+                                                   cfg.hidden_dim,
+                                                   stream));
         return hidden;
     }
 
@@ -397,40 +398,37 @@ struct InternVit::Impl {
 
         Tensor qkv;
         TM_SCOPE_CALL(linear_.Forward(input, *attn->w_qkv, qkv));
-        TM_CUDA_CHECK(cudaGetLastError());
 
         const int local_head_num = attn->head_num / attn->tp_size;
         const int head_dim       = attn->head_dim;
         const int local_dim      = local_head_num * head_dim;
 
-        ApplyBias(qkv, attn->w_qkv->bias, stream);
+        TM_SCOPE_CALL(ApplyBias(qkv, attn->w_qkv->bias, stream));
 
         if (attn->q_norm && attn->k_norm) {
             Tensor sums{output.buffer().view(kFloat), {2, d.token_num}};
-            invokeInternVitPreRMSNorm(sums, qkv, local_dim, stream);
+            TM_SCOPE_CALL(invokeInternVitPreRMSNorm(sums, qkv, local_dim, stream));
             if (attn->tp_size > 1) {
                 AllReduceSum(sums, stream);
             }
-            invokeInternVitPostRMSNorm(qkv,
-                                       sums,
-                                       attn->q_norm->weight,
-                                       attn->k_norm->weight,
-                                       local_dim,
-                                       config_.hidden_dim,
-                                       attn->q_norm->norm_eps_,
-                                       stream);
+            TM_SCOPE_CALL(invokeInternVitPostRMSNorm(qkv,
+                                                     sums,
+                                                     attn->q_norm->weight,
+                                                     attn->k_norm->weight,
+                                                     local_dim,
+                                                     config_.hidden_dim,
+                                                     attn->q_norm->norm_eps_,
+                                                     stream));
         }
 
         Tensor kv{{local_head_num, 2, d.token_num, head_dim}, qkv.dtype(), qkv.device()};
-        invokeInternVitPrepareQKV(kv, qkv, local_head_num, head_dim, stream);
+        TM_SCOPE_CALL(invokeInternVitPrepareQKV(kv, qkv, local_head_num, head_dim, stream));
 
         Tensor attn_output{{d.token_num, local_dim}, qkv.dtype(), qkv.device()};
         auto   params = CreateVitAttentionParams<T>(attn_output, qkv, kv, d, *attn, layer_id);
         dispatchAttention<T>(params);
-        TM_CUDA_CHECK(cudaGetLastError());
 
         TM_SCOPE_CALL(linear_.Forward(attn_output, *attn->wo, output));
-        TM_CUDA_CHECK(cudaGetLastError());
         if (attn->tp_size > 1) {
             AllReduceSum(output, stream);
         }
@@ -443,12 +441,10 @@ struct InternVit::Impl {
 
         Tensor inter;
         TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, inter));
-        TM_CUDA_CHECK(cudaGetLastError());
 
-        invokeAddBiasActivation(inter, block->mlp_fc1->bias, ActivationType::kGelu, stream);
+        TM_SCOPE_CALL(invokeAddBiasActivation(inter, block->mlp_fc1->bias, ActivationType::kGelu, stream));
 
         TM_SCOPE_CALL(linear_.Forward(inter, *block->mlp_fc2, output));
-        TM_CUDA_CHECK(cudaGetLastError());
         AllReduceSum(output, stream);
     }
 
@@ -462,40 +458,38 @@ struct InternVit::Impl {
         TM_CHECK_EQ(cfg.image_seq_length, (grid_size / 2) * (grid_size / 2));
 
         Tensor shuffled{{d.batch_size * cfg.image_seq_length, cfg.hidden_dim * 4}, cfg.data_type, kDEVICE};
-        invokeInternVitPixelShuffle(shuffled, hidden, grid_size, stream);
+        TM_SCOPE_CALL(invokeInternVitPixelShuffle(shuffled, hidden, grid_size, stream));
 
         Tensor projector_normed{{d.batch_size * cfg.image_seq_length, cfg.hidden_dim * 4}, cfg.data_type, kDEVICE};
-        invokeLayerNorm(projector_normed,
-                        shuffled,
-                        weights_.projector_norm->weight,
-                        weights_.projector_norm->bias,
-                        weights_.projector_norm->norm_eps_,
-                        stream);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(invokeLayerNorm(projector_normed,
+                                      shuffled,
+                                      weights_.projector_norm->weight,
+                                      weights_.projector_norm->bias,
+                                      weights_.projector_norm->norm_eps_,
+                                      stream));
 
         Tensor inter;
         TM_SCOPE_CALL(linear_.Forward(projector_normed, *weights_.projector_fc1, inter));
-        TM_CUDA_CHECK(cudaGetLastError());
 
-        invokeAddBiasActivation(inter, weights_.projector_fc1->bias, ActivationType::kGelu, stream);
+        TM_SCOPE_CALL(invokeAddBiasActivation(inter, weights_.projector_fc1->bias, ActivationType::kGelu, stream));
 
         Tensor output;
         if (tp_size_ > 1) {
             output = {symm_buf.view(config_.data_type), {inter.shape(0), weights_.projector_fc2->output_dim}};
         }
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.projector_fc2, output));
-        TM_CUDA_CHECK(cudaGetLastError());
         AllReduceSum(output, stream);
 
         Tensor result = empty_like(output);
-        ApplyBias(result, output, weights_.projector_fc2->bias, stream);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(ApplyBias(result, output, weights_.projector_fc2->bias, stream));
 
         return result;
     }
 
     void Forward(int phase, TensorMap& args)
     {
+        TM_FUNCTION_SCOPE();
+
         const auto& cfg = config_;
         auto&       d   = data_.at(phase);
         if (d.batch_size == 0) {
