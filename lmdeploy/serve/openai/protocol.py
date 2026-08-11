@@ -89,7 +89,8 @@ class UsageInfo(BaseModel):
 
         ``reasoning_tokens`` is only populated when the engine exposes a
         reasoning token count; otherwise ``completion_tokens_details`` is left
-        ``None`` to match the OpenAI shape (omitted when empty).
+        ``None``. Individual endpoints determine whether ``None`` fields are
+        serialized as ``null`` or omitted.
         """
         completion_tokens_details = (CompletionTokensDetails(
             reasoning_tokens=reasoning_tokens) if reasoning_tokens is not None else None)
