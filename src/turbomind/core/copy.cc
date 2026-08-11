@@ -82,12 +82,12 @@ F QueryDriverEntryPoint(const char* symbol, unsigned cuda_version)
 
 const MemcpyBatchAsync& GetMemcpyBatchAsync()
 {
-    static const MemcpyBatchAsync inst = []() -> MemcpyBatchAsync {
+    static thread_local const MemcpyBatchAsync inst = []() -> MemcpyBatchAsync {
         // cuMemcpyBatchAsync crashes on sm_100 (Blackwell); use serialized Copy().
         int device = 0;
-        (void)cudaGetDevice(&device);
+        TM_CUDA_CHECK(cudaGetDevice(&device));
         int compute_capability_major = 0;
-        (void)cudaDeviceGetAttribute(&compute_capability_major, cudaDevAttrComputeCapabilityMajor, device);
+        TM_CUDA_CHECK(cudaDeviceGetAttribute(&compute_capability_major, cudaDevAttrComputeCapabilityMajor, device));
         if (compute_capability_major >= 10) {
             return std::monostate{};
         }
