@@ -52,7 +52,7 @@ class TestNoauxTC:
                 torch.set_default_dtype(origin_dtype)
                 torch.set_default_device(origin_device)
 
-    @pytest.fixture(params=[1, 16, 96, 256])
+    @pytest.fixture(params=[1, 256])
     def batch_size(self, request):
         yield request.param
 

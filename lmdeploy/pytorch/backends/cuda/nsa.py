@@ -15,7 +15,11 @@ from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
-from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k_cache, prepare_dsa_indexer_q
+from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import (
+    flatten_dsa_indexer_k_cache,
+    prepare_dsa_indexer_k_cache,
+    prepare_dsa_indexer_q,
+)
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 from lmdeploy.utils import get_logger
 
@@ -53,12 +57,23 @@ def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
 
 
 @dataclass
-class _DeepGemmScoreMeta:
+class _DeepGemmPagedScoreMeta:
     """Layer-invariant metadata consumed by paged MQA scoring."""
     context_lens: Tensor
     block_offsets: Tensor
     schedule: Tensor
     max_kv_seqlen: int
+
+
+@dataclass
+class _DeepGemmContiguousScoreMeta:
+    """Contiguous-MQA metadata shared by prefill indexer layers."""
+    k_starts: Tensor
+    k_ends: Tensor
+    max_kv_seqlen: int
+
+
+_DeepGemmScoreMeta = _DeepGemmPagedScoreMeta | _DeepGemmContiguousScoreMeta
 
 
 @dataclass
@@ -75,8 +90,8 @@ def _get_deep_gemm():
         import deep_gemm
     except ImportError:
         return None
-    required = ('fp8_paged_mqa_logits', 'get_paged_mqa_logits_metadata',
-                'get_num_sms')
+    required = ('fp8_fp4_mqa_logits', 'fp8_fp4_paged_mqa_logits',
+                'get_paged_mqa_logits_metadata', 'get_num_sms')
     if not all(hasattr(deep_gemm, name) for name in required):
         return None
     return deep_gemm
@@ -86,7 +101,7 @@ def _get_deep_gemm():
 def _warn_triton_index_scoring():
     logger.warning(
         'DSA index scoring is using the Triton FP8 index kernel instead of '
-        'DeepGEMM paged MQA logits.')
+        'DeepGEMM MQA logits.')
 
 
 @functools.lru_cache
@@ -106,12 +121,26 @@ def _get_sparse_index_topk(topk: int):
 def _build_deep_gemm_score_meta(
         meta: NSAIndexMeta,
         block_offsets_buffer: Tensor | None = None,
-        schedule_buffer: Tensor | None = None) -> _DeepGemmScoreMeta | None:
-    """Build paged-MQA metadata once for all DSA indexer layers."""
+        schedule_buffer: Tensor | None = None
+) -> _DeepGemmScoreMeta | None:
+    """Build layer-invariant DeepGEMM index-scoring metadata."""
     deep_gemm = _get_deep_gemm()
-    if not meta.is_decoding or deep_gemm is None or not meta.block_offset.is_cuda:
+    if deep_gemm is None or not meta.block_offset.is_cuda:
         return None
 
+    if not meta.is_decoding:
+        k_starts = torch.repeat_interleave(
+            meta.cu_seqlen_k[:-1],
+            meta.q_seqlens,
+            output_size=meta.indexer_kv_seqlens.numel(),
+        ).to(torch.int32)
+        return _DeepGemmContiguousScoreMeta(
+            k_starts=k_starts,
+            k_ends=k_starts + meta.indexer_kv_seqlens,
+            max_kv_seqlen=meta.block_offset.size(1) * meta.block_size,
+        )
+
+    # DeepGEMM expects context lengths in [batch, next_n] layout.
     context_lens = meta.indexer_kv_seqlens.unsqueeze(-1)
     block_offsets = meta.block_offset
     if context_lens.size(0) != block_offsets.size(0):
@@ -134,7 +163,7 @@ def _build_deep_gemm_score_meta(
     if schedule_buffer is not None:
         schedule_buffer.copy_(schedule)
         schedule = schedule_buffer
-    return _DeepGemmScoreMeta(
+    return _DeepGemmPagedScoreMeta(
         context_lens=context_lens,
         block_offsets=block_offsets,
         schedule=schedule,
@@ -263,20 +292,42 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
     def _compute_scores(self, q: Tensor, q_s: Tensor,
                         indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         """Compute dense index scores with DeepGEMM or the Triton fallback."""
-        if meta.score_meta is not None:
-            score_meta = meta.score_meta
-            return _get_deep_gemm().fp8_paged_mqa_logits(
-                q[:, None],
-                indexer_k_cache,
-                q_s,
-                score_meta.context_lens,
-                score_meta.block_offsets,
-                score_meta.schedule,
-                score_meta.max_kv_seqlen,
-                False)
+        score_meta = meta.score_meta
+        if isinstance(score_meta, _DeepGemmContiguousScoreMeta):
+            k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+                indexer_k_cache, q.size(-1))
+            flat_k, flat_k_s = flatten_dsa_indexer_k_cache(
+                k_cache,
+                k_s_cache[..., 0],
+                meta.cu_seqlen_k,
+                meta.k_seqlens,
+                meta.block_offset,
+                out_size=meta.max_kv_seqlen,
+            )
+            return _get_deep_gemm().fp8_fp4_mqa_logits(
+                q=(q, None),
+                kv=(flat_k, flat_k_s),
+                weights=q_s,
+                cu_seq_len_k_start=score_meta.k_starts,
+                cu_seq_len_k_end=score_meta.k_ends,
+                clean_logits=False,
+                max_seqlen_k=score_meta.max_kv_seqlen,
+                logits_dtype=torch.float32,
+            )
+        if isinstance(score_meta, _DeepGemmPagedScoreMeta):
+            return _get_deep_gemm().fp8_fp4_paged_mqa_logits(
+                q=(q[:, None], None),
+                kv_cache=indexer_k_cache,
+                weights=q_s,
+                context_lens=score_meta.context_lens,
+                block_table=score_meta.block_offsets,
+                schedule_meta=score_meta.schedule,
+                max_context_len=score_meta.max_kv_seqlen,
+                clean_logits=False,
+                logits_dtype=torch.float32,
+            )
 
-        if meta.is_decoding:
-            _warn_triton_index_scoring()
+        _warn_triton_index_scoring()
         k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
             indexer_k_cache, q.size(-1))
         return fp8_index(q,

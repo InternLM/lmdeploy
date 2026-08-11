@@ -52,6 +52,48 @@ def test_indexer_meta_builds_causal_rows():
     assert torch.equal(meta.indexer_kv_seqlens, expected)
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+    reason='requires CUDA device with cc>=9.0')
+def test_deepgemm_prefill_scores_match_triton():
+    pytest.importorskip('deep_gemm')
+    from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
+    from lmdeploy.pytorch.consts import dsa_packed_indexer_k_cache_shape
+
+    torch.manual_seed(0)
+    q_seqlens = torch.tensor([2, 3], device='cuda', dtype=torch.int32)
+    kv_seqlens = torch.tensor([5, 8], device='cuda', dtype=torch.int32)
+    meta = _build_indexer_meta(q_seqlens, kv_seqlens, is_decoding=False)
+    meta.block_offset = torch.tensor([[1], [0]], device='cuda', dtype=torch.int32)
+    meta.score_meta = cuda_nsa._build_deep_gemm_score_meta(meta)
+
+    q = torch.randn(5, 32, 128, device='cuda').to(torch.float8_e4m3fn)
+    q_s = torch.randn(5, 32, device='cuda', dtype=torch.float32)
+    packed_cache = torch.empty(
+        2,
+        *dsa_packed_indexer_k_cache_shape(64, 128),
+        device='cuda',
+        dtype=torch.uint8,
+    )
+    k_cache, k_s_cache = cuda_nsa._get_dsa_indexer_k_cache_views(
+        packed_cache, 128)
+    k_cache.copy_(torch.randn_like(k_cache.float()).to(k_cache.dtype))
+    k_s_cache.copy_(torch.rand_like(k_s_cache) * 0.01)
+    impl = cuda_nsa.TritonNSAIndexFP8(
+        topk=2, softmax_scale=1.0, block_size=128, fill=-1)
+
+    deepgemm_scores = impl._compute_scores(q, q_s, packed_cache, meta)
+    meta.score_meta = None
+    triton_scores = impl._compute_scores(q, q_s, packed_cache, meta)
+    for row, row_len in enumerate(meta.indexer_kv_seqlens.tolist()):
+        torch.testing.assert_close(
+            deepgemm_scores[row, :row_len],
+            triton_scores[row, :row_len],
+            rtol=1e-3,
+            atol=1e-3,
+        )
+
+
 def test_indexer_meta_skips_reused_mtp_topk():
     assert nsa.should_skip_nsa_indexer([dict(skip_topk=True)])
     assert not nsa.should_skip_nsa_indexer([dict(skip_topk=False)])

@@ -12,6 +12,7 @@ class NSAIndexMeta:
     cu_seqlen_q: Tensor
     q_seqlens: Tensor
     k_seqlens: Tensor
+    cu_seqlen_k: Tensor
     block_offset: Tensor
     indexer_kv_seqlens: Tensor = None
     max_q_seqlen: int = None
@@ -52,6 +53,7 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
         cu_seqlen_q=sequence_metadata.cu_seqlens_q,
         q_seqlens=q_seqlens,
         k_seqlens=sequence_metadata.kv_seqlens,
+        cu_seqlen_k=sequence_metadata.cu_seqlens_k,
         block_offset=sequence_metadata.block_offsets,
         indexer_kv_seqlens=_build_indexer_kv_seqlens(
             num_tokens, q_seqlens, sequence_metadata.kv_seqlens,

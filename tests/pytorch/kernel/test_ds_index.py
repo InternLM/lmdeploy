@@ -242,15 +242,17 @@ class TestDSIndex:
         context_lens = expected_lens.unsqueeze(-1)
         schedule = deep_gemm.get_paged_mqa_logits_metadata(
             context_lens, block_size, deep_gemm.get_num_sms())
-        deepgemm_scores = deep_gemm.fp8_paged_mqa_logits(
-            q.view(total_q, 1, num_heads, head_dim),
-            packed_cache,
-            q_s,
-            context_lens,
-            page_table,
-            schedule,
-            max_k_seqlen,
-            False)
+        deepgemm_scores = deep_gemm.fp8_fp4_paged_mqa_logits(
+            q=(q.view(total_q, 1, num_heads, head_dim), None),
+            kv_cache=packed_cache,
+            weights=q_s,
+            context_lens=context_lens,
+            block_table=page_table,
+            schedule_meta=schedule,
+            max_context_len=max_k_seqlen,
+            clean_logits=False,
+            logits_dtype=torch.float32,
+        )
         for row, row_len in enumerate(expected_lens.tolist()):
             if row_len > 0:
                 torch.testing.assert_close(deepgemm_scores[row, :row_len],
