@@ -416,6 +416,10 @@ void bind_struct(py::module_& m, const char* name)
     T::for_each([&](const char* fname, auto member_ptr) { cls.def_readwrite(fname, member_ptr); });
 }
 
+namespace turbomind {
+void bind_moe_gate_v2(pybind11::module_& m);
+}
+
 PYBIND11_MODULE(_turbomind, m)
 {
     py::module_ multimodal = m.def_submodule("multimodal");
@@ -907,7 +911,15 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::return_value_policy::reference,
             "name"_a,
-            "child"_a);
+            "child"_a)
+        // Wire a meta-MoE layer weight to its shared routed pack (non-owning)
+        .def(
+            "set_meta_pack",
+            [](ft::core::Module& m, ft::core::Module* pack) {
+                auto& moe = dynamic_cast<ft::MoeWeight&>(m);
+                moe.set_meta_pack(dynamic_cast<ft::MoeWeight*>(pack));
+            },
+            "pack"_a);
 
     // Standalone module creation (no parent needed)
     m.def(
@@ -988,4 +1000,5 @@ PYBIND11_MODULE(_turbomind, m)
 
     turbomind::linear_attn::delta_rule::bind_delta_rule(m);
     turbomind::python_linear::bind_linear(m);
+    turbomind::bind_moe_gate_v2(m);
 }

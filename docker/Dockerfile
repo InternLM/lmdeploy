@@ -65,8 +65,13 @@ COPY docker/prepare_3rdparty_wheel.sh /tmp/prepare_3rdparty_wheel.sh
 RUN --mount=type=cache,target=/root/.cache \
     bash /tmp/prepare_3rdparty_wheel.sh
 
-# Full tree for local package build
-FROM runtime-deps-pip AS lmdeploy-wheel
+# Full tree for local package build.
+# Base on thirdparty-wheels (not runtime-deps-pip) to force buildx to build
+# this stage only after thirdparty-wheels finishes. Both stages run heavy nvcc
+# compilation; building them in parallel OOMs the 16GB CI runner (exit 143 /
+# runner shutdown). Serializing halves peak memory. Only /wheels is consumed
+# downstream, so the final image is unchanged.
+FROM thirdparty-wheels AS lmdeploy-wheel
 
 COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy

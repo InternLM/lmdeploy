@@ -160,9 +160,9 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
 
     const auto st = core::Context::stream().handle();
 
-    if (ep_size_ > 1) {
-        TM_CUDA_CHECK(cudaMemsetAsync(en2f_.data(), -1, sizeof(int) * tokens * experts_per_token, st));
-    }
+    // en2f is the skip sentinel for combine: entries not written by routing (invalid
+    // tokens, or shrunk batches with stale values) must read as -1 regardless of EP.
+    TM_CUDA_CHECK(cudaMemsetAsync(en2f_.data(), -1, sizeof(int) * tokens * experts_per_token, st));
 
     if (p.weights->topk_method == "noaux_tc") {
         TM_CHECK_EQ(p.weights->n_group, 1);
@@ -179,6 +179,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
                               masks_.data(),
                               accum_.data(),
                               logits.data(),
+                              p.token_mask,
                               correction_bias,
                               tokens,
                               padded,
@@ -203,7 +204,6 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
             softmax = false;
         }
 
-        /// TODO: fix illegal memory access even if NaN are present in logits
         invokeMoeGate_V2(f2n_.data(),
                          f2E_.data(),
                          en2f_.data(),
@@ -212,6 +212,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
                          masks_.data(),
                          accum_.data(),
                          logits.data(),
+                         p.token_mask,
                          tokens,
                          padded,
                          expert_num,
@@ -249,8 +250,9 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
 
     temp_ = Tensor{{tokens * experts_per_token, hidden_dim}, p.input.dtype(), p.input.device()};
 
-    // For ep_size > 1, the valid tokens are less than tokens * experts_per_token
-    const int* num_valid_tokens = ep_size_ > 1 ? offsets_.data() + local_expert_num : nullptr;
+    // Masked-out tokens compact the routing tables even for ep_size == 1, so the
+    // routed count is device-side offsets_[local_expert_num] in all cases.
+    const int* num_valid_tokens = offsets_.data() + local_expert_num;
 
     auto indices = f2n_.slice(0, temp_.shape(0));
     auto offsets = offsets_.slice(0, local_expert_num + 1);

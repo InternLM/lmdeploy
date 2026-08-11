@@ -60,8 +60,7 @@ public:
                           CacheRegistry&                registry,
                           const EngineParam&            engine,
                           const Context&                context,
-                          int                           phases,
-                          bool                          init);
+                          int                           phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -84,7 +83,6 @@ private:
     const EngineParam      engine_param_;
     const Context&         context_;
     int&                   is_warm_up_;
-    const bool             init_;
 
     LlamaLinear& linear_;
     const int    arch_{};
@@ -109,7 +107,6 @@ private:
     Tensor_<float> partial_O_;
     Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;
-    Tensor         tmp_attn_;
 
     Buffer_<float> rope_base_buf_;
     Buffer_<int>   mrope_default_buf_;
