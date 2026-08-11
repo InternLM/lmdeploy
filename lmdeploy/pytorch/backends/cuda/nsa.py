@@ -36,7 +36,10 @@ logger = get_logger('lmdeploy')
 
 def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
                                    head_dim: int) -> tuple[Tensor, Tensor]:
-    """Return FP8 K and FP32 scale views of a packed DSA indexer-K cache."""
+    """Return FP8 K and FP32 scale views of a packed DSA indexer-K cache.
+
+    Raw block layout: ``[all FP8 K][all FP32 scales]``.
+    """
     if indexer_k_cache.dtype != torch.uint8:
         raise TypeError(f'Packed DSA indexer-K cache must be uint8, got {indexer_k_cache.dtype}.')
     if indexer_k_cache.dim() != 4 or indexer_k_cache.size(2) != 1:
@@ -315,6 +318,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                 logits_dtype=torch.float32,
             )
         if isinstance(score_meta, _DeepGemmPagedScoreMeta):
+            # Paged MQA reads the packed cache directly and requires its compact
+            # ``entries * (D + 4)`` byte block stride.
             return _get_deep_gemm().fp8_fp4_paged_mqa_logits(
                 q=(q[:, None], None),
                 kv_cache=indexer_k_cache,

@@ -29,7 +29,7 @@ def _check_env_v32(device: str = 'cuda'):
 
 
 def _finalize_v32_cache_specs(model_config: ModelConfig, block_size: int):
-    """Give DeepGEMM a physically contiguous paged DSA indexer-K cache."""
+    """Declare a standalone packed DSA indexer-K cache for DeepGEMM."""
     hf_config = model_config.hf_config
     indexer_types = getattr(hf_config, 'indexer_types', None)
     if model_config.num_layers == hf_config.num_hidden_layers and indexer_types:
@@ -40,6 +40,8 @@ def _finalize_v32_cache_specs(model_config: ModelConfig, block_size: int):
     else:
         # Draft-model layer ids are local to its own cache engine.
         layer_ids = list(range(model_config.num_layers))
+    # DeepGEMM requires [blocks, entries, 1, D + 4] with a compact block
+    # stride; legacy K/scale cache_shapes share the aggregate MLA-pool stride.
     model_config.cache_shapes = []
     model_config.block_cache_specs = [
         BlockCacheSpec(DSA_INDEXER_K_CACHE_NAME,

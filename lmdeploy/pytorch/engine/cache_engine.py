@@ -485,6 +485,7 @@ class CacheEngine:
         mem_pools = []
         caches = []
         for resource in cls._get_block_cache_resources(model_config):
+            # A dedicated pool gives paged kernels a resource-only block stride.
             desc = resource.desc
             mem_pool = torch.zeros((resource.num_rows, num_blocks, desc.aligned_size),
                                    dtype=torch.uint8,
@@ -551,6 +552,8 @@ class CacheEngine:
                 model_config, cache_config, world_size)
         ]
         if model_config.block_cache_specs:
+            # Keep standard K/V shared, but give named caches standalone pools
+            # for resource-specific layer sets and physical block strides.
             mem_pools = []
             caches = []
             if standard_descs:
