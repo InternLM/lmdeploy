@@ -8,6 +8,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/layer_norm.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -254,6 +255,7 @@ void invokeLayerNorm(
     };
 
     TM_DISPATCH_DTYPES(x.dtype(), invoke, half_t, bfloat16_t);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeResidualBiasLayerNorm(void*        hidden_states,
@@ -319,6 +321,7 @@ void invokeResidualBiasLayerNorm(void*        hidden_states,
     };
 
     TM_DISPATCH_DTYPES(dtype, invoke, half_t, bfloat16_t);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

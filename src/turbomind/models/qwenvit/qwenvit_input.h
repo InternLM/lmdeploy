@@ -13,7 +13,8 @@
 namespace turbomind {
 namespace multimodal {
 
-struct Qwen3_5VitItem {
+// Unified multimodal input for the Qwen2-VL / Qwen2.5-VL / Qwen3.5 ViT encoders.
+struct QwenVitItem {
     Modality           modality;
     Tensor             data;
     int                token_begin;
@@ -21,14 +22,14 @@ struct Qwen3_5VitItem {
     std::array<int, 3> grid_thw;
     Fingerprint        fingerprint{};  // image content hash from the converter (empty if none supplied)
 
-    Qwen3_5VitItem() = default;
+    QwenVitItem() = default;
 
-    Qwen3_5VitItem(Modality           modality,
-                   Tensor             data,
-                   int                token_begin,
-                   int                token_end,
-                   std::array<int, 3> grid_thw,
-                   Fingerprint        fingerprint = {}):
+    QwenVitItem(Modality           modality,
+                Tensor             data,
+                int                token_begin,
+                int                token_end,
+                std::array<int, 3> grid_thw,
+                Fingerprint        fingerprint = {}):
         modality{modality},
         data{std::move(data)},
         token_begin{token_begin},
@@ -39,12 +40,12 @@ struct Qwen3_5VitItem {
     }
 };
 
-struct Qwen3_5VitInput final: Input {
-    std::vector<Qwen3_5VitItem> items;
+struct QwenVitInput final: Input {
+    std::vector<QwenVitItem> items;
 
-    Qwen3_5VitInput() = default;
+    QwenVitInput() = default;
 
-    explicit Qwen3_5VitInput(std::vector<Qwen3_5VitItem> items): items{std::move(items)} {}
+    explicit QwenVitInput(std::vector<QwenVitItem> items): items{std::move(items)} {}
 };
 
 }  // namespace multimodal
