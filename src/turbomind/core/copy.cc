@@ -2,7 +2,6 @@
 #include "src/turbomind/core/copy.h"
 
 #include <cstdint>
-#include <type_traits>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -46,22 +45,27 @@ typedef CUresult(CUDAAPI* PFN_cuMemcpyBatchAsync_v12080)(CUdeviceptr_v2*        
                                                          CUstream               hStream);
 
 typedef CUresult(CUDAAPI* PFN_cuMemcpyBatchAsync_v13000)(CUdeviceptr_v2*        dsts,
-                                                           CUdeviceptr_v2*        srcs,
-                                                           size_t*                sizes,
-                                                           size_t                 count,
-                                                           CUmemcpyAttributes_v1* attrs,
-                                                           size_t*                attrIdxs,
-                                                           size_t                 numAttrs,
-                                                           CUstream               hStream);
+                                                         CUdeviceptr_v2*        srcs,
+                                                         size_t*                sizes,
+                                                         size_t                 count,
+                                                         CUmemcpyAttributes_v1* attrs,
+                                                         size_t*                attrIdxs,
+                                                         size_t                 numAttrs,
+                                                         CUstream               hStream);
 
 namespace {
 
 struct MemcpyBatchAsync {
-    enum class Api { kNone, kV12080, kV13000 };
+    enum class Api
+    {
+        kNone,
+        kV12080,
+        kV13000
+    };
 
-    Api                            api = Api::kNone;
-    PFN_cuMemcpyBatchAsync_v12080  v12080{};
-    PFN_cuMemcpyBatchAsync_v13000  v13000{};
+    Api                           api = Api::kNone;
+    PFN_cuMemcpyBatchAsync_v12080 v12080{};
+    PFN_cuMemcpyBatchAsync_v13000 v13000{};
 
     explicit operator bool() const noexcept
     {
@@ -108,31 +112,31 @@ const MemcpyBatchAsync& GetMemcpyBatchAsync()
 
         // CUDA 13.0 removed failIdx from batched memcpy APIs; dispatch by runtime version.
         if (runtime_version >= 13000 && QueryDriverEntryPoint("cuMemcpyBatchAsync", 13000, &fpn)) {
-            api.api     = MemcpyBatchAsync::Api::kV13000;
-            api.v13000  = reinterpret_cast<PFN_cuMemcpyBatchAsync_v13000>(fpn);
+            api.api    = MemcpyBatchAsync::Api::kV13000;
+            api.v13000 = reinterpret_cast<PFN_cuMemcpyBatchAsync_v13000>(fpn);
             return api;
         }
 
         fpn = nullptr;
         if (QueryDriverEntryPoint("cuMemcpyBatchAsync", 12080, &fpn)) {
-            api.api     = MemcpyBatchAsync::Api::kV12080;
-            api.v12080  = reinterpret_cast<PFN_cuMemcpyBatchAsync_v12080>(fpn);
+            api.api    = MemcpyBatchAsync::Api::kV12080;
+            api.v12080 = reinterpret_cast<PFN_cuMemcpyBatchAsync_v12080>(fpn);
         }
         return api;
     }();
     return inst;
 }
 
-CUresult RunMemcpyBatchAsync(const MemcpyBatchAsync&               api,
-                             CUdeviceptr_v2*                       dsts,
-                             CUdeviceptr_v2*                       srcs,
-                             size_t*                               sizes,
-                             size_t                                count,
-                             CUmemcpyAttributes_v1*                attrs,
-                             size_t*                               attr_idxs,
-                             size_t                                num_attrs,
-                             CUstream                              stream,
-                             size_t*                               fail_idx)
+CUresult RunMemcpyBatchAsync(const MemcpyBatchAsync& api,
+                             CUdeviceptr_v2*         dsts,
+                             CUdeviceptr_v2*         srcs,
+                             size_t*                 sizes,
+                             size_t                  count,
+                             CUmemcpyAttributes_v1*  attrs,
+                             size_t*                 attr_idxs,
+                             size_t                  num_attrs,
+                             CUstream                stream,
+                             size_t*                 fail_idx)
 {
     if (api.api == MemcpyBatchAsync::Api::kV13000) {
         *fail_idx = SIZE_MAX;
@@ -166,23 +170,20 @@ void BatchCopy::Run()
         size_t              fail_idx{SIZE_MAX};
 
         const auto status = RunMemcpyBatchAsync(batch,
-                                               (CUdeviceptr_v2*)dst_.data(),
-                                               (CUdeviceptr_v2*)src_.data(),
-                                               size_.data(),
-                                               src_.size(),
-                                               &attr,
-                                               attr_idxs.data(),
-                                               1,
-                                               core::Context::stream().handle(),
-                                               &fail_idx);
+                                                (CUdeviceptr_v2*)dst_.data(),
+                                                (CUdeviceptr_v2*)src_.data(),
+                                                size_.data(),
+                                                src_.size(),
+                                                &attr,
+                                                attr_idxs.data(),
+                                                1,
+                                                core::Context::stream().handle(),
+                                                &fail_idx);
 
         if (status != CUDA_SUCCESS) {
             const size_t i = fail_idx != SIZE_MAX ? fail_idx : 0;
-            TM_LOG_FATAL("copy failed: src={} size={} dst={} code={}",
-                         (void*)src_[i],
-                         size_[i],
-                         (void*)dst_[i],
-                         (int)status);
+            TM_LOG_FATAL(
+                "copy failed: src={} size={} dst={} code={}", (void*)src_[i], size_[i], (void*)dst_[i], (int)status);
         }
         else if (fail_idx != SIZE_MAX) {
             TM_LOG_FATAL("copy failed: src={} size={} dst={} code={}",
