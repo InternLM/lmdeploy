@@ -30,9 +30,13 @@ class FakeAsyncEngine:
         self.call_count = 0
         self.gen_configs = []
 
-    def generate(self, prompt, session, **kwargs):
-        self.call_count += 1
+    async def preprocess(self, prompt, session, **kwargs):
+        """Return the minimal preprocessed input consumed by the fake."""
         self.gen_configs.append(kwargs.get('gen_config'))
+        return SimpleNamespace(prompt=prompt, session=session)
+
+    def generate(self, preprocessed, **kwargs):
+        self.call_count += 1
         call_index = self.call_count
 
         async def _generator():
