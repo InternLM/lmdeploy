@@ -51,8 +51,7 @@ class InternVL3VisionModel(InternVLVisionModel):
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
 
     def build_model(self, trust_remote_code: bool = False):
-        """InternVL3 does not support quantization."""
-        raise NotImplementedError('Quantization is not supported for InternVL3VisionModel.')
+        raise NotImplementedError
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
