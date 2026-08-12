@@ -52,6 +52,7 @@ class ManagedStreamingResponse(StreamingResponse):
         super().__init__(content, **kwargs)
 
     async def _with_resource_cleanup(self, content):
+        """Clean owned engine resources after normal body iteration."""
         try:
             async for item in content:
                 yield item
@@ -59,6 +60,7 @@ class ManagedStreamingResponse(StreamingResponse):
             await self._cleanup_resources()
 
     async def _cleanup_resources(self) -> None:
+        """Close result generators and sessions once, despite cancellation."""
         if not self._result_generators and not self._sessions:
             return
         if self._resource_cleanup_task is None:
@@ -72,6 +74,7 @@ class ManagedStreamingResponse(StreamingResponse):
         await asyncio.shield(self._resource_cleanup_task)
 
     async def _close(self) -> None:
+        """Close the response body, owned resources, and child callbacks."""
         body_iterator = self.body_iterator
         close_iterator = getattr(body_iterator, 'aclose', None)
         if close_iterator is not None:

@@ -12,6 +12,7 @@ _MAX_FANOUT_N = 128
 def check_request(request: ChatCompletionRequest,
                   server_context,
                   json_request: dict | None = None) -> str:
+    """Validate chat-completion options and fan-out compatibility."""
     engine_config = server_context.engine_config
     session_manager = server_context.session_manager
     try:

@@ -23,6 +23,8 @@ ChatEndpoint = Callable[[ChatCompletionRequest, Request],
 
 @dataclass
 class _FanoutResponseError(Exception):
+    """Carry an HTTP error response out of concurrent choice invocation."""
+
     response: Response
 
 
@@ -34,17 +36,21 @@ class _FanoutRequest:
         self._payload = payload
 
     def __getattr__(self, name):
+        """Delegate request attributes not overridden by this wrapper."""
         return getattr(self._request, name)
 
     async def json(self) -> dict:
+        """Return an isolated copy of this choice's raw JSON payload."""
         return deepcopy(self._payload)
 
     async def is_disconnected(self) -> bool:
+        """Report the connection state of the original client request."""
         return await self._request.is_disconnected()
 
 
 def _choice_request(request: ChatCompletionRequest,
                     index: int) -> ChatCompletionRequest:
+    """Create an independent single-choice request for one fan-out index."""
     choice_request = request.model_copy(deep=True)
     choice_request.n = 1
     choice_request.session_id = -1
@@ -54,6 +60,7 @@ def _choice_request(request: ChatCompletionRequest,
 
 
 async def _cancel_tasks(tasks: list[asyncio.Task]) -> list:
+    """Cancel unfinished tasks and collect every terminal result."""
     for task in tasks:
         if not task.done():
             task.cancel()
@@ -61,6 +68,7 @@ async def _cancel_tasks(tasks: list[asyncio.Task]) -> list:
 
 
 async def _close_streaming_response(response: StreamingResponse) -> None:
+    """Close a child response through its explicit or iterator lifecycle."""
     close_response = getattr(response, 'close', None)
     if close_response is not None:
         await close_response()
@@ -71,6 +79,7 @@ async def _close_streaming_response(response: StreamingResponse) -> None:
 
 
 async def _close_responses(responses) -> None:
+    """Close all streaming responses in an invocation result collection."""
     await asyncio.gather(*(
         _close_streaming_response(response)
         for response in responses
@@ -79,11 +88,13 @@ async def _close_responses(responses) -> None:
 
 
 async def _cleanup_invocations(tasks: list[asyncio.Task]) -> None:
+    """Cancel choice invocations and close responses they already created."""
     results = await _cancel_tasks(tasks)
     await _close_responses(results)
 
 
 def _consume_cleanup_result(task: asyncio.Task) -> None:
+    """Retrieve a detached cleanup task's result to suppress task warnings."""
     try:
         task.result()
     except BaseException:  # cleanup is best-effort after caller cancellation
@@ -91,6 +102,7 @@ def _consume_cleanup_result(task: asyncio.Task) -> None:
 
 
 async def _shield_cleanup(awaitable, name: str) -> None:
+    """Let cleanup continue if cancellation interrupts its caller."""
     cleanup_task = asyncio.create_task(awaitable, name=name)
     try:
         await asyncio.shield(cleanup_task)
@@ -105,8 +117,10 @@ async def _invoke_choices(
     raw_request: Request,
     payload: dict,
 ) -> list[dict | StreamingResponse] | Response:
+    """Invoke the single-choice endpoint concurrently for every choice."""
 
     async def invoke(index: int):
+        """Invoke and validate one indexed single-choice response."""
         choice_request = _choice_request(request, index)
         choice_payload = deepcopy(payload)
         choice_payload.update(n=1, session_id=-1, seed=choice_request.seed)
@@ -133,11 +147,13 @@ async def _invoke_choices(
 
 
 def _cached_tokens(usage: dict) -> int:
+    """Read cached prompt tokens from an OpenAI-compatible usage object."""
     details = usage.get('prompt_tokens_details') or {}
     return details.get('cached_tokens', 0)
 
 
 def _aggregate_usage(usages: list[dict]) -> UsageInfo:
+    """Count the shared prompt once and sum completion tokens by choice."""
     first_usage = usages[0]
     return UsageInfo.build(
         prompt_tokens=first_usage.get('prompt_tokens', 0),
@@ -152,6 +168,7 @@ def _collate_responses(
     request_id: str,
     created_time: int,
 ) -> dict:
+    """Combine single-choice JSON responses into one multi-choice response."""
     response = deepcopy(responses[0])
     response['id'] = request_id
     response['created'] = created_time
@@ -180,6 +197,7 @@ async def _stream_choice(
     model_name: str,
     stopping: asyncio.Event,
 ) -> None:
+    """Parse one child SSE stream and forward normalized events to a queue."""
     buffer = ''
     try:
         async for chunk in response.body_iterator:
@@ -251,6 +269,7 @@ async def _collate_streams(
     request_id: str,
     created_time: int,
 ) -> AsyncGenerator[str, None]:
+    """Interleave child streams into one multi-choice SSE response."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, len(responses) * 2))
     stopping = asyncio.Event()
     # produce the streaming responses for each fan-out request
