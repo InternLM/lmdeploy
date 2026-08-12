@@ -354,6 +354,82 @@ def _fill_block_meta_kernel(
 
 
 @triton.jit
+def _single_cta_route_prepare_kernel(
+    ExpertIds,
+    Cursors,
+    SortedIdx,
+    ExpStart,
+    ExpEnd,
+    BlockEnd,
+    BlockExpertIds,
+    BlockOffsets,
+    num_routes,
+    num_experts,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_E: tl.constexpr,
+    BLOCK_R: tl.constexpr,
+    BUILD_BLOCKS: tl.constexpr,
+):
+    """Build sorted routes and optional block metadata in one CTA."""
+    expert_offsets = tl.arange(0, BLOCK_E)
+    expert_mask = expert_offsets < num_experts
+    counts = tl.zeros((BLOCK_E, ), dtype=tl.int32)
+
+    for route_start in tl.static_range(0, BLOCK_R, 256):
+        route_offsets = route_start + tl.arange(0, 256)
+        route_mask = route_offsets < num_routes
+        expert_ids = tl.load(ExpertIds + route_offsets,
+                             mask=route_mask,
+                             other=0).to(tl.int32)
+        counts += tl.histogram(expert_ids, BLOCK_E, mask=route_mask)
+
+    exp_end = tl.cumsum(counts, axis=0)
+    exp_start = exp_end - counts
+    tl.store(ExpStart + expert_offsets, exp_start, mask=expert_mask)
+    tl.store(ExpEnd + expert_offsets, exp_end, mask=expert_mask)
+    if BUILD_BLOCKS:
+        block_counts = (counts + BLOCK_SIZE_M - 1) // BLOCK_SIZE_M
+        block_end = tl.cumsum(block_counts, axis=0)
+        tl.store(BlockEnd + expert_offsets, block_end, mask=expert_mask)
+    tl.store(Cursors + expert_offsets, 0, mask=expert_mask)
+    # One CTA owns all preparation state. The barrier orders cursor
+    # initialization and prefix stores before the scatter pass.
+    tl.debug_barrier()
+
+    for route_start in tl.static_range(0, BLOCK_R, 256):
+        route_offsets = route_start + tl.arange(0, 256)
+        route_mask = route_offsets < num_routes
+        expert_ids = tl.load(ExpertIds + route_offsets,
+                             mask=route_mask,
+                             other=0).to(tl.int32)
+        local_pos = tl.atomic_add(Cursors + expert_ids,
+                                  1,
+                                  mask=route_mask,
+                                  sem='relaxed',
+                                  scope='cta')
+        route_exp_start = tl.load(ExpStart + expert_ids, mask=route_mask, other=0)
+        sorted_pos = route_exp_start + local_pos
+        tl.store(SortedIdx + sorted_pos, route_offsets, mask=route_mask)
+
+        if BUILD_BLOCKS:
+            block_base = tl.where(
+                expert_ids == 0,
+                0,
+                tl.load(BlockEnd + expert_ids - 1,
+                        mask=route_mask & (expert_ids != 0),
+                        other=0),
+            )
+            is_block_start = route_mask & (local_pos % BLOCK_SIZE_M == 0)
+            block_id = block_base + local_pos // BLOCK_SIZE_M
+            tl.store(BlockExpertIds + block_id,
+                     expert_ids,
+                     mask=is_block_start)
+            tl.store(BlockOffsets + block_id,
+                     sorted_pos,
+                     mask=is_block_start)
+
+
+@triton.jit
 def fused_moe_compact_kernel(
     A,
     B,
@@ -537,11 +613,11 @@ def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
     return sorted_idx, exp_start, exp_end
 
 
-def _get_sorted_idx_blocks(topk_ids: torch.Tensor,
-                           num_experts: int,
-                           local_num_experts: int,
-                           expert_offset: int,
-                           block_m: int):
+def _get_sorted_idx_blocks_parallel(topk_ids: torch.Tensor,
+                                    num_experts: int,
+                                    local_num_experts: int,
+                                    expert_offset: int,
+                                    block_m: int):
     """Get sorted route indices plus compact routed-block metadata."""
     if topk_ids.dim() != 2:
         raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
@@ -593,7 +669,132 @@ def _get_sorted_idx_blocks(topk_ids: torch.Tensor,
     return sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets
 
 
-_get_sorted_idx = _get_sorted_idx_triton
+def _should_use_single_cta_sorted_idx(num_routes: int, num_experts: int):
+    """Use one CTA when it beats the parallel sorted-index preparation."""
+    # The sorted-index-only baseline has fewer launches than compact-block
+    # preparation, so scanning a large expert vector stops paying off sooner.
+    if num_experts <= 512:
+        return num_routes <= 1024
+    return num_experts <= 1024 and num_routes <= 512
+
+
+def _should_use_single_cta_sorted_idx_blocks(num_routes: int, num_experts: int):
+    """Use one CTA when it beats the parallel compact-block preparation."""
+    # Fusing block prefixes and block emission removes enough launches to keep
+    # the one-CTA path profitable for the larger expert bucket.
+    return num_routes <= 1024 and num_experts <= 2048
+
+
+def _supports_single_cta_route_prepare(topk_ids: torch.Tensor):
+    """Return whether the measured Hopper preparation is available."""
+    return topk_ids.is_cuda and torch.cuda.get_device_capability(topk_ids.device)[0] == 9
+
+
+def _get_sorted_idx_single_cta(topk_ids: torch.Tensor,
+                               num_experts: int):
+    """Build small-route sorted-index metadata in one CTA."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+    if num_experts > 2048:
+        raise ValueError(f'single-CTA metadata supports at most 2048 experts, got {num_experts}')
+
+    flatten_topk_ids = topk_ids.flatten()
+    num_routes = flatten_topk_ids.numel()
+    block_e = triton.next_power_of_2(num_experts)
+    block_r = max(256, triton.next_power_of_2(num_routes))
+    device = topk_ids.device
+    cursors = torch.empty(num_experts, dtype=torch.int32, device=device)
+    sorted_idx = torch.empty(num_routes, dtype=torch.int32, device=device)
+    exp_start = torch.empty(num_experts, dtype=torch.int32, device=device)
+    exp_end = torch.empty(num_experts, dtype=torch.int32, device=device)
+    _single_cta_route_prepare_kernel[(1, )](
+        flatten_topk_ids,
+        cursors,
+        sorted_idx,
+        exp_start,
+        exp_end,
+        exp_start,
+        exp_start,
+        exp_start,
+        num_routes,
+        num_experts,
+        BLOCK_SIZE_M=1,
+        BLOCK_E=block_e,
+        BLOCK_R=block_r,
+        BUILD_BLOCKS=False,
+        num_warps=8,
+    )
+    return sorted_idx, exp_start, exp_end
+
+
+def _get_sorted_idx_blocks_single_cta(topk_ids: torch.Tensor,
+                                      num_experts: int,
+                                      block_m: int):
+    """Build small-route sorted-index and compact-block metadata in one CTA."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+    if num_experts > 2048:
+        raise ValueError(f'single-CTA metadata supports at most 2048 experts, got {num_experts}')
+
+    flatten_topk_ids = topk_ids.flatten()
+    num_routes = flatten_topk_ids.numel()
+    block_e = triton.next_power_of_2(num_experts)
+    block_r = max(256, triton.next_power_of_2(num_routes))
+    max_blocks = min(num_routes, triton.cdiv(num_routes, block_m) + num_experts)
+    device = topk_ids.device
+    cursors = torch.empty(num_experts, dtype=torch.int32, device=device)
+    sorted_idx = torch.empty(num_routes, dtype=torch.int32, device=device)
+    exp_start = torch.empty(num_experts, dtype=torch.int32, device=device)
+    exp_end = torch.empty(num_experts, dtype=torch.int32, device=device)
+    block_end = torch.empty(num_experts, dtype=torch.int32, device=device)
+    block_expert_ids = torch.empty(max_blocks, dtype=torch.int32, device=device)
+    block_offsets = torch.empty(max_blocks, dtype=torch.int32, device=device)
+    _single_cta_route_prepare_kernel[(1, )](
+        flatten_topk_ids,
+        cursors,
+        sorted_idx,
+        exp_start,
+        exp_end,
+        block_end,
+        block_expert_ids,
+        block_offsets,
+        num_routes,
+        num_experts,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_E=block_e,
+        BLOCK_R=block_r,
+        BUILD_BLOCKS=True,
+        num_warps=8,
+    )
+    return sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets
+
+
+def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
+    """Build route metadata with the best preparation for the shape."""
+    if (_supports_single_cta_route_prepare(topk_ids)
+            and _should_use_single_cta_sorted_idx(topk_ids.numel(), num_experts)):
+        return _get_sorted_idx_single_cta(topk_ids, num_experts)
+    return _get_sorted_idx_triton(topk_ids, num_experts)
+
+
+def _get_sorted_idx_blocks(topk_ids: torch.Tensor,
+                           num_experts: int,
+                           local_num_experts: int,
+                           expert_offset: int,
+                           block_m: int):
+    """Build compact block metadata with the best preparation for the shape."""
+    if (_supports_single_cta_route_prepare(topk_ids) and local_num_experts == num_experts and expert_offset == 0
+            and _should_use_single_cta_sorted_idx_blocks(topk_ids.numel(), num_experts)):
+        return _get_sorted_idx_blocks_single_cta(topk_ids, num_experts, block_m)
+    return _get_sorted_idx_blocks_parallel(topk_ids, num_experts, local_num_experts, expert_offset, block_m)
 
 
 def _renormalize(topk_weights: torch.Tensor, renormalize: bool):

@@ -270,6 +270,12 @@ def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
                                                     w2_bias=w2_bias,
                                                     out_dtype=torch.bfloat16,
                                                     renormalize=True)
+    repeated = candidate_module.fused_moe_blocked_fp8(*args,
+                                                      topk=topk,
+                                                      w1_bias=w1_bias,
+                                                      w2_bias=w2_bias,
+                                                      out_dtype=torch.bfloat16,
+                                                      renormalize=True)
 
     expected_scale = expected.abs().max().clamp_min(1e-6)
     actual_scale = actual.abs().max().clamp_min(1e-6)
@@ -279,6 +285,7 @@ def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
                                atol=0.05)
     relative_scale_error = (actual_scale - expected_scale).abs() / expected_scale
     assert relative_scale_error < 0.05
+    torch.testing.assert_close(repeated, actual, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize(
