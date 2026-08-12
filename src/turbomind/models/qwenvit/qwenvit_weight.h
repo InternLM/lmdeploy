@@ -36,11 +36,18 @@ struct QwenVitConfig: ModuleConfig {
     int              patch_size{0};
     int              temporal_patch_size{0};
     int              spatial_merge_size{0};
+    int              output_spatial_merge_size{0};
     int              num_position_embeddings{0};
     int              window_size{0};
     bool             gated_mlp{false};
     bool             use_window_attention{false};
     bool             gelu_tanh{false};
+    bool             zero_padded_pos_embed{false};
+    bool             rope_axes_w_first{false};
+    int              rope_position_offset{0};
+    float            rope_theta{10000.f};
+    bool             pixel_shuffle{false};
+    bool             merger_double_gelu{false};
     NormType         norm_type{NormType::kLayerNorm};
     float            norm_eps{1e-6f};
     std::vector<int> fullatt_block_indexes;
@@ -57,11 +64,18 @@ struct QwenVitConfig: ModuleConfig {
     X(int, patch_size)                                                                                                 \
     X(int, temporal_patch_size)                                                                                        \
     X(int, spatial_merge_size)                                                                                         \
+    X(int, output_spatial_merge_size, 0)                                                                               \
     X(int, num_position_embeddings, 0)                                                                                 \
     X(int, window_size, 0)                                                                                             \
     X(bool, gated_mlp, false)                                                                                          \
     X(bool, use_window_attention, false)                                                                               \
     X(bool, gelu_tanh, false)                                                                                          \
+    X(bool, zero_padded_pos_embed, false)                                                                              \
+    X(bool, rope_axes_w_first, false)                                                                                  \
+    X(int, rope_position_offset, 0)                                                                                    \
+    X(float, rope_theta, 10000.f)                                                                                      \
+    X(bool, pixel_shuffle, false)                                                                                      \
+    X(bool, merger_double_gelu, false)                                                                                 \
     X(NormType, norm_type, NormType::kLayerNorm)                                                                       \
     X(std::vector<int>, fullatt_block_indexes)                                                                         \
     X(float, norm_eps, 1e-6f)
@@ -108,10 +122,13 @@ public:
     // --- X-macro field lists ---
 #define QWENVIT_WEIGHT_CHILDREN(X)                                                                                     \
     X(LinearWeight, patch_embed)                                                                                       \
+    X(core::Module, pre_norm)                                                                                          \
     X(core::ModuleList, blocks)                                                                                        \
     X(LinearWeight, merger_fc1)                                                                                        \
     X(LinearWeight, merger_fc2)                                                                                        \
-    X(core::Module, merger_norm)
+    X(LinearWeight, merger_fc3)                                                                                        \
+    X(core::Module, merger_norm)                                                                                       \
+    X(core::Module, output_norm)
 
 #define QWENVIT_WEIGHT_PARAMS(X) X(pos_embed)
 

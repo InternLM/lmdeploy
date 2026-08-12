@@ -16,7 +16,9 @@
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/generation/generation.h"
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/input_processor.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -279,6 +281,12 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         TM_CUDA_CHECK(cudaGetLastError());
     }
 
+    if (weights_.embedding_norm) {
+        const auto& norm = *weights_.embedding_norm;
+        invokeRMSNorm(input_embeds, input_embeds, norm.weight, norm.norm_eps_, norm.zero_centered_, st);
+        TM_CUDA_CHECK(cudaGetLastError());
+    }
+
     return input_embeds;
 }
 
@@ -293,6 +301,11 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     const int local_vocab_size = weights_.output->output_dim;
     const int vocab_size       = local_vocab_size * tp_size_;
 
+    auto finalize = [&](Tensor logits) {
+        invokeLogitTransform(logits, weights_.logit_scale, weights_.logit_softcap, st);
+        return logits;
+    };
+
     if (bsz == 0) {
         return Tensor{{0, vocab_size}, weights_.data_type, kDEVICE};
     }
@@ -301,7 +314,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
         Tensor logits{{bsz, vocab_size}, weights_.data_type, kDEVICE};
         TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, logits));
         TM_DEBUG_TENSOR(logits, "logits", 1);
-        return logits;
+        return finalize(std::move(logits));
     }
     else if (use_ag2d_) {
         Tensor logits{symm_buf.view(weights_.data_type), {bsz, tp_size_, local_vocab_size}};
@@ -318,7 +331,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
                                   comm_.d_tp_group,
                                   st);
         TM_CUDA_CHECK(cudaGetLastError());
-        return logits.view({bsz, -1});
+        return finalize(logits.view({bsz, -1}));
     }
     else {
         Tensor logits{symm_buf.view(weights_.data_type), {tp_size_, bsz, local_vocab_size}};
@@ -330,7 +343,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
         invokeTransposeAxis01(
             (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, st);
         TM_CUDA_CHECK(cudaGetLastError());
-        return out;
+        return finalize(std::move(out));
     }
 }
 

@@ -19,6 +19,8 @@ SUPPORTED_ARCHS = dict(
     Qwen3_5MoeForConditionalGeneration='qwen3_5-moe',
     InternS2PreviewForConditionalGeneration='qwen3_5-moe',
     InternS2MobiusForConditionalGeneration='interns2_mobius',
+    # Muse Glimmer
+    MuseGlimmerForConditionalGeneration='muse_glimmer',
     # InternVL family
     InternVLChatModel='internvl',
     InternVLForConditionalGeneration='internvl',

@@ -289,6 +289,7 @@ class Qwen3_5TextModel(TextModel):
 _VIT_HEAD_DIM_PADDED = {
     64:  64,    # <=2B: native
     72:  128,   # >=9B: pad to nearest kernel-supported dim
+    96:  128,   # Muse-Glimmer ViT
 }
 
 

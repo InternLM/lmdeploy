@@ -163,6 +163,11 @@ struct QwenVit::Impl {
             vit_window, llm_h, llm_w, (llm_h + vit_window - 1) / vit_window, (llm_w + vit_window - 1) / vit_window};
     }
 
+    int OutputMergeSize() const
+    {
+        return config_.output_spatial_merge_size > 0 ? config_.output_spatial_merge_size : config_.spatial_merge_size;
+    }
+
     void CollectPrefillInputs(Data& d, Buffer_<Sequence*>& rc, std::vector<Tensor>& pixel_values) const
     {
         const auto& cfg = config_;
@@ -191,9 +196,10 @@ struct QwenVit::Impl {
 
                         const auto& grid_thw = mm->grid_thw;
                         d.grid_thws_host.emplace_back(grid_thw);
-                        const auto& [t, h, w] = grid_thw;
-                        const int prod        = t * h * w;
-                        image_embeds_offsets += prod / cfg.spatial_merge_size / cfg.spatial_merge_size;
+                        const auto& [t, h, w]  = grid_thw;
+                        const int prod         = t * h * w;
+                        const int output_merge = OutputMergeSize();
+                        image_embeds_offsets += prod / output_merge / output_merge;
                     }
                 }
             }
@@ -467,15 +473,17 @@ struct QwenVit::Impl {
         TM_CHECK_EQ(weights_.pos_embed.shape(1), cfg.hidden_dim);
 
         Buffer_<int> pos_embed_idx     = {d.total_hw * 4, kDEVICE};
-        Tensor       pos_embed_weights = {{d.total_hw, 4}, cfg.data_type, kDEVICE};
+        const auto   weights_dtype     = cfg.zero_padded_pos_embed ? DataType::kFloat32 : cfg.data_type;
+        Tensor       pos_embed_weights = {{d.total_hw, 4}, weights_dtype, kDEVICE};
         TM_SCOPE_CALL(invokeFastPosEmbedIdxWeight(pos_embed_idx.data(),
                                                   pos_embed_weights.raw_data(),
-                                                  cfg.data_type,
+                                                  weights_dtype,
                                                   d.grid_thws.data(),
                                                   d.grid_offsets.data(),
                                                   (int)d.grid_thws_host.size(),
                                                   d.total_hw,
                                                   num_grid_per_side,
+                                                  cfg.zero_padded_pos_embed,
                                                   stream));
 
         Tensor pos_embeds = {{d.total_hw * 4, cfg.hidden_dim}, cfg.data_type, kDEVICE};
@@ -501,7 +509,9 @@ struct QwenVit::Impl {
                                                 (int)d.grid_thws_host.size(),
                                                 d.total_hw,
                                                 head_dim,
-                                                /*theta=*/10000.0f,
+                                                cfg.rope_theta,
+                                                cfg.rope_axes_w_first,
+                                                cfg.rope_position_offset,
                                                 core::Context::stream().handle()));
         env.produce("rotary_pos_emb", rotary_pos_emb);
     }
@@ -584,7 +594,7 @@ struct QwenVit::Impl {
             return;
         }
 
-        const int S = weights_.config().spatial_merge_size;
+        const int S = OutputMergeSize();
 
         // 1) One pass to upper-bound segment count, build flat forward offsets, then size scratch.
         //    Worst case per prefill slot with mrope: 2*num_images + 1 segments.
@@ -778,6 +788,7 @@ struct QwenVit::Impl {
                                          d.batch_size,
                                          cfg.hidden_dim,
                                          cfg.data_type,
+                                         cfg.zero_padded_pos_embed,
                                          stream));
         }
 
@@ -790,6 +801,12 @@ struct QwenVit::Impl {
                                                      d.merge_unit_count,
                                                      stream));
             residual = std::move(reordered);
+        }
+
+        if (weights_.pre_norm) {
+            Tensor normalized{{d.batch_size, cfg.hidden_dim}, cfg.data_type, kDEVICE};
+            ApplyNorm(normalized, residual, *weights_.pre_norm, cfg.norm_type);
+            residual = std::move(normalized);
         }
 
         Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
@@ -831,8 +848,29 @@ struct QwenVit::Impl {
             ResidualBiasNorm(hidden_states, residual, block->mlp_fc2->bias, *next_norm, cfg.norm_type);
         }
 
+        if (cfg.pixel_shuffle && cfg.use_window_attention) {
+            Tensor reordered{{d.batch_size, cfg.hidden_dim}, hidden_states.dtype(), kDEVICE};
+            TM_SCOPE_CALL(
+                invokeQwenVitReverseWindow(reordered, hidden_states, d.window_idx.data(), d.merge_unit_count, stream));
+            hidden_states = std::move(reordered);
+        }
+
+        if (cfg.pixel_shuffle) {
+            const int merge      = OutputMergeSize();
+            const int merge_area = merge * merge;
+            Tensor    shuffled{{d.batch_size / merge_area, cfg.hidden_dim * merge_area}, cfg.data_type, kDEVICE};
+            TM_SCOPE_CALL(invokeQwenVitPixelShuffle(shuffled,
+                                                    hidden_states,
+                                                    d.grid_thws.data(),
+                                                    d.grid_offsets.data(),
+                                                    (int)d.grid_thws_host.size(),
+                                                    merge,
+                                                    stream));
+            hidden_states = std::move(shuffled);
+        }
+
         Tensor image_embeds = Merger(hidden_states, symm_buf);
-        if (cfg.use_window_attention) {
+        if (cfg.use_window_attention && !cfg.pixel_shuffle) {
             Tensor reordered{{d.merge_unit_count, cfg.out_hidden_dim}, image_embeds.dtype(), kDEVICE};
             TM_SCOPE_CALL(
                 invokeQwenVitReverseWindow(reordered, image_embeds, d.window_idx.data(), d.merge_unit_count, stream));
@@ -983,8 +1021,9 @@ struct QwenVit::Impl {
         auto& cfg    = config_;
         auto  stream = core::Context::stream().handle();
 
-        const int merge_area   = cfg.spatial_merge_size * cfg.spatial_merge_size;
-        Tensor    merged_input = input.view({-1, cfg.hidden_dim * merge_area});
+        const int merge_size   = OutputMergeSize();
+        const int merge_area   = merge_size * merge_size;
+        Tensor    merged_input = cfg.pixel_shuffle ? input : input.view({-1, cfg.hidden_dim * merge_area});
 
         Tensor inter;
         TM_SCOPE_CALL(linear_.Forward(merged_input, *weights_.merger_fc1, inter));
@@ -1000,6 +1039,25 @@ struct QwenVit::Impl {
 
         Tensor result = empty_like(output);
         TM_SCOPE_CALL(ApplyBias(result, output, weights_.merger_fc2->bias, stream));
+
+        if (cfg.merger_double_gelu) {
+            TM_SCOPE_CALL(invokeAddBiasActivation(result, {}, ActivationType::kGelu, stream));
+        }
+
+        if (weights_.merger_fc3) {
+            Tensor projected;
+            TM_SCOPE_CALL(linear_.Forward(result, *weights_.merger_fc3, projected));
+            if (weights_.merger_fc3->bias) {
+                TM_SCOPE_CALL(ApplyBias(projected, weights_.merger_fc3->bias, stream));
+            }
+            result = std::move(projected);
+        }
+
+        if (weights_.output_norm) {
+            Tensor normalized = empty_like(result);
+            ApplyNorm(normalized, result, *weights_.output_norm, NormType::kRMSNorm);
+            result = std::move(normalized);
+        }
 
         return result;
     }

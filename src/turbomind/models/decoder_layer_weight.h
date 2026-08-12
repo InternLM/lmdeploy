@@ -45,7 +45,9 @@ public:
     X(FfnWeight, feed_forward)                                                                                         \
     X(MoeWeight, moe_ffn)                                                                                              \
     X(NormWeight, attention_norm)                                                                                      \
-    X(NormWeight, ffn_norm)
+    X(NormWeight, ffn_norm)                                                                                            \
+    X(NormWeight, post_attention_norm)                                                                                 \
+    X(NormWeight, post_ffn_norm)
 
 #define DECODER_LAYER_WEIGHT_PARAMS(X)
 

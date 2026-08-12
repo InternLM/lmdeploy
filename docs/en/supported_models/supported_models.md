@@ -22,6 +22,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |     Qwen2.5<sup>\[2\]</sup>      |    0.5B - 72B    | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |              Qwen3               |    0.6B-235B     | LLM  |    Yes    |   Yes   |  Yes\*  | Yes\* |
 |     Qwen3.5<sup>\[3\]</sup>      |    0.8B-397B     | MLLM |    Yes    |   Yes   |   No    |  Yes  |
+|   Muse-Glimmer<sup>\[4\]</sup>   |       30B        | MLLM |    Yes    |   No    |   No    |  No   |
 |     Mistral<sup>\[1\]</sup>      |        7B        | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |             Mixtral              |   8x7B, 8x22B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |           DeepSeek-V2            |    16B, 236B     | LLM  |    Yes    |   Yes   |   Yes   |  No   |
@@ -50,6 +51,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 * [1] The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, such as Mistral, Qwen1.5 and etc., please choose the PyTorch engine for inference.
 * [2] When the head_dim of a model is not 128, such as llama3.2-1B, qwen2-0.5B and internvl2-1B, turbomind doesn't support its kv cache 4/8 bit quantization and inference
 * [3] TurboMind does not currently support the vision encoder for the Qwen3.5 series.
+* [4] Muse-Glimmer is supported in BF16 only, including native image and video encoding.
 ```
 
 ## PyTorchEngine on CUDA Platform

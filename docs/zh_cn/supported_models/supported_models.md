@@ -23,6 +23,7 @@
 |     Qwen2.5<sup>\[2\]</sup>      |   0.5B - 72B   | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |              Qwen3               |   0.6B-235B    | LLM  |    Yes    |   Yes   |  Yes\*  |  Yes  |
 |     Qwen3.5<sup>\[3\]</sup>      |   0.8B-397B    | LLM  |    Yes    |   Yes   |   No    |  Yes  |
+|   Muse-Glimmer<sup>\[4\]</sup>   |      30B       | MLLM |    Yes    |   No    |   No    |  No   |
 |     Mistral<sup>\[1\]</sup>      |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |             Mixtral              |  8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |           DeepSeek-V2            |   16B, 236B    | LLM  |    Yes    |   Yes   |   Yes   |  No   |
@@ -51,6 +52,7 @@
 * [1] turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，比如 Mistral、Qwen1.5 等，在推理时，请选择 pytorch engine
 * [2] 当模型的 head_dim 非 128 时，turbomind 不支持它的 kv cache 4/8 bit 量化和推理。比如，llama3.2-1B，qwen2-0.5B，internvl2-1B 等等
 * [3] turbomind 目前暂不支持 Qwen3.5 系列的视觉编码器。
+* [4] Muse-Glimmer 仅支持 BF16，包括原生图像和视频编码。
 ```
 
 ## PyTorchEngine CUDA 平台
