@@ -15,8 +15,7 @@ from utils.restful_return_check import (
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-# INPUT_LENGTH_ERROR: ~100k tokens (was *100000 ≈500k).
-_OVERSIZE_CHAT_PROMPT = 'Hi, pls intro yourself' * 20000
+_OVERSIZE_CHAT_PROMPT = 'Hi, pls intro yourself' * 60000
 
 
 @pytest.mark.order(8)
