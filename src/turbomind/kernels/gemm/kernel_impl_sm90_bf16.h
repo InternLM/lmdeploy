@@ -369,6 +369,12 @@ public:
         if (want_fused && !Gemm::kSupportsFusedSilu) {
             return false;
         }
+        // A/B strides span K, C stride spans N (half-width for fused SiLU).
+        const int c_ld = want_fused ? desc.n / 2 : desc.n;
+        if (!is_tma_stride_feasible(desc.type_a, desc.k) || !is_tma_stride_feasible(desc.type_b, desc.k)
+            || !is_tma_stride_feasible(desc.type_c, c_ld)) {
+            return false;
+        }
         return Kernel::is_feasible(desc);
     }
 

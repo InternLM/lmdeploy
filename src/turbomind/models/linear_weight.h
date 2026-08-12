@@ -108,6 +108,7 @@ public:
 private:
     bool has_bias_   = false;
     bool is_grouped_ = false;
+    bool prepared_   = false;
 };
 
 }  // namespace turbomind
