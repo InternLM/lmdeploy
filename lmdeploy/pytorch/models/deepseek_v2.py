@@ -39,6 +39,15 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from .utils.cudagraph import CudaGraphMixin
 
 
+def fp32_router_gemm(hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """Dispatch CUDA router GEMM while preserving other backends."""
+    if hidden_states.is_cuda:
+        from lmdeploy.pytorch.kernels.cuda.fp32_router_gemm import fp32_router_gemm as cuda_fp32_router_gemm
+        return cuda_fp32_router_gemm(hidden_states, weight)
+    hidden_states = hidden_states.flatten(0, -2)
+    return F.linear(hidden_states.to(weight.dtype), weight)
+
+
 # microbatch
 class ExecType(Enum):
     """Batch exec type."""
@@ -645,7 +654,7 @@ class MoEGate(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, routed_experts: torch.Tensor = None):
         """forward."""
-        router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
+        router_logits = fp32_router_gemm(hidden_states, self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
