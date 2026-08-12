@@ -43,12 +43,18 @@ inline int ceil_pow2(int x)
     return 1 << ceil_log2(x);
 }
 
+inline bool is_power_of_2(size_t value)
+{
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
 class PageAllocator {
 public:
     PageAllocator(void* base, size_t size, size_t page_size):
         base_{align_base(base, page_size)},
         size_{align_size(base, base_, size)},
         page_size_{page_size},
+        is_page_size_pow2_{is_power_of_2(page_size)},
         page_size_log2_{ceil_log2(page_size)},
         pages_{static_cast<int>(size_ / page_size)},  //
         max_order_{ceil_log2(pages_)},
@@ -108,14 +114,18 @@ public:
     }
 
 private:
-    // Round `base` up to the next multiple of `page_size`. Also validates that
-    // `page_size` is a power of two so that the bit-mask below is well-defined.
+    // Round `base` up to the next multiple of `page_size`. Keep the
+    // mask implementation for power-of-two sizes and use modulo otherwise.
     static char* align_base(void* base, size_t page_size)
     {
-        TM_CHECK_EQ(page_size, ceil_pow2(page_size));
-        const auto p    = reinterpret_cast<uintptr_t>(base);
-        const auto mask = static_cast<uintptr_t>(page_size) - 1;
-        return reinterpret_cast<char*>((p + mask) & ~mask);
+        TM_CHECK_GT(page_size, 0u);
+        const auto p = reinterpret_cast<uintptr_t>(base);
+        if (is_power_of_2(page_size)) {
+            const auto mask = static_cast<uintptr_t>(page_size) - 1;
+            return reinterpret_cast<char*>((p + mask) & ~mask);
+        }
+        const auto remainder = p % page_size;
+        return reinterpret_cast<char*>(remainder ? p + page_size - remainder : p);
     }
 
     // Subtract the padding consumed by aligning `base` from the usable region size.
@@ -137,17 +147,26 @@ private:
     {
         auto offset = static_cast<char*>(addr) - base_;
         TM_CHECK(0 <= offset && offset < size_);
-        return static_cast<int>(offset >> page_size_log2_);
+        if (is_page_size_pow2_) {
+            return static_cast<int>(offset >> page_size_log2_);
+        }
+        return static_cast<int>(static_cast<size_t>(offset) / page_size_);
     }
 
     void* get_pointer(int idx)
     {
-        return base_ + (static_cast<size_t>(idx) << page_size_log2_);
+        if (is_page_size_pow2_) {
+            return base_ + (static_cast<size_t>(idx) << page_size_log2_);
+        }
+        return base_ + static_cast<size_t>(idx) * page_size_;
     }
 
     int get_pages(size_t size)
     {
-        return static_cast<int>((size + page_size_ - 1) >> page_size_log2_);
+        if (is_page_size_pow2_) {
+            return static_cast<int>((size + page_size_ - 1) >> page_size_log2_);
+        }
+        return static_cast<int>(size / page_size_ + (size % page_size_ != 0));
     }
 
     // Sentinel header node index for the order-k free list. Lives at
@@ -226,6 +245,7 @@ private:
     char*  base_;
     size_t size_;
     size_t page_size_;
+    bool   is_page_size_pow2_;
 
     int page_size_log2_;
 
