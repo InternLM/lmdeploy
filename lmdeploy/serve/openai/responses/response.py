@@ -81,6 +81,7 @@ def make_response(*,
                   tool_calls: list[Any] | None = None,
                   input_tokens: int,
                   output_tokens: int,
+                  reasoning_tokens: int,
                   finish_reason: str | None,
                   message_id: str | None = None) -> ResponsesResponse:
     text = text or ''
@@ -132,7 +133,7 @@ def make_response(*,
             ),
             output_tokens=output_tokens,
             output_tokens_details=ResponseOutputTokensDetails(
-                reasoning_tokens=0,
+                reasoning_tokens=reasoning_tokens,
                 tool_output_tokens=0,
                 output_tokens_per_turn=[],
                 tool_output_tokens_per_turn=[],

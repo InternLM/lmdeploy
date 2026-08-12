@@ -41,6 +41,7 @@ class PassthroughResponseParser:
 
     tool_parser_cls = None
     last_request = None
+    reasoning_tokens = None
 
     def __init__(self, request):
         self.request = request
