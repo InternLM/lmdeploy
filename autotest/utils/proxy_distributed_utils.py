@@ -265,7 +265,11 @@ class ApiServerPerTest:
 
         _pc = run_config.get('parallel_config') or {}
         _dp = int(_pc.get('dp', 0) or 0)
-        self.expected_instances = _dp if _dp > 1 else 1
+        # turbomind's dp is handled inside a single api_server process, which registers
+        # with the proxy once regardless of dp; only ray/pytorch spawn dp separate
+        # processes that each register independently.
+        _backend = run_config.get('backend')
+        self.expected_instances = _dp if (_dp > 1 and _backend != 'turbomind') else 1
         self.is_master = (self.node_rank == 0)
         self.api_process = None
 

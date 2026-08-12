@@ -44,9 +44,8 @@ Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, const LinearWeight& ga
 {
     TM_FUNCTION_SCOPE();
 
-    auto& w = gate.weight;
-    TM_CHECK_EQ(input.shape(1), w.shape(0));
-    Tensor_<float> logits{{input.shape(0), w.shape(1)}, kDEVICE};
+    TM_CHECK_EQ(input.shape(1), gate.input_dim);
+    Tensor_<float> logits{{input.shape(0), gate.output_dim}, kDEVICE};
     TM_SCOPE_CALL(linear_.Forward(input, gate, logits));
     ApplyBias(logits, gate.bias, core::Context::stream().handle());
     TM_CUDA_CHECK(cudaGetLastError());
@@ -161,9 +160,9 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
 
     const auto st = core::Context::stream().handle();
 
-    if (ep_size_ > 1) {
-        TM_CUDA_CHECK(cudaMemsetAsync(en2f_.data(), -1, sizeof(int) * tokens * experts_per_token, st));
-    }
+    // en2f is the skip sentinel for combine: entries not written by routing (invalid
+    // tokens, or shrunk batches with stale values) must read as -1 regardless of EP.
+    TM_CUDA_CHECK(cudaMemsetAsync(en2f_.data(), -1, sizeof(int) * tokens * experts_per_token, st));
 
     if (p.weights->topk_method == "noaux_tc") {
         TM_CHECK_EQ(p.weights->n_group, 1);
@@ -180,6 +179,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
                               masks_.data(),
                               accum_.data(),
                               logits.data(),
+                              p.token_mask,
                               correction_bias,
                               tokens,
                               padded,
@@ -204,7 +204,6 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
             softmax = false;
         }
 
-        /// TODO: fix illegal memory access even if NaN are present in logits
         invokeMoeGate_V2(f2n_.data(),
                          f2E_.data(),
                          en2f_.data(),
@@ -213,6 +212,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
                          masks_.data(),
                          accum_.data(),
                          logits.data(),
+                         p.token_mask,
                          tokens,
                          padded,
                          expert_num,
@@ -250,22 +250,33 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
 
     temp_ = Tensor{{tokens * experts_per_token, hidden_dim}, p.input.dtype(), p.input.device()};
 
-    // For ep_size > 1, the valid tokens are less than tokens * experts_per_token
-    const int* num_valid_tokens = ep_size_ > 1 ? offsets_.data() + local_expert_num : nullptr;
+    // Masked-out tokens compact the routing tables even for ep_size == 1, so the
+    // routed count is device-side offsets_[local_expert_num] in all cases.
+    const int* num_valid_tokens = offsets_.data() + local_expert_num;
 
     auto indices = f2n_.slice(0, temp_.shape(0));
     auto offsets = offsets_.slice(0, local_expert_num + 1);
 
     if (block.w1w3) {
         Tensor inter;
-        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1w3, indices, offsets, inter));
-
-        if (!block.is_fused_silu) {
-            Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st);
-            TM_CUDA_CHECK(cudaGetLastError());
+        Tensor inter_scales;
+        Tensor unused_in_scales;
+        if (block.is_fused_silu && block.w1w3->output_dtype() == kFloat8_e4m3) {
+            TM_SCOPE_CALL(
+                linear_.Forward(p.input, unused_in_scales, *block.w1w3, indices, offsets, inter, inter_scales));
+            TM_SCOPE_CALL(linear_.Forward(
+                inter.slice({0, 0}, {-1, inter_size}), inter_scales, *block.w2, {}, offsets, temp_, unused_in_scales));
         }
+        else {
+            TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1w3, indices, offsets, inter));
 
-        TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_));
+            if (!block.is_fused_silu) {
+                Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st);
+                TM_CUDA_CHECK(cudaGetLastError());
+            }
+
+            TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_));
+        }
     }
     else {
         // Separate w1/w3 path

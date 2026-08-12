@@ -27,6 +27,61 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     ep_rank           = cfg.ep_rank;
 }
 
+// Shallow alias of an already-prepared linear: shares its tensors and
+// copies its metadata. The alias is never prepared itself (MoeWeight::prepare
+// aliases only after its own Module::prepare() pass).
+static std::unique_ptr<LinearWeight> AliasLinear(const LinearWeight& src)
+{
+    auto dst    = std::make_unique<LinearWeight>();
+    dst->weight = src.weight;
+    dst->bias   = src.bias;
+    dst->scales = src.scales;
+    dst->zeros  = src.zeros;
+    src.copy_metadata_to(*dst);
+    return dst;
+}
+
+static std::unique_ptr<FfnWeight> AliasFfn(const FfnWeight& src)
+{
+    auto dst           = std::make_unique<FfnWeight>();
+    dst->hidden_dim    = src.hidden_dim;
+    dst->inter_size    = src.inter_size;
+    dst->act_type      = src.act_type;
+    dst->is_fused_silu = src.is_fused_silu;
+    dst->tp_size       = src.tp_size;
+    dst->tp_rank       = src.tp_rank;
+    if (src.w1w3) {
+        dst->add_child("w1w3", AliasLinear(*src.w1w3));
+    }
+    else {
+        dst->add_child("w1", AliasLinear(*TM_CHECK_NOTNULL(src.w1.get())));
+        dst->add_child("w3", AliasLinear(*TM_CHECK_NOTNULL(src.w3.get())));
+    }
+    dst->add_child("w2", AliasLinear(*TM_CHECK_NOTNULL(src.w2.get())));
+    return dst;
+}
+
+void MoeWeight::AliasRouted(const MoeWeight& meta_pack)
+{
+    TM_CHECK(meta_pack.gate && meta_pack.experts);
+    TM_CHECK(!gate && !experts);
+    TM_CHECK_NOTNULL(meta_pack.expert(0));
+
+    add_child("gate", AliasLinear(*meta_pack.gate));
+
+    // Experts are EP-sharded; iterate the local slice and keep global
+    // expert indices as child names (see MoeWeight::expert()).
+    TM_CHECK_EQ(ep_size, meta_pack.ep_size);
+    TM_CHECK_EQ(ep_rank, meta_pack.ep_rank);
+    const int local_num = meta_pack.num_local_experts();
+    const int offset    = meta_pack.local_expert_offset();
+    create_child("experts", core::ModuleListConfig{});
+    for (int e = 0; e < local_num; ++e) {
+        experts->add_child(std::to_string(offset + e), AliasFfn(*TM_CHECK_NOTNULL(meta_pack.expert(e))));
+    }
+    // never touch shared_gate
+}
+
 // Adapted from LinkExperts for LinearWeight
 static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, LinearWeight& d)
 {
@@ -56,24 +111,16 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     auto stream = core::Context::stream().handle();
 
-    if (d.weight_format.dtype == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
-        auto make_blocked_ptr = [&](const auto& ptrs) {
-            return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
-        };
-        d.weight         = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
-        d.scales         = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
-        d.k_desc.offsets = d.q_desc.offsets = (int*)1;
+    auto make_strided_ptr = [&](const auto& ptrs) {
+        return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+    };
+    d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
+    if (e0.scales) {
+        d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
     }
-    else {
-        auto make_strided_ptr = [&](const auto& ptrs) {
-            return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
-        };
-        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
-        if (e0.scales) {
-            d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
-        }
-        d.k_desc.ld = d.q_desc.ld = 0;
-    }
+    // MatrixLayout.ld == 0 identifies the StridedPtr expert table.
+    d.k_desc.ld = d.q_desc.ld = 0;
+    d.k_desc.offsets = d.q_desc.offsets = nullptr;
 }
 
 FfnWeight* MoeWeight::expert(int i) const
@@ -86,9 +133,22 @@ FfnWeight* MoeWeight::expert(int i) const
 
 void MoeWeight::prepare()
 {
-    // First prepare all children (experts, gate, etc.)
     Module::prepare();
 
+    if (meta_pack_) {
+        // Meta-MoE layer weight: alias the routed gate/experts from the
+        // shared pack. ModelWeight::prepare() prepares meta_experts before
+        // the layers, so the pack is already prepared at this point.
+        AliasRouted(*meta_pack_);
+    }
+
+    if (experts) {
+        link_block();
+    }
+}
+
+void MoeWeight::link_block()
+{
     const int local_expert_num = num_local_experts();
 
     // Create batched block view for fused MoE path

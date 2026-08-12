@@ -41,6 +41,7 @@ class PassthroughResponseParser:
 
     tool_parser_cls = None
     last_request = None
+    reasoning_tokens = None
 
     def __init__(self, request):
         self.request = request
@@ -66,6 +67,14 @@ class FakeServerContext:
         self.async_engine = FakeAsyncEngine()
         self.default_gen_config = {}
         self.sessions = []
+
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
+
+    @property
+    def session_manager(self):
+        return self.async_engine.session_mgr
 
     def create_session(self, session_id):
         session = FakeSession(session_id)

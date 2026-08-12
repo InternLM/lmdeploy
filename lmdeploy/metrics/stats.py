@@ -37,7 +37,7 @@ class SchedulerStats:
         # Engine core
         num_running_reqs: Engine core, currently executing requests.
         num_waiting_reqs: Engine core, requests queued waiting for execution.
-        gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
+        gpu_cache_usage: Fraction of GPU KV cache utilized (0.0 to 1.0).
         prefix_cache_hit_rate: Prefix caching hit rate.
     """
 
@@ -90,10 +90,7 @@ class SchedulerStats:
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
         self.num_running_reqs = scheduled_metrics.active_seqs
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
-        if scheduled_metrics.cache_usage is None:
-            self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
-        else:
-            self.gpu_cache_usage = scheduled_metrics.cache_usage
+        self.gpu_cache_usage = scheduled_metrics.cache_usage
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
 
 

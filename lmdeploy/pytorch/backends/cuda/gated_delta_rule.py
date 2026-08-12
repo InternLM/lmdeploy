@@ -1,12 +1,63 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Hashable
+from dataclasses import dataclass
 from functools import lru_cache
+from typing import ClassVar
 
 import torch
 import triton
 import triton.language as tl
 
+from lmdeploy.utils import get_logger
+
 from ..gated_delta_rule import GatedDeltaRuleBuilder, GatedDeltaRuleImpl
+from .step_metadata import CudaStepMetaUpdater, register_step_metadata_impl
 from .utils import has_tilelang
+
+logger = get_logger('lmdeploy')
+
+
+def prepare_chunked_gated_delta_rule(cu_seqlens_q: torch.Tensor) -> None:
+    """Populate FLA's chunk-index cache for the current sequence lengths."""
+    try:
+        from fla.ops.utils import prepare_chunk_indices
+    except ImportError:
+        logger.warning(
+            'Failed to import fla.ops.utils.prepare_chunk_indices for gated delta rule. '
+            'Please make sure the version of fla is installed, up to date and compatible with lmdeploy.'
+        )
+        return
+
+    # prepare_chunk_indices forces a stream synchronization. Retaining CPU
+    # cumulative lengths is a separate follow-up optimization.
+    try:
+        chunk_size = 64
+        try:
+            prepare_chunk_indices(cu_seqlens_q, chunk_size, cu_seqlens_cpu=None)
+        except TypeError:
+            prepare_chunk_indices(cu_seqlens_q, chunk_size)
+    except Exception as exc:
+        logger.exception(
+            'Unexpected error while preparing chunk indices for gated delta rule. '
+            'Please make sure the version of fla is up to date and compatible with lmdeploy.'
+        )
+        raise RuntimeError('Failed to prepare chunk indices for gated delta rule; see logs for details.') from exc
+
+
+@dataclass(frozen=True)
+class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
+    """Prepare step-local state owned by the selected CUDA gated-delta op."""
+
+    output_key: ClassVar[str] = 'gated_delta'
+    priority: ClassVar[int] = 20
+
+    @property
+    def key(self) -> Hashable:
+        return type(self)
+
+    def update(self, step_context, sequence_metadata) -> None:
+        if not step_context.is_decoding:
+            prepare_chunked_gated_delta_rule(sequence_metadata.cu_seqlens_q)
 
 
 @lru_cache
@@ -153,6 +204,12 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
         self.chunk_func = chunk_gated_delta_rule
         self.recurrent_func = fused_recurrent_gated_delta_rule
+
+        register_step_metadata_impl(self)
+
+    def get_step_metadata_provider(self):
+        """Describe preparation required by this selected implementation."""
+        return GatedDeltaStepMetaUpdater()
 
     def prepare_inputs(
         self,

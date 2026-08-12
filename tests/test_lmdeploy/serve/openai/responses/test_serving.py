@@ -84,6 +84,21 @@ def test_responses_non_streaming_cleans_up_session(
     assert context.async_engine.session_mgr.removed == context.sessions
 
 
+def test_responses_non_streaming_reports_reasoning_tokens(
+        responses_endpoint, fake_raw_request, passthrough_response_parser_cls):
+    class _ReasoningResponseParser(passthrough_response_parser_cls):
+        reasoning_tokens = 3
+
+    endpoint, context = responses_endpoint
+    context.response_parser_cls = _ReasoningResponseParser
+
+    response = asyncio.run(
+        endpoint(ResponsesRequest(model='fake-model', input='Hi'),
+                 fake_raw_request))
+
+    assert response['usage']['output_tokens_details']['reasoning_tokens'] == 3
+
+
 def test_responses_non_streaming_disconnect_cleans_up_session(
         responses_endpoint):
     class _DisconnectedRawRequest:

@@ -33,13 +33,15 @@ def test_responses_streaming_sse_shape(sse_payloads,
         )
 
     async def _collect_events():
+        parser = passthrough_response_parser_cls(request)
+        parser.reasoning_tokens = 2
         return [
             event async for event in stream_response(
                 _result_generator(),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=passthrough_response_parser_cls(request),
+                response_parser=parser,
             )
         ]
 
@@ -62,6 +64,7 @@ def test_responses_streaming_sse_shape(sse_payloads,
     assert done_item['id'] == added_item['id']
     assert payloads[-1]['type'] == 'response.completed'
     assert completed_response['output_text'] == 'Hello world!'
+    assert completed_response['usage']['output_tokens_details']['reasoning_tokens'] == 2
 
 
 def test_responses_streaming_length_finish_reason_emits_incomplete_event(
@@ -174,6 +177,7 @@ def test_responses_streaming_tool_call_events(sse_payloads):
                                stream=True)
 
     class _ToolParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
@@ -270,6 +274,7 @@ def test_responses_streaming_parallel_tool_calls_filtering(
     )
 
     class _ParallelToolParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
@@ -331,6 +336,7 @@ def test_responses_streaming_text_indices_follow_text_item_order(sse_payloads):
                                stream=True)
 
     class _ToolThenTextParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
@@ -405,6 +411,7 @@ def test_responses_streaming_accepts_parser_delta_list(sse_payloads):
                                stream=True)
 
     class _MultiDeltaParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
