@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 import torch
 
@@ -52,8 +54,10 @@ def _reference(
             partial = (
                 a[a_row, k_start:k_start + SCALE_BLOCK].float()
                 @ b[local_expert, :, k_start:k_start + SCALE_BLOCK].float().T)
+            block_b_scale = b_scale[local_expert, :, k_block]
+            block_b_scale = block_b_scale.repeat_interleave(SCALE_BLOCK)
             partials.append(partial * a_scale[a_row, k_block] *
-                            b_scale[local_expert, :, k_block])
+                            block_b_scale[:b.size(1)])
         value = torch.stack(partials).sum(0)
         if bias is not None:
             value += bias[local_expert]
@@ -63,29 +67,32 @@ def _reference(
 
 @torch.inference_mode()
 @pytest.mark.parametrize(
-    ('reindex_a', 'reindex_c', 'block_n', 'with_bias', 'num_stages',
-     'num_k_blocks'),
+    ('reindex_a', 'reindex_c', 'block_m', 'block_n', 'with_bias',
+     'num_stages', 'num_k_blocks', 'num_tokens', 'top_k',
+     'num_local_experts', 'n'),
     [
-        (True, False, 64, False, 1, 3),
-        (True, False, 128, True, None, 9),
-        (False, True, 128, True, 2, 5),
+        (True, False, 8, 64, False, 1, 3, 13, 2, 2, 128),
+        (True, False, 8, 128, True, None, 9, 13, 2, 2, 128),
+        (False, True, 8, 128, True, 2, 5, 13, 2, 2, 128),
+        (True, False, 64, 128, True, 1, 9, 65, 1, 1, 256),
+        (True, False, 64, 128, False, 2, 5, 65, 1, 1, 128),
+        (False, True, 64, 128, False, 3, 9, 65, 1, 1, 128),
     ],
 )
-def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_n, with_bias,
-                                     num_stages, num_k_blocks):
+def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_m, block_n,
+                                     with_bias, num_stages, num_k_blocks,
+                                     num_tokens, top_k, num_local_experts, n):
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import (
-        SMALL_M_BLOCK,
+        STANDARD_WGMMA_BLOCK_M,
+        TRANSPOSED_WGMMA_BLOCK_M,
         fused_moe_blocked_fp8_kernel_launcher,
     )
     from lmdeploy.pytorch.kernels.cuda.fused_moe import _get_sorted_idx_blocks
 
     torch.manual_seed(7)
-    num_tokens = 13
-    top_k = 2
-    num_experts = 4
-    num_local_experts = 2
+    assert block_m in (TRANSPOSED_WGMMA_BLOCK_M, STANDARD_WGMMA_BLOCK_M)
+    num_experts = num_local_experts + 2
     expert_offset = 1
-    n = 128
     k = num_k_blocks * SCALE_BLOCK
     num_routes = num_tokens * top_k
 
@@ -97,7 +104,7 @@ def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_n, with_bias,
         num_experts,
         num_local_experts,
         expert_offset,
-        SMALL_M_BLOCK,
+        block_m,
     )
     sorted_idx, _, exp_end, block_end, block_expert_ids, block_offsets = metadata
 
@@ -112,6 +119,10 @@ def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_n, with_bias,
         device='cuda',
         dtype=torch.float32,
     ) + 0.5
+    if block_m == STANDARD_WGMMA_BLOCK_M and num_stages == 1:
+        # Exercise the rescaled accumulator across zero-scale K blocks.
+        a_scale[0, 2] = 0
+        b_scale[0, 0, 4] = 0
     bias = torch.randn(
         (num_local_experts,
          n), device='cuda', dtype=torch.bfloat16) if with_bias else None
@@ -137,6 +148,7 @@ def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_n, with_bias,
             expert_offset=expert_offset,
             reindex_a=reindex_a,
             reindex_c=reindex_c,
+            block_m=block_m,
             block_n=block_n,
             num_stages=num_stages,
         )
@@ -164,17 +176,18 @@ def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_n, with_bias,
 
 
 def test_blocked_fp8_fused_moe_gluon_selects_pipeline_from_workload():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import _select_pipeline_stages
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import _select_transposed_pipeline_stages
 
-    assert _select_pipeline_stages(m=8, k=6144) == 3
-    assert _select_pipeline_stages(m=32, k=6144) == 3
-    assert _select_pipeline_stages(m=33, k=6144) == 2
-    assert _select_pipeline_stages(m=128, k=6144) == 2
-    assert _select_pipeline_stages(m=129, k=6144) == 1
-    assert _select_pipeline_stages(m=256, k=6144) == 1
-    assert _select_pipeline_stages(m=768, k=6144) == 1
-    assert _select_pipeline_stages(m=8, k=7 * SCALE_BLOCK) == 1
-    assert _select_pipeline_stages(m=768, k=256) == 1
+    assert _select_transposed_pipeline_stages(m=8, k=6144) == 3
+    assert _select_transposed_pipeline_stages(m=32, k=6144) == 3
+    assert _select_transposed_pipeline_stages(m=33, k=6144) == 2
+    assert _select_transposed_pipeline_stages(m=128, k=6144) == 2
+    assert _select_transposed_pipeline_stages(m=129, k=6144) == 1
+    assert _select_transposed_pipeline_stages(m=256, k=6144) == 1
+    assert _select_transposed_pipeline_stages(m=768, k=6144) == 1
+    assert _select_transposed_pipeline_stages(m=8,
+                                              k=7 * SCALE_BLOCK) == 1
+    assert _select_transposed_pipeline_stages(m=768, k=256) == 1
 
 
 def test_blocked_fp8_fused_moe_gluon_rejects_wrong_scale_block():
@@ -201,3 +214,118 @@ def test_blocked_fp8_fused_moe_gluon_rejects_wrong_scale_block():
             output,
             *metadata,
         )
+
+
+def test_blocked_fp8_fused_moe_gluon_has_baseline_api():
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8 as baseline
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import fused_moe_blocked_fp8 as candidate
+
+    def contract(fn):
+        return [(parameter.name, parameter.kind, parameter.default)
+                for parameter in inspect.signature(fn).parameters.values()]
+
+    assert contract(candidate) == contract(baseline)
+
+
+@torch.inference_mode()
+@pytest.mark.parametrize('schedule',
+                         ('transposed_wgmma_both',
+                          'standard_wgmma_gate_triton_down'))
+def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
+        monkeypatch, schedule):
+    from lmdeploy.pytorch.kernels.cuda import blocked_fp8_fused_moe_gluon as candidate_module
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8 as baseline
+
+    monkeypatch.setattr(candidate_module, '_select_gluon_moe_schedule',
+                        lambda *args: schedule)
+
+    torch.manual_seed(11)
+    num_tokens, num_experts, topk = 13, 4, 2
+    hidden_features, gate_features, intermediate_features = 384, 256, 128
+    input = (torch.randn((num_tokens, hidden_features), device='cuda') * 0.25).to(FP8_DTYPE)
+    input_scale = torch.rand((num_tokens, hidden_features // SCALE_BLOCK), device='cuda') + 0.5
+    w1 = (torch.randn((num_experts, gate_features, hidden_features), device='cuda') * 0.25).to(FP8_DTYPE)
+    w1_scale = torch.rand((num_experts, gate_features // SCALE_BLOCK, hidden_features // SCALE_BLOCK),
+                          device='cuda') + 0.5
+    w2 = (torch.randn((num_experts, hidden_features, intermediate_features), device='cuda') * 0.25).to(FP8_DTYPE)
+    w2_scale = torch.rand((num_experts, hidden_features // SCALE_BLOCK, intermediate_features // SCALE_BLOCK),
+                          device='cuda') + 0.5
+    topk_ids = torch.stack((torch.arange(num_tokens, device='cuda') % num_experts,
+                            (torch.arange(num_tokens, device='cuda') + 1) % num_experts),
+                           dim=1)
+    topk_weights = torch.rand((num_tokens, topk), device='cuda')
+    w1_bias = torch.randn((num_experts, gate_features), device='cuda', dtype=torch.bfloat16)
+    w2_bias = torch.randn((num_experts, hidden_features), device='cuda', dtype=torch.bfloat16)
+    args = (input, input_scale, w1, w1_scale, w2, w2_scale, topk_weights, topk_ids)
+
+    expected = baseline(*args,
+                        topk=topk,
+                        w1_bias=w1_bias,
+                        w2_bias=w2_bias,
+                        out_dtype=torch.bfloat16,
+                        renormalize=True)
+    actual = candidate_module.fused_moe_blocked_fp8(*args,
+                                                    topk=topk,
+                                                    w1_bias=w1_bias,
+                                                    w2_bias=w2_bias,
+                                                    out_dtype=torch.bfloat16,
+                                                    renormalize=True)
+
+    expected_scale = expected.abs().max().clamp_min(1e-6)
+    actual_scale = actual.abs().max().clamp_min(1e-6)
+    torch.testing.assert_close(actual / actual_scale,
+                               expected / expected_scale,
+                               rtol=1e-3,
+                               atol=0.05)
+    relative_scale_error = (actual_scale - expected_scale).abs() / expected_scale
+    assert relative_scale_error < 0.05
+
+
+@pytest.mark.parametrize(
+    ('num_tokens', 'expected'),
+    [
+        (71, None),
+        (72, 'transposed_wgmma_both'),
+        (120, 'transposed_wgmma_both'),
+        (121, None),
+        (2048, 'standard_wgmma_gate_triton_down'),
+        (8192, None),
+    ],
+)
+def test_blocked_fp8_fused_moe_gluon_selects_measured_schedule(num_tokens,
+                                                               expected):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import _select_gluon_moe_schedule
+
+    input = torch.empty((num_tokens, 6144), device='meta')
+    w1 = torch.empty((256, 512, 6144), device='meta')
+    w2 = torch.empty((256, 6144, 256), device='meta')
+    topk_ids = torch.empty((num_tokens, 8), device='meta', dtype=torch.int64)
+
+    assert _select_gluon_moe_schedule(input, w1, w2, topk_ids, 256) == expected
+
+
+def test_blocked_fp8_fused_moe_gluon_falls_back(monkeypatch):
+    from lmdeploy.pytorch.kernels.cuda import blocked_fp8_fused_moe_gluon as candidate_module
+
+    sentinel = object()
+    monkeypatch.setattr(candidate_module, '_supports_gluon_moe_contract', lambda *args: False)
+    monkeypatch.setattr(candidate_module, 'triton_fused_moe_blocked_fp8', lambda *args, **kwargs: sentinel)
+
+    input = torch.empty((1, 128), device='cuda', dtype=FP8_DTYPE)
+    input_scale = torch.empty((1, 1), device='cuda')
+    w1 = torch.empty((1, 256, 128), device='cuda', dtype=FP8_DTYPE)
+    w1_scale = torch.empty((1, 2, 1), device='cuda')
+    w2 = torch.empty((1, 128, 128), device='cuda', dtype=FP8_DTYPE)
+    w2_scale = torch.empty((1, 1, 1), device='cuda')
+    topk_weights = torch.ones((1, 1), device='cuda')
+    topk_ids = torch.zeros((1, 1), device='cuda', dtype=torch.int64)
+
+    assert candidate_module.fused_moe_blocked_fp8(input,
+                                                   input_scale,
+                                                   w1,
+                                                   w1_scale,
+                                                   w2,
+                                                   w2_scale,
+                                                   topk_weights,
+                                                   topk_ids,
+                                                   topk=1) is sentinel
