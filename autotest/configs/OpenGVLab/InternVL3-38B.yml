@@ -10,7 +10,6 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-    - cuda-ipc
   - name: pytorch
     communicators:
     - nccl

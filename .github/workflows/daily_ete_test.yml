@@ -53,7 +53,9 @@ env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   ROOT_DIR: /nvme/qa_test_models
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
-  COV_PARAM: --cov /opt/py3/lib/python3.12/site-packages/lmdeploy
+  COV_PARAM: --cov=lmdeploy --cov-branch
+  COVERAGE_PROCESS_START: .coveragerc
+  PYTHONSAFEPATH: '1'
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
@@ -114,7 +116,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -162,13 +164,13 @@ jobs:
       matrix:
         deps_profile: ['', 'transformers==4.57.6']
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
       DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -210,7 +212,10 @@ jobs:
         continue-on-error: true
         run: |
           pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Clear workfile
         if: always()
         run: |
@@ -245,13 +250,13 @@ jobs:
             model: llm
             function: other
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
       DEPS_PROFILE: ${{ matrix.deps_profile }}
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -294,42 +299,81 @@ jobs:
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         if: matrix.function == 'pipeline'
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Test lmdeploy - restful
         continue-on-error: true
         if: matrix.function == 'restful'
         run: |
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Test lmdeploy - local testcase
         if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'other'
         run: |
           pytest autotest/toolchain --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Clear workfile
         if: always()
         run: |
@@ -350,7 +394,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -362,7 +406,7 @@ jobs:
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
@@ -391,18 +435,55 @@ jobs:
           # remove tmp log in testcase
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Test interface restful - gpu concurrent
-        timeout-minutes: 280
+      - name: Test interface restful - gpu_num_1
+        continue-on-error: true
+        timeout-minutes: 120
         run: |
+          set +e
           echo "INTERFACE_BACKENDS=${INTERFACE_BACKENDS}"
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_1' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_2' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_4' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_8' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_1' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          rc=$?
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
+          exit $rc
+      - name: Test interface restful - gpu_num_2
+        continue-on-error: true
+        timeout-minutes: 120
+        run: |
+          set +e
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_2' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          rc=$?
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
+          exit $rc
+      - name: Test interface restful - gpu_num_4
+        continue-on-error: true
+        timeout-minutes: 120
+        run: |
+          set +e
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_4' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          rc=$?
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
+          exit $rc
+      - name: Test interface restful - gpu_num_8
+        continue-on-error: true
+        timeout-minutes: 120
+        run: |
+          set +e
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_8' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          rc=$?
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
+          exit $rc
       - name: Clear workfile
         if: always()
         run: |
@@ -419,13 +500,13 @@ jobs:
     needs: test_quantization
     timeout-minutes: 240
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
       DEPS_PROFILE: ''
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -460,17 +541,34 @@ jobs:
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - interface pipeline case
+        continue-on-error: true
         run: |
+          set +e
           pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_8 and not pr_test' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
       - name: Clear workfile
         if: always()
         run: |
@@ -488,13 +586,13 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
       DEPS_PROFILE: ''
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -529,9 +627,16 @@ jobs:
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test benchmark script
+        continue-on-error: true
         run: |
-          pytest autotest/benchmark -n 4 -m function --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          set +e
+          pytest autotest/benchmark -n 4 -m function --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          rc=$?
+          for f in .coverage .coverage.*; do
+            [ -e "$f" ] || continue
+            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
+          done
+          exit $rc
       - name: Clear workfile
         if: always()
         run: |
@@ -545,10 +650,10 @@ jobs:
   get_coverage_report:
     if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
-    needs: [test_tools, test_restful, test_pipeline, test_benchmark]
+    needs: [test_quantization, test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip

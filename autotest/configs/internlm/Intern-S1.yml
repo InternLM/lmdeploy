@@ -24,10 +24,8 @@ a100:
   - quantization
   quantization:
     turbomind:
-    - kvint4
     - kvint8
     pytorch:
-    - kvint4
     - kvint8
 h:
 - model_type:
