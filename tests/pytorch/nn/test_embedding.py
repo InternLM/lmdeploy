@@ -10,6 +10,11 @@ from torch import nn
 from lmdeploy.pytorch.distributed import DefaultContext
 from lmdeploy.pytorch.nn import ParallelEmbedding, ParallelLMHead
 
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 2,
+    reason='requires at least 2 CUDA devices',
+)
+
 
 def parallel_emb(rank: int, world_size: int, vocab_size: int, feat_size: int, padding_idx: int, dtype: torch.dtype,
                  x: torch.Tensor, weight: torch.Tensor, result_queue: mp.Queue):
