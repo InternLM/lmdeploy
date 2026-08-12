@@ -175,17 +175,21 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         import os
         os.environ['FLA_INTRACARD_CP'] = '0'
 
-        if not has_fla() or not has_tilelang():
-            raise ImportError('fla and tilelang is required for CudaGatedDeltaRuleImpl')
+        if not has_tilelang():
+            raise ImportError('tilelang is required for CudaGatedDeltaRuleImpl')
+
+        fla_chunk_gated_delta_rule = None
+        if has_fla():
+            from fla.ops.gated_delta_rule import chunk_gated_delta_rule as fla_chunk_gated_delta_rule
 
         from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
-            chunk_gated_delta_rule as local_chunk_gated_delta_rule,
+            chunk_gated_delta_rule as chunk_gated_delta_rule_with_chunk_states,
         )
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
-        # local triton port of the FLA chunk forward (inference-only, no autograd),
-        # which additionally exposes per-chunk-boundary recurrent states as a
-        # 3rd return value for prefix-cache checkpointing.
-        self.chunk_func = local_chunk_gated_delta_rule
+        # The local Triton forward additionally exposes per-chunk-boundary
+        # recurrent states for prefix-cache checkpointing.
+        self.fla_chunk_func = fla_chunk_gated_delta_rule
+        self.chunk_func_with_states = chunk_gated_delta_rule_with_chunk_states
         self.recurrent_func = fused_recurrent_gated_delta_rule
 
         register_step_metadata_impl(self)
@@ -270,20 +274,35 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             # l2norm in fla would recompile when seqlen changed.
             q = torch.nn.functional.normalize(q, p=2, dim=-1)
             k = torch.nn.functional.normalize(k, p=2, dim=-1)
-        core_attn_out, last_state, chunk_states = self.chunk_func(
-            q,
-            k,
-            v,
-            g=g,
-            beta=beta,
-            scale=scale,
-            initial_state=init_state,
-            output_final_state=output_final_state,
-            cu_seqlens=cu_seqlens,
-            chunk_indices=chunk_indices,
-            chunk_offsets=chunk_offsets,
-            state_v_first=transpose_state_layout,
-        )
+        if chunk_indices is None and self.fla_chunk_func is not None:
+            core_attn_out, last_state = self.fla_chunk_func(
+                q,
+                k,
+                v,
+                g=g,
+                beta=beta,
+                scale=scale,
+                initial_state=init_state,
+                output_final_state=output_final_state,
+                cu_seqlens=cu_seqlens,
+                state_v_first=transpose_state_layout,
+            )
+            chunk_states = None
+        else:
+            core_attn_out, last_state, chunk_states = self.chunk_func_with_states(
+                q,
+                k,
+                v,
+                g=g,
+                beta=beta,
+                scale=scale,
+                initial_state=init_state,
+                output_final_state=output_final_state,
+                cu_seqlens=cu_seqlens,
+                chunk_indices=chunk_indices,
+                chunk_offsets=chunk_offsets,
+                state_v_first=transpose_state_layout,
+            )
         if spec_state_offsets is not None:
             # write to next slots
             spec_write_offsets = spec_state_offsets[1]

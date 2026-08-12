@@ -315,6 +315,135 @@ def test_chunk_gated_delta_rule_rejects_invalid_varlen_inputs():
             cu_seqlens=torch.tensor([0, 32, 64], device='cuda', dtype=torch.int32))
 
 
+def test_cuda_backend_dispatches_to_fla_without_chunk_metadata():
+    from lmdeploy.pytorch.backends.cuda.gated_delta_rule import CudaGatedDeltaRuleImpl
+
+    impl = CudaGatedDeltaRuleImpl.__new__(CudaGatedDeltaRuleImpl)
+    calls = []
+    expected_out = torch.randn(1, 2, 1, 2)
+    expected_state = torch.randn(1, 1, 2, 2)
+
+    def fla_chunk_func(*args, **kwargs):
+        calls.append(('fla', kwargs))
+        return expected_out, expected_state
+
+    def chunk_func_with_states(*args, **kwargs):
+        raise AssertionError('chunk-state implementation must not be called')
+
+    impl.fla_chunk_func = fla_chunk_func
+    impl.chunk_func_with_states = chunk_func_with_states
+    state_bank = torch.zeros(2, 1, 2, 2)
+    state_indices = torch.tensor([1])
+    q = k = v = torch.empty(1, 2, 1, 2)
+    g = beta = torch.empty(1, 2, 1)
+
+    out, returned_bank, chunk_states = impl.chunk_gated_delta_rule(
+        q,
+        k,
+        v,
+        g=g,
+        beta=beta,
+        initial_state=state_bank,
+        state_indices=state_indices,
+        output_final_state=True,
+        transpose_state_layout=True,
+    )
+
+    assert out is expected_out
+    assert returned_bank.data_ptr() == state_bank.data_ptr()
+    assert chunk_states is None
+    assert calls[0][0] == 'fla'
+    assert 'chunk_indices' not in calls[0][1]
+    assert 'chunk_offsets' not in calls[0][1]
+    assert calls[0][1]['state_v_first'] is True
+    torch.testing.assert_close(state_bank[1], expected_state[0])
+
+
+def test_cuda_backend_falls_back_to_chunk_state_implementation_without_fla():
+    from lmdeploy.pytorch.backends.cuda.gated_delta_rule import CudaGatedDeltaRuleImpl
+
+    impl = CudaGatedDeltaRuleImpl.__new__(CudaGatedDeltaRuleImpl)
+    calls = []
+    expected_out = torch.randn(1, 2, 1, 2)
+    expected_state = torch.randn(1, 1, 2, 2)
+    expected_chunks = torch.randn(1, 1, 1, 2, 2)
+
+    def chunk_func_with_states(*args, **kwargs):
+        calls.append(kwargs)
+        return expected_out, expected_state, expected_chunks
+
+    impl.fla_chunk_func = None
+    impl.chunk_func_with_states = chunk_func_with_states
+    state_bank = torch.zeros(2, 1, 2, 2)
+    state_indices = torch.tensor([1])
+    q = k = v = torch.empty(1, 2, 1, 2)
+    g = beta = torch.empty(1, 2, 1)
+
+    out, returned_bank, chunk_states = impl.chunk_gated_delta_rule(
+        q,
+        k,
+        v,
+        g=g,
+        beta=beta,
+        initial_state=state_bank,
+        state_indices=state_indices,
+        output_final_state=True,
+    )
+
+    assert out is expected_out
+    assert returned_bank.data_ptr() == state_bank.data_ptr()
+    assert chunk_states is expected_chunks
+    assert calls[0]['chunk_indices'] is None
+    assert calls[0]['chunk_offsets'] is None
+    torch.testing.assert_close(state_bank[1], expected_state[0])
+
+
+def test_cuda_backend_dispatches_to_chunk_state_implementation():
+    from lmdeploy.pytorch.backends.cuda.gated_delta_rule import CudaGatedDeltaRuleImpl
+
+    impl = CudaGatedDeltaRuleImpl.__new__(CudaGatedDeltaRuleImpl)
+    calls = []
+    expected_out = torch.randn(1, 2, 1, 2)
+    expected_state = torch.randn(1, 1, 2, 2)
+    expected_chunks = torch.randn(1, 1, 1, 2, 2)
+
+    def fla_chunk_func(*args, **kwargs):
+        raise AssertionError('FLA implementation must not be called')
+
+    def chunk_func_with_states(*args, **kwargs):
+        calls.append(kwargs)
+        return expected_out, expected_state, expected_chunks
+
+    impl.fla_chunk_func = fla_chunk_func
+    impl.chunk_func_with_states = chunk_func_with_states
+    state_bank = torch.zeros(2, 1, 2, 2)
+    state_indices = torch.tensor([1])
+    chunk_indices = torch.tensor([[0, 0]], dtype=torch.int32)
+    chunk_offsets = torch.tensor([0, 1], dtype=torch.int32)
+    q = k = v = torch.empty(1, 2, 1, 2)
+    g = beta = torch.empty(1, 2, 1)
+
+    out, returned_bank, chunk_states = impl.chunk_gated_delta_rule(
+        q,
+        k,
+        v,
+        g=g,
+        beta=beta,
+        initial_state=state_bank,
+        state_indices=state_indices,
+        chunk_indices=chunk_indices,
+        chunk_offsets=chunk_offsets,
+        output_final_state=True,
+    )
+
+    assert out is expected_out
+    assert returned_bank.data_ptr() == state_bank.data_ptr()
+    assert chunk_states is expected_chunks
+    assert calls[0]['chunk_indices'] is chunk_indices
+    assert calls[0]['chunk_offsets'] is chunk_offsets
+    torch.testing.assert_close(state_bank[1], expected_state[0])
+
+
 @pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
 def test_cuda_backend_updates_only_selected_state_rows():
     pytest.importorskip('tilelang')
@@ -325,6 +454,8 @@ def test_cuda_backend_updates_only_selected_state_rows():
     total_length = sum(lengths)
     q, k, v, g, beta, _ = _make_inputs(total_length)
     cu_seqlens = torch.tensor([0, 63, 128], device='cuda', dtype=torch.int32)
+    chunk_indices = prepare_chunk_indices(cu_seqlens, 64)
+    chunk_offsets = prepare_chunk_offsets(cu_seqlens, 64)
     state_indices = torch.tensor([3, 1], device='cuda', dtype=torch.int64)
     state_bank = torch.randn(5, v.shape[2], v.shape[3], q.shape[3], device='cuda', dtype=torch.bfloat16)
     state_before = state_bank.clone()
@@ -350,6 +481,8 @@ def test_cuda_backend_updates_only_selected_state_rows():
         initial_state=state_bank,
         state_indices=state_indices,
         cu_seqlens=cu_seqlens,
+        chunk_indices=chunk_indices,
+        chunk_offsets=chunk_offsets,
         output_final_state=True,
         transpose_state_layout=True,
     )
