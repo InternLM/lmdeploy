@@ -125,8 +125,9 @@ for item in datasets:
         del item['infer_cfg']['inferencer']['max_out_len']
 
 # Cache under REPORT_DIR's parent so chat / longtext / local_run share one file.
+# dirname('.') is ''; fall back to '.' so the path stays under cwd.
 _dataset_size_root = _os.path.dirname(
-    _os.environ.get('REPORT_DIR', '.').rstrip('/') or '.')
+    _os.environ.get('REPORT_DIR', '.').rstrip('/') or '.') or '.'
 _dataset_type = _os.environ.get('CHAT_TYPE', 'longtext-512k').rstrip('/')
 dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
 
