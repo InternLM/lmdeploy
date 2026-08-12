@@ -180,6 +180,10 @@ with set_envs():
     blocked_fp8_gemm_backend = env_to_choice('LMDEPLOY_BLOCKED_FP8_GEMM_BACKEND', 'auto',
                                              {'auto', 'deepgemm', 'gluon', 'triton'})
 
+    # blocked FP8 MoE
+    blocked_fp8_moe_backend = env_to_choice('LMDEPLOY_BLOCKED_FP8_MOE_BACKEND', 'auto',
+                                            {'auto', 'gluon', 'triton'})
+
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
 

@@ -85,23 +85,36 @@ def test_compact_blocked_fp8_both_configs(num_routes, gate_out_features, block_m
         block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
 
 
-@pytest.mark.parametrize(('num_tokens', 'num_routes', 'num_experts', 'local_experts', 'expected'), [
-    (64, 256 * 4, 256, 256, False),
-    (128, 256 * 3, 256, 256, False),
-    (128, 256 * 4, 256, 256, True),
-    (1536, 256 * 48, 256, 256, True),
-    (2048, 256 * 64, 256, 256, False),
-    (128, 256 * 4, 512, 256, False),
-    (128, 256 * 4, 256, 128, False),
+@pytest.mark.parametrize(('num_routes', 'num_experts', 'local_experts', 'gate_features', 'input_features',
+                          'expected'), [
+    (256, 256, 256, 512, 6144, False),
+    (256 * 2, 256, 256, 512, 6144, True),
+    (256 * 48, 256, 256, 512, 6144, True),
+    (256 * 64, 256, 256, 512, 6144, False),
+    (256 * 16, 256, 256, 512, 2048, False),
+    (256 * 40, 256, 256, 512, 2048, True),
+    (256 * 64, 256, 256, 512, 2048, True),
+    (256 * 64, 256, 256, 1024, 2048, True),
+    (256 * 16, 256, 256, 256, 2048, False),
+    (384 * 3, 384, 384, 1024, 2048, True),
+    (512, 512, 512, 512, 4096, True),
+    (512 * 60, 512, 512, 512, 4096, True),
+    (512 * 70, 512, 512, 512, 4096, False),
+    (512 * 120, 512, 512, 512, 4096, False),
+    (512 * 140, 512, 512, 512, 4096, True),
+    (512 * 160, 512, 512, 512, 4096, True),
+    (512 * 161, 512, 512, 512, 4096, False),
+    (128 * 3, 128, 128, 1024, 2048, False),
+    (256 * 3, 512, 256, 1024, 2048, False),
 ])
-def test_compact_blocked_fp8_both_policy_uses_measured_route_density(num_tokens, num_routes, num_experts,
-                                                                    local_experts, expected):
+def test_compact_blocked_fp8_both_policy_uses_launch_features(num_routes, num_experts, local_experts, gate_features,
+                                                             input_features, expected):
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
         _should_use_compact_blocked_fp8_moe_both_by_shape,
     )
 
     assert _should_use_compact_blocked_fp8_moe_both_by_shape(
-        num_tokens, num_routes, num_experts, local_experts) is expected
+        num_routes, num_experts, local_experts, gate_features, input_features) is expected
 
 
 @pytest.mark.parametrize(('num_tokens', 'num_routes', 'origin_ctas', 'compact_ctas'), [

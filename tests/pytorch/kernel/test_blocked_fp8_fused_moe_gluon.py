@@ -231,8 +231,9 @@ def test_blocked_fp8_fused_moe_gluon_has_baseline_api():
 @pytest.mark.parametrize('schedule',
                          ('transposed_wgmma_both',
                           'standard_wgmma_gate_triton_down'))
+@pytest.mark.parametrize('custom_act', (False, True))
 def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
-        monkeypatch, schedule):
+        monkeypatch, schedule, custom_act):
     from lmdeploy.pytorch.kernels.cuda import blocked_fp8_fused_moe_gluon as candidate_module
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8 as baseline
 
@@ -257,25 +258,29 @@ def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
     w1_bias = torch.randn((num_experts, gate_features), device='cuda', dtype=torch.bfloat16)
     w2_bias = torch.randn((num_experts, hidden_features), device='cuda', dtype=torch.bfloat16)
     args = (input, input_scale, w1, w1_scale, w2, w2_scale, topk_weights, topk_ids)
+    act_func = (lambda x: torch.nn.functional.gelu(x[:, :x.size(1) // 2])) if custom_act else None
 
     expected = baseline(*args,
                         topk=topk,
                         w1_bias=w1_bias,
                         w2_bias=w2_bias,
                         out_dtype=torch.bfloat16,
-                        renormalize=True)
+                        renormalize=True,
+                        act_func=act_func)
     actual = candidate_module.fused_moe_blocked_fp8(*args,
                                                     topk=topk,
                                                     w1_bias=w1_bias,
                                                     w2_bias=w2_bias,
                                                     out_dtype=torch.bfloat16,
-                                                    renormalize=True)
+                                                    renormalize=True,
+                                                    act_func=act_func)
     repeated = candidate_module.fused_moe_blocked_fp8(*args,
                                                       topk=topk,
                                                       w1_bias=w1_bias,
                                                       w2_bias=w2_bias,
                                                       out_dtype=torch.bfloat16,
-                                                      renormalize=True)
+                                                      renormalize=True,
+                                                      act_func=act_func)
 
     expected_scale = expected.abs().max().clamp_min(1e-6)
     actual_scale = actual.abs().max().clamp_min(1e-6)
@@ -288,27 +293,34 @@ def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
     torch.testing.assert_close(repeated, actual, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize(
-    ('num_tokens', 'expected'),
-    [
-        (71, None),
-        (72, 'transposed_wgmma_both'),
-        (120, 'transposed_wgmma_both'),
-        (121, None),
-        (2048, 'standard_wgmma_gate_triton_down'),
-        (8192, None),
-    ],
-)
-def test_blocked_fp8_fused_moe_gluon_selects_measured_schedule(num_tokens,
-                                                               expected):
+@pytest.mark.parametrize(('num_tokens', 'num_experts', 'topk', 'hidden_features', 'intermediate_features',
+                          'expected'), [
+                              (63, 256, 8, 2048, 512, None),
+                              (64, 256, 8, 2048, 512, 'transposed_wgmma_both'),
+                              (96, 256, 8, 3072, 512, 'transposed_wgmma_both'),
+                              (128, 256, 8, 2048, 512, 'transposed_wgmma_both'),
+                              (129, 256, 8, 2048, 512, None),
+                              (192, 256, 4, 2048, 512, 'transposed_wgmma_both'),
+                              (144, 384, 8, 2048, 512, 'transposed_wgmma_both'),
+                              (48, 128, 8, 2048, 512, None),
+                              (2048, 256, 8, 6144, 256, 'standard_wgmma_gate_triton_down'),
+                              (3072, 384, 8, 6144, 256, 'standard_wgmma_gate_triton_down'),
+                              (2048, 256, 8, 6144, 1024, None),
+                              (2560, 256, 8, 6144, 256, None),
+                              (8192, 256, 8, 6144, 256, None),
+                          ])
+def test_blocked_fp8_fused_moe_gluon_selects_schedule_from_launch_features(
+        num_tokens, num_experts, topk, hidden_features,
+        intermediate_features, expected):
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import _select_gluon_moe_schedule
 
-    input = torch.empty((num_tokens, 6144), device='meta')
-    w1 = torch.empty((256, 512, 6144), device='meta')
-    w2 = torch.empty((256, 6144, 256), device='meta')
-    topk_ids = torch.empty((num_tokens, 8), device='meta', dtype=torch.int64)
+    gate_features = 2 * intermediate_features
+    input = torch.empty((num_tokens, hidden_features), device='meta')
+    w1 = torch.empty((num_experts, gate_features, hidden_features), device='meta')
+    w2 = torch.empty((num_experts, hidden_features, intermediate_features), device='meta')
+    topk_ids = torch.empty((num_tokens, topk), device='meta', dtype=torch.int64)
 
-    assert _select_gluon_moe_schedule(input, w1, w2, topk_ids, 256) == expected
+    assert _select_gluon_moe_schedule(input, w1, w2, topk_ids, num_experts) == expected
 
 
 def test_blocked_fp8_fused_moe_gluon_falls_back(monkeypatch):

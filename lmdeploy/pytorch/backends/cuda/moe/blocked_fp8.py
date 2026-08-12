@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import functools
 from collections.abc import Callable
 
 import torch
@@ -15,6 +16,7 @@ from lmdeploy.pytorch.backends.cuda.token_dispatcher import (
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl
 from lmdeploy.pytorch.distributed import get_dist_manager
+from lmdeploy.pytorch.envs import blocked_fp8_moe_backend
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import per_token_group_quant_fp8, quant_fp8
@@ -23,9 +25,36 @@ from lmdeploy.pytorch.kernels.cuda.fused_moe_ep_fp8 import fused_moe_v3_fp8
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
+from ..blockedf8_modules import (
+    _GLUON_TRITON_MAX_EXCLUSIVE,
+    _GLUON_TRITON_MIN_VERSION,
+    _has_gluon,
+)
 from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
 
 logger = get_logger('lmdeploy')
+
+
+@functools.lru_cache
+def _has_gluon_moe() -> bool:
+    """Whether the validated Gluon runtime and MoE provider are available."""
+    if not _has_gluon():
+        return False
+    try:
+        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import (  # noqa: F401
+            fused_moe_blocked_fp8,
+        )
+    except (AttributeError, ImportError):
+        return False
+    return True
+
+
+def _supports_gluon_moe(top_k: int, num_experts: int, hidden_dim: int, ffn_dim: int | None, block_size: int,
+                        ep_size: int, out_dtype: torch.dtype, fp8_dtype: torch.dtype) -> bool:
+    """Whether the statically known MoE contract can use Gluon schedules."""
+    return (ep_size == 1 and block_size == 128 and 0 < top_k <= num_experts and hidden_dim > 0
+            and hidden_dim % block_size == 0 and ffn_dim is not None and ffn_dim > 0 and ffn_dim % block_size == 0
+            and out_dtype == torch.bfloat16 and fp8_dtype == torch.float8_e4m3fn and _has_gluon_moe())
 
 
 class FusedMoENormal:
@@ -295,6 +324,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         self.renormalize = renormalize
         self.block_size = block_size
         self.out_dtype = out_dtype
+        self._fused_moe_blocked_fp8 = fused_moe_blocked_fp8
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
@@ -328,24 +358,39 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         if expert_list is not None and len(expert_list) != self.num_experts:
             expert_offset = expert_list[0]
             num_experts = self.num_experts
-        output = fused_moe_blocked_fp8(input_quant,
-                                       input_scale,
-                                       gate_up_weights,
-                                       gate_up_scale,
-                                       down_weights,
-                                       down_scale,
-                                       topk_weights=topk_weights,
-                                       topk_ids=topk_ids,
-                                       topk=self.top_k,
-                                       w1_bias=gate_up_bias,
-                                       w2_bias=down_bias,
-                                       out_dtype=hidden_states.dtype,
-                                       expert_offset=expert_offset,
-                                       num_experts=num_experts,
-                                       renormalize=self.renormalize,
-                                       act_func=act_func)
+        output = self._fused_moe_blocked_fp8(input_quant,
+                                             input_scale,
+                                             gate_up_weights,
+                                             gate_up_scale,
+                                             down_weights,
+                                             down_scale,
+                                             topk_weights=topk_weights,
+                                             topk_ids=topk_ids,
+                                             topk=self.top_k,
+                                             w1_bias=gate_up_bias,
+                                             w2_bias=down_bias,
+                                             out_dtype=hidden_states.dtype,
+                                             expert_offset=expert_offset,
+                                             num_experts=num_experts,
+                                             renormalize=self.renormalize,
+                                             act_func=act_func)
         output = output.unflatten(0, input_size[:-1])
         return output
+
+
+class GluonFusedMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
+    """Feature-selected Gluon MoE with an internal Triton fallback."""
+
+    def __init__(self,
+                 top_k: int,
+                 num_experts: int,
+                 renormalize: bool = False,
+                 block_size: int = 128,
+                 out_dtype: torch.dtype = torch.bfloat16):
+        super().__init__(top_k, num_experts, renormalize, block_size, out_dtype)
+        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import fused_moe_blocked_fp8
+
+        self._fused_moe_blocked_fp8 = fused_moe_blocked_fp8
 
 
 class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
@@ -449,8 +494,8 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         return deepep_moe
 
 
-class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
-    """Triton fused moe blocked f8 builder."""
+class CudaFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
+    """Select a blocked-FP8 MoE provider for CUDA."""
 
     @staticmethod
     def build(top_k: int,
@@ -464,9 +509,12 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
               fp8_dtype: torch.dtype = torch.float8_e4m3fn,
               num_max_dispatch_tokens_per_rank: int = 128,
               layer_idx: int = 0,
-              custom_gateup_act: bool = False):
+              custom_gateup_act: bool = False,
+              ffn_dim: int | None = None):
         """Build from mlp."""
         if ep_size > 1:
+            if blocked_fp8_moe_backend == 'gluon':
+                raise RuntimeError('Gluon blocked-FP8 MoE does not support expert parallelism.')
             assert custom_gateup_act is False, 'Custom gate up activation is not supported in EP MoE.'
             return FusedDeepEpMoEBlockedF8Impl(ep_size=ep_size,
                                                ep_group=ep_group,
@@ -479,9 +527,38 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
                                                fp8_dtype=fp8_dtype,
                                                num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
                                                layer_idx=layer_idx)
+
+        provider = blocked_fp8_moe_backend
+        supports_gluon = (provider in ('auto', 'gluon')
+                          and _supports_gluon_moe(top_k, num_experts, hidden_dim, ffn_dim, block_size, ep_size,
+                                                 out_dtype, fp8_dtype))
+        if provider == 'auto':
+            use_gluon = False
+            if supports_gluon:
+                from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import (
+                    _has_gluon_moe_schedule_family,
+                )
+                use_gluon = _has_gluon_moe_schedule_family(num_experts, num_experts, hidden_dim, ffn_dim, top_k)
+            impl_cls = GluonFusedMoEBlockedF8Impl if use_gluon else TritonFusedMoEBlockedF8Impl
+        elif provider == 'gluon':
+            if not supports_gluon:
+                try:
+                    import triton
+                    triton_version = triton.__version__
+                except ImportError:
+                    triton_version = 'not installed'
+                raise RuntimeError('Gluon blocked-FP8 MoE requires Hopper, non-EP, valid top-k, positive hidden '
+                                   'and local FFN dimensions divisible by 128, BF16 output, FP8 E4M3, block size '
+                                   '128, and Triton '
+                                   f'>={_GLUON_TRITON_MIN_VERSION},<{_GLUON_TRITON_MAX_EXCLUSIVE} '
+                                   f'(found {triton_version}).')
+            impl_cls = GluonFusedMoEBlockedF8Impl
         else:
-            return TritonFusedMoEBlockedF8Impl(top_k=top_k,
-                                               num_experts=num_experts,
-                                               renormalize=renormalize,
-                                               block_size=block_size,
-                                               out_dtype=out_dtype)
+            impl_cls = TritonFusedMoEBlockedF8Impl
+
+        logger.debug(f'Build FusedMoEBlockedF8 with {impl_cls.__name__}.')
+        return impl_cls(top_k=top_k,
+                        num_experts=num_experts,
+                        renormalize=renormalize,
+                        block_size=block_size,
+                        out_dtype=out_dtype)

@@ -463,7 +463,7 @@ def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
 
     seq_len = 128
     in_size = 128
-    hidden_size = 256
+    hidden_size = 512
     out_size = 128
     num_experts = 256
     top_k = 8
@@ -491,7 +491,8 @@ def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
     routing_weights = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
     topk_weights, topk_ids = torch.topk(routing_weights, top_k, dim=-1)
 
-    assert _should_use_compact_blocked_fp8_moe_both_by_shape(seq_len, topk_ids.numel(), num_experts, num_experts)
+    assert _should_use_compact_blocked_fp8_moe_both_by_shape(topk_ids.numel(), num_experts, num_experts, hidden_size,
+                                                             in_size)
 
     gt = fused_moe(hidden_states.to(dtype),
                    w1.to(dtype),

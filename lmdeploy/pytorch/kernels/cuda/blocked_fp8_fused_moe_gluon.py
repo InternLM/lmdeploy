@@ -795,21 +795,46 @@ def _supports_gluon_moe_contract(input: torch.Tensor,
     return True
 
 
+def _has_gluon_moe_schedule_family(num_experts: int,
+                                   num_local_experts: int,
+                                   hidden_features: int,
+                                   intermediate_features: int,
+                                   topk: int) -> bool:
+    """Whether static GEMM features can enter a measured Gluon region."""
+    if (num_local_experts != num_experts or not 256 <= num_experts <= 384
+            or not 0 < topk <= num_experts):
+        return False
+    k_blocks = hidden_features // SCALE_BLOCK_K
+    down_k_blocks = intermediate_features // SCALE_BLOCK_K
+    transposed_family = 8 <= k_blocks <= 24 and down_k_blocks == 4
+    standard_family = k_blocks >= 48 and 1 <= down_k_blocks <= 4
+    return transposed_family or standard_family
+
+
 def _select_gluon_moe_schedule(input: torch.Tensor, w1: torch.Tensor,
                                w2: torch.Tensor, topk_ids: torch.Tensor,
                                num_experts: int) -> str | None:
-    """Select only complete-MoE schedules with a measured whole-call win."""
-    num_tokens = input.size(0)
-    measured_projection = (num_experts == 256 and w1.shape == (256, 512, 6144)
-                           and w2.shape == (256, 6144, 256))
-    measured_routing = topk_ids.shape == (num_tokens, 8)
-    if not measured_projection or not measured_routing:
+    """Select a measured complete-MoE strategy from launch features."""
+    if input.dim() != 2 or w1.dim() != 3 or w2.dim() != 3 or topk_ids.dim() != 2:
+        return None
+    local_experts = w1.size(0)
+    hidden_features = w1.size(2)
+    intermediate_features = w2.size(2)
+    if not _has_gluon_moe_schedule_family(num_experts, local_experts,
+                                           hidden_features,
+                                           intermediate_features,
+                                           topk_ids.size(1)):
         return None
     # Expert counts stay on device. These static windows assume the broad
     # routing distribution encouraged by load-balanced MoE training.
-    if 72 <= num_tokens <= 120:
+    num_routes = topk_ids.numel()
+    k_blocks = hidden_features // SCALE_BLOCK_K
+    down_k_blocks = intermediate_features // SCALE_BLOCK_K
+    if (2 * local_experts <= num_routes <= 4 * local_experts
+            and 8 <= k_blocks <= 24 and down_k_blocks == 4):
         return _TRANSPOSED_WGMMA_BOTH
-    if num_tokens == 2048:
+    if (48 * local_experts <= num_routes <= 64 * local_experts
+            and k_blocks >= 48 and 1 <= down_k_blocks <= 4):
         return _STANDARD_WGMMA_GATE_TRITON_DOWN
     return None
 
@@ -928,10 +953,10 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     local_experts = w1.size(0)
     if num_experts is None:
         num_experts = local_experts
-    supported = _supports_gluon_moe_contract(input, input_scale, w1, w1_scale, w2, w2_scale, topk_weights,
-                                             topk_ids, topk, w1_bias, w2_bias, out_dtype, num_experts, expert_offset)
-    schedule = _select_gluon_moe_schedule(input, w1, w2, topk_ids, num_experts) if supported else None
-    if schedule is not None:
+    schedule = _select_gluon_moe_schedule(input, w1, w2, topk_ids, num_experts)
+    if schedule is not None and _supports_gluon_moe_contract(input, input_scale, w1, w1_scale, w2, w2_scale,
+                                                             topk_weights, topk_ids, topk, w1_bias, w2_bias,
+                                                             out_dtype, num_experts, expert_offset):
         return _run_gluon_moe(
             input,
             input_scale,

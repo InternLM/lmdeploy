@@ -597,11 +597,29 @@ def _should_use_compact_blocked_fp8_moe_down_by_shape(num_tokens: int, num_route
     return origin_ctas >= min_cta_ratio * compact_ctas
 
 
-def _should_use_compact_blocked_fp8_moe_both_by_shape(num_tokens: int, num_routes: int, num_experts: int,
-                                                      local_experts: int):
-    """Use compact scheduling in the measured full-expert density window."""
+def _should_use_compact_blocked_fp8_moe_both_by_shape(num_routes: int, num_experts: int, local_experts: int,
+                                                      gate_out_features: int,
+                                                      input_features: int):
+    """Use compact scheduling in measured broad-routing feature regions."""
     avg_routes = triton.cdiv(num_routes, num_experts)
-    return num_tokens >= 128 and num_experts == 256 and local_experts == num_experts and 4 <= avg_routes <= 48
+    if local_experts != num_experts or local_experts < 256:
+        return False
+    n_tiles = gate_out_features // 128
+    k_blocks = input_features // 128
+    if n_tiles >= 8:
+        max_avg_routes = 64 if k_blocks <= 24 else 48
+        return 2 <= avg_routes <= max_avg_routes
+    if n_tiles != 4:
+        return False
+    if k_blocks <= 24:
+        return 40 <= avg_routes <= 64
+    if k_blocks == 32:
+        # At E=512 the origin gate wins in the middle density band, while
+        # compact gate/up wins again once the routed activation exceeds cache.
+        return avg_routes <= 64 or 140 <= avg_routes <= 160
+    if k_blocks >= 48:
+        return 2 <= avg_routes <= 48
+    return False
 
 
 def _should_use_compact_blocked_fp8_moe_down(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
@@ -648,7 +666,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     supports_compact = _supports_compact_blocked_fp8_moe(input, input_scale, w1, w1_scale, w2, w2_scale, topk_ids,
                                                          num_experts, expert_offset)
     use_compact_both = supports_compact and _should_use_compact_blocked_fp8_moe_both_by_shape(
-        M, topk_ids.numel(), num_experts, E)
+        topk_ids.numel(), num_experts, E, w1.size(1), w1.size(2))
     use_compact_down = (not use_compact_both and supports_compact
                         and _should_use_compact_blocked_fp8_moe_down_by_shape(M, topk_ids.numel(), num_experts, E,
                                                                             w2.size(1)))
