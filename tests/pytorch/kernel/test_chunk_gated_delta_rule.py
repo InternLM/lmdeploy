@@ -1,13 +1,14 @@
 import pytest
 import torch
 import torch.nn.functional as F
+import triton
 
 fla = pytest.importorskip('fla.ops.gated_delta_rule')
 fla_chunk_gated_delta_rule = fla.chunk_gated_delta_rule
 
 from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
-    _chunk_count_bucket, chunk_gated_delta_rule, prepare_chunk_indices,
-    prepare_chunk_offsets)
+    _chunk_count_bucket, chunk_conv_states, chunk_gated_delta_rule,
+    prepare_chunk_indices, prepare_chunk_offsets)
 
 
 @pytest.mark.parametrize(
@@ -360,3 +361,76 @@ def test_cuda_backend_updates_only_selected_state_rows():
         atol=0,
         rtol=0,
     )
+
+
+@pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
+@pytest.mark.parametrize('conv_kernel_size', [4, 7])
+def test_chunk_conv_states_matches_gather(conv_kernel_size):
+    """Conv state at every chunk boundary must equal the raw-token gather.
+
+    Mirrors the per-sequence-end extraction in CausalConv1dFunc.conv1d_func
+    (``x[0, cu_seqlens[1:] + arange(-W, 0)]``) but at each chunk boundary,
+    clamped to the sequence start (no cross-sequence reads, zero-padded below).
+    """
+    torch.manual_seed(7)
+    W = conv_kernel_size
+    lengths = [63, 65, 130]
+    total = sum(lengths)
+    dim = 32
+    x = torch.randn(1, total, dim, device='cuda', dtype=torch.bfloat16)
+    cu_seqlens = torch.tensor([0, 63, 128, 258], device='cuda', dtype=torch.int32)
+    chunk_indices = prepare_chunk_indices(cu_seqlens, 64)
+
+    out = chunk_conv_states(x, W, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
+    assert out.shape == (1, len(chunk_indices), dim, W)
+
+    ref = torch.zeros_like(out)
+    for c in range(len(chunk_indices)):
+        seq_id = int(chunk_indices[c, 0].item())
+        local_c = int(chunk_indices[c, 1].item())
+        bos = int(cu_seqlens[seq_id].item())
+        boundary = bos + local_c * 64
+        for j in range(W):
+            pos = boundary - W + j
+            if pos >= bos:
+                ref[0, c, :, j] = x[0, pos]
+
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+    # boundary 0 is the first chunk of the first sequence: all W positions
+    # precede bos=0, so the conv state must be all zero (fresh sequence).
+    torch.testing.assert_close(out[0, 0], torch.zeros_like(out[0, 0]), atol=0, rtol=0)
+
+    # re-assert the kernel for the last chunk slot of sequence 0 against an
+    # independent gather written in the opposite (dim-last) layout, confirming
+    # the stored row-major [dim, W] block matches a transposed [W, dim] gather.
+    seq_ids = chunk_indices[:, 0]
+    last_seq0_slot = int((seq_ids == 0).nonzero()[-1].item())
+    bos0 = int(cu_seqlens[0].item())
+    boundary_last = bos0 + int(chunk_indices[last_seq0_slot, 1].item()) * 64
+    expected_tail = torch.zeros(W, dim, device=x.device, dtype=x.dtype)
+    for j in range(W):
+        pos = boundary_last - W + j
+        if pos >= bos0:
+            expected_tail[j] = x[0, pos]
+    torch.testing.assert_close(out[0, last_seq0_slot].transpose(-2, -1), expected_tail, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
+def test_chunk_conv_states_dense_and_contiguous_view():
+    """Dense (no cu_seqlens) path and a non-contiguous view input both work."""
+    torch.manual_seed(8)
+    W = 4
+    length, dim = 200, 48
+    x_dense = torch.randn(1, length, dim, device='cuda', dtype=torch.bfloat16)
+    out_dense = chunk_conv_states(x_dense, W)
+    assert out_dense.shape == (1, triton.cdiv(length, 64), dim, W)
+
+    # non-contiguous slice view (e.g. a channel subset) should be handled by the
+    # entry contiguous() guard, matching the gated-delta kernel's input_guard.
+    x_view = x_dense[:, :, :32]
+    assert not x_view.is_contiguous()
+    out_view = chunk_conv_states(x_view, W)
+    assert out_view.shape == (1, triton.cdiv(length, 64), 32, W)
+    torch.testing.assert_close(out_view, chunk_conv_states(x_view.contiguous(), W), atol=0, rtol=0)
+

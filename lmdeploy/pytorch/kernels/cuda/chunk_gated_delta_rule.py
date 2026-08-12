@@ -1387,3 +1387,120 @@ def chunk_gated_delta_rule(
             chunk_offsets=chunk_offsets,
         )
     return o, final_state, chunk_states
+
+
+# ---------------------------------------------------------------------------
+# chunk-boundary conv states (paired with chunk_states above)
+# ---------------------------------------------------------------------------
+# The recurrent-state chunk_states lets a prefix-cache checkpoint restore the
+# gated-delta state at any 64-token chunk boundary. Resuming the layer also
+# requires the *conv* state at that same boundary: the last ``conv_kernel_size``
+# raw conv-input tokens preceding it, exactly what ``CausalConv1dFunc.conv1d_func``
+# extracts once at the sequence end (``x[0, cu_seqlens[1:] + arange(-W, 0)]``).
+# This kernel produces that conv state at *every* chunk boundary, so a
+# per-chunk checkpoint has both halves (recurrent + conv) needed to resume.
+#
+# Deliberately not wired into the nn/models/backends: this is a kernel-only
+# primitive, available for the future checkpoint writer. ``chunk_conv_states``
+# returns the tensor; nothing propagates it through the framework call chain.
+@triton.jit
+def _chunk_conv_states_kernel(
+    x_ptr,
+    out_ptr,
+    chunk_indices_ptr,
+    cu_seqlens_ptr,
+    DIM,
+    BLOCK_DIM: tl.constexpr,
+    W: tl.constexpr,
+    W_PAD: tl.constexpr,
+    CHUNK: tl.constexpr,
+):
+    # one program per (chunk slot, dim block)
+    pid_c = tl.program_id(0)
+    pid_d = tl.program_id(1)
+
+    seq_id = tl.load(chunk_indices_ptr + pid_c * 2).to(tl.int32)
+    local_c = tl.load(chunk_indices_ptr + pid_c * 2 + 1).to(tl.int64)
+    bos = tl.load(cu_seqlens_ptr + seq_id).to(tl.int64)
+    # global position of the first token of chunk ``local_c``
+    boundary = bos + local_c * CHUNK
+
+    o_d = pid_d * BLOCK_DIM + tl.arange(0, BLOCK_DIM)
+    m_d = o_d < DIM
+    j = tl.arange(0, W_PAD)
+    m_j = j < W
+    # the W raw tokens immediately preceding the boundary: [boundary-W, boundary-1]
+    pos = boundary - W + j
+
+    # x is [sum_T, DIM] (x[0]); element (pos, d) lives at pos*DIM + d
+    x_ptrs = x_ptr + pos[None, :] * DIM + o_d[:, None]
+    # tokens below the sequence start do not exist (and must not cross into a
+    # previous packed sequence), so mask them to zero
+    load_mask = m_j[None, :] & (pos[None, :] >= bos) & m_d[:, None]
+    vals = tl.load(x_ptrs, mask=load_mask, other=0.0)
+
+    out_ptrs = out_ptr + (pid_c * DIM + o_d[:, None]) * W + j[None, :]
+    tl.store(out_ptrs, vals, mask=m_d[:, None] & m_j[None, :])
+
+
+def chunk_conv_states(
+    x: torch.Tensor,
+    conv_kernel_size: int,
+    cu_seqlens: torch.Tensor | None = None,
+    chunk_size: int = 64,
+    chunk_indices: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Conv state at every chunk boundary, pairing with ``chunk_states``.
+
+    Args:
+        x: the conv input of shape ``[1, T, dim]`` (channel-last, same tensor
+            ``CausalConv1dFunc`` consumes). Gathered as raw tokens, no conv
+            is applied here.
+        conv_kernel_size: the causal-conv width ``W``. The output stores ``W``
+            columns per boundary, matching the conv-state bank layout (columns
+            ``1..W-1`` are the ``W-1`` most-recent tokens used to seed the conv).
+        cu_seqlens: packed-varlen cumulative lengths ``[N+1]``. When ``None``
+            the input is treated as a single sequence ``[0, T]``.
+        chunk_size: must be 64 (block alignment).
+        chunk_indices: optional precomputed ``prepare_chunk_indices`` result.
+
+    Returns:
+        ``[1, NT, dim, conv_kernel_size]`` where ``[0, c]`` is the conv state
+        at the start of chunk ``c``: the ``W`` raw tokens at positions
+        ``[boundary_c - W, boundary_c - 1]``, clamped to the sequence start and
+        zero-padded below it (so ``[0, 0]`` of a fresh sequence is all zero).
+        This mirrors what ``conv1d_func`` writes once at the sequence end, but
+        at each chunk boundary instead.
+    """
+    assert chunk_size == 64, 'only chunk_size=64 is supported (block alignment)'
+    assert x.ndim == 3 and x.shape[0] == 1, 'x must have shape [1, T, dim]'
+    W = conv_kernel_size
+    _, T, DIM = x.shape
+
+    with torch.cuda.device(x.device):
+        x = x.contiguous()
+        if cu_seqlens is None:
+            cu_seqlens = torch.tensor([0, T], device=x.device, dtype=torch.int32)
+        else:
+            cu_seqlens = cu_seqlens.contiguous()
+        if chunk_indices is None:
+            chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size)
+        else:
+            chunk_indices = chunk_indices.contiguous()
+        NT = len(chunk_indices)
+
+        out = x.new_empty(1, NT, DIM, W)
+        BLOCK_DIM = 128
+        grid = (NT, triton.cdiv(DIM, BLOCK_DIM))
+        _chunk_conv_states_kernel[grid](
+            x,
+            out,
+            chunk_indices,
+            cu_seqlens,
+            DIM=DIM,
+            BLOCK_DIM=BLOCK_DIM,
+            W=W,
+            W_PAD=max(triton.next_power_of_2(W), 1),
+            CHUNK=chunk_size,
+        )
+    return out
