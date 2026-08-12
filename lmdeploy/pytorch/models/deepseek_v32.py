@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
+from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_ep_world_rank
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
@@ -244,7 +244,12 @@ class Indexer(nn.Module):
 
 class DeepseekV32Attention(DeepseekV2Attention):
 
-    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 all_reduce: bool = True):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -348,6 +353,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
             device=device,
             is_tp=True,
             quant_config=quantization_config,
+            all_reduce=all_reduce,
         )
 
         self.indexer = self._build_indexer(config, layer_idx, dtype, device)
@@ -459,14 +465,20 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = None
+        self.defer_attn_allreduce = get_dist_group('attn').supports_deferred_allreduce(dtype)
+        self.defer_mlp_allreduce = get_dist_group('mlp').supports_deferred_allreduce(dtype)
+        defer_mlp_output = self.defer_mlp_allreduce and layer_idx < config.num_hidden_layers - 1
 
         # build attention layer
-        self.self_attn = self.attention_cls(config, layer_idx, dtype=dtype, device=device)
+        self.self_attn = self.attention_cls(
+            config, layer_idx, dtype=dtype, device=device, all_reduce=not self.defer_attn_allreduce)
 
         # mlp
-        self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
+        self.mlp = (DeepseekV2MoE(
+            config, layer_idx, dtype=dtype, device=device, all_reduce=not defer_mlp_output) if
                     (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
-                     and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(config, dtype=dtype, device=device))
+                     and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(
+                         config, dtype=dtype, device=device, all_reduce=not defer_mlp_output))
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -481,6 +493,17 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
                                                 dtype=torch.float32,
                                                 device=device)
 
+    def _input_norm(self, hidden_states: torch.Tensor, residual: torch.Tensor | None):
+        if residual is None:
+            return self.input_layernorm(hidden_states), hidden_states
+        if self.defer_mlp_allreduce:
+            return self.input_layernorm.forward_with_allreduce(hidden_states, residual, 'mlp')
+        return self.input_layernorm(hidden_states, residual)
+
+    def _post_attention_norm(self, hidden_states: torch.Tensor, residual: torch.Tensor):
+        if self.defer_attn_allreduce:
+            return self.post_attention_layernorm.forward_with_allreduce(hidden_states, residual, 'attn')
+        return self.post_attention_layernorm(hidden_states, residual)
 
 class DeepseekV32Model(DeepseekV2Model):
     decoder_layer_cls = DeepseekV32DecoderLayer

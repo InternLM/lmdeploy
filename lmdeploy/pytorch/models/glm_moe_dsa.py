@@ -261,11 +261,7 @@ class GlmMoeDsaDecoderLayer(DeepseekV32DecoderLayer):
         skip_topk: bool = False,
         all_routed_experts: torch.Tensor | None = None,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        hidden_states, residual = self._input_norm(hidden_states, residual)
 
         hidden_states = self.self_attn(hidden_states=hidden_states,
                                        rotary_pos_emb=rotary_pos_emb,
@@ -273,7 +269,7 @@ class GlmMoeDsaDecoderLayer(DeepseekV32DecoderLayer):
                                        attn_metadata=attn_metadata,
                                        topk_indices_buffer=topk_indices_buffer,
                                        skip_topk=skip_topk)
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        hidden_states, residual = self._post_attention_norm(hidden_states, residual)
         if isinstance(self.mlp, DeepseekV2MoE):
             hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
         else:

@@ -1,0 +1,155 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+# Modified from: https://github.com/vllm-project/vllm
+import torch
+from torch import distributed as dist
+
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
+_MiB = 1024 * 1024
+_MAX_TOKEN_NUM = 2048
+
+# Empirical FlashInfer fusion limits used by vLLM:
+# https://github.com/vllm-project/vllm/blob/main/vllm/compilation/passes/fusion/allreduce_rms_fusion.py
+# The separate token cap bounds each process-group workspace.
+_FUSION_MAX_SIZE = {
+    90: {
+        2: 64 * _MiB,
+        4: 2 * _MiB,
+        8: _MiB // 2,
+    },
+    100: {
+        2: 64 * _MiB,
+        4: 32 * _MiB,
+        8: _MiB,
+    },
+    103: {
+        2: 64 * _MiB,
+        4: 64 * _MiB,
+        8: 2 * _MiB,
+    },
+}
+_ONE_SHOT_MAX_SIZE = {
+    90: {
+        2: 32 * _MiB,
+        4: 2 * _MiB,
+        8: _MiB // 2,
+    },
+    100: {
+        2: 32 * _MiB,
+        4: 4 * _MiB,
+        8: _MiB,
+    },
+    103: {
+        2: 32 * _MiB,
+        4: 4 * _MiB,
+        8: 2 * _MiB,
+    },
+}
+
+
+class FlashInferAllReduce:
+    """FlashInfer fused all-reduce and RMSNorm for one distributed group."""
+
+    def __init__(self, group: dist.ProcessGroup):
+        self.group = group
+        self._comm = None
+        self._workspace = None
+        self._hidden_dim = None
+        self._dtype = None
+        self._world_size = dist.get_world_size(group)
+        major, minor = torch.cuda.get_device_capability()
+        self._device_capability = major * 10 + minor
+        self._max_size = _FUSION_MAX_SIZE.get(self._device_capability, {}).get(self._world_size, 0)
+        self._one_shot_max_size = _ONE_SHOT_MAX_SIZE.get(self._device_capability, {}).get(self._world_size, 0)
+
+    def _initialize(self):
+        if self._comm is not None:
+            return
+        message = 'FlashInfer all-reduce fusion requires flashinfer-python with the unified comm API.'
+        try:
+            import flashinfer.comm as comm
+            from flashinfer.comm.cuda_ipc import cudart
+        except ImportError as e:
+            raise ImportError(message) from e
+        if not (hasattr(comm, 'allreduce_fusion') and hasattr(
+                comm, 'create_allreduce_fusion_workspace')):
+            raise ImportError(message)
+
+        # Bind FlashInfer to the real CUDA runtime before TileLang can load its
+        # link-only libcudart stub into the worker process.
+        cudart.cudaSetDevice(torch.cuda.current_device())
+        self._comm = comm
+
+    def supports(self, dtype: torch.dtype) -> bool:
+        """Whether this group can fuse an all-reduce with RMSNorm."""
+        if dtype != torch.bfloat16 or self._max_size == 0:
+            return False
+        self._initialize()
+        return True
+
+    def _get_workspace(self, input: torch.Tensor):
+        hidden_dim = input.size(-1)
+        if self._workspace is not None:
+            assert self._hidden_dim == hidden_dim and self._dtype == input.dtype
+            return self._workspace
+
+        rank = dist.get_rank(self.group)
+        max_token_num = min(_MAX_TOKEN_NUM, self._max_size // input[0].nbytes)
+        self._workspace = self._comm.create_allreduce_fusion_workspace(
+            backend='trtllm',
+            world_size=self._world_size,
+            rank=rank,
+            max_token_num=max_token_num,
+            hidden_dim=hidden_dim,
+            dtype=input.dtype,
+            group=self.group,
+        )
+        self._hidden_dim = hidden_dim
+        self._dtype = input.dtype
+        logger.info(
+            f'FlashInfer all-reduce workspace initialized: rank={rank}, world_size={self._world_size}, '
+            f'max_token_num={max_token_num}, hidden_dim={hidden_dim}')
+        return self._workspace
+
+    def fused_allreduce_rmsnorm(self,
+                                input: torch.Tensor,
+                                residual: torch.Tensor,
+                                weight: torch.Tensor,
+                                eps: float):
+        """Fuse all-reduce, residual addition and RMSNorm when supported."""
+        if not self.supports(input.dtype):
+            return None
+        input_2d = input.flatten(0, -2)
+        residual_2d = residual.flatten(0, -2)
+        if (input_2d.nbytes > self._max_size or input_2d.size(0) > _MAX_TOKEN_NUM
+                or not input_2d.is_contiguous()
+                or not residual_2d.is_contiguous()
+                or not weight.is_contiguous()):
+            return None
+
+        norm_out = torch.empty_like(input_2d)
+        residual_out = torch.empty_like(residual_2d)
+        self._comm.allreduce_fusion(
+            input=input_2d,
+            workspace=self._get_workspace(input_2d),
+            pattern=self._comm.AllReduceFusionPattern.kARResidualRMSNorm,
+            launch_with_pdl=True,
+            # The following Triton quant kernel is not PDL-aware, so wait for
+            # all blocks instead of signaling completion early.
+            trigger_completion_at_end=True,
+            use_oneshot=input_2d.nbytes <= self._one_shot_max_size,
+            residual_in=residual_2d,
+            residual_out=residual_out,
+            norm_out=norm_out,
+            rms_gamma=weight,
+            rms_eps=eps,
+        )
+        return norm_out.view_as(input), residual_out.view_as(residual)
+
+    def close(self):
+        """Release the group-bound FlashInfer workspace."""
+        if self._workspace is not None:
+            self._workspace.destroy()
+            self._workspace = None

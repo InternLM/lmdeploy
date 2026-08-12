@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_group, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from ..backends import OpType, get_backend
@@ -67,6 +67,37 @@ class RMSNorm(nn.Module):
         if tp:
             self.weight.weight_loader = self.weight_loader
         self.align = align
+        self.eps = eps
+        self._cast_weight = None
+
+    def _get_cast_weight(self, dtype: torch.dtype):
+        """Return a cached weight cast for dtype-constrained fused kernels."""
+        if self.weight.dtype == dtype:
+            return self.weight
+        if self._cast_weight is None or self._cast_weight.dtype != dtype:
+            self._cast_weight = self.weight.to(dtype)
+        return self._cast_weight
+
+    def update_weights(self):
+        """Invalidate the fused-kernel weight after an online update."""
+        self._cast_weight = None
+
+    def forward_with_allreduce(self,
+                               x: torch.Tensor,
+                               residual: torch.Tensor,
+                               layer_type: str):
+        """Apply a pending TP all-reduce together with residual RMSNorm."""
+        group = get_dist_group(layer_type)
+        output = group.try_fused_allreduce_rmsnorm(
+            input=x,
+            residual=residual,
+            weight=self._get_cast_weight(x.dtype),
+            eps=self.eps,
+        )
+        if output is not None:
+            return output
+        group.all_reduce_(x)
+        return self(x, residual)
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
