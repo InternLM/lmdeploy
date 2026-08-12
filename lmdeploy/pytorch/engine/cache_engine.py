@@ -479,6 +479,7 @@ class CacheEngine:
         """Build global-layer-id to local-row maps for named block caches."""
         if model_config is None or len(model_config.block_cache_specs) == 0:
             return {}
+        # Named caches keep compact rows even when standard K/V also exists.
         return _layer_maps_from_resources(CacheEngine._get_block_cache_resources(model_config))
 
     @classmethod
@@ -544,6 +545,8 @@ class CacheEngine:
             quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
             cache_descs += [k_cache_desc, v_cache_desc] + quant_cache_descs
 
+        # Legacy anonymous caches share the standard per-layer pool. Named
+        # caches are allocated below with their own layer rows and block stride.
         if not model_config.block_cache_specs:
             cache_descs += cls.get_custom_cache_descs(model_config, cache_config)
 
@@ -564,7 +567,9 @@ class CacheEngine:
             caches.append(cache)
 
         if model_config.block_cache_specs:
-            # Paged index scoring requires a cache-only physical block stride.
+            # Paged scoring advances between physical cache blocks directly.
+            # Keep named payloads out of the shared K/V stride and allocate
+            # only the layer rows declared by each BlockCacheSpec.
             block_pools, block_caches = cls._allocate_layer_packed_block_caches(num_blocks, model_config, device)
             return [mem_pool, *block_pools], caches + block_caches
         return mem_pool, caches
@@ -582,6 +587,8 @@ class CacheEngine:
         )
         self.full_gpu_cache = mem_pool
         num_block_caches = len(self.model_config.block_cache_specs)
+        # Compact named caches are read through block_caches.layer(); only
+        # standard caches belong in per-layer past_key_values.
         self.local_gpu_cache = list(zip(*caches[:-num_block_caches])) if num_block_caches else list(zip(*caches))
         self._cache_names = [name for _, name in self._get_cache_desc_names(
             self.model_config, self.cache_config, self.world_size)]
