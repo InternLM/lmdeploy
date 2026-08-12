@@ -57,9 +57,8 @@ class GatedDeltaRuleImpl(ABC):
     ):
         """Run chunked prefill.
 
-        Returns the attention output, the updated recurrent-state bank, and the
-        states at the start of each 64-token chunk. The terminal sequence state
-        is in the updated state bank rather than the final chunk-state entry.
+        Returns the attention output, the updated recurrent-state bank, and the states at the start of each 64-token
+        chunk. The terminal sequence state is in the updated state bank rather than the final chunk-state entry.
         """
         raise NotImplementedError
 

@@ -31,8 +31,7 @@ class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
     def update(self, step_context, sequence_metadata, attn_metadata) -> None:
         if step_context.is_decoding:
             return
-        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
-            prepare_chunk_indices, prepare_chunk_offsets)
+        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import prepare_chunk_indices, prepare_chunk_offsets
         chunk_size = 64
         cu_seqlens_q = sequence_metadata.cu_seqlens_q
         attn_metadata.gated_delta_chunk_indices = prepare_chunk_indices(cu_seqlens_q, chunk_size)
@@ -179,8 +178,9 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         if not has_fla() or not has_tilelang():
             raise ImportError('fla and tilelang is required for CudaGatedDeltaRuleImpl')
 
-        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import \
-            chunk_gated_delta_rule as local_chunk_gated_delta_rule
+        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
+            chunk_gated_delta_rule as local_chunk_gated_delta_rule,
+        )
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
         # local triton port of the FLA chunk forward (inference-only, no autograd),
         # which additionally exposes per-chunk-boundary recurrent states as a

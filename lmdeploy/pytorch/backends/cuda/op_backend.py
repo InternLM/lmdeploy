@@ -196,8 +196,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         ``step_context`` is retained for API symmetry with the legacy path; the
         metadata only depends on ``cu_seqlens_q``.
         """
-        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
-            prepare_chunk_indices, prepare_chunk_offsets)
+        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import prepare_chunk_indices, prepare_chunk_offsets
         cu_seqlens_q = attn_metadata.cu_seqlens_q
         chunk_size = 64
         attn_metadata.gated_delta_chunk_indices = prepare_chunk_indices(cu_seqlens_q, chunk_size)

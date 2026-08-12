@@ -831,28 +831,29 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
 
         if USE_GK:
             o_k1 = tl.arange(0, 64)
-            b_gk_last1 = tl.load(gk + (bos + last_idx) * HV * K + i_h * K + o_k1, mask=(o_k1 < K), other=0.).to(tl.float32)
+            gk_last_ptr = gk + (bos + last_idx) * HV * K + i_h * K
+            b_gk_last1 = tl.load(gk_last_ptr + o_k1, mask=(o_k1 < K), other=0.).to(tl.float32)
             if STATE_V_FIRST:
                 b_h1 *= exp2(b_gk_last1)[None, :]
             else:
                 b_h1 *= exp2(b_gk_last1)[:, None]
             if K > 64:
                 o_k2 = 64 + o_k1
-                b_gk_last2 = tl.load(gk + (bos + last_idx) * HV * K + i_h * K + o_k2, mask=(o_k2 < K), other=0.).to(tl.float32)
+                b_gk_last2 = tl.load(gk_last_ptr + o_k2, mask=(o_k2 < K), other=0.).to(tl.float32)
                 if STATE_V_FIRST:
                     b_h2 *= exp2(b_gk_last2)[None, :]
                 else:
                     b_h2 *= exp2(b_gk_last2)[:, None]
             if K > 128:
                 o_k3 = 128 + o_k1
-                b_gk_last3 = tl.load(gk + (bos + last_idx) * HV * K + i_h * K + o_k3, mask=(o_k3 < K), other=0.).to(tl.float32)
+                b_gk_last3 = tl.load(gk_last_ptr + o_k3, mask=(o_k3 < K), other=0.).to(tl.float32)
                 if STATE_V_FIRST:
                     b_h3 *= exp2(b_gk_last3)[None, :]
                 else:
                     b_h3 *= exp2(b_gk_last3)[:, None]
             if K > 192:
                 o_k4 = 192 + o_k1
-                b_gk_last4 = tl.load(gk + (bos + last_idx) * HV * K + i_h * K + o_k4, mask=(o_k4 < K), other=0.).to(tl.float32)
+                b_gk_last4 = tl.load(gk_last_ptr + o_k4, mask=(o_k4 < K), other=0.).to(tl.float32)
                 if STATE_V_FIRST:
                     b_h4 *= exp2(b_gk_last4)[None, :]
                 else:

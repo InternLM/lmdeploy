@@ -19,7 +19,6 @@
 import pytest
 import torch
 import torch.nn.functional as F
-
 from fla.ops.gated_delta_rule import chunk_gated_delta_rule as fla_chunk_gated_delta_rule
 
 from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import chunk_gated_delta_rule
@@ -30,8 +29,8 @@ DEVICE = 'cuda'
 
 
 def _make_inputs(B, T, H, HV, K, V, dtype, with_init=True):
-    """构造与 lmdeploy 调 kernel 时一致的输入：q/k 已 l2norm、beta 已 sigmoid、
-    g 为 log-space per-token decay。"""
+    """构造与 lmdeploy 调 kernel 时一致的输入：q/k 已 l2norm、beta 已 sigmoid、 g 为 log-space
+    per-token decay。"""
     q = torch.randn(B, T, H, K, device=DEVICE, dtype=dtype)
     k = torch.randn(B, T, H, K, device=DEVICE, dtype=dtype)
     q = F.normalize(q, p=2, dim=-1)

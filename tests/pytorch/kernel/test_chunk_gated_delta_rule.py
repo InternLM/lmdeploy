@@ -3,12 +3,16 @@ import torch
 import torch.nn.functional as F
 import triton
 
+from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
+    _chunk_count_bucket,
+    chunk_conv_states,
+    chunk_gated_delta_rule,
+    prepare_chunk_indices,
+    prepare_chunk_offsets,
+)
+
 fla = pytest.importorskip('fla.ops.gated_delta_rule')
 fla_chunk_gated_delta_rule = fla.chunk_gated_delta_rule
-
-from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
-    _chunk_count_bucket, chunk_conv_states, chunk_gated_delta_rule,
-    prepare_chunk_indices, prepare_chunk_offsets)
 
 
 @pytest.mark.parametrize(
@@ -122,8 +126,8 @@ def test_chunk_gated_delta_rule_fused_qkv_view_production_shape(
         length, num_heads, num_value_heads, key_dim, value_dim):
     """Qwen passes value as a non-contiguous view of fused QKV storage.
 
-    Covers GVA ratios (1:1 and 1:2), K==V and K!=V, several head dims up to the
-    256 ceiling, and lengths that are sub-chunk, chunk-aligned, and multi-chunk.
+    Covers GVA ratios (1:1 and 1:2), K==V and K!=V, several head dims up to the 256 ceiling, and lengths that are sub-
+    chunk, chunk-aligned, and multi-chunk.
     """
     torch.manual_seed(1)
     q_width = num_heads * key_dim
@@ -353,7 +357,8 @@ def test_cuda_backend_updates_only_selected_state_rows():
     assert returned_bank.data_ptr() == state_bank.data_ptr()
     torch.testing.assert_close(out, expected_out, atol=0, rtol=0)
     torch.testing.assert_close(chunk_states, expected_chunks, atol=0, rtol=0)
-    torch.testing.assert_close(state_bank.index_select(0, state_indices), expected_state.to(state_bank.dtype), atol=0, rtol=0)
+    updated = state_bank.index_select(0, state_indices)
+    torch.testing.assert_close(updated, expected_state.to(state_bank.dtype), atol=0, rtol=0)
     untouched = torch.tensor([0, 2, 4], device='cuda', dtype=torch.int64)
     torch.testing.assert_close(
         state_bank.index_select(0, untouched),
@@ -433,4 +438,3 @@ def test_chunk_conv_states_dense_and_contiguous_view():
     out_view = chunk_conv_states(x_view, W)
     assert out_view.shape == (1, triton.cdiv(length, 64), 32, W)
     torch.testing.assert_close(out_view, chunk_conv_states(x_view.contiguous(), W), atol=0, rtol=0)
-
