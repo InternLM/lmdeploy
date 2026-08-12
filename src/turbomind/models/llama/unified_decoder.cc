@@ -86,8 +86,7 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
                                                               registry,
                                                               engine,
                                                               ctx,
-                                                              phases,
-                                                              (bool)moe_ffn_layer_);
+                                                              phases);
     }
 
     if (!gdn_weights.empty()) {
@@ -300,7 +299,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                                       global_hidden_states,
                                                       weights.at(layer)->moe_ffn.get(),
                                                       weights.at(layer)->feed_forward ? 1.f : 0.f,
-                                                      layer};
+                                                      layer,
+                                                      (const bool*)args.at("token_mask").buffer().raw_data()};
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 

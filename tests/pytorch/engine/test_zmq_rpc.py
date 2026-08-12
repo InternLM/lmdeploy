@@ -2,8 +2,11 @@ import asyncio
 import multiprocessing as mp
 from contextlib import suppress
 
+import pytest
+
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngine
+from lmdeploy.pytorch.engine.mp_engine.base_worker import StreamMailbox, StreamPollResult
 
 
 def _sleep_then_exit():
@@ -28,7 +31,13 @@ class TestZMQRPC:
             await asyncio.sleep(0.2)
             if notify_add_msg_func is not None:
                 notify_add_msg_func()
+            if name == 'error-before-output':
+                raise RuntimeError('inference failed before output')
             yield f'{name}: instance async stream infer'
+
+        async def streaming_error(name):
+            yield f'{name}: pending output'
+            raise RuntimeError('generic stream failed after output')
 
         def method(name):
             return f'{name}: method'
@@ -46,6 +55,7 @@ class TestZMQRPC:
         server.register_method('method', method)
         server.register_method('async_method', async_method)
         server.register_method('streaming_method', streaming_method)
+        server.register_method('streaming_error', streaming_error)
         server.register_method('instance_async_stream_infer', instance_async_stream_infer)
         server.register_method('stream_state', stream_state)
         server.register_method('close', close)
@@ -56,6 +66,7 @@ class TestZMQRPC:
         asyncio.run(server.run())
 
     async def async_main(self, port):
+        from lmdeploy.pytorch.engine.mp_engine.base_worker import MPStreamError
         from lmdeploy.pytorch.engine.mp_engine.zmq_rpc import AsyncRPCClient
         client = AsyncRPCClient(port=port)
 
@@ -71,6 +82,23 @@ class TestZMQRPC:
         async for result in client.async_stream_call('streaming_method', asyncio.Event(), 'test3'):
             pass
         assert result == 'test3: streaming method 2'
+
+        error_stream = client.async_stream_call('streaming_error', asyncio.Event(), 'test-error')
+        assert await error_stream.__anext__() == 'test-error: pending output'
+        with pytest.raises(MPStreamError, match='generic stream failed after output'):
+            await error_stream.__anext__()
+
+        inference_error_stream = client.async_stream_call(
+            'instance_async_stream_infer',
+            asyncio.Event(),
+            'error-before-output',
+            session_id=98,
+            streaming_startup_notify_kwarg='notify_add_msg_func',
+        )
+        inference_error_outputs = [output async for output in inference_error_stream]
+        assert len(inference_error_outputs) == 1
+        assert inference_error_outputs[0].status == ResponseType.INTERNAL_ENGINE_ERROR
+        assert inference_error_outputs[0].token_ids == []
 
         init_done = asyncio.Event()
         stream = client.async_stream_call('instance_async_stream_infer',
@@ -143,30 +171,52 @@ class _FakeMPEngine(MPEngine):
         yield EngineOutput(ResponseType.CANCEL, [])
 
 
-async def _async_test_mp_async_end_waits_for_stream_init_after_cancel():
-    engine = _FakeMPEngine()
-    instance = engine.create_instance()
-    stream = instance.async_stream_infer(7)
-    stream_task = asyncio.create_task(stream.__anext__())
-    await asyncio.wait_for(engine.started.wait(), timeout=1)
+@pytest.mark.parametrize('mode', ['cancel', 'cancel_end', 'stream_cancel'])
+def test_mp_cancel_during_stream_startup(mode):
 
-    stream_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await stream_task
+    async def _test():
+        engine = _FakeMPEngine()
+        instance = engine.create_instance()
+        stream = instance.async_stream_infer(7)
+        stream_task = asyncio.create_task(stream.__anext__())
+        await asyncio.wait_for(engine.started.wait(), timeout=1)
 
-    assert await instance.async_cancel(7) == ResponseType.SUCCESS
-    end_task = asyncio.create_task(instance.async_end(7))
-    await asyncio.sleep(0)
-    assert not end_task.done()
+        if mode == 'stream_cancel':
+            stream_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await stream_task
 
-    engine.allow_init.set()
-    assert await asyncio.wait_for(end_task, timeout=1) == ResponseType.SUCCESS
-    assert engine.calls == [('instance_async_end', (7, ))]
-    assert 7 not in engine.session_states
+        assert await instance.async_cancel(7) == ResponseType.SUCCESS
+        state = engine.session_states[7]
+        end_task = asyncio.create_task(instance.async_end(7)) if mode == 'cancel_end' else None
+        await asyncio.sleep(0)
+        assert engine.calls == []
+        if end_task is not None:
+            assert not end_task.done()
 
+        engine.allow_init.set()
+        if mode != 'stream_cancel':
+            output = await asyncio.wait_for(stream_task, timeout=1)
+            assert output.status == ResponseType.CANCEL
+        if end_task is not None:
+            assert await asyncio.wait_for(end_task, timeout=1) == ResponseType.SUCCESS
+        elif state.cleanup_task is not None:
+            await asyncio.wait_for(state.cleanup_task, timeout=1)
+        else:
+            for _ in range(10):
+                if engine.calls:
+                    break
+                await asyncio.sleep(0)
 
-def test_mp_async_end_waits_for_stream_init_after_cancel():
-    asyncio.run(_async_test_mp_async_end_waits_for_stream_init_after_cancel())
+        expected = [('instance_async_cancel', (7, ))]
+        if mode == 'cancel_end':
+            expected.append(('instance_async_end', (7, )))
+        assert engine.calls == expected
+        await stream.aclose()
+        assert 7 not in engine.session_states
+        assert 7 not in engine.pending_cancel_sessions
+
+    asyncio.run(_test())
 
 
 def test_zmq_backend_dead_callback_wakes_stream_init_waiters():
@@ -211,22 +261,17 @@ async def _async_test_zmq_get_stream_output_after_drop_is_idempotent():
     server = AsyncRPCServer()
     try:
         stream_id = 123
-        stream_out = dict(
-            event=asyncio.Event(),
-            result=None,
-            stopped=False,
-            pending=False,
-        )
+        stream_out = StreamMailbox()
         server.stream_output[stream_id] = stream_out
 
         get_task = asyncio.create_task(server.get_stream_output(stream_id))
         await asyncio.sleep(0)
         server.drop_stream_output(stream_id)
 
-        stream_out['stopped'] = True
-        stream_out['event'].set()
-        assert await asyncio.wait_for(get_task, timeout=1) == (None, True)
-        assert await server.get_stream_output(stream_id) == (None, True)
+        stream_out.finish()
+        poll_result = await asyncio.wait_for(get_task, timeout=1)
+        assert poll_result == StreamPollResult(done=True)
+        assert await server.get_stream_output(stream_id) == StreamPollResult(done=True)
     finally:
         server.stop()
         server.socket.close(0)

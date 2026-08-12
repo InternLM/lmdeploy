@@ -25,6 +25,7 @@ public:
         const MoeWeight* weights;
         float            scale;
         int              layer_id;
+        const bool*      token_mask;  // [tokens]; invalid tokens route nowhere
     };
 
     void Forward(ForwardParam& p);

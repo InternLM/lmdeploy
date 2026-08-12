@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import replace
 from typing import Any
 
 import torch
@@ -20,10 +19,9 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
 from .qwen3 import Qwen3MLP
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMixin
 
 _SLIDING_ATTENTION = 'sliding_attention'
-_DFLASH_FULL_SCHEDULER_METADATA = 'dflash_full_scheduler_metadata'
 
 
 def _normalize_dflash_weight_name(name: str) -> str | None:
@@ -234,7 +232,6 @@ class DFlashQwen3DecoderLayer(nn.Module):
         past_key_value: list[torch.FloatTensor] | None,
         attn_metadata: Any,
         residual: torch.Tensor | None = None,
-        dflash_full_scheduler_metadata: torch.Tensor | None = None,
     ):
         """Forward one decoder layer."""
         if residual is None:
@@ -243,25 +240,15 @@ class DFlashQwen3DecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
-        layer_attn_metadata = self._get_layer_attn_metadata(attn_metadata, dflash_full_scheduler_metadata)
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             rotary_pos_emb=rotary_pos_emb,
             past_key_value=past_key_value,
-            attn_metadata=layer_attn_metadata,
+            attn_metadata=attn_metadata,
         )
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
-
-    def _get_layer_attn_metadata(self, attn_metadata: Any,
-                                 dflash_full_scheduler_metadata: torch.Tensor | None):
-        """Return a layer-local view only for non-causal full decode."""
-        is_full_noncausal = self.self_attn.sliding_window is None and not self.self_attn.causal
-        if not attn_metadata.is_decoding or not is_full_noncausal:
-            return attn_metadata
-        return replace(attn_metadata, scheduler_metadata=dflash_full_scheduler_metadata)
-
 
 class DFlashDraftModel(nn.Module, CudaGraphMixin):
     """Qwen-family DFlash draft model.
@@ -450,7 +437,6 @@ class DFlashDraftModel(nn.Module, CudaGraphMixin):
         past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any,
         inputs_embeds: torch.Tensor | None = None,
-        dflash_full_scheduler_metadata: torch.Tensor | None = None,
         **kwargs,
     ):
         """Forward a DFlash query block."""
@@ -470,7 +456,6 @@ class DFlashDraftModel(nn.Module, CudaGraphMixin):
                 past_key_value=past_key_values[idx],
                 residual=residual,
                 attn_metadata=attn_metadata,
-                dflash_full_scheduler_metadata=dflash_full_scheduler_metadata,
             )
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
@@ -488,48 +473,7 @@ class DFlashDraftModel(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=context.attn_metadata,
             inputs_embeds=inputs_embeds,
-            dflash_full_scheduler_metadata=None,
         )
-
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Add the DFlash full/non-causal FA3 scheduler buffer."""
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        if graph_meta.use_fa3_decoding:
-            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
-            input_buffers[_DFLASH_FULL_SCHEDULER_METADATA] = self.build_fa3_scheduler_metadata(
-                graph_meta.max_batchs,
-                graph_meta.decode_query_len,
-                block_size=graph_meta.block_size,
-                max_seqlen_k=max_seqlen_k,
-                cache_seqlens=input_buffers['kv_seqlens'],
-                sliding_window=None,
-                causal=False,
-            )
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Refresh and expose the graph bucket's full/non-causal buffer."""
-        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        if graph_meta.use_fa3_decoding:
-            input_buffers = graph_meta.input_buffers
-            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
-            scheduler_metadata = self.build_fa3_scheduler_metadata(
-                graph_meta.max_batchs,
-                graph_meta.decode_query_len,
-                block_size=graph_meta.block_size,
-                max_seqlen_k=max_seqlen_k,
-                cache_seqlens=input_buffers['kv_seqlens'],
-                sliding_window=None,
-                causal=False,
-            )
-            num_meta = scheduler_metadata.size(0)
-            full_buffer = input_buffers[_DFLASH_FULL_SCHEDULER_METADATA]
-            full_buffer[:num_meta].copy_(scheduler_metadata)
-            full_buffer[num_meta:].zero_()
-            new_inputs[_DFLASH_FULL_SCHEDULER_METADATA] = full_buffer[:num_meta]
-        else:
-            new_inputs[_DFLASH_FULL_SCHEDULER_METADATA] = None
-        return new_inputs
 
     def update_model_metas(
         self,

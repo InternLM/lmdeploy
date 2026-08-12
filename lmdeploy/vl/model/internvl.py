@@ -7,7 +7,6 @@ from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcesso
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
-from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
@@ -76,6 +75,7 @@ class InternVLVisionModel(VisionModel):
     """InternVL vision model."""
 
     _arch = 'InternVLChatModel'
+    _turbomind_native_vision = True
 
     def __init__(self,
                  model_path: str,
@@ -115,11 +115,9 @@ class InternVLVisionModel(VisionModel):
                 T.Normalize(mean=MEAN, std=STD)
             ])
             self.processor = self._preprocess_v1_5
-            self._forward_func = self._forward_v1_5
         else:
             self.processor = self._preprocess
             self.image_processor = image_processor
-            self._forward_func = self._forward
 
         force_image_size = self.hf_config.force_image_size
         patch_size = self.vision_config.patch_size
@@ -127,30 +125,14 @@ class InternVLVisionModel(VisionModel):
         self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
 
     def build_model(self, trust_remote_code: bool = False):
-        """Build the vision part of a VLM model when backend is turbomind, or
-        load the whole VLM model when `self.with_llm==True`"""
-        from accelerate import init_empty_weights
-        with init_empty_weights():
-            # transformers below 4.37.0 may raise error about flash_attn
-            self.config.llm_config.attn_implementation = 'eager'
-            model = AutoModel.from_config(self.config, trust_remote_code=trust_remote_code)
-            self.vl_model = model
-            if not self.with_llm:
-                del model.language_model
-
-        model.half()
-        from accelerate import load_checkpoint_and_dispatch
-        with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         checkpoint=self.model_path,
-                                         device_map='auto' if not self.with_llm else {'': 'cpu'},
-                                         max_memory=self.max_memory,
-                                         no_split_module_classes=['InternVisionEncoderLayer'],
-                                         dtype=torch.half)
-
-        # We need eval mode to freeze the weights in model, thus,
-        # avoid randomness in inference.
-        self.model = model.eval()
+        """Load the whole VLM for quantization."""
+        # transformers below 4.37.0 may raise error about flash_attn
+        self.config.llm_config.attn_implementation = 'eager'
+        self.vl_model = AutoModel.from_pretrained(self.model_path,
+                                                  config=self.config,
+                                                  device_map='cpu',
+                                                  dtype=torch.half,
+                                                  trust_remote_code=trust_remote_code).eval()
 
     def _preprocess_v1_5(self, image, params=None):
         image_res = {'low': 6, 'medium': 12, 'high': 24}
@@ -168,39 +150,10 @@ class InternVLVisionModel(VisionModel):
         pixel_values = torch.stack(pixel_values)
         return pixel_values
 
-    def _forward_v1_5(self, inputs, max_batch_size):
-        """Forward for internvl-chat-v1-5."""
-        assert all(x.get('pixel_values') is not None for x in inputs)
-        outputs = []
-        for idx in range(0, len(inputs), max_batch_size):
-            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
-            split = [x.shape[0] for x in pixel_values]
-            pixel_values = torch.cat(pixel_values, dim=0)
-            pixel_values = pixel_values.to(self.model.device, dtype=torch.float16)
-            logger.info(f'vision forward shape: {pixel_values.shape}')
-            feats = self.model.extract_feature(pixel_values)
-            feats = torch.split(feats, split, dim=0)
-            outputs.extend([x.reshape(-1, x.shape[-1]) for x in feats])
-        return outputs
-
     def _preprocess(self, image, params=None):
-        """Forward for internvl-chat-v1-1, internvl-chat-v1-2."""
+        """Preprocess for internvl-chat-v1-1 and internvl-chat-v1-2."""
         pixel_values = self.image_processor(images=image, return_tensors='pt').pixel_values
         return pixel_values
-
-    def _forward(self, inputs, max_batch_size):
-        """Forward for internvl-chat-v1-1, internvl-chat-v1-2."""
-        assert all(x.get('pixel_values') is not None for x in inputs)
-        outputs = []
-        for idx in range(0, len(inputs), max_batch_size):
-            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
-            pixel_values = torch.cat(pixel_values, dim=0)
-            pixel_values = pixel_values.to(self.model.device, dtype=torch.float16)
-            logger.info(f'vision forward shape: {pixel_values.shape}')
-            feats = self.model.extract_feature(pixel_values)
-            feats = torch.split(feats, 1, dim=0)
-            outputs.extend([x.squeeze() for x in feats])
-        return outputs
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
@@ -210,29 +163,11 @@ class InternVLVisionModel(VisionModel):
             pixel_values = self.processor(image, params)
             image_tokens = (pixel_values.shape[0] * self.image_tokens_per_patch)
             outputs.append(
-                dict(pixel_values=pixel_values,
+                dict(pixel_values=pixel_values.to(self.mm_feature_dtype),
                      image_tokens=image_tokens,
                      image_token_id=self.image_token_id,
                      image_size=image.size))
         messages.append(dict(role='preprocess', content=outputs))
-        return messages
-
-    @torch.no_grad()
-    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
-        """Extract image feature. ONLY implement it when the backend is
-        turbomind engine.
-
-        Args:
-            messages(list[dict]): the outputs of `preprocess`
-            max_batch_size(int): the max batch size when forwarding vision
-                model
-        Return:
-            the message list with forwarding results included
-        """
-        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
-        inputs = inputs[0]
-        outputs = self._forward_func(inputs, max_batch_size)
-        messages.append(dict(role='forward', content=outputs))
         return messages
 
     def proc_messages(
@@ -289,16 +224,3 @@ class InternVLVisionModel(VisionModel):
                                                  tools=tools,
                                                  chat_template_kwargs=chat_template_kwargs)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
-
-    def to_turbomind(self,
-                     messages,
-                     chat_template,
-                     tokenizer,
-                     tools: list[object] | None = None,
-                     chat_template_kwargs: dict | None = None,
-                     **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages,
-                                                 chat_template,
-                                                 tools=tools,
-                                                 chat_template_kwargs=chat_template_kwargs)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

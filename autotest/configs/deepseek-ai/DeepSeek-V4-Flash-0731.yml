@@ -1,0 +1,16 @@
+# HF model id: deepseek-ai/DeepSeek-V4-Flash-0731
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 4
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - evaluate
+  - func
+  gen_config:
+    temperature: 1.0
+    top-p: 1.0

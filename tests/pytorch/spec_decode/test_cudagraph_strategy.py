@@ -20,7 +20,7 @@ def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
-def test_cudagraph_fa3_metadata_uses_explicit_swa_policy_for_single_token_capture(monkeypatch):
+def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypatch):
     from types import SimpleNamespace
 
     import torch
@@ -32,26 +32,24 @@ def test_cudagraph_fa3_metadata_uses_explicit_swa_policy_for_single_token_captur
     monkeypatch.setattr(cudagraph_mod, 'get_step_ctx_manager',
                         lambda: SimpleNamespace(current_context=lambda: step_context))
 
-    class DummyCudaGraphModel(CudaGraphMixin):
+    class DummyPlan:
 
         def __init__(self):
             self.max_seqlen_q_calls = []
 
-        def build_fa3_scheduler_metadata(self,
-                                         batch_size,
-                                         max_seqlen_q,
-                                         block_size,
-                                         max_seqlen_k,
-                                         cache_seqlens,
-                                         *,
-                                         sliding_window,
-                                         causal):
-            self.max_seqlen_q_calls.append(max_seqlen_q)
-            assert sliding_window == 4096
-            assert causal is True
-            return torch.zeros(4, dtype=torch.int32)
+        def make_cudagraph_buffers(self, graph_meta, input_buffers, step_context):
+            self.max_seqlen_q_calls.append(graph_meta.decode_query_len)
+            return SimpleNamespace(attention_buffers=(torch.zeros(4, dtype=torch.int32), ))
+
+        def fill_cudagraph_buffers(self, graph_meta, input_buffers, step_context, buffers, attn_metadata):
+            self.max_seqlen_q_calls.append(graph_meta.decode_query_len)
+            assert len(buffers.attention_buffers) == 1
+
+    class DummyCudaGraphModel(CudaGraphMixin):
+        pass
 
     model = DummyCudaGraphModel()
+    plan = DummyPlan()
     graph_meta = CudaGraphMeta(
         max_batchs=8,
         max_tokens=8,
@@ -62,6 +60,7 @@ def test_cudagraph_fa3_metadata_uses_explicit_swa_policy_for_single_token_captur
         output_buffers={},
         use_fa3_decoding=True,
         decode_query_len=1,
+        step_meta_plan=plan,
     )
     input_ids = torch.zeros((1, 8), dtype=torch.long)
     position_ids = torch.zeros_like(input_ids)
@@ -88,7 +87,7 @@ def test_cudagraph_fa3_metadata_uses_explicit_swa_policy_for_single_token_captur
         inputs_embeds=None,
     )
 
-    assert model.max_seqlen_q_calls == [1, 1]
+    assert plan.max_seqlen_q_calls == [1, 1]
 
 
 def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypatch):

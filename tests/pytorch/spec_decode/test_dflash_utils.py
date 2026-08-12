@@ -7,7 +7,7 @@ import torch
 
 from lmdeploy.cli.utils import ArgumentHelper, get_speculative_config
 from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
-from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionMetadata
+from lmdeploy.pytorch.backends.cuda.step_metadata import CudaAttentionMetaBuilder, CudaStepMetaPlan
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.model_inputs import BuildModelContext, ModelInputs
@@ -22,7 +22,6 @@ from lmdeploy.pytorch.models.qwen3_dflash import (
     _normalize_dflash_weight_name,
     _resolve_dflash_layer_attention,
 )
-from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
 from lmdeploy.pytorch.spec_decode.dflash_utils import (
     build_target_layer_ids,
     parse_dflash_config,
@@ -397,59 +396,7 @@ def test_dflash_draft_graph_inputs_exclude_target_hidden_and_target_embeds():
     assert 'target_hidden_states' not in outputs
 
 
-def test_dflash_graph_scheduler_metadata_reuses_generic_swa_and_separates_full(monkeypatch):
-    model = object.__new__(DFlashDraftModel)
-    torch.nn.Module.__init__(model)
-
-    generic = torch.tensor([1, 2, 3], dtype=torch.int32)
-    monkeypatch.setattr(CudaGraphMixin, 'make_buffers_cudagraph',
-                        lambda self, graph_meta, **kwargs: {
-                            'kv_seqlens': torch.zeros(2, dtype=torch.int32),
-                            'scheduler_metadata': generic.clone(),
-                        })
-    patterns = []
-    lengths = iter((4, 4, 2, 3))
-
-    def build_fa3_scheduler_metadata(*args, sliding_window, causal, **kwargs):
-        patterns.append((sliding_window, causal))
-        return torch.arange(next(lengths), dtype=torch.int32)
-
-    monkeypatch.setattr(model, 'build_fa3_scheduler_metadata', build_fa3_scheduler_metadata)
-    graph_meta1 = SimpleNamespace(use_fa3_decoding=True,
-                                  num_blocks=2,
-                                  block_size=64,
-                                  max_batchs=2,
-                                  decode_query_len=16)
-    graph_meta2 = SimpleNamespace(**vars(graph_meta1))
-
-    buffers1 = model.make_buffers_cudagraph(graph_meta1)
-    buffers2 = model.make_buffers_cudagraph(graph_meta2)
-    graph_meta1.input_buffers = buffers1
-    graph_meta2.input_buffers = buffers2
-    assert buffers1['scheduler_metadata'].data_ptr() != buffers1['dflash_full_scheduler_metadata'].data_ptr()
-    assert buffers1['dflash_full_scheduler_metadata'].data_ptr() != buffers2[
-        'dflash_full_scheduler_metadata'].data_ptr()
-
-    attn_metadata = TritonAttentionMetadata(is_decoding=True,
-                                            block_offsets=torch.zeros(2, 1, dtype=torch.int32),
-                                            scheduler_metadata=buffers1['scheduler_metadata'])
-    monkeypatch.setattr(CudaGraphMixin, 'fill_buffers_cudagraph',
-                        lambda self, graph_meta, **kwargs: {'attn_metadata': attn_metadata})
-    inputs1 = model.fill_buffers_cudagraph(graph_meta1)
-    inputs2 = model.fill_buffers_cudagraph(graph_meta2)
-
-    assert patterns == [(None, False)] * 4
-    full1 = inputs1['dflash_full_scheduler_metadata']
-    full2 = inputs2['dflash_full_scheduler_metadata']
-    assert full1.shape == (2, )
-    assert full2.shape == (3, )
-    assert full1.data_ptr() == buffers1['dflash_full_scheduler_metadata'].data_ptr()
-    assert full2.data_ptr() == buffers2['dflash_full_scheduler_metadata'].data_ptr()
-    assert not hasattr(attn_metadata, 'scheduler_metadata_overrides')
-    assert attn_metadata.scheduler_metadata is buffers1['scheduler_metadata']
-
-
-def test_dflash_layer_scheduler_metadata_is_local_and_never_mutates_shared_input():
+def test_dflash_hybrid_attention_uses_operator_owned_metadata_groups():
     draft_config = _draft_config(
         layer_types=['sliding_attention'] * 3 + ['full_attention'],
         sliding_window=4096,
@@ -462,38 +409,52 @@ def test_dflash_layer_scheduler_metadata_is_local_and_never_mutates_shared_input
     ]
     assert layer_patterns == [(4096, True)] * 3 + [(None, False)]
 
-    generic = torch.tensor([1, 2, 3], dtype=torch.int32)
-    attn_metadata = TritonAttentionMetadata(is_decoding=True,
-                                            block_offsets=torch.zeros(1, 1, dtype=torch.int32),
-                                            scheduler_metadata=generic)
-    swa_layer = SimpleNamespace(self_attn=SimpleNamespace(sliding_window=4096, causal=True))
-    full_layer = SimpleNamespace(self_attn=SimpleNamespace(sliding_window=None, causal=False))
+    class FakeFA3MetaBuilder(CudaAttentionMetaBuilder):
 
-    swa_metadata = DFlashQwen3DecoderLayer._get_layer_attn_metadata(swa_layer, attn_metadata, None)
-    eager_full_metadata = DFlashQwen3DecoderLayer._get_layer_attn_metadata(full_layer, attn_metadata, None)
-    full_buffer = torch.tensor([4, 5, 6], dtype=torch.int32)
-    graph_full_metadata = DFlashQwen3DecoderLayer._get_layer_attn_metadata(full_layer, attn_metadata, full_buffer)
-    prefill_metadata = TritonAttentionMetadata(is_decoding=False,
-                                               block_offsets=attn_metadata.block_offsets,
-                                               scheduler_metadata=generic)
+        def __init__(self, sliding_window, causal):
+            self.sliding_window = sliding_window
+            self.causal = causal
 
-    assert swa_metadata is attn_metadata
-    assert eager_full_metadata is not attn_metadata
-    assert eager_full_metadata.scheduler_metadata is None
-    assert graph_full_metadata is not attn_metadata
-    assert graph_full_metadata.scheduler_metadata is full_buffer
-    assert DFlashQwen3DecoderLayer._get_layer_attn_metadata(full_layer, prefill_metadata,
-                                                            full_buffer) is prefill_metadata
-    assert attn_metadata.scheduler_metadata is generic
+        @property
+        def key(self):
+            return (type(self), self.sliding_window, self.causal)
 
-    scheduler_policy_by_ptr = {
-        generic.data_ptr(): (4096, True),
-        full_buffer.data_ptr(): (None, False),
-    }
-    for sliding_window, causal in layer_patterns:
-        layer = SimpleNamespace(self_attn=SimpleNamespace(sliding_window=sliding_window, causal=causal))
-        layer_metadata = DFlashQwen3DecoderLayer._get_layer_attn_metadata(layer, attn_metadata, full_buffer)
-        assert scheduler_policy_by_ptr[layer_metadata.scheduler_metadata.data_ptr()] == (sliding_window, causal)
+        def build(self, step_context, sequence_metadata):
+            raise NotImplementedError
+
+        def apply_legacy_metadata(self, attn_metadata, metadata):
+            raise NotImplementedError
+
+        def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context):
+            raise NotImplementedError
+
+        def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context, buffer):
+            raise NotImplementedError
+
+    class FakeFA3Impl:
+
+        def __init__(self, sliding_window, causal):
+            self.group_id = None
+            self.builder = FakeFA3MetaBuilder(sliding_window, causal)
+
+        def get_step_metadata_provider(self):
+            return self.builder
+
+        def bind_step_meta_group(self, group_id):
+            self.group_id = group_id
+
+    implementations = [FakeFA3Impl(*pattern) for pattern in layer_patterns]
+    plan = CudaStepMetaPlan.from_implementations(implementations)
+
+    assert plan.is_supported
+    assert len(plan.attention_builders) == 2
+    assert [impl.group_id for impl in implementations] == [0, 0, 0, 1]
+    assert [(builder.sliding_window, builder.causal) for builder in plan.attention_builders] == [
+        (4096, True),
+        (None, False),
+    ]
+    assert 'dflash_full_scheduler_metadata' not in inspect.signature(DFlashDraftModel.forward).parameters
+    assert 'dflash_full_scheduler_metadata' not in inspect.signature(DFlashQwen3DecoderLayer.forward).parameters
 
 
 def test_dflash_production_forward_requires_attention_metadata():
