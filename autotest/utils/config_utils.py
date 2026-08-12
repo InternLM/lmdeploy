@@ -687,7 +687,7 @@ def _suite_launch_extra_defaults(suites: list[str] | set[str]) -> dict[str, Any]
     if suite_set & {'logprob', 'experts'}:
         defaults['logprobs-mode'] = 'raw_logprobs'
     if suite_set & {'experts', 'toolcall'}:
-        defaults['enable-return-routed-experts'] = None
+        defaults['enable-return-routed-experts'] = True
     return defaults
 
 
@@ -1190,8 +1190,11 @@ def get_cli_str(config: dict[str, Any]) -> str:
         if norm_key in CLI_SKIP_EXTRA_KEYS:
             continue
         key = norm_key
-        if value is None:
+        # ``null`` / ``true`` → bare ``--flag`` (argparse store_true).
+        if value is None or value is True:
             cli_str.append(f'--{key}')
+        elif value is False:
+            continue
         elif isinstance(value, list):
             tmp_cli = ' '.join(map(str, value))
             cli_str.append(f'--{key} {tmp_cli}')

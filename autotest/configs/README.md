@@ -139,13 +139,13 @@ interface:
   - suites: [base, logprob, experts, toolcall, reasoning]
     extra:
       logprobs-mode: raw_logprobs
-      enable-return-routed-experts: null
+      enable-return-routed-experts: true
       tool-call-parser: qwen3coder
       reasoning-parser: default
   - suites: [anthropic]
     extra:
       logprobs-mode: raw_logprobs
-      enable-return-routed-experts: null
+      enable-return-routed-experts: true
   turbomind:
   - suites: [base, logprob, toolcall, reasoning]
     extra:

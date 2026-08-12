@@ -29,7 +29,7 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-        enable-return-routed-experts: null
+        enable-return-routed-experts: true
     turbomind:
       suites:
       - base
@@ -73,7 +73,7 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-        enable-return-routed-experts: null
+        enable-return-routed-experts: true
     turbomind:
       suites:
       - base
