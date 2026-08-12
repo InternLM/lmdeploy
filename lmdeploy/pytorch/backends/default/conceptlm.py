@@ -179,6 +179,12 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
             self.chunk_size,
             rounding_mode='floor',
         ).clamp(min=1).to(dtype=kv_dtype)
+        # CUDAGraph pads decode batches with state_id=-1 rows. Those rows
+        # still execute concept attention and KV snapshot/restore, so keep
+        # their concept timeline inside the dummy cache slot.
+        valid_state_mask = decode_metadata.valid_state_mask.to(device=device)
+        safe_concept_kv_seqlens = torch.ones_like(concept_kv_seqlens)
+        concept_kv_seqlens = torch.where(valid_state_mask, concept_kv_seqlens, safe_concept_kv_seqlens)
 
         updates = dict(
             is_decoding=True,
@@ -253,6 +259,12 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
             )
             concept_attn_metadata = self.build_concept_decode_metadata_static(token_attn_metadata, decode_metadata)
             concept_position_ids = self.decode_concept_position_ids(decode_metadata.position_ids)
+            # Match the safe dummy KV length above for graph-padded rows.
+            concept_position_ids = torch.where(
+                decode_metadata.valid_state_mask,
+                concept_position_ids,
+                torch.zeros_like(concept_position_ids),
+            )
             return ConceptChunkInput(
                 source_states=concept_states,
                 position_ids=concept_position_ids,
