@@ -1400,10 +1400,8 @@ def chunk_gated_delta_rule(
 # extracts once at the sequence end (``x[0, cu_seqlens[1:] + arange(-W, 0)]``).
 # This kernel produces that conv state at *every* chunk boundary, so a
 # per-chunk checkpoint has both halves (recurrent + conv) needed to resume.
-#
-# Deliberately not wired into the nn/models/backends: this is a kernel-only
-# primitive, available for the future checkpoint writer. ``chunk_conv_states``
-# returns the tensor; nothing propagates it through the framework call chain.
+# The CUDA CausalConv1d backend exposes this primitive to the framework while
+# keeping the nn layer independent of the CUDA/Triton implementation.
 @triton.jit
 def _chunk_conv_states_kernel(
     x_ptr,

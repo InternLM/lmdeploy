@@ -101,6 +101,7 @@ class CausalConv1dFunc:
         impl = builder.build()
         self.causal_conv1d_fn = impl.conv1d_fn
         self.causal_conv1d_update = impl.update_fn
+        self.chunk_conv_states_fn = impl.chunk_conv_states
         self.activation = activation
 
     def conv1d_func(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, conv_state: torch.Tensor,
@@ -128,8 +129,7 @@ class CausalConv1dFunc:
         # two together let a checkpoint restore the layer at any chunk boundary.
         # Computed on the prefill path (this method is prefill-only) and attached
         # to the shared meta so the model layer can store it per layer.
-        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import chunk_conv_states
-        gated_delta_meta.chunk_conv_states = chunk_conv_states(
+        gated_delta_meta.chunk_conv_states = self.chunk_conv_states_fn(
             x,
             conv_state.size(-1),
             cu_seqlens=gated_delta_meta.cu_seqlens,
