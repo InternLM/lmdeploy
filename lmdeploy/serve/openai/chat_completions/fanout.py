@@ -225,6 +225,26 @@ async def _stream_choice(
         await _close_streaming_response(response)
 
 
+def _batch_stream_payloads(payloads: list[dict]) -> list[dict]:
+    """Combine each choice's Nth ready delta into the Nth output batch."""
+    batches: list[dict] = []
+    next_batch_by_index: dict[int, int] = {}
+
+    for payload in payloads:
+        choice = payload['choices'][0]
+        index = choice['index']
+        target = next_batch_by_index.get(index, 0)
+        if target == len(batches):
+            batches.append(payload)
+        else:
+            batches[target]['choices'].append(choice)
+        next_batch_by_index[index] = target + 1
+
+    for payload in batches:
+        payload['choices'].sort(key=lambda choice: choice['index'])
+    return batches
+
+
 async def _collate_streams(
     responses: list[StreamingResponse],
     request: ChatCompletionRequest,
@@ -247,16 +267,31 @@ async def _collate_streams(
     # consume the streaming responses of each fan-out request, and yield to the client
     try:
         while completed < len(tasks):
-            item = await queue.get()
-            if item[0] == 'data':
-                yield f'data: {json.dumps(item[1])}\n\n'
-            elif item[0] == 'usage':
-                # item[1]: index, iterm[2]: usage payload
-                usages[item[1]] = item[2]
-            elif item[0] == 'done':
-                completed += 1
-            else:
-                raise item[1]
+            items = [await queue.get()]
+            while True:
+                try:
+                    items.append(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+
+            payloads = []
+            stream_error = None
+            for item in items:
+                if item[0] == 'data':
+                    payloads.append(item[1])
+                elif item[0] == 'usage':
+                    # item[1]: index, item[2]: usage payload
+                    usages[item[1]] = item[2]
+                elif item[0] == 'done':
+                    completed += 1
+                else:
+                    stream_error = item[1]
+                    break
+
+            for payload in _batch_stream_payloads(payloads):
+                yield f'data: {json.dumps(payload)}\n\n'
+            if stream_error is not None:
+                raise stream_error
         if include_usage and len(usages) == len(tasks):
             ordered_usages = [usages[index] for index in range(len(tasks))]
             usage_response = {

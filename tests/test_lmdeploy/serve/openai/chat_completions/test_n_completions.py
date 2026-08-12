@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.responses import JSONResponse
 
+from lmdeploy.serve.openai.chat_completions.fanout import _batch_stream_payloads
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 
@@ -46,6 +47,39 @@ async def _collect_stream(response):
     async for chunk in response.body_iterator:
         chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
     return ''.join(chunks)
+
+
+def _stream_payload(index, content, **metadata):
+    return {
+        'id': 'chatcmpl-test',
+        'object': 'chat.completion.chunk',
+        'created': 1,
+        'model': 'fake-model',
+        'choices': [{
+            'index': index,
+            'delta': {
+                'content': content
+            }
+        }],
+        **metadata,
+    }
+
+
+def test_ready_stream_chunks_are_batched_by_choice():
+    payloads = [
+        _stream_payload(0, '0-a'),
+        _stream_payload(0, '0-b'),
+        _stream_payload(1, '1-a'),
+    ]
+
+    batches = _batch_stream_payloads(payloads)
+
+    assert [[choice['index'] for choice in batch['choices']]
+            for batch in batches] == [[0, 1], [0]]
+    assert [choice['delta']['content']
+            for batch in batches
+            for choice in batch['choices'] if choice['index'] == 0
+            ] == ['0-a', '0-b']
 
 
 def test_handler_n3_nonstream_collates_single_choice_path(
