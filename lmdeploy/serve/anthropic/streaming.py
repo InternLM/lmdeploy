@@ -12,6 +12,7 @@ from lmdeploy.serve.openai.protocol import DeltaMessage
 
 from .adapter import map_finish_reason
 from .protocol import (
+    LOCAL_THINKING_SIGNATURE,
     AnthropicStreamEvent,
     ContentBlockDeltaEvent,
     ContentBlockStartEvent,
@@ -24,6 +25,7 @@ from .protocol import (
     MessageStartMessage,
     MessageStopEvent,
     MessageUsage,
+    SignatureDelta,
     StreamTextBlock,
     StreamThinkingBlock,
     StreamToolUseBlock,
@@ -49,21 +51,30 @@ class _StreamBlockState:
     tool_blocks: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
-def _close_current_block(state: _StreamBlockState) -> str | None:
-    if state.current_block is None:
-        return None
-    payload = _format_sse(ContentBlockStopEvent(index=state.current_block['block_index']))
+def _close_current_block(state: _StreamBlockState) -> list[str]:
+    block = state.current_block
+    if block is None:
+        return []
+
+    block_index = block['block_index']
+    events: list[str] = []
+    if block['kind'] == 'thinking':
+        events.append(
+            _format_sse(
+                ContentBlockDeltaEvent(
+                    index=block_index,
+                    delta=SignatureDelta(signature=LOCAL_THINKING_SIGNATURE),
+                )))
+    events.append(_format_sse(ContentBlockStopEvent(index=block_index)))
     state.current_block = None
-    return payload
+    return events
 
 
 def _start_text_or_thinking(state: _StreamBlockState, kind: str) -> list[str]:
     events: list[str] = []
     if state.current_block is not None and state.current_block['kind'] == kind:
         return events
-    closing = _close_current_block(state)
-    if closing:
-        events.append(closing)
+    events.extend(_close_current_block(state))
     block_index = state.next_block_index
     state.next_block_index += 1
     if kind == 'text':
@@ -90,9 +101,7 @@ def _start_tool_block(state: _StreamBlockState, tool_delta) -> list[str]:
         and block is not None
         and current_block['block_index'] == block['block_index'])
     if not same_block:
-        closing = _close_current_block(state)
-        if closing:
-            events.append(closing)
+        events.extend(_close_current_block(state))
     if block is None:
         function_delta = tool_delta.function
         tool_name = '' if function_delta is None else function_delta.name or ''
@@ -308,9 +317,8 @@ async def stream_messages_response(result_generator,
         if res.finish_reason == 'stop' and streaming_tools:
             res.finish_reason = 'tool_calls'
 
-    closing = _close_current_block(block_state)
-    if closing:
-        yield closing
+    for event in _close_current_block(block_state):
+        yield event
 
     output_tokens = 0 if final_res is None else final_res.generate_token_len
     stop_reason = map_finish_reason(None if final_res is None else final_res.finish_reason)
